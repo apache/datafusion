@@ -762,6 +762,85 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_update_from_alias_variants_are_rejected() -> Result<()> {
+    // UPDATE ... FROM is currently not working
+    // TODO fix https://github.com/apache/datafusion/issues/19950
+    let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
+
+    let source_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("status", DataType::Utf8, true),
+        Field::new("value", DataType::Int32, true),
+    ]));
+    let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
+    ctx.register_table("t2", Arc::new(source_table))?;
+
+    let alias_queries = [
+        "UPDATE t1 AS dst \
+         SET status = src.status, value = src.value + dst.value \
+         FROM t2 AS src \
+         WHERE dst.id = src.id AND src.status = 'active'",
+        "UPDATE t1 \
+         FROM t2 AS src \
+         SET status = src.status, value = t1.value + src.value \
+         WHERE t1.id = src.id",
+    ];
+
+    for sql in alias_queries {
+        let result = ctx.sql(sql).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("UPDATE ... FROM is not supported"),
+            "Expected 'UPDATE ... FROM is not supported' error for `{sql}`, got: {err}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_from_joined_assignments_are_rejected() -> Result<()> {
+    // This captures joined assignment patterns that currently fail if UPDATE ... FROM
+    // planning is enabled without full qualifier-safe assignment handling.
+    // TODO fix https://github.com/apache/datafusion/issues/19950
+    let target_provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
+    let ctx = SessionContext::new();
+    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
+
+    let source_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("status", DataType::Utf8, true),
+        Field::new("value", DataType::Int32, true),
+    ]));
+    let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
+    ctx.register_table("t2", Arc::new(source_table))?;
+
+    let result = ctx
+        .sql(
+            "UPDATE t1 AS dst \
+             SET status = src.status, value = src.value + dst.value \
+             FROM t2 AS src \
+             WHERE dst.id = src.id AND src.value > 10 AND dst.value > 0",
+        )
+        .await;
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("UPDATE ... FROM is not supported"),
+        "Expected 'UPDATE ... FROM is not supported' error, got: {err}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
     // Test that filter qualifiers are properly stripped and validated
     // Unqualified predicates should work fine
