@@ -4992,7 +4992,8 @@ mod tests {
         let col = schema.field_names()[0].clone();
 
         let filter = Filter::try_new(
-            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
+            Expr::Column(Column::from_qualified_name(col))
+                .eq(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
             scan,
         )
         .unwrap();
@@ -5021,8 +5022,11 @@ mod tests {
         }));
         let col = schema.field_names()[0].clone();
 
-        let filter =
-            Filter::try_new(Expr::Column(col.into()).eq(lit(1i32)), scan).unwrap();
+        let filter = Filter::try_new(
+            Expr::Column(Column::from_qualified_name(col)).eq(lit(1i32)),
+            scan,
+        )
+        .unwrap();
         assert!(filter.is_scalar());
     }
 

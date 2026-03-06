@@ -300,7 +300,10 @@ mod tests {
 
         // Test that it still extracts from direct column references
         let col_expr = col("a");
-        assert_eq!(extract_column_from_expr(&col_expr), Some(Column::from("a")));
+        assert_eq!(
+            extract_column_from_expr(&col_expr),
+            Some(Column::from_qualified_name("a"))
+        );
     }
 
     #[test]
@@ -322,8 +325,8 @@ mod tests {
         let has_a_predicate = result.iter().any(|p| {
             matches!(p, Expr::BinaryExpr(BinaryExpr { 
                 left, 
-                op: Operator::Lt, 
-                right 
+                op: Operator::Lt,
+                right
             }) if left == &Box::new(col("a")) && right == &Box::new(lit(3i32)))
         });
         assert!(has_a_predicate, "Should have a < 3 predicate");
@@ -332,8 +335,8 @@ mod tests {
         let has_b_predicate = result.iter().any(|p| {
             matches!(p, Expr::BinaryExpr(BinaryExpr { 
                 left, 
-                op: Operator::Gt, 
-                right 
+                op: Operator::Gt,
+                right
             }) if left == &Box::new(col("b")) && right == &Box::new(lit(20i32)))
         });
         assert!(has_b_predicate, "Should have b > 20 predicate");

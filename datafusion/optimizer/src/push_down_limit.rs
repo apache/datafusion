@@ -279,7 +279,7 @@ mod test {
     use crate::test::*;
 
     use crate::OptimizerContext;
-    use datafusion_common::DFSchemaRef;
+    use datafusion_common::{Column, DFSchemaRef};
     use datafusion_expr::{
         Expr, Extension, UserDefinedLogicalNodeCore, col, exists,
         logical_plan::builder::LogicalPlanBuilder,
@@ -837,7 +837,10 @@ mod test {
             .join(
                 LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Inner,
-                (vec!["a"], vec!["a"]),
+                (
+                    vec![Column::from_qualified_name("a")],
+                    vec![Column::from_qualified_name("a")],
+                ),
                 None,
             )?
             .limit(10, Some(1000))?
@@ -864,7 +867,10 @@ mod test {
             .join(
                 LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Inner,
-                (vec!["a"], vec!["a"]),
+                (
+                    vec![Column::from_qualified_name("a")],
+                    vec![Column::from_qualified_name("a")],
+                ),
                 None,
             )?
             .limit(10, Some(1000))?
@@ -955,7 +961,10 @@ mod test {
             .join(
                 LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Left,
-                (vec!["a"], vec!["a"]),
+                (
+                    vec![Column::from_qualified_name("a")],
+                    vec![Column::from_qualified_name("a")],
+                ),
                 None,
             )?
             .limit(10, Some(1000))?
@@ -983,7 +992,10 @@ mod test {
             .join(
                 LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Right,
-                (vec!["a"], vec!["a"]),
+                (
+                    vec![Column::from_qualified_name("a")],
+                    vec![Column::from_qualified_name("a")],
+                ),
                 None,
             )?
             .limit(0, Some(1000))?
@@ -1011,7 +1023,10 @@ mod test {
             .join(
                 LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Right,
-                (vec!["a"], vec!["a"]),
+                (
+                    vec![Column::from_qualified_name("a")],
+                    vec![Column::from_qualified_name("a")],
+                ),
                 None,
             )?
             .limit(10, Some(1000))?

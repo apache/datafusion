@@ -1500,19 +1500,23 @@ impl LogicalPlanBuilder {
     }
 
     /// Unnest the given column.
-    pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        unnest(Arc::unwrap_or_clone(self.plan), vec![column.into()]).map(Self::new)
+    pub fn unnest_column(self, column: impl Into<String>) -> Result<Self> {
+        unnest(
+            Arc::unwrap_or_clone(self.plan),
+            vec![Column::from_qualified_name(column)],
+        )
+        .map(Self::new)
     }
 
     /// Unnest the given column given [`UnnestOptions`]
     pub fn unnest_column_with_options(
         self,
-        column: impl Into<Column>,
+        column: impl Into<String>,
         options: UnnestOptions,
     ) -> Result<Self> {
         unnest_with_options(
             Arc::unwrap_or_clone(self.plan),
-            vec![column.into()],
+            vec![Column::from_qualified_name(column)],
             options,
         )
         .map(Self::new)
@@ -2664,7 +2668,7 @@ mod tests {
         // Unnesting multiple fields at the same time, using infer syntax
         let cols = vec!["strings", "structs", "struct_singular"]
             .into_iter()
-            .map(|c| c.into())
+            .map(Column::from_qualified_name)
             .collect();
 
         let plan = nested_table_scan("test_table")?
@@ -2683,16 +2687,19 @@ mod tests {
         // Simultaneously unnesting a list (with different depth) and a struct column
         let plan = nested_table_scan("test_table")?
             .unnest_columns_with_options(
-                vec!["stringss".into(), "struct_singular".into()],
+                vec![
+                    Column::from_qualified_name("stringss"),
+                    Column::from_qualified_name("struct_singular"),
+                ],
                 UnnestOptions::default()
                     .with_recursions(RecursionUnnestOption {
-                        input_column: "stringss".into(),
-                        output_column: "stringss_depth_1".into(),
+                        input_column: Column::from_qualified_name("stringss"),
+                        output_column: Column::from_qualified_name("stringss_depth_1"),
                         depth: 1,
                     })
                     .with_recursions(RecursionUnnestOption {
-                        input_column: "stringss".into(),
-                        output_column: "stringss_depth_2".into(),
+                        input_column: Column::from_qualified_name("stringss"),
+                        output_column: Column::from_qualified_name("stringss_depth_2"),
                         depth: 2,
                     }),
             )?
