@@ -776,6 +776,25 @@ impl Stream for GroupedHashAggregateStream {
                                     self.exec_state = new_state;
                                     break 'reading_input;
                                 }
+
+                                // Emit partial aggregation results once accumulated
+                                // state exceeds 4MB to bound memory usage and provide
+                                // incremental output to downstream operators.
+                                if self.current_aggregate_size()
+                                    >= Self::PARTIAL_AGGREGATE_EMIT_SIZE
+                                    && !self.group_values.is_empty()
+                                {
+                                    timer.done();
+                                    if let Some(batch) = self.emit(EmitTo::All, false)? {
+                                        // Clear the hash map so new groups can be
+                                        // interned correctly when we resume reading.
+                                        let batch_size = self.batch_size;
+                                        self.clear_shrink(batch_size);
+                                        self.exec_state =
+                                            ExecutionState::ProducingOutput(batch);
+                                    }
+                                    break 'reading_input;
+                                }
                             }
 
                             // If we reach this point, try to update the memory reservation
@@ -1208,6 +1227,18 @@ impl GroupedHashAggregateStream {
     /// Clear memory and shrink capacities to zero.
     fn clear_all(&mut self) {
         self.clear_shrink(0);
+    }
+
+    /// Size threshold (in bytes) at which partial aggregation emits accumulated
+    /// state. Emitting periodically bounds memory usage and provides incremental
+    /// output to downstream operators (e.g. repartition / final aggregation).
+    const PARTIAL_AGGREGATE_EMIT_SIZE: usize = 4 * 1024 * 1024; // 4 MB
+
+    /// Returns the current memory size of accumulated group state
+    /// (group values + accumulators).
+    fn current_aggregate_size(&self) -> usize {
+        let acc: usize = self.accumulators.iter().map(|a| a.size()).sum();
+        acc + self.group_values.size()
     }
 
     /// returns true if there is a soft groups limit and the number of distinct
