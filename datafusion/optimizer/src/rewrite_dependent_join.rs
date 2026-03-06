@@ -436,30 +436,6 @@ impl DependentJoinRewriter {
     // this function is called with 2 args a:[1,2,3] and [1,2,5,6,7]
     // it then returns the id of the dependent join node (2)
     // and the id of the subquery node (5)
-    /*
-    Edge case
-     n1
-     |
-     n2 filter where outer.column = exists(subquery)
-     ----------------------
-     |                    \
-     |                    n5: subquery
-     |                        |
-     n3 alias outer   n6 filter outer.column=inner.column
-     |                        |
-     |                    n7 scan table inner
-     |
-     n8 join ----> n9 scan table "outer"
-            |
-            -----> n10 scan table "some table"
-
-    According to the traversal order, n9 will be visited first,
-    and accessed for column "outer.column" will include [n1,n2,n5,n6]
-
-    If this function is called on n9 (stacked n1,n2,n3,n8,n9)
-    it has to do a check that  from (n2,n3,n8,n9) there exists an alias node
-    that invalidate the providing function of n9, and thus return None
-         */
     fn dependent_join_and_subquery_node_ids(
         stack_with_table_provider: &[usize],
         stack_with_subquery: &[usize],
