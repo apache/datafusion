@@ -92,7 +92,7 @@ fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
 }
 
 fn compute_soundex(s: &str) -> String {
-    if s.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         return s.to_string();
     }
 
