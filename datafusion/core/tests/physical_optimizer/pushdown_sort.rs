@@ -18,7 +18,7 @@
 //! Tests for sort pushdown optimizer rule (Phase 1)
 //!
 //! Phase 1 tests verify that:
-//! 1. Reverse scan is enabled (reverse_row_groups=true)
+//! 1. Reverse scan is enabled (reverse_row_groups=true, reverse_pages=true)
 //! 2. SortExec is kept (because ordering is inexact)
 //! 3. output_ordering remains unchanged
 //! 4. Early termination is enabled for TopK queries
@@ -85,7 +85,7 @@ fn test_sort_pushdown_basic_phase1() {
       output:
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -114,7 +114,7 @@ fn test_sort_with_limit_phase1() {
       output:
         Ok:
           - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -145,7 +145,7 @@ fn test_sort_multiple_columns_phase1() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -180,7 +180,7 @@ fn test_prefix_match_single_column() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -214,7 +214,7 @@ fn test_prefix_match_with_limit() {
       output:
         Ok:
           - SortExec: TopK(fetch=100), expr=[a@0 DESC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -249,7 +249,7 @@ fn test_prefix_match_through_transparent_nodes() {
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -343,7 +343,7 @@ fn test_sort_through_repartition() {
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -375,7 +375,7 @@ fn test_nested_sorts() {
         Ok:
           - SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
           -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -435,7 +435,7 @@ fn test_sort_through_coalesce_partitions() {
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   CoalescePartitionsExec
           -     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -467,7 +467,7 @@ fn test_complex_plan_with_multiple_operators() {
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   CoalescePartitionsExec
           -     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -501,7 +501,7 @@ fn test_multiple_sorts_different_columns() {
         Ok:
           - SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
           -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -630,7 +630,7 @@ fn test_pushdown_through_blocking_node() {
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           -   AggregateExec: mode=Final, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
           -     SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -668,7 +668,7 @@ fn test_sort_pushdown_through_simple_projection() {
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   ProjectionExec: expr=[a@0 as a, b@1 as b]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -703,7 +703,7 @@ fn test_sort_pushdown_through_projection_with_alias() {
         Ok:
           - SortExec: expr=[id@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   ProjectionExec: expr=[a@0 as id, b@1 as value]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -792,7 +792,7 @@ fn test_sort_pushdown_projection_reordered_columns() {
         Ok:
           - SortExec: expr=[a@2 DESC NULLS LAST], preserve_partitioning=[false]
           -   ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -826,7 +826,7 @@ fn test_sort_pushdown_projection_with_limit() {
         Ok:
           - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   ProjectionExec: expr=[a@0 as a, b@1 as b]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -860,7 +860,7 @@ fn test_sort_pushdown_through_projection() {
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   ProjectionExec: expr=[a@0 as a, b@1 as b]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
@@ -895,7 +895,7 @@ fn test_sort_pushdown_projection_subset_of_columns() {
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   ProjectionExec: expr=[a@0 as a]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true, reverse_pages=true
     "
     );
 }
