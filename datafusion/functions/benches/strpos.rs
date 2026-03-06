@@ -152,7 +152,7 @@ fn random_substring(rng: &mut StdRng, s: &str) -> String {
 fn bench_strpos(
     c: &mut Criterion,
     name: &str,
-    args: Vec<ColumnarValue>,
+    args: &[ColumnarValue],
     strpos: &datafusion_expr::ScalarUDF,
 ) {
     let arg_fields = vec![Field::new("a", args[0].data_type(), true).into()];
@@ -162,7 +162,7 @@ fn bench_strpos(
     c.bench_function(name, |b| {
         b.iter(|| {
             black_box(strpos.invoke_with_args(ScalarFunctionArgs {
-                args: args.clone(),
+                args: args.to_vec(),
                 arg_fields: arg_fields.clone(),
                 number_rows: N_ROWS,
                 return_field: Arc::clone(&return_field),
@@ -189,7 +189,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             bench_strpos(
                 c,
                 &format!("strpos_{label}_str_len_{str_len}"),
-                args,
+                &args,
                 strpos.as_ref(),
             );
         }
@@ -207,7 +207,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             bench_strpos(
                 c,
                 &format!("strpos_{label}_str_len_{str_len}"),
-                args,
+                &args,
                 strpos.as_ref(),
             );
         }
