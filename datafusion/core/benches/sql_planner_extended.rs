@@ -261,13 +261,66 @@ fn build_case_heavy_left_join_df_with_push_down_filter(
     let ctx = SessionContext::new();
     register_string_table(&ctx, 100, 1000);
     if !push_down_filter_enabled {
-        debug_assert!(
-            ctx.remove_optimizer_rule("push_down_filter"),
+        let removed = ctx.remove_optimizer_rule("push_down_filter");
+        assert!(
+            removed,
             "push_down_filter rule should be present in the default optimizer"
         );
     }
 
     let query = build_case_heavy_left_join_query(predicate_count, case_depth);
+    rt.block_on(async { ctx.sql(&query).await.unwrap() })
+}
+
+fn build_non_case_left_join_query(
+    predicate_count: usize,
+    nesting_depth: usize,
+) -> String {
+    let mut query = String::from(
+        "SELECT l.c0, r.c0 AS rc0 FROM t l LEFT JOIN t r ON l.c0 = r.c0 WHERE ",
+    );
+
+    if predicate_count == 0 {
+        query.push_str("TRUE");
+        return query;
+    }
+
+    // Keep this deterministic so comparisons between profiles are stable.
+    for i in 0..predicate_count {
+        if i > 0 {
+            query.push_str(" AND ");
+        }
+
+        let left_col = i % 20;
+        let mut expr = format!("l.c{left_col}");
+        for depth in 0..nesting_depth {
+            let right_col = (i + depth + 1) % 20;
+            expr = format!("coalesce({expr}, r.c{right_col})");
+        }
+
+        let _ = write!(&mut query, "length({expr}) > 2");
+    }
+
+    query
+}
+
+fn build_non_case_left_join_df_with_push_down_filter(
+    rt: &Runtime,
+    predicate_count: usize,
+    nesting_depth: usize,
+    push_down_filter_enabled: bool,
+) -> DataFrame {
+    let ctx = SessionContext::new();
+    register_string_table(&ctx, 100, 1000);
+    if !push_down_filter_enabled {
+        let removed = ctx.remove_optimizer_rule("push_down_filter");
+        assert!(
+            removed,
+            "push_down_filter rule should be present in the default optimizer"
+        );
+    }
+
+    let query = build_non_case_left_join_query(predicate_count, nesting_depth);
     rt.block_on(async { ctx.sql(&query).await.unwrap() })
 }
 
@@ -289,17 +342,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("logical_plan_optimize_case_heavy_left_join", |b| {
+    c.bench_function("logical_plan_optimize_hotspot_case_heavy_left_join", |b| {
         b.iter(|| {
             let df_clone = case_heavy_left_join_df.clone();
             black_box(rt.block_on(async { df_clone.into_optimized_plan().unwrap() }));
         })
     });
 
-    let mut group = c.benchmark_group("push_down_filter_case_heavy_left_join_ab");
     let predicate_sweep = [10, 20, 30, 40, 60];
     let case_depth_sweep = [1, 2, 3];
 
+    let mut hotspot_group =
+        c.benchmark_group("push_down_filter_hotspot_case_heavy_left_join_ab");
     for case_depth in case_depth_sweep {
         for predicate_count in predicate_sweep {
             let with_push_down_filter =
@@ -323,7 +377,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             // - with_push_down_filter: default optimizer path (rule enabled)
             // - without_push_down_filter: control path with the rule removed
             // Compare both IDs at the same sweep point to isolate rule impact.
-            group.bench_with_input(
+            hotspot_group.bench_with_input(
                 BenchmarkId::new("with_push_down_filter", &input_label),
                 &with_push_down_filter,
                 |b, df| {
@@ -337,7 +391,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     })
                 },
             );
-            group.bench_with_input(
+            hotspot_group.bench_with_input(
                 BenchmarkId::new("without_push_down_filter", &input_label),
                 &without_push_down_filter,
                 |b, df| {
@@ -353,7 +407,59 @@ fn criterion_benchmark(c: &mut Criterion) {
             );
         }
     }
-    group.finish();
+    hotspot_group.finish();
+
+    let mut control_group =
+        c.benchmark_group("push_down_filter_control_non_case_left_join_ab");
+    for nesting_depth in case_depth_sweep {
+        for predicate_count in predicate_sweep {
+            let with_push_down_filter = build_non_case_left_join_df_with_push_down_filter(
+                &rt,
+                predicate_count,
+                nesting_depth,
+                true,
+            );
+            let without_push_down_filter =
+                build_non_case_left_join_df_with_push_down_filter(
+                    &rt,
+                    predicate_count,
+                    nesting_depth,
+                    false,
+                );
+
+            let input_label =
+                format!("predicates={predicate_count},nesting_depth={nesting_depth}");
+            control_group.bench_with_input(
+                BenchmarkId::new("with_push_down_filter", &input_label),
+                &with_push_down_filter,
+                |b, df| {
+                    b.iter(|| {
+                        let df_clone = df.clone();
+                        black_box(
+                            rt.block_on(async {
+                                df_clone.into_optimized_plan().unwrap()
+                            }),
+                        );
+                    })
+                },
+            );
+            control_group.bench_with_input(
+                BenchmarkId::new("without_push_down_filter", &input_label),
+                &without_push_down_filter,
+                |b, df| {
+                    b.iter(|| {
+                        let df_clone = df.clone();
+                        black_box(
+                            rt.block_on(async {
+                                df_clone.into_optimized_plan().unwrap()
+                            }),
+                        );
+                    })
+                },
+            );
+        }
+    }
+    control_group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);
