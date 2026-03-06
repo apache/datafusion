@@ -442,3 +442,29 @@ fn test_duplicate_bare_table_in_from() -> Result<()> {
     assert_eq!(diag.notes[0].span, Some(spans["a"]));
     Ok(())
 }
+
+#[test]
+fn test_duplicate_alias_non_overlapping_columns() -> Result<()> {
+    let query = "SELECT * FROM /*a*/j1 AS t/*a*/, /*b*/j2 AS t/*b*/";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"duplicate table alias in FROM clause");
+    assert_eq!(diag.span, Some(spans["b"]));
+    assert_eq!(diag.notes.len(), 1);
+    assert_snapshot!(diag.notes[0].message, @"first defined here");
+    assert_eq!(diag.notes[0].span, Some(spans["a"]));
+    Ok(())
+}
+
+#[test]
+fn test_duplicate_alias_non_overlapping_three_tables() -> Result<()> {
+    let query = "SELECT * FROM j1 AS x, /*a*/j2 AS t/*a*/, j3 AS y, /*b*/j1 AS t/*b*/";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"duplicate table alias in FROM clause");
+    assert_eq!(diag.span, Some(spans["b"]));
+    assert_eq!(diag.notes.len(), 1);
+    assert_snapshot!(diag.notes[0].message, @"first defined here");
+    assert_eq!(diag.notes[0].span, Some(spans["a"]));
+    Ok(())
+}

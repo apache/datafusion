@@ -738,26 +738,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 for input in from {
                     let current_name = extract_table_name(&input);
 
-                    if let Some((ref name, ref span)) = current_name {
-                        alias_spans.entry(name.clone()).or_insert(*span);
+                    if let Some((ref name, current_span)) = current_name {
+                        if let Some(prior_span) = alias_spans.get(name) {
+                            let mut diagnostic = Diagnostic::new_error(
+                                "duplicate table alias in FROM clause",
+                                current_span,
+                            );
+                            if let Some(span) = *prior_span {
+                                diagnostic = diagnostic
+                                    .with_note("first defined here", Some(span));
+                            }
+                            return plan_err!("duplicate table alias in FROM clause")
+                                .map_err(|e| e.with_diagnostic(diagnostic));
+                        }
+                        alias_spans.insert(name.clone(), current_span);
                     }
 
                     let right = self.plan_table_with_joins(input, planner_context)?;
 
-                    left = left.cross_join(right).map_err(|e| {
-                        if let Some((ref name, ref current_span)) = current_name
-                            && let Some(prior_span) =
-                                alias_spans.get(name).copied().flatten()
-                        {
-                            let diagnostic = Diagnostic::new_error(
-                                "duplicate table alias in FROM clause",
-                                *current_span,
-                            )
-                            .with_note("first defined here", Some(prior_span));
-                            return e.with_diagnostic(diagnostic);
-                        }
-                        e
-                    })?;
+                    left = left.cross_join(right)?;
                     let left_schema = Some(Arc::clone(left.schema()));
                     planner_context.set_outer_from_schema(left_schema);
                 }
