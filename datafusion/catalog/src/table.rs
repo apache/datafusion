@@ -345,6 +345,9 @@ pub trait TableProvider: Debug + Sync + Send {
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     /// Empty `filters` updates all rows.
+    ///
+    /// Assignment expressions may include qualified column references for
+    /// multi-table UPDATE statements (for example, `UPDATE t1 SET c = t2.c FROM t2`).
     async fn update(
         &self,
         _state: &dyn Session,

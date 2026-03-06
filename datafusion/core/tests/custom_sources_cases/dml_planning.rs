@@ -725,117 +725,126 @@ async fn test_delete_target_table_scoping() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_from_drops_non_target_predicates() -> Result<()> {
-    // UPDATE ... FROM is currently not working
-    // TODO fix https://github.com/apache/datafusion/issues/19950
+    let target_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, true),
+        Field::new("d", DataType::Int32, true),
+    ]));
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
-        test_schema(),
+        Arc::clone(&target_schema),
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
     ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
 
     let source_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("status", DataType::Utf8, true),
-        // t2-only column to avoid false negatives after qualifier stripping
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, true),
+        Field::new("d", DataType::Int32, true),
         Field::new("src_only", DataType::Utf8, true),
     ]));
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
-    let result = ctx
+    let df = ctx
         .sql(
-            "UPDATE t1 SET value = 1 FROM t2 \
-             WHERE t1.id = t2.id AND t2.src_only = 'active' AND t1.value > 10",
+            "UPDATE t1 SET d = 1 FROM t2 \
+             WHERE t1.a = t2.a AND t2.src_only = 'active' AND t1.d > 10",
         )
-        .await;
+        .await?;
 
-    // Verify UPDATE ... FROM is rejected with appropriate error
-    // TODO fix https://github.com/apache/datafusion/issues/19950
-    assert!(result.is_err());
-    let err = result.unwrap_err();
+    df.collect().await?;
+
+    let filters = target_provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(
+        filters.len(),
+        1,
+        "only target-table predicates should be retained for provider update"
+    );
     assert!(
-        err.to_string().contains("UPDATE ... FROM is not supported"),
-        "Expected 'UPDATE ... FROM is not supported' error, got: {err}"
+        filters[0].to_string().contains("d"),
+        "Expected target predicate on d, got: {}",
+        filters[0]
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn test_update_from_alias_variants_are_rejected() -> Result<()> {
-    // UPDATE ... FROM is currently not working
-    // TODO fix https://github.com/apache/datafusion/issues/19950
+async fn test_update_from_alias_variants_are_accepted() -> Result<()> {
+    let target_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, true),
+        Field::new("d", DataType::Int32, true),
+    ]));
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
-        test_schema(),
+        Arc::clone(&target_schema),
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
     ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
 
     let source_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("status", DataType::Utf8, true),
-        Field::new("value", DataType::Int32, true),
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, true),
+        Field::new("d", DataType::Int32, true),
     ]));
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
     let alias_queries = [
         "UPDATE t1 AS dst \
-         SET status = src.status, value = src.value + dst.value \
+         SET b = src.b, d = src.d \
          FROM t2 AS src \
-         WHERE dst.id = src.id AND src.status = 'active'",
+         WHERE dst.a = src.a AND src.b = 'active'",
         "UPDATE t1 \
          FROM t2 AS src \
-         SET status = src.status, value = t1.value + src.value \
-         WHERE t1.id = src.id",
+         SET b = src.b, d = src.d \
+         WHERE t1.a = src.a",
     ];
 
     for sql in alias_queries {
-        let result = ctx.sql(sql).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains("UPDATE ... FROM is not supported"),
-            "Expected 'UPDATE ... FROM is not supported' error for `{sql}`, got: {err}"
-        );
+        let _ = ctx.sql(sql).await?;
     }
 
     Ok(())
 }
 
 #[tokio::test]
-async fn test_update_from_joined_assignments_are_rejected() -> Result<()> {
-    // This captures joined assignment patterns that currently fail if UPDATE ... FROM
-    // planning is enabled without full qualifier-safe assignment handling.
-    // TODO fix https://github.com/apache/datafusion/issues/19950
-    let target_provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
+async fn test_update_from_joined_assignments_plan_success() -> Result<()> {
+    let target_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, true),
+        Field::new("d", DataType::Int32, true),
+    ]));
+    let target_provider =
+        Arc::new(CaptureUpdateProvider::new(Arc::clone(&target_schema)));
     let ctx = SessionContext::new();
     ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
 
     let source_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("status", DataType::Utf8, true),
-        Field::new("value", DataType::Int32, true),
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, true),
+        Field::new("d", DataType::Int32, true),
     ]));
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
-    let result = ctx
+    let _ = ctx
         .sql(
             "UPDATE t1 AS dst \
-             SET status = src.status, value = src.value + dst.value \
+             SET b = src.b, d = src.d \
              FROM t2 AS src \
-             WHERE dst.id = src.id AND src.value > 10 AND dst.value > 0",
+             WHERE dst.a = src.a AND src.b = 'active'",
         )
-        .await;
-
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(
-        err.to_string().contains("UPDATE ... FROM is not supported"),
-        "Expected 'UPDATE ... FROM is not supported' error, got: {err}"
-    );
+        .await?;
 
     Ok(())
 }
