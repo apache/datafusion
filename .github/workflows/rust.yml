@@ -69,6 +69,26 @@ jobs:
           # the changes to `Cargo.lock` after building with the updated manifest.
           cargo check --profile ci --workspace --all-targets --features integration-tests --locked
 
+  # Check the workspace compiles without a lock file
+  #
+  # This catches downstream breaking changes from dependencies
+  # as soon as possible by resolving deps fresh (without Cargo.lock).
+  linux-build-no-lock:
+    name: cargo check (no lock)
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Remove Cargo.lock
+        run: rm Cargo.lock
+      - name: Check workspace
+        run: cargo check --profile ci --workspace --all-targets --features serde,avro,json,backtrace,integration-tests,parquet_encryption
+
   # Check datafusion-common features
   #
   # Ensure via `cargo check` that the crate can be built with a
