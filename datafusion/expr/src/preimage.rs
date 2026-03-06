@@ -23,7 +23,23 @@ use crate::Expr;
 pub enum PreimageResult {
     /// No preimage exists for the specified value
     None,
-    /// The expression always evaluates to the specified constant
-    /// given that `expr` is within the interval
-    Range { expr: Expr, interval: Box<Interval> },
+    /// For some UDF, a `preimage` implementation determines that:
+    ///     the result `udf_result` in `udf_result = UDF(expr)`
+    ///     is equivalent to `udf_result = UDF(i)` for any `i` in `interval`.
+    ///
+    /// Then, `is_boundary` indicates a boundary condition where:
+    ///     the original expression `UDF(expr)` is compared to a value `lit` where:
+    ///         `UDF(lit) == lit`
+    /// This condition is important for two scenarios:
+    /// 1. `<` and `>=` operators:
+    ///    if `Some(false)`, expression rewrite should use `interval.upper`
+    /// 2. `=` and `!=` operators:
+    ///    if `Some(false)`, expression rewrite can use constant (false and true, respectively)
+    ///
+    /// if is_boundary is `None`, then the boundary condition never applies.
+    Range {
+        expr: Expr,
+        interval: Box<Interval>,
+        is_boundary: Option<bool>,
+    },
 }

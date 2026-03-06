@@ -5385,3 +5385,379 @@ SELECT to_timestamp(arrow_cast(100.5, 'Float16'), name) FROM test_to_timestamp_s
 
 statement ok
 drop table test_to_timestamp_scalar
+
+## date_trunc Preimage tests
+
+# Test with timestamp data
+statement ok
+CREATE TABLE t1(ts TIMESTAMP) AS VALUES
+  (NULL),
+  ('2023-01-15T10:30:45'::timestamp),
+  ('2024-06-20T14:25:30'::timestamp),
+  ('2024-12-31T23:59:59'::timestamp),
+  ('2025-03-10T08:15:20'::timestamp);
+
+# Test YEAR granularity - basic comparisons
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) = timestamp '2024-01-01T00:00:00' ORDER BY ts;
+----
+2024-06-20T14:25:30
+2024-12-31T23:59:59
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) <> timestamp '2024-01-01T00:00:00' ORDER BY ts;
+----
+2023-01-15T10:30:45
+2025-03-10T08:15:20
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) > timestamp '2024-01-01T00:00:00' ORDER BY ts;
+----
+2025-03-10T08:15:20
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) < timestamp '2024-01-01T00:00:00' ORDER BY ts;
+----
+2023-01-15T10:30:45
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) >= timestamp '2024-01-01T00:00:00' ORDER BY ts;
+----
+2024-06-20T14:25:30
+2024-12-31T23:59:59
+2025-03-10T08:15:20
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) <= timestamp '2024-01-01T00:00:00' ORDER BY ts;
+----
+2023-01-15T10:30:45
+2024-06-20T14:25:30
+2024-12-31T23:59:59
+
+# Test IS [NOT] DISTINCT FROM
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) IS NOT DISTINCT FROM timestamp '2024-01-01T00:00:00' ORDER BY ts;
+----
+2024-06-20T14:25:30
+2024-12-31T23:59:59
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) IS DISTINCT FROM timestamp '2024-01-01T00:00:00' ORDER BY ts;
+----
+2023-01-15T10:30:45
+2025-03-10T08:15:20
+NULL
+
+# Verify the plan shows the optimization (date_trunc should be rewritten)
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('year', ts) = timestamp '2024-01-01T00:00:00';
+----
+logical_plan
+01)Filter: t1.ts >= TimestampNanosecond(1704067200000000000, None) AND t1.ts < TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1704067200000000000 AND ts@0 < 1735689600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('year', ts) <> timestamp '2024-01-01T00:00:00';
+----
+logical_plan
+01)Filter: t1.ts < TimestampNanosecond(1704067200000000000, None) OR t1.ts >= TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 < 1704067200000000000 OR ts@0 >= 1735689600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('year', ts) > timestamp '2024-01-01T00:00:00';
+----
+logical_plan
+01)Filter: t1.ts >= TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1735689600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test YEAR granularity with non-aligned literal (2024-06-20 instead of 2024-01-01)
+# date_trunc('year', x) can never equal '2024-06-20' because date_trunc always sets month=01, day=01
+# So this should return no rows (optimized to EmptyRelation)
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) = timestamp '2024-06-20T14:25:30' ORDER BY ts;
+----
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('year', ts) = timestamp '2024-06-20T14:25:30';
+----
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
+
+# Test YEAR granularity with non-aligned literal and <> operator
+# date_trunc('year', x) can never equal '2024-06-20', so <> is always true
+# Should return all rows (optimized to full table scan)
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('year', ts) <> timestamp '2024-06-20T14:25:30' ORDER BY ts;
+----
+2023-01-15T10:30:45
+2024-06-20T14:25:30
+2024-12-31T23:59:59
+2025-03-10T08:15:20
+NULL
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('year', ts) <> timestamp '2024-06-20T14:25:30';
+----
+logical_plan TableScan: t1 projection=[ts]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test MONTH granularity
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('month', ts) = timestamp '2024-06-01T00:00:00' ORDER BY ts;
+----
+2024-06-20T14:25:30
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('month', ts) = timestamp '2024-06-01T00:00:00';
+----
+logical_plan
+01)Filter: t1.ts >= TimestampNanosecond(1717200000000000000, None) AND t1.ts < TimestampNanosecond(1719792000000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1717200000000000000 AND ts@0 < 1719792000000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test MONTH granularity with non-aligned literal (2024-06-20 instead of 2024-06-01)
+# date_trunc('month', x) can never equal '2024-06-20' because date_trunc always sets day=01
+# So this should return no rows (optimized to EmptyRelation)
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('month', ts) = timestamp '2024-06-20T14:25:30' ORDER BY ts;
+----
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('month', ts) = timestamp '2024-06-20T14:25:30';
+----
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
+
+# Test QUARTER granularity
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('quarter', ts) = timestamp '2024-04-01T00:00:00' ORDER BY ts;
+----
+2024-06-20T14:25:30
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('quarter', ts) = timestamp '2024-04-01T00:00:00';
+----
+logical_plan
+01)Filter: t1.ts >= TimestampNanosecond(1711929600000000000, None) AND t1.ts < TimestampNanosecond(1719792000000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1711929600000000000 AND ts@0 < 1719792000000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test WEEK granularity
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('week', ts) = timestamp '2024-06-17T00:00:00' ORDER BY ts;
+----
+2024-06-20T14:25:30
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('week', ts) = timestamp '2024-06-17T00:00:00';
+----
+logical_plan
+01)Filter: t1.ts >= TimestampNanosecond(1718582400000000000, None) AND t1.ts < TimestampNanosecond(1719187200000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1718582400000000000 AND ts@0 < 1719187200000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test DAY granularity
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('day', ts) = timestamp '2024-06-20T00:00:00' ORDER BY ts;
+----
+2024-06-20T14:25:30
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('day', ts) = timestamp '2024-06-20T00:00:00';
+----
+logical_plan
+01)Filter: t1.ts >= TimestampNanosecond(1718841600000000000, None) AND t1.ts < TimestampNanosecond(1718928000000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1718841600000000000 AND ts@0 < 1718928000000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test HOUR granularity
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('hour', ts) = timestamp '2024-06-20T14:00:00' ORDER BY ts;
+----
+2024-06-20T14:25:30
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('hour', ts) = timestamp '2024-06-20T14:00:00';
+----
+logical_plan
+01)Filter: t1.ts >= TimestampNanosecond(1718892000000000000, None) AND t1.ts < TimestampNanosecond(1718895600000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1718892000000000000 AND ts@0 < 1718895600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test MINUTE granularity
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('minute', ts) = timestamp '2024-06-20T14:25:00' ORDER BY ts;
+----
+2024-06-20T14:25:30
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('minute', ts) = timestamp '2024-06-20T14:25:00';
+----
+logical_plan
+01)Filter: t1.ts >= TimestampNanosecond(1718893500000000000, None) AND t1.ts < TimestampNanosecond(1718893560000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1718893500000000000 AND ts@0 < 1718893560000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test SECOND granularity
+
+query P
+SELECT ts FROM t1 WHERE date_trunc('second', ts) = timestamp '2024-06-20T14:25:30' ORDER BY ts;
+----
+2024-06-20T14:25:30
+
+query TT
+EXPLAIN SELECT ts FROM t1 WHERE date_trunc('second', ts) = timestamp '2024-06-20T14:25:30';
+----
+logical_plan
+01)Filter: t1.ts >= TimestampNanosecond(1718893530000000000, None) AND t1.ts < TimestampNanosecond(1718893531000000000, None)
+02)--TableScan: t1 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1718893530000000000 AND ts@0 < 1718893531000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test MILLISECOND granularity
+
+statement ok
+CREATE TABLE t2(ts TIMESTAMP) AS VALUES
+  ('2024-06-20T14:25:30.123456'::timestamp),
+  ('2024-06-20T14:25:30.123999'::timestamp),
+  ('2024-06-20T14:25:30.124001'::timestamp);
+
+query P
+SELECT ts FROM t2 WHERE date_trunc('millisecond', ts) = timestamp '2024-06-20T14:25:30.123' ORDER BY ts;
+----
+2024-06-20T14:25:30.123456
+2024-06-20T14:25:30.123999
+
+query TT
+EXPLAIN SELECT ts FROM t2 WHERE date_trunc('millisecond', ts) = timestamp '2024-06-20T14:25:30.123';
+----
+logical_plan
+01)Filter: t2.ts >= TimestampNanosecond(1718893530123000000, None) AND t2.ts < TimestampNanosecond(1718893530124000000, None)
+02)--TableScan: t2 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1718893530123000000 AND ts@0 < 1718893530124000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test MICROSECOND granularity
+
+query P
+SELECT ts FROM t2 WHERE date_trunc('microsecond', ts) = timestamp '2024-06-20T14:25:30.123456' ORDER BY ts;
+----
+2024-06-20T14:25:30.123456
+
+query TT
+EXPLAIN SELECT ts FROM t2 WHERE date_trunc('microsecond', ts) = timestamp '2024-06-20T14:25:30.123456';
+----
+logical_plan
+01)Filter: t2.ts >= TimestampNanosecond(1718893530123456000, None) AND t2.ts < TimestampNanosecond(1718893530123457000, None)
+02)--TableScan: t2 projection=[ts]
+physical_plan
+01)FilterExec: ts@0 >= 1718893530123456000 AND ts@0 < 1718893530123457000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test with timestamp with timezone
+
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+statement ok
+CREATE TABLE t3(ts TIMESTAMPTZ) AS VALUES
+  (NULL),
+  ('2023-12-31T23:59:59-05:00'::timestamptz),
+  ('2024-01-01T00:00:00-05:00'::timestamptz),
+  ('2024-12-31T23:59:59-05:00'::timestamptz),
+  ('2025-01-01T00:00:00-05:00'::timestamptz);
+
+query P
+SELECT ts FROM t3 WHERE date_trunc('year', ts) = timestamp '2024-01-01T00:00:00-05:00' ORDER BY ts;
+----
+
+query TT
+EXPLAIN SELECT ts FROM t3 WHERE date_trunc('year', ts) = timestamp '2024-01-01T00:00:00-05:00';
+----
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
+
+statement ok
+RESET datafusion.execution.time_zone;
+
+# Test date_trunc preimage optimization with Time types
+# These tests verify that the preimage computation works correctly for Time types with valid granularities
+
+statement ok
+CREATE TABLE time_test (id INT, val VARCHAR) AS VALUES (1, '12:34:56');
+
+# Valid granularity for Time32Second: the preimage optimization should create a range filter
+query TT
+EXPLAIN SELECT * FROM time_test WHERE date_trunc('second', arrow_cast(val, 'Time32(Second)')) = arrow_cast('12:34:56', 'Time32(Second)');
+----
+logical_plan
+01)Projection: time_test.id, time_test.val
+02)--Filter: __common_expr_3 >= Time32Second("45296") AND __common_expr_3 < Time32Second("45297")
+03)----Projection: CAST(time_test.val AS Time32(s)) AS __common_expr_3, time_test.id, time_test.val
+04)------TableScan: time_test projection=[id, val]
+physical_plan
+01)FilterExec: __common_expr_3@0 >= 45296 AND __common_expr_3@0 < 45297, projection=[id@1, val@2]
+02)--ProjectionExec: expr=[CAST(val@1 AS Time32(s)) as __common_expr_3, id@0 as id, val@1 as val]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Valid granularity for Time32Millisecond: the preimage optimization should create a range filter
+query TT
+EXPLAIN SELECT * FROM time_test WHERE date_trunc('millisecond', arrow_cast(val, 'Time32(Millisecond)')) = arrow_cast('12:34:56', 'Time32(Millisecond)');
+----
+logical_plan
+01)Projection: time_test.id, time_test.val
+02)--Filter: __common_expr_3 >= Time32Millisecond("45296000") AND __common_expr_3 < Time32Millisecond("45296001")
+03)----Projection: CAST(time_test.val AS Time32(ms)) AS __common_expr_3, time_test.id, time_test.val
+04)------TableScan: time_test projection=[id, val]
+physical_plan
+01)FilterExec: __common_expr_3@0 >= 45296000 AND __common_expr_3@0 < 45296001, projection=[id@1, val@2]
+02)--ProjectionExec: expr=[CAST(val@1 AS Time32(ms)) as __common_expr_3, id@0 as id, val@1 as val]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE time_test;
+
+# Cleanup
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;

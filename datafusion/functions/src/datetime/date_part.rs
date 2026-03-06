@@ -307,6 +307,7 @@ impl ScalarUDFImpl for DatePartFunc {
         Ok(PreimageResult::Range {
             expr: col_expr.clone(),
             interval,
+            is_boundary: None,
         })
     }
 

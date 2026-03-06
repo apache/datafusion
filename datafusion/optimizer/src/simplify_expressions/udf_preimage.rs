@@ -30,33 +30,43 @@ pub(super) fn rewrite_with_preimage(
     preimage_interval: Interval,
     op: Operator,
     expr: Expr,
+    is_boundary: Option<bool>,
 ) -> Result<Transformed<Expr>> {
     let (lower, upper) = preimage_interval.into_bounds();
     let (lower, upper) = (lit(lower), lit(upper));
 
-    let rewritten_expr = match op {
-        // <expr> < x   ==>  <expr> < lower
-        Operator::Lt => expr.lt(lower),
-        // <expr> >= x  ==>  <expr> >= lower
-        Operator::GtEq => expr.gt_eq(lower),
-        // <expr> > x ==> <expr> >= upper
-        Operator::Gt => expr.gt_eq(upper),
-        // <expr> <= x ==> <expr> < upper
-        Operator::LtEq => expr.lt(upper),
-        // <expr> = x ==> (<expr> >= lower) and (<expr> < upper)
-        Operator::Eq => and(expr.clone().gt_eq(lower), expr.lt(upper)),
-        // <expr> != x ==> (<expr> < lower) or (<expr> >= upper)
-        Operator::NotEq => or(expr.clone().lt(lower), expr.gt_eq(upper)),
+    // When is_boundary is Some, intervals are adjacent and we need to choose one
+    let rewritten_expr = match (op, is_boundary) {
+        // operators that use upper bound if is_boundary is Some(false):
+        // udf(expr) < x  ==>  udf(expr) < interval.upper
+        (Operator::Lt, Some(false)) => expr.lt(upper),
+        (Operator::GtEq, Some(false)) => expr.gt_eq(upper),
+        (Operator::Eq, Some(false)) => lit(false),
+        (Operator::NotEq, Some(false)) => lit(true),
+
+        // otherwise, use lower bound
+        // udf(expr) < x  ==>  udf(expr) < interval.lower
+        (Operator::Lt, _) => expr.lt(lower),
+        (Operator::GtEq, _) => expr.gt_eq(lower),
+        (Operator::Eq, _) => and(expr.clone().gt_eq(lower), expr.lt(upper)),
+        (Operator::NotEq, _) => or(expr.clone().lt(lower), expr.gt_eq(upper)),
+
+        // Operators that don't depend on interval boundaries
+        // udf(expr) > x ==> expr >= upper
+        (Operator::Gt, _) => expr.gt_eq(upper),
+        (Operator::LtEq, _) => expr.lt(upper),
+
         // <expr> is not distinct from x ==> (<expr> is NULL and x is NULL) or ((<expr> >= lower) and (<expr> < upper))
-        // but since x is always not NULL => (<expr> is not NULL) and (<expr> >= lower) and (<expr> < upper)
-        Operator::IsNotDistinctFrom => expr
+        // but since x is always not NULL => (<expr> is not NULL) and (<expr) >= lower) and (<expr> < upper)
+        (Operator::IsNotDistinctFrom, _) => expr
             .clone()
             .is_not_null()
             .and(expr.clone().gt_eq(lower))
             .and(expr.lt(upper)),
+
         // <expr> is distinct from x ==> (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL and x is not NULL) or (<expr> is not NULL and x is NULL)
-        // but given that x is always not NULL => (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL)
-        Operator::IsDistinctFrom => expr
+        // but given that x is always not NULL => (<expr> < lower) or (<expr> >= upper) or (<expr) is NULL)
+        (Operator::IsDistinctFrom, _) => expr
             .clone()
             .lt(lower)
             .or(expr.clone().gt_eq(upper))
@@ -136,10 +146,34 @@ mod test {
             Ok(DataType::Int32)
         }
 
-        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(500))))
+        /// Simple UDF that maps: [100, 200) -> 500 and [300, 400) -> 600
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            let arg = &args.args[0];
+
+            fn is_small_range(val: &i32) -> bool {
+                *val >= 100 && *val < 200
+            }
+            fn is_large_range(val: &i32) -> bool {
+                *val >= 300 && *val < 400
+            }
+
+            let map_result = match arg {
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(val))) => {
+                    if is_small_range(val) {
+                        Some(500)
+                    } else if is_large_range(val) {
+                        Some(600)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            Ok(ColumnarValue::Scalar(ScalarValue::Int32(map_result)))
         }
 
+        /// Simple preimage that maps: 500 -> [100, 200) and 600 -> [300, 400)
         fn preimage(
             &self,
             args: &[Expr],
@@ -162,6 +196,7 @@ mod test {
                             ScalarValue::Int32(Some(100)),
                             ScalarValue::Int32(Some(200)),
                         )?),
+                        is_boundary: None,
                     })
                 }
                 Expr::Literal(ScalarValue::Int32(Some(600)), _) => {
@@ -171,8 +206,11 @@ mod test {
                             ScalarValue::Int32(Some(300)),
                             ScalarValue::Int32(Some(400)),
                         )?),
+                        is_boundary: None,
                     })
                 }
+
+                // Any other value has no preimage
                 _ => Ok(PreimageResult::None),
             }
         }

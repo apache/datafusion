@@ -302,7 +302,8 @@ impl ScalarUDFImpl for FloorFunc {
 
         Ok(PreimageResult::Range {
             expr: arg,
-            interval: Box::new(Interval::try_new(lower, upper)?),
+            interval: Box::new(Interval::try_new(lower.clone(), upper)?),
+            is_boundary: Some(lower == *lit_value),
         })
     }
 
@@ -403,7 +404,7 @@ mod tests {
         let result = floor_func.preimage(&args, &lit_expr, &info).unwrap();
 
         match result {
-            PreimageResult::Range { expr, interval } => {
+            PreimageResult::Range { expr, interval, .. } => {
                 assert_eq!(expr, col("x"));
                 assert_eq!(interval.lower().clone(), expected_lower);
                 assert_eq!(interval.upper().clone(), expected_upper);
