@@ -785,7 +785,7 @@ impl DefaultPhysicalPlanner {
                     // We pass the filters and let the provider handle the projection
                     let filters = extract_dml_filters(input, table_name)?;
                     // Extract assignments from the projection in input plan
-                    let assignments = extract_update_assignments(input)?;
+                    let assignments = extract_update_assignments(input, table_name)?;
                     provider
                         .table_provider
                         .update(session_state, assignments, filters)
@@ -2233,9 +2233,16 @@ fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
 /// Extract column assignments from an UPDATE input plan.
 /// For UPDATE statements, the SQL planner encodes assignments as a projection
 /// over the source table. This function extracts column name and expression pairs
-/// from the projection. Column qualifiers are stripped from the expressions.
+/// from the projection.
 ///
-fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, Expr)>> {
+/// For single-table UPDATE, qualifiers are stripped for compatibility with
+/// table providers that evaluate assignment expressions against unqualified
+/// target schemas. For multi-table UPDATE ... FROM, qualifiers are preserved.
+///
+fn extract_update_assignments(
+    input: &Arc<LogicalPlan>,
+    target_table: &TableReference,
+) -> Result<Vec<(String, Expr)>> {
     // The UPDATE input plan structure is:
     // Projection(updated columns as expressions with aliases)
     //   Filter(optional WHERE clause)
@@ -2243,6 +2250,9 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
     //
     // Each projected expression has an alias matching the column name
     let mut assignments = Vec::new();
+
+    let is_multi_table_update = plan_contains_join(input)?;
+    let target_refs = collect_update_target_references(input, target_table)?;
 
     // Find the top-level projection
     if let LogicalPlan::Projection(projection) = input.as_ref() {
@@ -2253,10 +2263,15 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
                 let column_name = alias.name.clone();
                 // Only include if it's not just a column reference to itself
                 // (those are columns that aren't being updated)
-                if !is_identity_assignment(&alias.expr, &column_name) {
-                    // Strip qualifiers from the assignment expression
-                    let stripped_expr = strip_column_qualifiers((*alias.expr).clone())?;
-                    assignments.push((column_name, stripped_expr));
+                if !is_identity_assignment(&alias.expr, &column_name, &target_refs) {
+                    let assignment_expr = if is_multi_table_update {
+                        (*alias.expr).clone()
+                    } else {
+                        // Preserve existing single-table behavior for table providers
+                        // that expect unqualified assignment columns.
+                        strip_column_qualifiers((*alias.expr).clone())?
+                    };
+                    assignments.push((column_name, assignment_expr));
                 }
             }
         }
@@ -2267,10 +2282,17 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
                 for expr in &projection.expr {
                     if let Expr::Alias(alias) = expr {
                         let column_name = alias.name.clone();
-                        if !is_identity_assignment(&alias.expr, &column_name) {
-                            let stripped_expr =
-                                strip_column_qualifiers((*alias.expr).clone())?;
-                            assignments.push((column_name, stripped_expr));
+                        if !is_identity_assignment(
+                            &alias.expr,
+                            &column_name,
+                            &target_refs,
+                        ) {
+                            let assignment_expr = if is_multi_table_update {
+                                (*alias.expr).clone()
+                            } else {
+                                strip_column_qualifiers((*alias.expr).clone())?
+                            };
+                            assignments.push((column_name, assignment_expr));
                         }
                     }
                 }
@@ -2285,11 +2307,68 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
 
 /// Check if an assignment is an identity assignment (column = column)
 /// These are columns that are not being modified in the UPDATE
-fn is_identity_assignment(expr: &Expr, column_name: &str) -> bool {
+fn is_identity_assignment(
+    expr: &Expr,
+    column_name: &str,
+    target_refs: &[TableReference],
+) -> bool {
     match expr {
-        Expr::Column(col) => col.name == column_name,
+        Expr::Column(col) => {
+            col.name == column_name
+                && col.relation.as_ref().is_none_or(|relation| {
+                    target_refs
+                        .iter()
+                        .any(|target| relation.resolved_eq(target))
+                })
+        }
         _ => false,
     }
+}
+
+fn plan_contains_join(input: &Arc<LogicalPlan>) -> Result<bool> {
+    let mut has_join = false;
+    input.apply(|node| {
+        if matches!(node, LogicalPlan::Join(_)) {
+            has_join = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(has_join)
+}
+
+fn collect_update_target_references(
+    input: &Arc<LogicalPlan>,
+    target_table: &TableReference,
+) -> Result<Vec<TableReference>> {
+    let mut refs = vec![target_table.clone()];
+    input.apply(|node| {
+        if let LogicalPlan::SubqueryAlias(alias) = node
+            && plan_contains_table_scan(&alias.input, target_table)?
+            && !refs.iter().any(|r| r.resolved_eq(&alias.alias))
+        {
+            refs.push(alias.alias.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(refs)
+}
+
+fn plan_contains_table_scan(
+    input: &Arc<LogicalPlan>,
+    target_table: &TableReference,
+) -> Result<bool> {
+    let mut found = false;
+    input.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan { table_name, .. }) = node
+            && table_name.resolved_eq(target_table)
+        {
+            found = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(found)
 }
 
 /// Check if window bounds are valid after schema information is available, and
@@ -3115,7 +3194,8 @@ mod tests {
 
     use crate::execution::session_state::SessionStateBuilder;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
-    use arrow::datatypes::{DataType, Field, Int32Type};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::record_batch::RecordBatch;
     use arrow_schema::SchemaRef;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
@@ -3125,12 +3205,52 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::builder::subquery_alias;
     use datafusion_expr::{
-        LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore, col, lit,
+        DmlStatement, LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore,
+        WriteOp, col, lit,
     };
     use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+
+    async fn make_update_from_plan(
+        sql: &str,
+    ) -> Result<(Arc<LogicalPlan>, TableReference)> {
+        let ctx = SessionContext::new();
+        let t1_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let t2_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let t1 = MemTable::try_new(
+            Arc::clone(&t1_schema),
+            vec![vec![RecordBatch::new_empty(Arc::clone(&t1_schema))]],
+        )?;
+        let t2 = MemTable::try_new(
+            Arc::clone(&t2_schema),
+            vec![vec![RecordBatch::new_empty(Arc::clone(&t2_schema))]],
+        )?;
+        ctx.register_table("t1", Arc::new(t1))?;
+        ctx.register_table("t2", Arc::new(t2))?;
+
+        let plan = ctx.sql(sql).await?.into_unoptimized_plan();
+        match plan {
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                op: WriteOp::Update,
+                input,
+                ..
+            }) => Ok((input, table_name)),
+            other => internal_err!("Expected UPDATE DML plan, got: {other}"),
+        }
+    }
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -3414,6 +3534,77 @@ mod tests {
             },
         )
         "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_update_assignments_preserves_source_qualifiers_for_update_from()
+    -> Result<()> {
+        let (input, table_name) = make_update_from_plan(
+            "UPDATE t1 AS dst \
+             SET b = src.b, d = src.d \
+             FROM t2 AS src \
+             WHERE dst.a = src.a",
+        )
+        .await?;
+
+        let assignments = extract_update_assignments(&input, &table_name)?;
+        let b_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "b")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column b")
+            })?;
+        let d_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "d")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column d")
+            })?;
+
+        assert!(
+            b_expr.contains("src.b"),
+            "Unexpected b assignment: {b_expr}"
+        );
+        assert!(
+            d_expr.contains("src.d"),
+            "Unexpected d assignment: {d_expr}"
+        );
+        assert!(
+            assignments.iter().all(|(name, _)| name != "a"),
+            "Identity target columns should not be extracted as assignments"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_update_assignments_strips_target_qualifiers_single_table()
+    -> Result<()> {
+        let (input, table_name) =
+            make_update_from_plan("UPDATE t1 AS dst SET d = dst.d + 1 WHERE dst.a > 0")
+                .await?;
+
+        let assignments = extract_update_assignments(&input, &table_name)?;
+        let d_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "d")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column d")
+            })?;
+
+        assert!(
+            !d_expr.contains("dst."),
+            "Single-table assignment should not keep target qualifiers: {d_expr}"
+        );
+        assert!(
+            d_expr.contains("d"),
+            "Unexpected assignment expression: {d_expr}"
+        );
 
         Ok(())
     }
