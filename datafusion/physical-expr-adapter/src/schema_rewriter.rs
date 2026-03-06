@@ -903,7 +903,7 @@ mod tests {
         let result = adapter.rewrite(column_expr)?;
 
         // Should be replaced with a literal null
-        if let Some(literal) = result.as_any().downcast_ref::<expressions::Literal>() {
+        if let Some(literal) = result.as_any().downcast_ref::<Literal>() {
             assert_eq!(*literal.value(), ScalarValue::Float64(None));
         } else {
             panic!("Expected literal expression");
@@ -933,7 +933,7 @@ mod tests {
         let result = adapter.rewrite(Arc::new(Column::new("b", 1)))?;
         let literal = result
             .as_any()
-            .downcast_ref::<expressions::Literal>()
+            .downcast_ref::<Literal>()
             .expect("Expected literal expression");
 
         assert_eq!(
@@ -999,7 +999,7 @@ mod tests {
         // Should be replaced with the partition value
         let literal = result
             .as_any()
-            .downcast_ref::<expressions::Literal>()
+            .downcast_ref::<Literal>()
             .expect("Expected literal expression");
         assert_eq!(*literal.value(), partition_value);
 
