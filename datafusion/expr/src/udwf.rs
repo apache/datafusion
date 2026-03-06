@@ -157,7 +157,7 @@ impl WindowUDF {
         self.inner.signature()
     }
 
-    /// Do the function rewrite
+    /// Returns this window function's simplification hook, if any.
     ///
     /// See [`WindowUDFImpl::simplify`] for more details.
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
@@ -344,25 +344,28 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>>;
 
-    /// Optionally apply per-UDWF simplification / rewrite rules.
+    /// Returns an optional hook for simplifying this user-defined window
+    /// function.
     ///
-    /// This can be used to apply function specific simplification rules during
-    /// optimization. The default implementation does nothing.
+    /// Use this hook to apply function-specific rewrites during optimization.
+    /// The default implementation returns `None`.
     ///
-    /// Note that DataFusion handles simplifying arguments and  "constant
-    /// folding" (replacing a function call with constant arguments such as
-    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
-    /// optimizations manually for specific UDFs.
+    /// DataFusion already simplifies arguments and performs constant folding
+    /// (for example, `my_add(1, 2) -> 3`), so there is usually no need to
+    /// implement those optimizations manually for specific UDFs.
     ///
     /// Example:
     /// `advanced_udwf.rs`: <https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs>
     ///
     /// # Returns
-    /// [None] if simplify is not defined or,
+    /// `None` if simplify is not defined.
     ///
-    /// Or, a closure with two arguments:
-    /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
-    /// * 'info': [crate::simplify::SimplifyContext]
+    /// Or, a closure ([`WindowFunctionSimplification`]) invoked with:
+    /// * `window_function`: [WindowFunction] with already simplified
+    ///   arguments
+    /// * `info`: [crate::simplify::SimplifyContext]
+    ///
+    /// The closure returns a simplified [Expr] or an error.
     ///
     /// # Notes
     /// The returned expression must have the same schema as the original
