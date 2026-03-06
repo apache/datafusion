@@ -28,7 +28,7 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
 use datafusion_expr::statistics::StatisticsRequest;
 
-use datafusion_expr::dml::InsertOp;
+use datafusion_expr::dml::{InsertOp, MergeIntoClause};
 use datafusion_expr::{
     CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
@@ -378,6 +378,23 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// representing the number of rows removed.
     async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("TRUNCATE not supported for {} table", self.table_type())
+    }
+
+    /// Merge rows from a source into this table.
+    ///
+    /// The `source` is an [`ExecutionPlan`] representing the USING clause.
+    /// The `on` condition is the join predicate from the ON clause.
+    /// The `clauses` describe the WHEN MATCHED / WHEN NOT MATCHED actions.
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    async fn merge_into(
+        &self,
+        _state: &dyn Session,
+        _source: Arc<dyn ExecutionPlan>,
+        _on: Expr,
+        _clauses: Vec<MergeIntoClause>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("MERGE INTO not supported for {} table", self.table_type())
     }
 }
 
