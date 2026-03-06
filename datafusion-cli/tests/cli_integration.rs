@@ -272,13 +272,11 @@ fn bind_to_settings(snapshot_name: &str) -> SettingsBindDropGuard {
     settings.bind_to_scope()
 }
 
-#[rstest]
-#[case("default")]
 #[test]
-fn test_cli_with_unbounded_memory_pool<'a>(#[case] snapshot_name: &str) {
+fn test_cli_with_unbounded_memory_pool() {
     let mut settings = make_settings();
 
-    settings.set_snapshot_suffix(snapshot_name);
+    settings.set_snapshot_suffix("default");
 
     let _bound = settings.bind_to_scope();
 
