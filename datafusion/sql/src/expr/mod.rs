@@ -22,8 +22,8 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
-    ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript, TrimWhereField,
-    TypedString, Value, ValueWithSpan,
+    ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, StructField, Subscript,
+    TrimWhereField, TypedString, Value, ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -651,8 +651,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 options: Box::new(WildcardOptions::default()),
             }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
+            SQLExpr::JsonAccess { value, path } => {
+                self.parse_json_access(schema, planner_context, value, &path)
+            }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
+    }
+
+    fn parse_json_access(
+        &self,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        value: Box<SQLExpr>,
+        path: &JsonPath,
+    ) -> Result<Expr> {
+        let json_path = path.to_string();
+        let json_path = if let Some(json_path) = json_path.strip_prefix(":") {
+            // sqlparser's JsonPath display adds an extra `:` at the beginning.
+            json_path.to_owned()
+        } else {
+            json_path
+        };
+        self.build_logical_expr(
+            BinaryOperator::Custom(":".to_owned()),
+            self.sql_to_expr(*value, schema, planner_context)?,
+            // pass json path as a string literal, let the impl parse it when needed.
+            Expr::Literal(ScalarValue::Utf8(Some(json_path)), None),
+            schema,
+        )
     }
 
     /// Parses a struct(..) expression and plans it creation
