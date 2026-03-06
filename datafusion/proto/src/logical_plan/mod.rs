@@ -44,13 +44,15 @@ use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
     FileFormatFactory, file_type_to_format, format_as_file_type,
 };
-use datafusion_datasource_arrow::file_format::ArrowFormat;
+use datafusion_datasource_arrow::file_format::{ArrowFormat, ArrowFormatFactory};
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::file_format::AvroFormat;
-use datafusion_datasource_csv::file_format::CsvFormat;
-use datafusion_datasource_json::file_format::JsonFormat as OtherNdJsonFormat;
+use datafusion_datasource_csv::file_format::{CsvFormat, CsvFormatFactory};
+use datafusion_datasource_json::file_format::{
+    JsonFormat as OtherNdJsonFormat, JsonFormatFactory,
+};
 #[cfg(feature = "parquet")]
-use datafusion_datasource_parquet::file_format::ParquetFormat;
+use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::{
     AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
 };
@@ -213,8 +215,6 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         buf: &[u8],
         ctx: &TaskContext,
     ) -> Result<Arc<dyn FileFormatFactory>> {
-        use prost::Message;
-
         let proto = protobuf::FileFormatProto::decode(buf).map_err(|e| {
             internal_datafusion_err!("Failed to decode FileFormatProto: {e}")
         })?;
@@ -225,18 +225,18 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
 
         match kind {
             protobuf::FileFormatKind::Csv => file_formats::CsvLogicalExtensionCodec
-                .try_decode_file_format(&proto.options, ctx),
+                .try_decode_file_format(&proto.encoded_file_format, ctx),
             protobuf::FileFormatKind::Json => file_formats::JsonLogicalExtensionCodec
-                .try_decode_file_format(&proto.options, ctx),
+                .try_decode_file_format(&proto.encoded_file_format, ctx),
             #[cfg(feature = "parquet")]
             protobuf::FileFormatKind::Parquet => {
                 file_formats::ParquetLogicalExtensionCodec
-                    .try_decode_file_format(&proto.options, ctx)
+                    .try_decode_file_format(&proto.encoded_file_format, ctx)
             }
             protobuf::FileFormatKind::Arrow => file_formats::ArrowLogicalExtensionCodec
-                .try_decode_file_format(&proto.options, ctx),
+                .try_decode_file_format(&proto.encoded_file_format, ctx),
             protobuf::FileFormatKind::Avro => file_formats::AvroLogicalExtensionCodec
-                .try_decode_file_format(&proto.options, ctx),
+                .try_decode_file_format(&proto.encoded_file_format, ctx),
             #[cfg(not(feature = "parquet"))]
             protobuf::FileFormatKind::Parquet => {
                 not_impl_err!("Parquet support requires the 'parquet' feature")
@@ -252,33 +252,29 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         buf: &mut Vec<u8>,
         node: Arc<dyn FileFormatFactory>,
     ) -> Result<()> {
-        use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
-        use datafusion_datasource_csv::file_format::CsvFormatFactory;
-        use datafusion_datasource_json::file_format::JsonFormatFactory;
-        use prost::Message;
+        let mut encoded_file_format = Vec::new();
 
         let any = node.as_any();
-        let mut options = Vec::new();
-
         let kind = if any.downcast_ref::<CsvFormatFactory>().is_some() {
             file_formats::CsvLogicalExtensionCodec
-                .try_encode_file_format(&mut options, Arc::clone(&node))?;
+                .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Csv
         } else if any.downcast_ref::<JsonFormatFactory>().is_some() {
             file_formats::JsonLogicalExtensionCodec
-                .try_encode_file_format(&mut options, Arc::clone(&node))?;
+                .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Json
         } else if any.downcast_ref::<ArrowFormatFactory>().is_some() {
             file_formats::ArrowLogicalExtensionCodec
-                .try_encode_file_format(&mut options, Arc::clone(&node))?;
+                .try_encode_file_format(&mut encoded_file_format, Arc::clone(&node))?;
             protobuf::FileFormatKind::Arrow
         } else {
             #[cfg(feature = "parquet")]
             {
-                use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
                 if any.downcast_ref::<ParquetFormatFactory>().is_some() {
-                    file_formats::ParquetLogicalExtensionCodec
-                        .try_encode_file_format(&mut options, Arc::clone(&node))?;
+                    file_formats::ParquetLogicalExtensionCodec.try_encode_file_format(
+                        &mut encoded_file_format,
+                        Arc::clone(&node),
+                    )?;
                     protobuf::FileFormatKind::Parquet
                 } else {
                     return not_impl_err!(
@@ -296,7 +292,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
 
         let proto = protobuf::FileFormatProto {
             kind: kind as i32,
-            options,
+            encoded_file_format,
         };
         proto.encode(buf).map_err(|e| {
             internal_datafusion_err!("Failed to encode FileFormatProto: {e}")

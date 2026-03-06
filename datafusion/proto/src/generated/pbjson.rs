@@ -6170,7 +6170,7 @@ impl serde::Serialize for FileFormatProto {
         if self.kind != 0 {
             len += 1;
         }
-        if !self.options.is_empty() {
+        if !self.encoded_file_format.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileFormatProto", len)?;
@@ -6179,10 +6179,10 @@ impl serde::Serialize for FileFormatProto {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.kind)))?;
             struct_ser.serialize_field("kind", &v)?;
         }
-        if !self.options.is_empty() {
+        if !self.encoded_file_format.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("options", pbjson::private::base64::encode(&self.options).as_str())?;
+            struct_ser.serialize_field("encodedFileFormat", pbjson::private::base64::encode(&self.encoded_file_format).as_str())?;
         }
         struct_ser.end()
     }
@@ -6195,13 +6195,14 @@ impl<'de> serde::Deserialize<'de> for FileFormatProto {
     {
         const FIELDS: &[&str] = &[
             "kind",
-            "options",
+            "encoded_file_format",
+            "encodedFileFormat",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Kind,
-            Options,
+            EncodedFileFormat,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6224,7 +6225,7 @@ impl<'de> serde::Deserialize<'de> for FileFormatProto {
                     {
                         match value {
                             "kind" => Ok(GeneratedField::Kind),
-                            "options" => Ok(GeneratedField::Options),
+                            "encodedFileFormat" | "encoded_file_format" => Ok(GeneratedField::EncodedFileFormat),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6245,7 +6246,7 @@ impl<'de> serde::Deserialize<'de> for FileFormatProto {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut kind__ = None;
-                let mut options__ = None;
+                let mut encoded_file_format__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Kind => {
@@ -6254,11 +6255,11 @@ impl<'de> serde::Deserialize<'de> for FileFormatProto {
                             }
                             kind__ = Some(map_.next_value::<FileFormatKind>()? as i32);
                         }
-                        GeneratedField::Options => {
-                            if options__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("options"));
+                        GeneratedField::EncodedFileFormat => {
+                            if encoded_file_format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("encodedFileFormat"));
                             }
-                            options__ = 
+                            encoded_file_format__ = 
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -6266,7 +6267,7 @@ impl<'de> serde::Deserialize<'de> for FileFormatProto {
                 }
                 Ok(FileFormatProto {
                     kind: kind__.unwrap_or_default(),
-                    options: options__.unwrap_or_default(),
+                    encoded_file_format: encoded_file_format__.unwrap_or_default(),
                 })
             }
         }

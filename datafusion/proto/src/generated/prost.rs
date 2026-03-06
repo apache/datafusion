@@ -412,12 +412,14 @@ pub struct CopyToNode {
     #[prost(string, repeated, tag = "7")]
     pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+/// Wraps a serialized FileFormatFactory with its format kind tag,
+/// so the decoder can dispatch to the correct format-specific codec.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FileFormatProto {
     #[prost(enumeration = "FileFormatKind", tag = "1")]
     pub kind: i32,
     #[prost(bytes = "vec", tag = "2")]
-    pub options: ::prost::alloc::vec::Vec<u8>,
+    pub encoded_file_format: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DmlNode {
@@ -2178,6 +2180,9 @@ pub struct BufferExecNode {
     #[prost(uint64, tag = "2")]
     pub capacity: u64,
 }
+/// Identifies a built-in file format supported by DataFusion.
+/// Used by DefaultLogicalExtensionCodec to serialize/deserialize
+/// FileFormatFactory instances (e.g. in CopyTo plans).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum FileFormatKind {
