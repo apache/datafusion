@@ -125,6 +125,16 @@ cargo run --example dataframe -- dataframe
 | mem_pool_tracking  | [`execution_monitoring/memory_pool_tracking.rs`](examples/execution_monitoring/memory_pool_tracking.rs)             | Demonstrates memory tracking             |
 | tracing            | [`execution_monitoring/tracing.rs`](examples/execution_monitoring/tracing.rs)                                       | Demonstrates tracing integration         |
 
+## Extension Types Examples
+
+### Group: `extension_types`
+
+#### Category: Single Process
+
+| Subcommand | File Path                                                             | Description                                               |
+| ---------- | --------------------------------------------------------------------- | --------------------------------------------------------- |
+| event_id   | [`extension_types/event_id.rs`](examples/extension_types/event_id.rs) | A custom wrapper around integers that represent event ids |
+
 ## External Dependency Examples
 
 ### Group: `external_dependency`
