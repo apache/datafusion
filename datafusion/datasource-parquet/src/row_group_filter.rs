@@ -26,7 +26,7 @@ use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
 use datafusion_physical_expr::PhysicalExprSimplifier;
 use datafusion_physical_expr::expressions::NotExpr;
-use datafusion_pruning::PruningPredicate;
+use datafusion_pruning::{PruningPredicate, PruningPredicateConfig};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
@@ -256,6 +256,7 @@ impl RowGroupAccessPlanFilter {
         groups: &[RowGroupMetaData],
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
+        pruning_predicate_config: &PruningPredicateConfig,
     ) {
         // scoped timer updates on drop
         let _timer_guard = metrics.statistics_eval_time.timer();
@@ -296,6 +297,7 @@ impl RowGroupAccessPlanFilter {
                     groups,
                     predicate,
                     metrics,
+                    pruning_predicate_config,
                 );
             }
             // stats filter array could not be built, so we can't prune
@@ -314,6 +316,7 @@ impl RowGroupAccessPlanFilter {
     /// predicate, which implies all rows match the original predicate.
     ///
     /// Note: This optimization is relatively inexpensive for a limited number of row groups.
+    #[expect(clippy::too_many_arguments)]
     fn identify_fully_matched_row_groups(
         &mut self,
         candidate_row_group_indices: &[usize],
@@ -322,6 +325,7 @@ impl RowGroupAccessPlanFilter {
         groups: &[RowGroupMetaData],
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
+        pruning_predicate_config: &PruningPredicateConfig,
     ) {
         if candidate_row_group_indices.is_empty() {
             return;
@@ -337,9 +341,11 @@ impl RowGroupAccessPlanFilter {
             return;
         };
 
-        let Ok(inverted_predicate) =
-            PruningPredicate::try_new(inverted_expr, Arc::clone(predicate.schema()))
-        else {
+        let Ok(inverted_predicate) = PruningPredicate::try_new_with_config(
+            inverted_expr,
+            Arc::clone(predicate.schema()),
+            pruning_predicate_config,
+        ) else {
             return;
         };
 
@@ -768,6 +774,7 @@ mod tests {
             &[rgm1, rgm2],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]))
     }
@@ -808,6 +815,7 @@ mod tests {
             &[rgm1, rgm2],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::None);
     }
@@ -855,6 +863,7 @@ mod tests {
             groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
 
@@ -873,6 +882,7 @@ mod tests {
             groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::None);
     }
@@ -929,6 +939,7 @@ mod tests {
             groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
     }
@@ -978,6 +989,7 @@ mod tests {
             &groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
     }
@@ -1011,6 +1023,7 @@ mod tests {
             &groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
     }
@@ -1080,6 +1093,7 @@ mod tests {
             &[rgm1, rgm2, rgm3],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 2]));
     }
@@ -1177,6 +1191,7 @@ mod tests {
             &[rgm1, rgm2, rgm3, rgm4, rgm5],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 1, 4]));
     }
@@ -1234,6 +1249,7 @@ mod tests {
             &[rgm1, rgm2, rgm3],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
     }
@@ -1312,6 +1328,7 @@ mod tests {
             &[rgm1, rgm2, rgm3],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
     }
@@ -1381,6 +1398,7 @@ mod tests {
             &[rgm1, rgm2, rgm3],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
     }
