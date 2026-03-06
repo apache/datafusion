@@ -744,7 +744,7 @@ fn type_union_resolution_coercion(
             // Numeric coercion is the same as comparison coercion, both find the narrowest type
             // that can accommodate both types
             binary_numeric_coercion(lhs_type, rhs_type)
-                .or_else(|| list_coercion(lhs_type, rhs_type, type_union_coercion))
+                .or_else(|| list_coercion(lhs_type, rhs_type))
                 .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
                 .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
@@ -859,7 +859,7 @@ pub fn type_union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| ree_coercion(lhs_type, rhs_type, true, type_union_coercion))
         .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
-        .or_else(|| list_coercion(lhs_type, rhs_type, type_union_coercion))
+        .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_union_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
@@ -898,7 +898,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| ree_coercion(lhs_type, rhs_type, true, comparison_coercion))
         .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
-        .or_else(|| list_coercion(lhs_type, rhs_type, comparison_coercion))
+        .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
@@ -1620,28 +1620,24 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
     }
 }
 
-/// Coerce two list element fields to a common type using `coerce_fn`.
+/// Coerce two list element fields to a common type via
+/// [`type_union_resolution`].
 fn coerce_list_children(
     lhs_field: &FieldRef,
     rhs_field: &FieldRef,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
 ) -> Option<FieldRef> {
-    let coerced_type = coerce_fn(lhs_field.data_type(), rhs_field.data_type())?;
+    let data_types = vec![lhs_field.data_type().clone(), rhs_field.data_type().clone()];
     Some(Arc::new(
         (**lhs_field)
             .clone()
-            .with_data_type(coerced_type)
+            .with_data_type(type_union_resolution(&data_types)?)
             .with_nullable(lhs_field.is_nullable() || rhs_field.is_nullable()),
     ))
 }
 
-/// Coerce two list types by coercing their element types using
-/// `coerce_fn` (either [`comparison_coercion`] or [`type_union_coercion`]).
-fn list_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+/// Coerce two list types by coercing their element types via
+/// [`type_union_resolution`].
+fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // Coerce to the left side FixedSizeList type if the list lengths are the same,
@@ -1649,11 +1645,11 @@ fn list_coercion(
         (FixedSizeList(lhs_field, ls), FixedSizeList(rhs_field, rs)) => {
             if ls == rs {
                 Some(FixedSizeList(
-                    coerce_list_children(lhs_field, rhs_field, coerce_fn)?,
+                    coerce_list_children(lhs_field, rhs_field)?,
                     *rs,
                 ))
             } else {
-                Some(List(coerce_list_children(lhs_field, rhs_field, coerce_fn)?))
+                Some(List(coerce_list_children(lhs_field, rhs_field)?))
             }
         }
         // LargeList on any side
@@ -1661,13 +1657,13 @@ fn list_coercion(
             LargeList(lhs_field),
             List(rhs_field) | LargeList(rhs_field) | FixedSizeList(rhs_field, _),
         )
-        | (List(lhs_field) | FixedSizeList(lhs_field, _), LargeList(rhs_field)) => Some(
-            LargeList(coerce_list_children(lhs_field, rhs_field, coerce_fn)?),
-        ),
+        | (List(lhs_field) | FixedSizeList(lhs_field, _), LargeList(rhs_field)) => {
+            Some(LargeList(coerce_list_children(lhs_field, rhs_field)?))
+        }
         // Lists on both sides
         (List(lhs_field), List(rhs_field) | FixedSizeList(rhs_field, _))
         | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
-            Some(List(coerce_list_children(lhs_field, rhs_field, coerce_fn)?))
+            Some(List(coerce_list_children(lhs_field, rhs_field)?))
         }
         _ => None,
     }

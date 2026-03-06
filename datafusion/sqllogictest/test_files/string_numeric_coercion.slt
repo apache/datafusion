@@ -477,3 +477,20 @@ DROP TABLE t_float;
 
 statement ok
 DROP TABLE t_str;
+
+# -------------------------------------------------
+# List element coercion should reject mixed
+# numeric/string categories (same as array literals)
+# -------------------------------------------------
+
+# Array literal with mixed numeric/string elements errors
+query error Cannot cast string 'a' to value of Int64 type
+SELECT [1, 'a'];
+
+# MAP with mixed-category list keys should also error
+query error
+SELECT MAP {[1,2,3]:1, ['a', 'b']:2};
+
+# MAP with mixed-category list values should also error
+query error
+SELECT MAP {'a':[1,2,3], 'b':['a', 'b']};

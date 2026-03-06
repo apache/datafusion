@@ -654,7 +654,7 @@ fn test_list_coercion() {
 
     let rhs_type = DataType::List(Arc::new(Field::new("rhs", DataType::Int64, true)));
 
-    let coerced_type = list_coercion(&lhs_type, &rhs_type, comparison_coercion).unwrap();
+    let coerced_type = list_coercion(&lhs_type, &rhs_type).unwrap();
     assert_eq!(
         coerced_type,
         DataType::List(Arc::new(Field::new("lhs", DataType::Int64, true)))
