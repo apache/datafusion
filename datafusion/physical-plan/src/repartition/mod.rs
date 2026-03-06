@@ -1510,7 +1510,7 @@ impl RepartitionExec {
         };
 
         // While there are still outputs to send to, keep pulling inputs
-        let mut batches_until_yield = partitioner.num_partitions();
+        // let mut batches_until_yield: usize = partitioner.num_partitions();
         while !output_channels.is_empty() {
             // fetch the next batch
             let timer = metrics.fetch_time.timer();
@@ -1584,12 +1584,12 @@ impl RepartitionExec {
             // on uneven distributions even if some partition can not
             // make progress, but parallelism is going to be limited
             // in that case anyways
-            if batches_until_yield == 0 {
-                tokio::task::yield_now().await;
-                batches_until_yield = partitioner.num_partitions();
-            } else {
-                batches_until_yield -= 1;
-            }
+            // if batches_until_yield == 0 {
+            //     tokio::task::yield_now().await;
+            //     batches_until_yield = partitioner.num_partitions();
+            // } else {
+            //     batches_until_yield -= 1;
+            // }
         }
 
         // Flush remaining buffered batches from coalescers
