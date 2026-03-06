@@ -352,6 +352,21 @@ SELECT repeat(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 3)
 ----
 foofoofoo
 
+query T
+SELECT arrow_typeof(repeat('foo', 3))
+----
+Utf8
+
+query T
+SELECT arrow_typeof(repeat(arrow_cast('foo', 'LargeUtf8'), 3))
+----
+LargeUtf8
+
+query T
+SELECT arrow_typeof(repeat(arrow_cast('foo', 'Utf8View'), 3))
+----
+Utf8View
+
 
 query T
 SELECT replace('foobar', 'bar', 'hello')
