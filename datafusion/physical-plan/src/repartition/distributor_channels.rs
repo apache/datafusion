@@ -193,6 +193,8 @@ impl<T> Future for SendFuture<'_, T> {
         let to_wake = {
             let mut guard = this.channel.state.lock();
 
+            let receiver_active = guard.receiver_active;
+
             let Some(data) = guard.data.as_mut() else {
                 // receiver end dead
                 return Poll::Ready(Err(SendError(
@@ -200,8 +202,11 @@ impl<T> Future for SendFuture<'_, T> {
                 )));
             };
 
-            // Per-channel backpressure: block if this channel is at capacity
-            if data.len() >= this.channel.capacity {
+            // Per-channel backpressure: block if this channel is at capacity.
+            // Only apply backpressure when the receiver is actively consuming data.
+            // If the receiver has never consumed data (e.g., unclaimed output partition),
+            // allow unbounded buffering to prevent deadlocks.
+            if receiver_active && data.len() >= this.channel.capacity {
                 guard.send_wakers.push(cx.waker().clone());
                 return Poll::Pending;
             }
@@ -277,6 +282,10 @@ impl<T> Future for RecvFuture<'_, T> {
 
         match data.pop_front() {
             Some(element) => {
+                // Mark the receiver as active now that data has been consumed.
+                // This enables per-channel backpressure for this channel.
+                channel_state.receiver_active = true;
+
                 // Wake blocked senders if the buffer was at capacity before this pop.
                 // After popping, data.len() == old_len - 1, so old_len == data.len() + 1.
                 // If old_len >= capacity, senders may have been blocked.
@@ -333,6 +342,7 @@ impl<T> Channel<T> {
                 data: Some(VecDeque::default()),
                 recv_wakers: Some(Vec::default()),
                 send_wakers: Vec::default(),
+                receiver_active: false,
             }),
         }
     }
@@ -356,6 +366,12 @@ struct ChannelState<T> {
     /// Senders are blocked when the channel buffer reaches [capacity](Channel::capacity).
     /// They are woken when the receiver consumes data, making space in the buffer.
     send_wakers: Vec<Waker>,
+
+    /// Whether the receiver has actively consumed data from this channel.
+    /// Backpressure is only enforced when the receiver is active. This prevents
+    /// deadlocks when some output partitions are never consumed (e.g., when
+    /// only a subset of partitions are executed).
+    receiver_active: bool,
 }
 
 impl<T> ChannelState<T> {
@@ -430,6 +446,13 @@ mod tests {
     #[test]
     fn test_per_channel_backpressure() {
         let (txs, mut rxs) = channels(2);
+
+        // Activate receivers by sending and receiving one item each.
+        // Backpressure only applies once a receiver has actively consumed data.
+        poll_ready(&mut txs[0].send("0_warmup")).unwrap();
+        poll_ready(&mut txs[1].send("1_warmup")).unwrap();
+        assert_eq!(poll_ready(&mut rxs[0].recv()), Some("0_warmup"));
+        assert_eq!(poll_ready(&mut rxs[1].recv()), Some("1_warmup"));
 
         // Fill channel 0 to capacity
         poll_ready(&mut txs[0].send("0_a")).unwrap();
@@ -514,6 +537,10 @@ mod tests {
     #[test]
     fn test_close_channel_by_dropping_rx_wakes_blocked_senders() {
         let (txs, mut rxs) = channels(1);
+
+        // Activate receiver by consuming one item
+        poll_ready(&mut txs[0].send("warmup")).unwrap();
+        assert_eq!(poll_ready(&mut rxs[0].recv()), Some("warmup"));
 
         let rx0 = rxs.remove(0);
 
@@ -628,6 +655,10 @@ mod tests {
     #[test]
     fn test_poll_send_blocked_twice() {
         let (txs, mut rxs) = channels(1);
+
+        // Activate receiver
+        poll_ready(&mut txs[0].send("warmup")).unwrap();
+        assert_eq!(poll_ready(&mut rxs[0].recv()), Some("warmup"));
 
         // Fill to capacity
         poll_ready(&mut txs[0].send("a")).unwrap();
