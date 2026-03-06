@@ -93,7 +93,7 @@ fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
 
 fn compute_soundex(s: &str) -> String {
     if s.chars().next().map_or(false, |c| c.is_ascii_digit()) {
-        return s.to_string()
+        return s.to_string();
     }
 
     let mut chars = s.chars().filter(|c| c.is_ascii_alphabetic());
