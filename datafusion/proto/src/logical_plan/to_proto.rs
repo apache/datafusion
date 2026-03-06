@@ -54,6 +54,7 @@ impl From<&UnnestOptions> for protobuf::UnnestOptions {
     fn from(opts: &UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
+            preserve_empty_as_null: opts.preserve_empty_as_null,
             recursions: opts
                 .recursions
                 .iter()

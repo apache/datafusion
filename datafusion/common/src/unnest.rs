@@ -63,6 +63,22 @@ use crate::Column;
 ///        c1         c2                        c1        c2
 /// ```
 ///
+/// ## `Unnest(c1)`, preserve_nulls: true, preserve_empty_as_null: true (Spark's explode_outer behavior)
+/// ```text
+///      ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
+///      │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
+///      ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+///      │  null   │ │  B  │                │    2    │ │  A  │
+///      ├─────────┤ ├─────┤ ────────────▶  ├─────────┤ ├─────┤
+///      │   {}    │ │  D  │                │  null   │ │  B  │
+///      ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+///      │   {3}   │ │  E  │                │  null   │ │  D  │  <-- empty array {} produces null
+///      └─────────┘ └─────┘                ├─────────┤ ├─────┤
+///        c1         c2                    │    3    │ │  E  │
+///                                         └─────────┘ └─────┘
+///                                             c1        c2
+/// ```
+///
 /// `recursions` instruct how a column should be unnested (e.g unnesting a column multiple
 /// time, with depth = 1 and depth = 2). Any unnested column not being mentioned inside this
 /// options is inferred to be unnested with depth = 1
@@ -70,6 +86,11 @@ use crate::Column;
 pub struct UnnestOptions {
     /// Should nulls in the input be preserved? Defaults to true
     pub preserve_nulls: bool,
+    /// Should empty arrays be treated as NULL arrays? Defaults to false.
+    /// When true, empty arrays `[]` will produce a row with NULL value,
+    /// similar to Spark's `explode_outer` behavior.
+    /// When false (default), empty arrays produce no output rows.
+    pub preserve_empty_as_null: bool,
     /// If specific columns need to be unnested multiple times (e.g at different depth),
     /// declare them here. Any unnested columns not being mentioned inside this option
     /// will be unnested with depth = 1
@@ -90,6 +111,8 @@ impl Default for UnnestOptions {
         Self {
             // default to true to maintain backwards compatible behavior
             preserve_nulls: true,
+            // default to false to maintain backwards compatible behavior
+            preserve_empty_as_null: false,
             recursions: vec![],
         }
     }
@@ -105,6 +128,14 @@ impl UnnestOptions {
     /// [`Self`]
     pub fn with_preserve_nulls(mut self, preserve_nulls: bool) -> Self {
         self.preserve_nulls = preserve_nulls;
+        self
+    }
+
+    /// Set the behavior with empty arrays in the input.
+    /// When true, empty arrays `[]` will produce a row with NULL value,
+    /// similar to Spark's `explode_outer` behavior.
+    pub fn with_preserve_empty_as_null(mut self, preserve_empty_as_null: bool) -> Self {
+        self.preserve_empty_as_null = preserve_empty_as_null;
         self
     }
 

@@ -519,6 +519,8 @@ pub struct UnnestOptions {
     pub preserve_nulls: bool,
     #[prost(message, repeated, tag = "2")]
     pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
+    #[prost(bool, tag = "3")]
+    pub preserve_empty_as_null: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RecursionUnnestOption {
