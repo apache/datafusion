@@ -434,6 +434,11 @@ pub(crate) struct GroupedHashAggregateStream {
     /// Tracks which partition to emit next during final output drain.
     emit_partition_idx: usize,
 
+    /// The internal partition index that produced the current
+    /// `ProducingOutput` batch. Used by channel-based multi-output
+    /// to route batches to the correct output partition without re-hashing.
+    pub(super) last_emitted_partition: usize,
+
     // ========================================================================
     // TASK-SPECIFIC STATES:
     // Inner states groups together properties, states for a specific task.
@@ -702,6 +707,7 @@ impl GroupedHashAggregateStream {
                 Vec::new()
             },
             emit_partition_idx: num_agg_partitions,
+            last_emitted_partition: 0,
             aggregate_arguments,
             filter_expressions,
             group_by: agg_group_by,
@@ -1216,6 +1222,7 @@ impl GroupedHashAggregateStream {
                     if let Some(batch) =
                         self.emit(largest, EmitTo::All, false)?
                     {
+                        self.last_emitted_partition = largest;
                         self.clear_partition(largest, self.batch_size);
                         Ok(Some(ExecutionState::ProducingOutput(batch)))
                     } else {
@@ -1429,6 +1436,7 @@ impl GroupedHashAggregateStream {
             let idx = self.emit_partition_idx;
             self.emit_partition_idx += 1;
             if let Some(batch) = self.emit(idx, EmitTo::All, false)? {
+                self.last_emitted_partition = idx;
                 return Ok(ExecutionState::ProducingOutput(batch));
             }
         }

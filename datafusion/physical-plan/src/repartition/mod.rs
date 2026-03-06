@@ -551,7 +551,7 @@ impl BatchPartitioner {
     /// The reason this was pulled out is that we need to have a variant of `partition` that works w/ sync functions,
     /// and one that works w/ async. Using an iterator as an intermediate representation was the best way to achieve
     /// this (so we don't need to clone the entire implementation).
-    fn partition_iter(
+    pub fn partition_iter(
         &mut self,
         batch: RecordBatch,
     ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {

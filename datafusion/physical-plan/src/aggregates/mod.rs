@@ -31,12 +31,15 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
+    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode, Partitioning,
     SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 use datafusion_common::config::ConfigOptions;
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_physical_expr::utils::collect_columns;
+use futures::StreamExt;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 
@@ -47,7 +50,8 @@ use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
+    Constraint, Constraints, DataFusionError, Result, ScalarValue,
+    assert_eq_or_internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
@@ -621,6 +625,39 @@ impl LimitOptions {
     }
 }
 
+/// State for channel-based multi-output aggregation.
+/// When `num_agg_partitions > 1`, partial aggregation acts as a repartitioning
+/// operator, routing output from N input partitions to T output partitions.
+enum AggRepartitionState {
+    /// Not yet initialized. Transitions on first `execute()` call.
+    NotInitialized,
+    /// Input tasks have been spawned and are sending to output channels.
+    Consuming {
+        /// One receiver per output partition. `None` if already taken by `execute()`.
+        receivers:
+            Vec<Option<tokio::sync::mpsc::UnboundedReceiver<Result<RecordBatch>>>>,
+        /// Background tasks; dropped to abort if the exec is dropped.
+        _abort_helper: Vec<SpawnedTask<()>>,
+    },
+}
+
+impl Default for AggRepartitionState {
+    fn default() -> Self {
+        Self::NotInitialized
+    }
+}
+
+impl std::fmt::Debug for AggRepartitionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotInitialized => write!(f, "NotInitialized"),
+            Self::Consuming { receivers, .. } => {
+                write!(f, "Consuming({})", receivers.len())
+            }
+        }
+    }
+}
+
 /// Hash aggregate execution plan
 #[derive(Debug, Clone)]
 pub struct AggregateExec {
@@ -665,7 +702,17 @@ pub struct AggregateExec {
     /// When > 1, input rows are hashed by group keys and routed to separate
     /// smaller hash tables for better cache locality. Only used when mode is
     /// Partial and input is unordered. Defaults to 1 (single hash table).
+    ///
+    /// When > 1 AND this is a Partial aggregate, this also acts as a
+    /// repartitioning operator: the aggregate produces `num_agg_partitions`
+    /// output partitions (one per internal hash table), eliminating the need
+    /// for a downstream RepartitionExec.
     pub(crate) num_agg_partitions: usize,
+
+    /// Shared state for channel-based multi-output when `num_agg_partitions > 1`.
+    /// Each output partition gets a receiver; input tasks send partitioned
+    /// batches to the appropriate output channel.
+    repartition_state: Arc<Mutex<AggRepartitionState>>,
 }
 
 impl AggregateExec {
@@ -692,6 +739,7 @@ impl AggregateExec {
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
             num_agg_partitions: self.num_agg_partitions,
+            repartition_state: Arc::new(Mutex::new(AggRepartitionState::default())),
         }
     }
 
@@ -713,6 +761,7 @@ impl AggregateExec {
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
             num_agg_partitions: self.num_agg_partitions,
+            repartition_state: Arc::new(Mutex::new(AggRepartitionState::default())),
         }
     }
 
@@ -848,6 +897,7 @@ impl AggregateExec {
             cache: Arc::new(cache),
             dynamic_filter: None,
             num_agg_partitions: 1,
+            repartition_state: Arc::new(Mutex::new(AggRepartitionState::default())),
         };
 
         exec.init_dynamic_filter();
@@ -861,8 +911,17 @@ impl AggregateExec {
     }
 
     /// Set the number of internal hash table partitions for partial aggregation.
+    /// When n > 1, the aggregate also acts as a repartitioning operator,
+    /// producing n output partitions.
     pub fn with_num_agg_partitions(mut self, n: usize) -> Self {
         self.num_agg_partitions = n;
+        if n > 1 {
+            // Update output partitioning to reflect the repartitioned output.
+            let group_exprs = self.output_group_expr();
+            let mut cache = (*self.cache).clone();
+            cache.partitioning = Partitioning::Hash(group_exprs, n);
+            self.cache = Arc::new(cache);
+        }
         self
     }
 
@@ -931,6 +990,51 @@ impl AggregateExec {
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
             self, context, partition,
         )?))
+    }
+
+    /// Pulls batches from a single input partition's aggregate stream and
+    /// routes each batch to the correct output partition channel.
+    ///
+    /// Because the internal hash tables use the same hash function
+    /// (`REPARTITION_RANDOM_STATE`) and partition count as the output,
+    /// each emitted batch already belongs entirely to one output partition.
+    /// We read `last_emitted_partition` from the stream to route without
+    /// re-hashing.
+    async fn pull_and_route(
+        mut stream: GroupedHashAggregateStream,
+        num_partitions: usize,
+        senders: Vec<tokio::sync::mpsc::UnboundedSender<Result<RecordBatch>>>,
+    ) {
+        let mut batches_until_yield = num_partitions;
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(batch) => {
+                    if batch.num_rows() == 0 {
+                        continue;
+                    }
+                    let partition = stream.last_emitted_partition;
+                    if senders[partition].send(Ok(batch)).is_err() {
+                        // Receiver dropped (e.g. LIMIT), stop
+                        return;
+                    }
+
+                    if batches_until_yield == 0 {
+                        tokio::task::yield_now().await;
+                        batches_until_yield = num_partitions;
+                    } else {
+                        batches_until_yield -= 1;
+                    }
+                }
+                Err(e) => {
+                    let e = Arc::new(e);
+                    for sender in &senders {
+                        let _ =
+                            sender.send(Err(DataFusionError::from(&e)));
+                    }
+                    return;
+                }
+            }
+        }
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
@@ -1445,6 +1549,14 @@ impl ExecutionPlan for AggregateExec {
         )?;
         me.limit_options = self.limit_options;
         me.dynamic_filter = self.dynamic_filter.clone();
+        me.num_agg_partitions = self.num_agg_partitions;
+        if self.num_agg_partitions > 1 {
+            let group_exprs = me.output_group_expr();
+            let mut cache = (*me.cache).clone();
+            cache.partitioning =
+                Partitioning::Hash(group_exprs, self.num_agg_partitions);
+            me.cache = Arc::new(cache);
+        }
 
         Ok(Arc::new(me))
     }
@@ -1454,8 +1566,72 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, &context)
-            .map(|stream| stream.into())
+        if self.num_agg_partitions <= 1 {
+            return self
+                .execute_typed(partition, &context)
+                .map(|stream| stream.into());
+        }
+
+        // Channel-based multi-output: N input partitions → T output partitions.
+        let mut state = self.repartition_state.lock();
+        if matches!(*state, AggRepartitionState::NotInitialized) {
+            let num_output = self.num_agg_partitions;
+            let num_input = self.input.output_partitioning().partition_count();
+
+            // Create one unbounded channel per output partition.
+            // Unbounded is safe here: aggregate output is much smaller
+            // than input, and bounded channels risk deadlock when a
+            // single input task drains partitions sequentially.
+            let mut senders = Vec::with_capacity(num_output);
+            let mut receivers = Vec::with_capacity(num_output);
+            for _ in 0..num_output {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                senders.push(tx);
+                receivers.push(Some(rx));
+            }
+
+            // Spawn one task per input partition
+            let mut tasks = Vec::with_capacity(num_input);
+            for input_idx in 0..num_input {
+                let stream = GroupedHashAggregateStream::new(
+                    self, &context, input_idx,
+                )?;
+                let senders_clone: Vec<_> =
+                    senders.iter().map(|s| s.clone()).collect();
+                let n = num_output;
+
+                let task = SpawnedTask::spawn(Self::pull_and_route(
+                    stream,
+                    n,
+                    senders_clone,
+                ));
+                tasks.push(task);
+            }
+
+            *state = AggRepartitionState::Consuming {
+                receivers,
+                _abort_helper: tasks,
+            };
+        }
+
+        // Take this partition's receiver
+        let AggRepartitionState::Consuming { receivers, .. } = &mut *state
+        else {
+            unreachable!()
+        };
+
+        let rx = receivers
+            .get_mut(partition)
+            .and_then(|r| r.take())
+            .expect("partition receiver already consumed");
+        let schema = Arc::clone(&self.schema);
+        drop(state);
+
+        // Wrap the receiver as a RecordBatchStream
+        let stream = futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|batch| (batch, rx))
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -4153,6 +4329,118 @@ mod tests {
             | 3 | 90.0   |
             +---+--------+
         ");
+
+        Ok(())
+    }
+
+    /// Test that when `num_agg_partitions > 1`, the aggregate produces
+    /// multiple output partitions via channels, each containing correctly
+    /// hash-partitioned data.
+    #[tokio::test]
+    async fn test_repartitioned_aggregate_multi_output() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Float64, false),
+        ]));
+
+        // Create 2 input partitions with overlapping group keys
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 1, 2, 3])),
+                Arc::new(Float64Array::from(vec![
+                    10.0, 20.0, 30.0, 40.0, 50.0, 60.0,
+                ])),
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(Float64Array::from(vec![100.0, 200.0, 300.0, 400.0])),
+            ],
+        )?;
+        let input_partitions = vec![vec![batch1], vec![batch2]];
+
+        let task_ctx = Arc::new(TaskContext::default());
+
+        let group_expr =
+            vec![(col("group_col", &schema)?, "group_col".to_string())];
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(
+                sum_udaf(),
+                vec![col("value_col", &schema)?],
+            )
+            .schema(Arc::clone(&schema))
+            .alias("sum_value")
+            .build()?,
+        )];
+
+        let num_output_partitions = 3;
+
+        let exec = TestMemoryExec::try_new(
+            &input_partitions,
+            Arc::clone(&schema),
+            None,
+        )?;
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+
+        let aggregate_exec = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                PhysicalGroupBy::new_single(group_expr),
+                aggr_expr,
+                vec![None],
+                exec,
+                Arc::clone(&schema),
+            )?
+            .with_num_agg_partitions(num_output_partitions),
+        );
+
+        // Verify output partitioning is Hash with num_output_partitions
+        assert_eq!(
+            aggregate_exec.properties().output_partitioning().partition_count(),
+            num_output_partitions
+        );
+
+        // Collect from all output partitions
+        let mut all_results: std::collections::HashMap<i32, f64> =
+            std::collections::HashMap::new();
+
+        for partition in 0..num_output_partitions {
+            let stream =
+                aggregate_exec.execute(partition, Arc::clone(&task_ctx))?;
+            let batches: Vec<_> = stream
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+
+            for batch in &batches {
+                let groups = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap();
+                let sums = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap();
+                for i in 0..batch.num_rows() {
+                    *all_results.entry(groups.value(i)).or_insert(0.0) +=
+                        sums.value(i);
+                }
+            }
+        }
+
+        // Verify: group 1 -> 10+40+100=150, group 2 -> 20+50+200=270,
+        //         group 3 -> 30+60+300=390, group 4 -> 400
+        assert_eq!(all_results.len(), 4);
+        assert_eq!(all_results[&1], 150.0);
+        assert_eq!(all_results[&2], 270.0);
+        assert_eq!(all_results[&3], 390.0);
+        assert_eq!(all_results[&4], 400.0);
 
         Ok(())
     }
