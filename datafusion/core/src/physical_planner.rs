@@ -781,41 +781,14 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    let filters = extract_dml_filters(input, table_name)?;
-                    if plan_contains_join(input)? {
-                        let input_exec = children.one()?;
-                        // `update_from` may execute the input plan eagerly as part of
-                        // table mutation. Ensure join partitioning modes (e.g. Auto)
-                        // are fully resolved before handing the plan to providers.
-                        let input_exec = self.optimize_physical_plan(
-                            input_exec,
-                            session_state,
-                            |_, _| {},
-                        )?;
-                        provider
-                            .table_provider
-                            .update_from(session_state, input_exec, filters)
-                            .await
-                            .map_err(|e| {
-                                e.context(format!(
-                                    "UPDATE operation on table '{table_name}'"
-                                ))
-                            })?
-                    } else {
-                        // For single-table UPDATE, assignments are encoded in the
-                        // projection of input and can be evaluated using only target
-                        // columns.
-                        let assignments = extract_update_assignments(input, table_name)?;
-                        provider
-                            .table_provider
-                            .update(session_state, assignments, filters)
-                            .await
-                            .map_err(|e| {
-                                e.context(format!(
-                                    "UPDATE operation on table '{table_name}'"
-                                ))
-                            })?
-                    }
+                    self.plan_update_with_provider(
+                        provider,
+                        table_name,
+                        input,
+                        session_state,
+                        children,
+                    )
+                    .await?
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -1800,6 +1773,45 @@ impl DefaultPhysicalPlanner {
             }
         };
         Ok(exec_node)
+    }
+
+    async fn plan_update_with_provider(
+        &self,
+        provider: &DefaultTableSource,
+        table_name: &TableReference,
+        input: &Arc<LogicalPlan>,
+        session_state: &SessionState,
+        children: ChildrenContainer,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let filters = extract_dml_filters(input, table_name)?;
+
+        if plan_contains_join(input)? {
+            let input_exec = children.one()?;
+            // `update_from` may execute the input plan eagerly as part of
+            // table mutation. Ensure join partitioning modes (e.g. Auto)
+            // are fully resolved before handing the plan to providers.
+            let input_exec =
+                self.optimize_physical_plan(input_exec, session_state, |_, _| {})?;
+            provider
+                .table_provider
+                .update_from(session_state, input_exec, filters)
+                .await
+                .map_err(|e| {
+                    e.context(format!("UPDATE operation on table '{table_name}'"))
+                })
+        } else {
+            // For single-table UPDATE, assignments are encoded in the
+            // projection of input and can be evaluated using only target
+            // columns.
+            let assignments = extract_update_assignments(input, table_name)?;
+            provider
+                .table_provider
+                .update(session_state, assignments, filters)
+                .await
+                .map_err(|e| {
+                    e.context(format!("UPDATE operation on table '{table_name}'"))
+                })
+        }
     }
 
     fn create_grouping_physical_expr(
