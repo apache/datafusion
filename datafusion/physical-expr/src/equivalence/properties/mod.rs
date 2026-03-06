@@ -838,7 +838,9 @@ impl EquivalenceProperties {
                         .map(|(source, _target)| source)
                         .filter(|source| expr_refers(source, &sort_expr.expr))
                         .cloned();
-                    let mut result = vec![];
+                    // Start with the original expression so that
+                    // declared orderings appear before derived ones:
+                    let mut result = vec![sort_expr.clone()];
                     // The sort expression comes from this schema, so the
                     // following call to `unwrap` is safe.
                     let expr_type = sort_expr.expr.data_type(schema).unwrap();
@@ -860,7 +862,6 @@ impl EquivalenceProperties {
                             }
                         }
                     }
-                    result.push(sort_expr);
                     result
                 })
                 // Generate all valid orderings given substituted expressions:
@@ -1099,8 +1100,11 @@ impl EquivalenceProperties {
             prefixes
         });
 
-        // Simplify each ordering by removing redundant sections:
-        orderings.chain(projected_orderings).collect()
+        // Simplify each ordering by removing redundant sections.
+        // Place projected_orderings first so that orderings reconstructed
+        // from the dependency map (which preserves declaration order via
+        // IndexMap) appear before newly derived orderings from Pass 1:
+        projected_orderings.chain(orderings).collect()
     }
 
     /// Projects constraints according to the given projection mapping.

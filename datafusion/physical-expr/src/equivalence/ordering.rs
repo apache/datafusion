@@ -107,14 +107,14 @@ impl OrderingEquivalenceClass {
                     if let Some(remove) = self.resolve_overlap(idx, ordering_idx) {
                         work = true;
                         if remove {
-                            self.orderings.swap_remove(idx);
+                            self.orderings.remove(idx);
                             continue 'outer;
                         }
                     }
                     if let Some(remove) = self.resolve_overlap(ordering_idx, idx) {
                         work = true;
                         if remove {
-                            self.orderings.swap_remove(ordering_idx);
+                            self.orderings.remove(ordering_idx);
                             continue;
                         }
                     }
