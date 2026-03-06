@@ -104,18 +104,21 @@ impl OrderingEquivalenceClass {
             'outer: while idx < self.orderings.len() {
                 let mut ordering_idx = idx + 1;
                 while ordering_idx < self.orderings.len() {
-                    if let Some(remove) = self.resolve_overlap(idx, ordering_idx) {
-                        work = true;
-                        if remove {
-                            self.orderings.remove(idx);
-                            continue 'outer;
-                        }
-                    }
+                    // Check the later index first so that for exact
+                    // duplicates we remove the later occurrence and
+                    // preserve the declaration order of orderings:
                     if let Some(remove) = self.resolve_overlap(ordering_idx, idx) {
                         work = true;
                         if remove {
                             self.orderings.remove(ordering_idx);
                             continue;
+                        }
+                    }
+                    if let Some(remove) = self.resolve_overlap(idx, ordering_idx) {
+                        work = true;
+                        if remove {
+                            self.orderings.remove(idx);
+                            continue 'outer;
                         }
                     }
                     ordering_idx += 1;
