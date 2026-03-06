@@ -784,6 +784,14 @@ impl DefaultPhysicalPlanner {
                     let filters = extract_dml_filters(input, table_name)?;
                     if plan_contains_join(input)? {
                         let input_exec = children.one()?;
+                        // `update_from` may execute the input plan eagerly as part of
+                        // table mutation. Ensure join partitioning modes (e.g. Auto)
+                        // are fully resolved before handing the plan to providers.
+                        let input_exec = self.optimize_physical_plan(
+                            input_exec,
+                            session_state,
+                            |_, _| {},
+                        )?;
                         provider
                             .table_provider
                             .update_from(session_state, input_exec, filters)
