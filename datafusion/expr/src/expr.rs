@@ -1010,7 +1010,7 @@ impl WindowFunctionDefinition {
         }
     }
 
-    /// Return the inner window simplification function, if any
+    /// Returns this window function's simplification hook, if any.
     ///
     /// See [`WindowFunctionSimplification`] for more information
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
@@ -1097,7 +1097,7 @@ impl WindowFunction {
         }
     }
 
-    /// Return the inner window simplification function, if any
+    /// Returns this window function's simplification hook, if any.
     ///
     /// See [`WindowFunctionSimplification`] for more information
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {

@@ -28,11 +28,33 @@ use arrow::datatypes::{DataType, Schema};
 /// propagate information the precision of statistical values.
 #[derive(Clone, PartialEq, Eq, Default, Copy)]
 pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
-    /// The exact value is known
+    /// The exact value is known. Used for guaranteeing correctness.
+    ///
+    /// Comes from definitive sources such as:
+    /// - Parquet file metadata (row counts, byte sizes)
+    /// - In-memory RecordBatch data (actual row counts, byte sizes, null counts)
+    /// - and more...
     Exact(T),
-    /// The value is not known exactly, but is likely close to this value
+    /// The value is not known exactly, but is likely close to this value.
+    /// Used for cost-based optimizations.
+    ///
+    /// Some operations that would result in `Inexact(T)` would be:
+    /// - Applying a filter (selectivity is unknown)
+    /// - Mixing exact and inexact values in arithmetic
+    /// - and more...
     Inexact(T),
-    /// Nothing is known about the value
+    /// Nothing is known about the value. This is the default state.
+    ///
+    /// Acts as an absorbing element in arithmetic -> any operation
+    /// involving `Absent` yields `Absent`. [`Precision::to_inexact`]
+    /// on `Absent` returns `Absent`, not `Inexact` — it represents
+    /// a fundamentally different state.
+    ///
+    /// Common sources include:
+    /// - Data sources without statistics
+    /// - Parquet columns missing from file metadata
+    /// - Statistics that cannot be derived for an operation (e.g.,
+    ///   `distinct_count` after a union, `total_byte_size` for joins)
     #[default]
     Absent,
 }
@@ -286,6 +308,7 @@ pub struct Statistics {
     /// The number of rows estimated to be scanned.
     pub num_rows: Precision<usize>,
     /// The total bytes of the output data.
+    ///
     /// Note that this is not the same as the total bytes that may be scanned,
     /// processed, etc.
     /// E.g. we may read 1GB of data from a Parquet file but the Arrow data
