@@ -937,6 +937,11 @@ config_namespace! {
         /// past window functions, if possible
         pub enable_window_limits: bool, default = true
 
+        /// When set to true, the optimizer will push TopK (Sort with fetch)
+        /// below hash repartition when the partition key is a prefix of the
+        /// sort key, reducing data volume before the shuffle.
+        pub enable_topk_repartition: bool, default = true
+
         /// When set to true, the optimizer will attempt to push down TopK dynamic filters
         /// into the file scan phase.
         pub enable_topk_dynamic_filter_pushdown: bool, default = true

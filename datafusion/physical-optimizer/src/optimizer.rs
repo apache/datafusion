@@ -33,6 +33,7 @@ use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
 use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
+use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
 use crate::hash_join_buffering::HashJoinBuffering;
@@ -146,6 +147,11 @@ impl PhysicalOptimizer {
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.
             Arc::new(LimitPushdown::new()),
+            // TopKRepartition pushes TopK (Sort with fetch) below Hash
+            // repartition when the partition key is a prefix of the sort key.
+            // This reduces data volume before a hash shuffle. It must run
+            // after LimitPushdown so that the TopK already exists on the SortExec.
+            Arc::new(TopKRepartition::new()),
             // The ProjectionPushdown rule tries to push projections towards
             // the sources in the execution plan. As a result of this process,
             // a projection can disappear if it reaches the source providers, and
