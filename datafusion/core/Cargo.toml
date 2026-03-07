@@ -109,6 +109,7 @@ unicode_expressions = [
     "datafusion-functions/unicode_expressions",
 ]
 extended_tests = []
+jiff = ["datafusion-functions/jiff"]
 
 [dependencies]
 arrow = { workspace = true }

@@ -52,6 +52,8 @@ default = [
 ]
 # enable encode/decode functions
 encoding_expressions = ["base64", "hex"]
+# enable jiff timestamp parsing
+jiff = ["dep:jiff"]
 # enable math functions
 math_expressions = []
 # enable regular expressions
@@ -78,8 +80,11 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-macros = { workspace = true }
+dyn-eq = "0.1.3"
+dyn-hash = "1.0.0"
 hex = { workspace = true, optional = true }
 itertools = { workspace = true }
+jiff = { version = "0.2.18", optional = true }
 log = { workspace = true }
 md-5 = { version = "^0.10.0", optional = true }
 memchr = { workspace = true }
@@ -116,7 +121,7 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "to_timestamp"
-required-features = ["datetime_expressions"]
+required-features = ["datetime_expressions", "jiff"]
 
 [[bench]]
 harness = false

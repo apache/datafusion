@@ -2555,23 +2555,23 @@ query error input contains invalid characters
 SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%c', '%+')
 
 # to_timestamp with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using formats: \["%q"\]: trailing input
 SELECT to_timestamp('2020-09-08 12/00/00+00:00', '%q')
 
 # to_timestamp_nanos with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using formats: \["%q"\]: trailing input
 SELECT to_timestamp_nanos('2020-09-08 12/00/00+00:00', '%q')
 
 # to_timestamp_millis with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using formats: \["%q"\]: trailing input
 SELECT to_timestamp_millis('2020-09-08 12/00/00+00:00', '%q')
 
 # to_timestamp_micros with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using formats: \["%q"\]: trailing input
 SELECT to_timestamp_micros('2020-09-08 12/00/00+00:00', '%q')
 
 # to_timestamp_seconds with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using formats: \["%q"\]: trailing input
 SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%q')
 
 # Create string timestamp table with different formats
@@ -2675,8 +2675,11 @@ SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S
 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01
 
 # verify timestamp data using tables with formatting options where at least one column cannot be parsed
-query error Error parsing timestamp from '1926632005' using format '%d-%m-%Y %H:%M:%S%#z': input contains invalid characters
+query error
 SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+----
+DataFusion error: Execution error: Error parsing timestamp from '1926632005' using formats: ["%Y-%m-%d %H/%M/%S%#z", "%+", "%d-%m-%Y %H:%M:%S%#z"]: input contains invalid characters
+
 
 # verify timestamp data using tables with formatting options where one of the formats is invalid
 query P

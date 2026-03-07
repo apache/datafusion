@@ -24,7 +24,7 @@ use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
 use crate::parquet_config::DFParquetWriterVersion;
-use crate::parsers::CompressionTypeVariant;
+use crate::parsers::{CompressionTypeVariant, DateTimeParserType};
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
@@ -504,6 +504,11 @@ config_namespace! {
         ///
         /// Defaults to the number of CPU cores on the system
         pub target_partitions: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
+
+        /// The date time parser to use when parsing date time values.
+        ///
+        /// Defaults to 'chrono'. 'jiff' is supported when the 'jiff' feature is enabled.
+        pub date_time_parser: Option<DateTimeParserType>, default = Some(DateTimeParserType::Chrono)
 
         /// The default time zone
         ///

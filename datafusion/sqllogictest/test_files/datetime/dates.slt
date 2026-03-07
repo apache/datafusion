@@ -295,7 +295,7 @@ query error input contains invalid characters
 SELECT to_date('2020-09-08 12/00/00+00:00', '%c', '%+')
 
 # to_date with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using formats: \["%q"\]: trailing input
 SELECT to_date('2020-09-08 12/00/00+00:00', '%q')
 
 statement ok
@@ -371,8 +371,11 @@ SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z')
 1999-12-31
 
 # verify date data using tables with formatting options where at least one column cannot be parsed
-query error Error parsing timestamp from '1926632005' using format '%d-%m-%Y %H:%M:%S%#z': input contains invalid characters
+query error
 SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+----
+DataFusion error: Execution error: Error parsing timestamp from '1926632005' using formats: ["%Y-%m-%d %H/%M/%S%#z", "%+", "%d-%m-%Y %H:%M:%S%#z"]: input contains invalid characters
+
 
 # verify date data using tables with formatting options where one of the formats is invalid
 query D
