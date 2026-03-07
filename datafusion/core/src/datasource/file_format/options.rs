@@ -85,6 +85,8 @@ pub struct CsvReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<(String, DataType)>,
+    /// Character encoding
+    pub charset: Option<&'a str>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
     /// Indicates how the file is sorted
@@ -118,6 +120,7 @@ impl<'a> CsvReadOptions<'a> {
             newlines_in_values: false,
             file_extension: DEFAULT_CSV_EXTENSION,
             table_partition_cols: vec![],
+            charset: None,
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             file_sort_order: vec![],
             comment: None,
@@ -206,6 +209,12 @@ impl<'a> CsvReadOptions<'a> {
     /// Configure number of max records to read for schema inference
     pub fn schema_infer_max_records(mut self, max_records: usize) -> Self {
         self.schema_infer_max_records = max_records;
+        self
+    }
+
+    /// Configure the character set encoding
+    pub fn charset(mut self, charset: &'a str) -> Self {
+        self.charset = Some(charset);
         self
     }
 
@@ -633,6 +642,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_terminator(self.terminator)
             .with_newlines_in_values(self.newlines_in_values)
             .with_schema_infer_max_rec(self.schema_infer_max_records)
+            .with_charset(self.charset.map(ToOwned::to_owned))
             .with_file_compression_type(self.file_compression_type.to_owned())
             .with_null_regex(self.null_regex.clone())
             .with_truncated_rows(self.truncated_rows);

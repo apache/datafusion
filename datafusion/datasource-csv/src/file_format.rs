@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
+use crate::charset::lookup_charset;
 use crate::source::CsvSource;
 
 use arrow::array::RecordBatch;
@@ -294,6 +295,13 @@ impl CsvFormat {
         self
     }
 
+    /// Sets the character encoding of the CSV.
+    /// Defaults to UTF-8 if unspecified.
+    pub fn with_charset(mut self, charset: Option<String>) -> Self {
+        self.options.charset = charset;
+        self
+    }
+
     /// Set a `FileCompressionType` of CSV
     /// - defaults to `FileCompressionType::UNCOMPRESSED`
     pub fn with_file_compression_type(
@@ -540,6 +548,8 @@ impl CsvFormat {
 
         pin_mut!(stream);
 
+        let charset = lookup_charset(self.options.charset.as_deref())?;
+
         while let Some(chunk) = stream.next().await.transpose()? {
             record_number += 1;
             let first_chunk = record_number == 0;
@@ -569,8 +579,15 @@ impl CsvFormat {
                 format = format.with_comment(comment);
             }
 
-            let (Schema { fields, .. }, records_read) =
-                format.infer_schema(chunk.reader(), Some(records_to_read))?;
+            let (Schema { fields, .. }, records_read) = match charset {
+                #[cfg(feature = "encoding_rs")]
+                Some(enc) => {
+                    use crate::charset::CharsetReader;
+                    let reader = CharsetReader::new(chunk.reader(), enc);
+                    format.infer_schema(reader, Some(records_to_read))?
+                }
+                None => format.infer_schema(chunk.reader(), Some(records_to_read))?,
+            };
 
             records_to_read -= records_read;
             total_records_read += records_read;
