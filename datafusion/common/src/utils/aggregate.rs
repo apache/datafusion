@@ -146,7 +146,7 @@ pub(crate) fn scalar_sum(values: &[ScalarValue]) -> Result<ScalarValue> {
             for sv in $values {
                 if let ScalarValue::$VARIANT(Some(v)) = sv {
                     if has_value {
-                        acc = acc + *v;
+                        acc += *v;
                     } else {
                         acc = *v;
                         has_value = true;
