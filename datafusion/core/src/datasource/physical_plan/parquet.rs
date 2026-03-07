@@ -1341,7 +1341,6 @@ mod tests {
         let filename = "int96_from_spark.parquet";
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
-        let task_ctx = state.task_ctx();
 
         let time_units_and_expected = vec![
             (
@@ -1393,7 +1392,8 @@ mod tests {
             .unwrap();
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-            let mut results = parquet_exec.execute(0, task_ctx.clone())?;
+            let task_ctx = state.task_ctx();
+            let mut results = parquet_exec.execute(0, task_ctx)?;
             let batch = results.next().await.unwrap()?;
 
             assert_eq!(6, batch.num_rows());
