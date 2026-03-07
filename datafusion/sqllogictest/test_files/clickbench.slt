@@ -205,13 +205,12 @@ query TT
 EXPLAIN SELECT "AdvEngineID", COUNT(*) FROM hits WHERE "AdvEngineID" <> 0 GROUP BY "AdvEngineID" ORDER BY COUNT(*) DESC;
 ----
 logical_plan
-01)Projection: hits.AdvEngineID, count(*)
-02)--Sort: count(Int64(1)) AS count(*) AS count(*) DESC NULLS FIRST
-03)----Projection: hits.AdvEngineID, count(Int64(1)) AS count(*), count(Int64(1))
-04)------Aggregate: groupBy=[[hits.AdvEngineID]], aggr=[[count(Int64(1))]]
-05)--------SubqueryAlias: hits
-06)----------Filter: hits_raw.AdvEngineID != Int16(0)
-07)------------TableScan: hits_raw projection=[AdvEngineID], partial_filters=[hits_raw.AdvEngineID != Int16(0)]
+01)Sort: count(*) AS count(*) DESC NULLS FIRST
+02)--Projection: hits.AdvEngineID, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[hits.AdvEngineID]], aggr=[[count(Int64(1))]]
+04)------SubqueryAlias: hits
+05)--------Filter: hits_raw.AdvEngineID != Int16(0)
+06)----------TableScan: hits_raw projection=[AdvEngineID], partial_filters=[hits_raw.AdvEngineID != Int16(0)]
 physical_plan
 01)SortPreservingMergeExec: [count(*)@1 DESC]
 02)--SortExec: expr=[count(*)@1 DESC], preserve_partitioning=[true]
@@ -432,12 +431,11 @@ query TT
 EXPLAIN SELECT "UserID", COUNT(*) FROM hits GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
 logical_plan
-01)Projection: hits.UserID, count(*)
-02)--Sort: count(Int64(1)) AS count(*) AS count(*) DESC NULLS FIRST, fetch=10
-03)----Projection: hits.UserID, count(Int64(1)) AS count(*), count(Int64(1))
-04)------Aggregate: groupBy=[[hits.UserID]], aggr=[[count(Int64(1))]]
-05)--------SubqueryAlias: hits
-06)----------TableScan: hits_raw projection=[UserID]
+01)Sort: count(*) AS count(*) DESC NULLS FIRST, fetch=10
+02)--Projection: hits.UserID, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[hits.UserID]], aggr=[[count(Int64(1))]]
+04)------SubqueryAlias: hits
+05)--------TableScan: hits_raw projection=[UserID]
 physical_plan
 01)SortPreservingMergeExec: [count(*)@1 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[count(*)@1 DESC], preserve_partitioning=[true]
@@ -461,12 +459,11 @@ query TT
 EXPLAIN SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
 logical_plan
-01)Projection: hits.UserID, hits.SearchPhrase, count(*)
-02)--Sort: count(Int64(1)) AS count(*) AS count(*) DESC NULLS FIRST, fetch=10
-03)----Projection: hits.UserID, hits.SearchPhrase, count(Int64(1)) AS count(*), count(Int64(1))
-04)------Aggregate: groupBy=[[hits.UserID, hits.SearchPhrase]], aggr=[[count(Int64(1))]]
-05)--------SubqueryAlias: hits
-06)----------TableScan: hits_raw projection=[UserID, SearchPhrase]
+01)Sort: count(*) AS count(*) DESC NULLS FIRST, fetch=10
+02)--Projection: hits.UserID, hits.SearchPhrase, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[hits.UserID, hits.SearchPhrase]], aggr=[[count(Int64(1))]]
+04)------SubqueryAlias: hits
+05)--------TableScan: hits_raw projection=[UserID, SearchPhrase]
 physical_plan
 01)SortPreservingMergeExec: [count(*)@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[count(*)@2 DESC], preserve_partitioning=[true]
@@ -517,12 +514,11 @@ query TT
 EXPLAIN SELECT "UserID", extract(minute FROM to_timestamp_seconds("EventTime")) AS m, "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", m, "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
 logical_plan
-01)Projection: hits.UserID, m, hits.SearchPhrase, count(*)
-02)--Sort: count(Int64(1)) AS count(*) AS count(*) DESC NULLS FIRST, fetch=10
-03)----Projection: hits.UserID, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime)) AS m, hits.SearchPhrase, count(Int64(1)) AS count(*), count(Int64(1))
-04)------Aggregate: groupBy=[[hits.UserID, date_part(Utf8("MINUTE"), to_timestamp_seconds(hits.EventTime)), hits.SearchPhrase]], aggr=[[count(Int64(1))]]
-05)--------SubqueryAlias: hits
-06)----------TableScan: hits_raw projection=[EventTime, UserID, SearchPhrase]
+01)Sort: count(*) AS count(*) DESC NULLS FIRST, fetch=10
+02)--Projection: hits.UserID, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime)) AS m, hits.SearchPhrase, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[hits.UserID, date_part(Utf8("MINUTE"), to_timestamp_seconds(hits.EventTime)), hits.SearchPhrase]], aggr=[[count(Int64(1))]]
+04)------SubqueryAlias: hits
+05)--------TableScan: hits_raw projection=[EventTime, UserID, SearchPhrase]
 physical_plan
 01)SortPreservingMergeExec: [count(*)@3 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[count(*)@3 DESC], preserve_partitioning=[true]

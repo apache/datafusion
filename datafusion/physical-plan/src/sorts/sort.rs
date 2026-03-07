@@ -1385,24 +1385,10 @@ impl ExecutionPlan for SortExec {
             return Ok(None);
         }
 
-        let updated_exprs =
-            if let Some(exprs) = update_ordering(self.expr.clone(), projection.expr())? {
-                exprs
-            } else if let Some(normalized) = self
-                .properties()
-                .equivalence_properties()
-                .normalize_sort_exprs(self.expr.iter().cloned())
-            {
-                // If direct update fails, normalize the ordering using equivalence
-                // properties (e.g. when duplicate columns from the same source exist
-                // under different aliases) and retry.
-                let Some(exprs) = update_ordering(normalized, projection.expr())? else {
-                    return Ok(None);
-                };
-                exprs
-            } else {
-                return Ok(None);
-            };
+        let Some(updated_exprs) = update_ordering(self.expr.clone(), projection.expr())?
+        else {
+            return Ok(None);
+        };
 
         Ok(Some(Arc::new(
             SortExec::new(updated_exprs, make_with_child(projection, self.input())?)
