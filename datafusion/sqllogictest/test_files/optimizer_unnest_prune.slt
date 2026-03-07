@@ -1,0 +1,136 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+###############################
+# Unnest Pruning Safety Tests #
+###############################
+
+statement ok
+CREATE TABLE unnest_prune_t
+AS VALUES
+    (1, [1, 2]),
+    (2, []),
+    (3, [3]),
+    (4, null)
+;
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# Safe case: struct unnest is cardinality-preserving and unnested outputs are dead.
+# Unnest should be removed.
+statement ok
+CREATE TABLE unnest_prune_struct_t
+AS VALUES
+    (1, struct('a', 10)),
+    (2, struct('b', 20))
+;
+
+query TT
+EXPLAIN SELECT id
+FROM (
+  SELECT column1 AS id, unnest(column2)
+  FROM unnest_prune_struct_t
+) q
+GROUP BY id;
+----
+logical_plan
+01)Aggregate: groupBy=[[q.id]], aggr=[[]]
+02)--SubqueryAlias: q
+03)----Projection: unnest_prune_struct_t.column1 AS id
+04)------TableScan: unnest_prune_struct_t projection=[column1]
+
+# Safe case: deterministic non-empty make_array unnest is cardinality-preserving.
+# Unnest should be removed.
+query TT
+EXPLAIN SELECT id
+FROM (
+  SELECT column1 AS id, unnest(make_array(1, 2, 3)) AS elem
+  FROM unnest_prune_t
+) q
+GROUP BY id;
+----
+logical_plan
+01)Aggregate: groupBy=[[q.id]], aggr=[[]]
+02)--SubqueryAlias: q
+03)----Projection: unnest_prune_t.column1 AS id
+04)------TableScan: unnest_prune_t projection=[column1]
+
+# Empty-list/null semantics are cardinality-sensitive even if unnested column is dead.
+# Unnest must remain.
+query TT
+EXPLAIN SELECT id
+FROM (
+  SELECT column1 AS id, unnest(column2) AS elem
+  FROM unnest_prune_t
+) q
+GROUP BY id;
+----
+logical_plan
+01)Aggregate: groupBy=[[q.id]], aggr=[[]]
+02)--SubqueryAlias: q
+03)----Projection: id
+04)------Unnest: lists[__unnest_placeholder(unnest_prune_t.column2)|depth=1] structs[]
+05)--------Projection: unnest_prune_t.column1 AS id, unnest_prune_t.column2 AS __unnest_placeholder(unnest_prune_t.column2)
+06)----------TableScan: unnest_prune_t projection=[column1, column2]
+
+# Count(*) is explicitly multiplicity-sensitive. Unnest must remain.
+query TT
+EXPLAIN SELECT id, count(*) AS cnt
+FROM (
+  SELECT column1 AS id, unnest(column2) AS elem
+  FROM unnest_prune_t
+) q
+GROUP BY id;
+----
+logical_plan
+01)Projection: q.id, count(Int64(1)) AS count(*) AS cnt
+02)--Aggregate: groupBy=[[q.id]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: q
+04)------Projection: id
+05)--------Unnest: lists[__unnest_placeholder(unnest_prune_t.column2)|depth=1] structs[]
+06)----------Projection: unnest_prune_t.column1 AS id, unnest_prune_t.column2 AS __unnest_placeholder(unnest_prune_t.column2)
+07)------------TableScan: unnest_prune_t projection=[column1, column2]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# Correctness check for empty-list/null behavior
+query I
+SELECT id
+FROM (
+  SELECT column1 AS id, unnest(column2) AS elem
+  FROM unnest_prune_t
+) q
+GROUP BY id
+ORDER BY id;
+----
+1
+3
+
+# Correctness check for multiplicity-sensitive count path
+query II
+SELECT id, count(*) AS cnt
+FROM (
+  SELECT column1 AS id, unnest(column2) AS elem
+  FROM unnest_prune_t
+) q
+GROUP BY id
+ORDER BY id;
+----
+1 2
+3 1
