@@ -2103,12 +2103,18 @@ fn get_physical_expr_pair(
 
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
 ///
-/// Walks the logical plan tree and collects Filter predicates and any filters
-/// pushed down into TableScan nodes, splitting AND conjunctions into individual expressions.
+/// This function combines whole-plan predicate scanning with target-branch
+/// discovery to keep DELETE and UPDATE semantics aligned:
 ///
-/// For UPDATE...FROM queries involving multiple tables, this function only extracts predicates
-/// that reference the target table. Filters from source table scans are excluded to prevent
-/// incorrect filter semantics.
+/// 1. Discover the DML target branch (`find_dml_target_branch`).
+/// 2. Collect aliases for the target relation from that branch.
+/// 3. Scan the full input tree for `Filter` predicates, retaining only
+///    predicates that reference the target relation (or its aliases).
+/// 4. Collect pushed-down `TableScan.filters` only from scans on the target branch.
+///
+/// This avoids leaking source-side predicates for `UPDATE ... FROM` while still
+/// extracting target predicates regardless of where `Filter` nodes appear in the
+/// broader DML input plan.
 ///
 /// Column qualifiers are stripped so expressions can be evaluated against the TableProvider's
 /// schema. Deduplication is performed because filters may appear in both Filter nodes and
@@ -2130,7 +2136,7 @@ fn extract_dml_filters(
     let mut allowed_refs = vec![target.clone()];
     let target_branch = find_dml_target_branch(input)?;
 
-    // First pass: collect any alias references to the target table
+    // Pass 1: collect alias references for the target relation from the target branch.
     target_branch.apply(|node| {
         if let LogicalPlan::SubqueryAlias(alias) = node
             // Check if this alias points to the target table
@@ -2142,6 +2148,8 @@ fn extract_dml_filters(
         Ok(TreeNodeRecursion::Continue)
     })?;
 
+    // Pass 2: scan the whole DML input for Filter predicates, but keep only
+    // predicates that reference the target relation (or its aliases).
     input.apply(|node| {
         match node {
             LogicalPlan::Filter(filter) => {
@@ -2187,6 +2195,7 @@ fn extract_dml_filters(
         Ok(TreeNodeRecursion::Continue)
     })?;
 
+    // Pass 3: collect pushdown filters only from target-branch scans.
     target_branch.apply(|node| {
         if let LogicalPlan::TableScan(TableScan {
             table_name,
