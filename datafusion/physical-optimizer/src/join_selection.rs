@@ -87,16 +87,18 @@ fn supports_collect_by_thresholds(
     threshold_byte_size: usize,
     threshold_num_rows: usize,
 ) -> bool {
-    // Currently we do not trust the 0 value from stats, due to stats collection might have bug
-    // TODO check the logic in datasource::get_statistics_with_limit()
     let Ok(stats) = plan.partition_statistics(None) else {
         return false;
     };
 
+    // Stats use `Precision<T>` to represent stats, where `Absent` means unknown.
+    // `Exact(0)` and `Inexact(0)` are both valid stats, and we should not treat
+    // them as unknown, `Absent` will return None (this is in regards to why
+    // `!=0` is not checked)
     if let Some(byte_size) = stats.total_byte_size.get_value() {
-        *byte_size != 0 && *byte_size < threshold_byte_size
+        *byte_size < threshold_byte_size
     } else if let Some(num_rows) = stats.num_rows.get_value() {
-        *num_rows != 0 && *num_rows < threshold_num_rows
+        *num_rows < threshold_num_rows
     } else {
         false
     }
