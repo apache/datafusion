@@ -60,9 +60,9 @@ use parking_lot::Mutex;
 /// Per-channel backpressure capacity.
 ///
 /// Each channel can buffer up to this many items before blocking senders.
-/// A value of 8 allows sender and receiver to overlap operations for better
+/// A value of 16 allows sender and receiver to overlap operations for better
 /// throughput while still providing meaningful backpressure.
-const CHANNEL_CAPACITY: usize = 8;
+const CHANNEL_CAPACITY: usize = 16;
 
 /// Create `n` empty channels with per-channel backpressure.
 pub fn channels<T>(
