@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
@@ -115,9 +116,16 @@ fn scan_with_predicate(
     let file_metrics = ParquetFileMetrics::new(0, &path.display().to_string(), &metrics);
 
     let builder = if pushdown {
-        if let Some(row_filter) =
-            build_row_filter(predicate, file_schema, &metadata, false, &file_metrics)?
-        {
+        let all_cols: HashSet<usize> = (0..file_schema.fields().len()).collect();
+        let (row_filter, _demoted) = build_row_filter(
+            predicate,
+            file_schema,
+            &metadata,
+            false,
+            &file_metrics,
+            &all_cols,
+        )?;
+        if let Some(row_filter) = row_filter {
             builder.with_row_filter(row_filter)
         } else {
             builder
