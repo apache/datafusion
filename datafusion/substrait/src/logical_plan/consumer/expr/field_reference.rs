@@ -56,6 +56,9 @@ pub(crate) fn from_substrait_field_reference(
                     Some(RootType::Expression(_)) => not_impl_err!(
                         "Expression root type in field reference is not supported"
                     ),
+                    Some(RootType::LambdaParameterReference(_)) => not_impl_err!(
+                        "Lambda parameter reference in field reference is not yet supported"
+                    ),
                 }
             }
             _ => not_impl_err!(
