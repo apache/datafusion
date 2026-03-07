@@ -155,6 +155,7 @@ impl FileStream {
                     if let Some(queue) = self.shared_queue.as_ref() {
                         match queue.pull() {
                             WorkStatus::Work(part_file) => {
+                                let part_file = *part_file;
                                 if self.file_opener.is_leaf_morsel(&part_file) {
                                     // Leaf morsel from the morsel queue — open directly.
                                     match self.file_opener.open(part_file) {
@@ -440,7 +441,7 @@ impl RecordBatchStream for FileStream {
 #[derive(Debug)]
 pub enum WorkStatus {
     /// A morsel is available
-    Work(PartitionedFile),
+    Work(Box<PartitionedFile>),
     /// No morsel available now, but others are morselizing
     Wait,
     /// No more work available
@@ -485,7 +486,7 @@ impl WorkQueue {
         // First try the morsel queue — these are ready to open immediately
         // and preserve locality with the file that was just morselized.
         if let Some(morsel) = self.morsels.lock().unwrap().pop_front() {
-            return WorkStatus::Work(morsel);
+            return WorkStatus::Work(Box::new(morsel));
         }
         // Fall back to whole files that need morselizing.
         let mut files = self.files.lock().unwrap();
@@ -493,7 +494,7 @@ impl WorkQueue {
             // Relaxed: the increment is done by the same task that will later call
             // stop_morselizing(), so program order ensures the decrement sees it.
             self.morselizing_count.fetch_add(1, Ordering::Relaxed);
-            WorkStatus::Work(file)
+            WorkStatus::Work(Box::new(file))
         } else if self.morselizing_count.load(Ordering::Acquire) > 0 {
             // Acquire: stop_morselizing() uses AcqRel (a Release write) without
             // holding the files mutex, so we need Acquire here to synchronize with
