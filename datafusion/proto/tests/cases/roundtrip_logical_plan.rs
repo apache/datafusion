@@ -743,6 +743,192 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_default_codec_csv() -> Result<()> {
+    let ctx = SessionContext::new();
+    let input = create_csv_scan(&ctx).await?;
+
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut csv_format = table_options.csv;
+    csv_format.delimiter = b'|';
+    csv_format.has_header = Some(true);
+    csv_format.compression = CompressionTypeVariant::GZIP;
+
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new_with_options(
+        csv_format.clone(),
+    )));
+
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.csv".to_string(),
+        vec![],
+        file_type,
+        Default::default(),
+    ));
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let roundtrip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    match roundtrip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.csv", copy_to.output_url);
+            assert_eq!("csv", copy_to.file_type.get_ext());
+            let dt = copy_to
+                .file_type
+                .as_ref()
+                .as_any()
+                .downcast_ref::<DefaultFileType>()
+                .unwrap();
+            let csv = dt
+                .as_format_factory()
+                .as_ref()
+                .as_any()
+                .downcast_ref::<CsvFormatFactory>()
+                .unwrap();
+            let decoded = csv.options.as_ref().unwrap();
+            assert_eq!(csv_format.delimiter, decoded.delimiter);
+            assert_eq!(csv_format.has_header, decoded.has_header);
+            assert_eq!(csv_format.compression, decoded.compression);
+        }
+        _ => panic!("Expected CopyTo plan"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_default_codec_json() -> Result<()> {
+    let ctx = SessionContext::new();
+    let input = create_json_scan(&ctx).await?;
+
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut json_format = table_options.json;
+    json_format.compression = CompressionTypeVariant::GZIP;
+    json_format.schema_infer_max_rec = Some(500);
+
+    let file_type = format_as_file_type(Arc::new(JsonFormatFactory::new_with_options(
+        json_format.clone(),
+    )));
+
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.json".to_string(),
+        vec![],
+        file_type,
+        Default::default(),
+    ));
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let roundtrip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    match roundtrip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.json", copy_to.output_url);
+            assert_eq!("json", copy_to.file_type.get_ext());
+            let dt = copy_to
+                .file_type
+                .as_ref()
+                .as_any()
+                .downcast_ref::<DefaultFileType>()
+                .unwrap();
+            let json = dt
+                .as_format_factory()
+                .as_ref()
+                .as_any()
+                .downcast_ref::<JsonFormatFactory>()
+                .unwrap();
+            let decoded = json.options.as_ref().unwrap();
+            assert_eq!(json_format.compression, decoded.compression);
+            assert_eq!(
+                json_format.schema_infer_max_rec,
+                decoded.schema_infer_max_rec
+            );
+        }
+        _ => panic!("Expected CopyTo plan"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_default_codec_parquet() -> Result<()> {
+    let ctx = SessionContext::new();
+    let input = create_parquet_scan(&ctx).await?;
+
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut parquet_format = table_options.parquet;
+    parquet_format.global.bloom_filter_on_read = true;
+    parquet_format.global.created_by = "DefaultCodecTest".to_string();
+
+    let file_type = format_as_file_type(Arc::new(
+        ParquetFormatFactory::new_with_options(parquet_format.clone()),
+    ));
+
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.parquet".to_string(),
+        vec![],
+        file_type,
+        Default::default(),
+    ));
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let roundtrip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    match roundtrip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.parquet", copy_to.output_url);
+            assert_eq!("parquet", copy_to.file_type.get_ext());
+            let dt = copy_to
+                .file_type
+                .as_ref()
+                .as_any()
+                .downcast_ref::<DefaultFileType>()
+                .unwrap();
+            let pq = dt
+                .as_format_factory()
+                .as_ref()
+                .as_any()
+                .downcast_ref::<ParquetFormatFactory>()
+                .unwrap();
+            let decoded = pq.options.as_ref().unwrap();
+            assert!(decoded.global.bloom_filter_on_read);
+            assert_eq!("DefaultCodecTest", decoded.global.created_by);
+        }
+        _ => panic!("Expected CopyTo plan"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_default_codec_arrow() -> Result<()> {
+    let ctx = SessionContext::new();
+    let input = create_csv_scan(&ctx).await?;
+
+    let file_type = format_as_file_type(Arc::new(ArrowFormatFactory::new()));
+
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.arrow".to_string(),
+        vec![],
+        file_type,
+        Default::default(),
+    ));
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let roundtrip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    match roundtrip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.arrow", copy_to.output_url);
+            assert_eq!("arrow", copy_to.file_type.get_ext());
+        }
+        _ => panic!("Expected CopyTo plan"),
+    }
+    Ok(())
+}
+
 async fn create_csv_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
