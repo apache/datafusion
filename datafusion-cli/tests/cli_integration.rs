@@ -20,6 +20,7 @@ use std::process::Command;
 use rstest::rstest;
 
 use async_trait::async_trait;
+use insta::internals::SettingsBindDropGuard;
 use insta::{Settings, glob};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
@@ -215,6 +216,42 @@ fn test_cli_top_memory_consumers<'a>(
     #[case] snapshot_name: &str,
     #[case] top_memory_consumers: impl IntoIterator<Item = &'a str>,
 ) {
+    let _bound = bind_to_settings(snapshot_name);
+
+    let mut cmd = cli();
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
+    cmd.args(["--memory-limit", "10M", "--command", sql]);
+    cmd.args(top_memory_consumers);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[rstest]
+#[case("no_track", ["--top-memory-consumers", "0"])]
+#[case("top2", ["--top-memory-consumers", "2"])]
+#[test]
+fn test_cli_top_memory_consumers_with_mem_pool_type<'a>(
+    #[case] snapshot_name: &str,
+    #[case] top_memory_consumers: impl IntoIterator<Item = &'a str>,
+) {
+    let _bound = bind_to_settings(snapshot_name);
+
+    let mut cmd = cli();
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
+    cmd.args([
+        "--memory-limit",
+        "10M",
+        "--mem-pool-type",
+        "fair",
+        "--command",
+        sql,
+    ]);
+    cmd.args(top_memory_consumers);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+fn bind_to_settings(snapshot_name: &str) -> SettingsBindDropGuard {
     let mut settings = make_settings();
 
     settings.set_snapshot_suffix(snapshot_name);
@@ -232,12 +269,20 @@ fn test_cli_top_memory_consumers<'a>(
         "Resources exhausted: Failed to allocate",
     );
 
+    settings.bind_to_scope()
+}
+
+#[test]
+fn test_cli_with_unbounded_memory_pool() {
+    let mut settings = make_settings();
+
+    settings.set_snapshot_suffix("default");
+
     let _bound = settings.bind_to_scope();
 
     let mut cmd = cli();
     let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
-    cmd.args(["--memory-limit", "10M", "--command", sql]);
-    cmd.args(top_memory_consumers);
+    cmd.args(["--maxrows", "10", "--command", sql]);
 
     assert_cmd_snapshot!(cmd);
 }

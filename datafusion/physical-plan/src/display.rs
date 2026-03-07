@@ -734,13 +734,14 @@ impl TreeRenderVisitor<'_, '_> {
                 if let Some(node) = root.get_node(x, y) {
                     write!(self.f, "{}", Self::VERTICAL)?;
 
-                    // Rigure out what to render.
-                    let mut render_text = String::new();
-                    if render_y == 0 {
-                        render_text = node.name.clone();
+                    // Figure out what to render.
+                    let mut render_text = if render_y == 0 {
+                        node.name.clone()
                     } else if render_y <= extra_info[x].len() {
-                        render_text = extra_info[x][render_y - 1].clone();
-                    }
+                        extra_info[x][render_y - 1].clone()
+                    } else {
+                        String::new()
+                    };
 
                     render_text = Self::adjust_text_for_rendering(
                         &render_text,

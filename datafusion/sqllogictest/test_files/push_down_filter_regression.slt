@@ -21,7 +21,8 @@
 query I
 COPY (select i as k, i as v from generate_series(1, 10000000) as t(i))
 TO 'test_files/scratch/push_down_filter_regression/t2.parquet'
-STORED AS PARQUET;
+STORED AS PARQUET
+OPTIONS ('format.compression' 'uncompressed');
 ----
 10000000
 
@@ -92,7 +93,8 @@ COPY (
     SELECT arrow_cast('2025-01-01T00:00:00Z'::timestamptz, 'Timestamp(Microsecond, Some("UTC"))') AS start_timestamp
 )
 TO 'test_files/scratch/push_down_filter_regression/17512.parquet'
-STORED AS PARQUET;
+STORED AS PARQUET
+OPTIONS ('format.compression' 'uncompressed');
 ----
 1
 
