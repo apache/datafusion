@@ -2218,7 +2218,9 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow::datatypes::{DataType, TimeUnit};
+    use arrow_schema::FieldRef;
     use datafusion_common::DataFusionError;
+    use datafusion_common::datatype::DataTypeExt;
     use std::error::Error;
     use std::path::PathBuf;
 
@@ -2735,7 +2737,7 @@ mod tests {
     struct MyTypePlanner {}
 
     impl TypePlanner for MyTypePlanner {
-        fn plan_type(&self, sql_type: &ast::DataType) -> Result<Option<DataType>> {
+        fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
             match sql_type {
                 ast::DataType::Datetime(precision) => {
                     let precision = match precision {
@@ -2745,7 +2747,9 @@ mod tests {
                         None | Some(9) => TimeUnit::Nanosecond,
                         _ => unreachable!(),
                     };
-                    Ok(Some(DataType::Timestamp(precision, None)))
+                    Ok(Some(
+                        DataType::Timestamp(precision, None).into_nullable_field_ref(),
+                    ))
                 }
                 _ => Ok(None),
             }

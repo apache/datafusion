@@ -292,15 +292,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("CAST with format is not supported: {format}");
                 }
 
-                Ok(Expr::TryCast(TryCast::new(
+                Ok(Expr::TryCast(TryCast::new_from_field(
                     Box::new(self.sql_expr_to_logical_expr(
                         *expr,
                         schema,
                         planner_context,
                     )?),
-                    self.convert_data_type_to_field(&data_type)?
-                        .data_type()
-                        .clone(),
+                    self.convert_data_type_to_field(&data_type)?,
                 )))
             }
 
@@ -308,11 +306,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 data_type,
                 value,
                 uses_odbc_syntax: _,
-            }) => Ok(Expr::Cast(Cast::new(
+            }) => Ok(Expr::Cast(Cast::new_from_field(
                 Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type_to_field(&data_type)?
-                    .data_type()
-                    .clone(),
+                self.convert_data_type_to_field(&data_type)?,
             ))),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
@@ -1061,12 +1057,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => expr,
         };
 
-        // Currently drops metadata attached to the type
-        // https://github.com/apache/datafusion/issues/18060
-        Ok(Expr::Cast(Cast::new(
-            Box::new(expr),
-            dt.data_type().clone(),
-        )))
+        Ok(Expr::Cast(Cast::new_from_field(Box::new(expr), dt)))
     }
 
     /// Extracts the root expression and access chain from a compound expression.
