@@ -38,5 +38,211 @@
 
 ## Original Query: SELECT ceil(5);
 ## PySpark 3.5.5 Result: {'CEIL(5)': 5, 'typeof(CEIL(5))': 'bigint', 'typeof(5)': 'int'}
-#query
-#SELECT ceil(5::int);
+query I
+SELECT ceil(5::int);
+----
+5
+
+# Additional tests for all supported numeric types
+
+# Test Float32
+query I
+SELECT ceil(125.2345::float);
+----
+126
+
+query I
+SELECT ceil(15.0001::float);
+----
+16
+
+query I
+SELECT ceil(0.1::float);
+----
+1
+
+query I
+SELECT ceil(-0.9::float);
+----
+0
+
+query I
+SELECT ceil(-1.1::float);
+----
+-1
+
+query I
+SELECT ceil(123.0::float);
+----
+123
+
+query I
+SELECT ceil(0.0::float);
+----
+0
+
+# Test Float64
+query I
+SELECT ceil(125.2345::double);
+----
+126
+
+query I
+SELECT ceil(15.0001::double);
+----
+16
+
+query I
+SELECT ceil(0.1::double);
+----
+1
+
+query I
+SELECT ceil(-0.9::double);
+----
+0
+
+query I
+SELECT ceil(-1.1::double);
+----
+-1
+
+query I
+SELECT ceil(123.0::double);
+----
+123
+
+query I
+SELECT ceil(1.9999::double);
+----
+2
+
+query I
+SELECT ceil(-1.9999::double);
+----
+-1
+
+# Test Int8 (tinyint)
+query I
+SELECT ceil(5::tinyint);
+----
+5
+
+query I
+SELECT ceil(-1::tinyint);
+----
+-1
+
+query I
+SELECT ceil(0::tinyint);
+----
+0
+
+query I
+SELECT ceil(127::tinyint);
+----
+127
+
+query I
+SELECT ceil(CAST(-128 AS tinyint));
+----
+-128
+
+# Test Int16 (smallint)
+query I
+SELECT ceil(100::smallint);
+----
+100
+
+query I
+SELECT ceil(-50::smallint);
+----
+-50
+
+query I
+SELECT ceil(0::smallint);
+----
+0
+
+query I
+SELECT ceil(32767::smallint);
+----
+32767
+
+query I
+SELECT ceil(CAST(-32768 AS smallint));
+----
+-32768
+
+# Test Int32 (int)
+query I
+SELECT ceil(1000::int);
+----
+1000
+
+query I
+SELECT ceil(-500::int);
+----
+-500
+
+query I
+SELECT ceil(0::int);
+----
+0
+
+# Test Int64 (bigint)
+query I
+SELECT ceil(48::bigint);
+----
+48
+
+query I
+SELECT ceil(-1::bigint);
+----
+-1
+
+query I
+SELECT ceil(0::bigint);
+----
+0
+
+query I
+SELECT ceil(9223372036854775807::bigint);
+----
+9223372036854775807
+
+query I
+SELECT ceil(CAST(-9223372036854775808 AS bigint));
+----
+-9223372036854775808
+
+# Test NULL values
+query I
+SELECT ceil(NULL::float);
+----
+NULL
+
+query I
+SELECT ceil(NULL::double);
+----
+NULL
+
+query I
+SELECT ceil(NULL::tinyint);
+----
+NULL
+
+query I
+SELECT ceil(NULL::smallint);
+----
+NULL
+
+query I
+SELECT ceil(NULL::int);
+----
+NULL
+
+query I
+SELECT ceil(NULL::bigint);
+----
+NULL
