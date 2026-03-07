@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -29,7 +29,9 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result, not_impl_err, plan_err};
+use datafusion_common::{
+    Column, DFSchema, Diagnostic, Result, Span, not_impl_err, plan_err,
+};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -50,7 +52,9 @@ use sqlparser::ast::{
     SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
     visit_expressions_mut,
 };
-use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
+use sqlparser::ast::{
+    NamedWindowDefinition, Select, SelectItem, Spanned, TableFactor, TableWithJoins,
+};
 
 /// Result of the `aggregate` function, containing the aggregate plan and
 /// rewritten expressions that reference the aggregate output columns.
@@ -690,21 +694,69 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 self.plan_table_with_joins(input, planner_context)
             }
             _ => {
-                let mut from = from.into_iter();
+                let extract_table_name =
+                    |t: &TableWithJoins| -> Option<(String, Option<Span>)> {
+                        let span = Span::try_from_sqlparser_span(t.relation.span());
+                        match &t.relation {
+                            TableFactor::Table { alias: Some(a), .. } => {
+                                let name =
+                                    self.ident_normalizer.normalize(a.name.clone());
+                                Some((name, span))
+                            }
+                            TableFactor::Table {
+                                name, alias: None, ..
+                            } => {
+                                let table_name = name
+                                    .0
+                                    .iter()
+                                    .filter_map(|p| p.as_ident())
+                                    .map(|id| self.ident_normalizer.normalize(id.clone()))
+                                    .next_back()?;
+                                Some((table_name, span))
+                            }
+                            _ => None,
+                        }
+                    };
 
-                let mut left = LogicalPlanBuilder::from({
-                    let input = from.next().unwrap();
-                    self.plan_table_with_joins(input, planner_context)?
-                });
+                let mut alias_spans: HashMap<String, Option<Span>> = HashMap::new();
+
+                let mut from = from.into_iter();
+                let first = from.next().unwrap();
+
+                if let Some((name, span)) = extract_table_name(&first) {
+                    alias_spans.entry(name).or_insert(span);
+                }
+
+                let mut left = LogicalPlanBuilder::from(
+                    self.plan_table_with_joins(first, planner_context)?,
+                );
+
                 let old_outer_from_schema = {
                     let left_schema = Some(Arc::clone(left.schema()));
                     planner_context.set_outer_from_schema(left_schema)
                 };
                 for input in from {
-                    // Join `input` with the current result (`left`).
+                    let current_name = extract_table_name(&input);
+
+                    if let Some((ref name, current_span)) = current_name {
+                        if let Some(prior_span) = alias_spans.get(name) {
+                            let mut diagnostic = Diagnostic::new_error(
+                                "duplicate table alias in FROM clause",
+                                current_span,
+                            );
+                            if let Some(span) = *prior_span {
+                                diagnostic = diagnostic
+                                    .with_note("first defined here", Some(span));
+                            }
+                            return plan_err!("duplicate table alias in FROM clause")
+                                .map_err(|e| e.with_diagnostic(diagnostic));
+                        }
+                        alias_spans.insert(name.clone(), current_span);
+                    }
+
                     let right = self.plan_table_with_joins(input, planner_context)?;
+
                     left = left.cross_join(right)?;
-                    // Update the outer FROM schema.
                     let left_schema = Some(Arc::clone(left.schema()));
                     planner_context.set_outer_from_schema(left_schema);
                 }

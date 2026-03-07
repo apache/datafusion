@@ -27,7 +27,9 @@ use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
-use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
+use datafusion_common::{
+    DFSchema, DataFusionError, Result, Span, not_impl_err, plan_err,
+};
 use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
     plan_datafusion_err,
@@ -258,9 +260,9 @@ pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
     /// in `PREPARE` statement
     prepare_param_data_types: Arc<Vec<FieldRef>>,
-    /// Map of CTE name to logical plan of the WITH clause.
+    /// Map of CTE name to logical plan of the WITH clause and optional span.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
-    ctes: HashMap<String, Arc<LogicalPlan>>,
+    ctes: HashMap<String, (Arc<LogicalPlan>, Option<Span>)>,
 
     /// The queries schemas of outer query relations, used to resolve the outer referenced
     /// columns in subquery (recursive aware)
@@ -387,18 +389,34 @@ impl PlannerContext {
     /// Subquery for the specified name
     pub fn insert_cte(&mut self, cte_name: impl Into<String>, plan: LogicalPlan) {
         let cte_name = cte_name.into();
-        self.ctes.insert(cte_name, Arc::new(plan));
+        self.ctes.insert(cte_name, (Arc::new(plan), None));
+    }
+
+    /// Inserts a LogicalPlan with an optional span for the CTE
+    pub(super) fn insert_cte_with_span(
+        &mut self,
+        cte_name: impl Into<String>,
+        plan: LogicalPlan,
+        span: Option<Span>,
+    ) {
+        let cte_name = cte_name.into();
+        self.ctes.insert(cte_name, (Arc::new(plan), span));
     }
 
     /// Return a plan for the Common Table Expression (CTE) / Subquery for the
     /// specified name
     pub fn get_cte(&self, cte_name: &str) -> Option<&LogicalPlan> {
-        self.ctes.get(cte_name).map(|cte| cte.as_ref())
+        self.ctes.get(cte_name).map(|(cte, _)| cte.as_ref())
     }
 
     /// Remove the plan of CTE / Subquery for the specified name
     pub(super) fn remove_cte(&mut self, cte_name: &str) {
         self.ctes.remove(cte_name);
+    }
+
+    /// Get the span of a previously defined CTE name
+    pub(super) fn get_cte_span(&self, name: &str) -> Option<Span> {
+        self.ctes.get(name).and_then(|(_, span)| *span)
     }
 }
 

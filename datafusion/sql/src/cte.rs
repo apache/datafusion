@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{
-    Result, not_impl_err, plan_err,
+    Diagnostic, Result, Span, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
@@ -37,10 +37,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         for cte in with.cte_tables {
             // A `WITH` block can't use the same name more than once
             let cte_name = self.ident_normalizer.normalize(cte.alias.name.clone());
+            let cte_name_span = Span::try_from_sqlparser_span(cte.alias.name.span);
             if planner_context.contains_cte(&cte_name) {
-                return plan_err!(
-                    "WITH query name {cte_name:?} specified more than once"
-                );
+                let msg =
+                    format!("WITH query name {cte_name:?} specified more than once");
+                let mut diagnostic = Diagnostic::new_error(&msg, cte_name_span);
+                if let Some(first_span) = planner_context.get_cte_span(&cte_name) {
+                    diagnostic =
+                        diagnostic.with_note("previously defined here", Some(first_span));
+                }
+                return plan_err!("{msg}").map_err(|e| e.with_diagnostic(diagnostic));
             }
 
             // Create a logical plan for the CTE
@@ -53,8 +59,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // Each `WITH` block can change the column names in the last
             // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
             let final_plan = self.apply_table_alias(cte_plan, cte.alias)?;
-            // Export the CTE to the outer query
-            planner_context.insert_cte(cte_name, final_plan);
+            planner_context.insert_cte_with_span(cte_name, final_plan, cte_name_span);
         }
         Ok(())
     }
