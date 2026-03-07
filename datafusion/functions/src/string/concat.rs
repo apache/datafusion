@@ -25,8 +25,10 @@ use crate::string::concat;
 use crate::strings::{
     ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
 };
-use datafusion_common::cast::{as_string_array, as_string_view_array};
-use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
+use datafusion_common::cast::{as_binary_array, as_string_array, as_string_view_array};
+use datafusion_common::{
+    Result, ScalarValue, exec_datafusion_err, internal_err, plan_err,
+};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
@@ -68,7 +70,7 @@ impl ConcatFunc {
         use DataType::*;
         Self {
             signature: Signature::variadic(
-                vec![Utf8View, Utf8, LargeUtf8],
+                vec![Utf8View, Utf8, LargeUtf8, Binary],
                 Volatility::Immutable,
             ),
         }
@@ -130,19 +132,25 @@ impl ScalarUDFImpl for ConcatFunc {
 
         // Scalar
         if array_len.is_none() {
-            let mut values = Vec::with_capacity(args.len());
+            let mut values: Vec<&str> = Vec::with_capacity(args.len());
             for arg in &args {
                 let ColumnarValue::Scalar(scalar) = arg else {
                     return internal_err!("concat expected scalar value, got {arg:?}");
                 };
-
-                match scalar.try_as_str() {
-                    Some(Some(v)) => values.push(v),
-                    Some(None) => {} // null literal
-                    None => plan_err!(
-                        "Concat function does not support scalar type {}",
-                        scalar
-                    )?,
+                if let ScalarValue::Binary(Some(value)) = scalar {
+                    let s: &str = std::str::from_utf8(value).map_err(|_| {
+                        exec_datafusion_err!("invalid UTF-8 in binary literal: {value:?}")
+                    })?;
+                    values.push(s);
+                } else {
+                    match scalar.try_as_str() {
+                        Some(Some(v)) => values.push(v),
+                        Some(None) => {} // null literal
+                        None => plan_err!(
+                            "Concat function does not support scalar type {}",
+                            scalar
+                        )?,
+                    }
                 }
             }
             let result = values.concat();
@@ -176,6 +184,13 @@ impl ScalarUDFImpl for ConcatFunc {
                     if let Some(s) = maybe_value {
                         data_size += s.len() * len;
                         columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
+                    }
+                }
+                ColumnarValue::Scalar(ScalarValue::Binary(maybe_value)) => {
+                    if let Some(b) = maybe_value {
+                        // data_size is a capacity hint, so doesn't matter if it is chars or bytes
+                        data_size += b.len() * len;
+                        columns.push(ColumnarValueRef::Scalar(b.as_slice()));
                     }
                 }
                 ColumnarValue::Array(array) => {
@@ -212,6 +227,17 @@ impl ScalarUDFImpl for ConcatFunc {
                                 ColumnarValueRef::NullableStringViewArray(string_array)
                             } else {
                                 ColumnarValueRef::NonNullableStringViewArray(string_array)
+                            };
+                            columns.push(column);
+                        }
+                        DataType::Binary => {
+                            let string_array = as_binary_array(array)?;
+
+                            data_size += string_array.values().len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableBinaryArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableBinaryArray(string_array)
                             };
                             columns.push(column);
                         }
@@ -456,7 +482,33 @@ mod tests {
             Utf8View,
             StringViewArray
         );
-
+        test_function!(
+            ConcatFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(
+                    "Café".as_bytes().into()
+                ))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("cc".to_string()))),
+            ],
+            Ok(Some("Cafécc")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            ConcatFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(Vec::from(
+                    "Café".as_bytes()
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Binary(Some("cc".as_bytes().into()))),
+            ],
+            Ok(Some("Cafécc")),
+            &str,
+            Utf8,
+            StringArray
+        );
         Ok(())
     }
 
