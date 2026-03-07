@@ -18,9 +18,10 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Date64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
@@ -35,6 +36,8 @@ mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::GroupValuesColumn;
 use row::GroupValuesRows;
+use single_group_by::primitive_adaptive::GroupValuesPrimitiveAdaptive;
+use single_group_by::primitive_flat::GroupValuesPrimitiveFlat;
 
 pub(crate) use single_group_by::primitive::HashValue;
 
@@ -119,6 +122,12 @@ pub trait GroupValues: Send {
 ///
 /// [`GroupValues`] implementations choosing logic:
 ///
+///   - If group by single column with a small integer type (i8/u8/i16/u16),
+///     or a larger integer type with statistics showing a small range
+///     or a low fill rate (range / num_rows < 4),
+///     [`GroupValuesPrimitiveFlat`] will be chosen for O(1) direct-indexed
+///     lookups.
+///
 ///   - If group by single column, and type of this column has
 ///     the specific [`GroupValues`] implementation, such implementation
 ///     will be chosen.
@@ -137,6 +146,11 @@ pub fn new_group_values(
 ) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
+
+        // Try flat (direct-indexed) implementation first
+        if let Some(flat) = try_create_flat_group_values(d) {
+            return Ok(flat);
+        }
 
         macro_rules! downcast_helper {
             ($t:ty, $d:ident) => {
@@ -208,5 +222,63 @@ pub fn new_group_values(
         }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
+    }
+}
+
+/// Try to create a flat (direct-indexed) [`GroupValues`] implementation for a
+/// single primitive column. Returns `None` if the type doesn't support flat
+/// indexing.
+///
+/// For small types (i8/u8/i16/u16) the full type range is always flat-indexed.
+/// For larger integer types an adaptive implementation is used that observes
+/// the actual data range at runtime and transparently falls back to hashing
+/// if the range exceeds the threshold.
+fn try_create_flat_group_values(data_type: &DataType) -> Option<Box<dyn GroupValues>> {
+    match data_type {
+        // Small integer types: always use flat indexing (full type range)
+        DataType::Int8 => Some(Box::new(GroupValuesPrimitiveFlat::<Int8Type>::new(
+            data_type.clone(),
+            i8::MIN,
+            256,
+        ))),
+        DataType::UInt8 => Some(Box::new(GroupValuesPrimitiveFlat::<UInt8Type>::new(
+            data_type.clone(),
+            0u8,
+            256,
+        ))),
+        DataType::Int16 => Some(Box::new(GroupValuesPrimitiveFlat::<Int16Type>::new(
+            data_type.clone(),
+            i16::MIN,
+            65536,
+        ))),
+        DataType::UInt16 => Some(Box::new(GroupValuesPrimitiveFlat::<UInt16Type>::new(
+            data_type.clone(),
+            0u16,
+            65536,
+        ))),
+
+        // Larger integer types: adaptive flat → hash fallback at runtime.
+        // No statistics required — the implementation observes the actual
+        // data range and switches to hashing if it exceeds the threshold.
+        DataType::Int32 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<Int32Type>::new(data_type.clone()),
+        )),
+        DataType::UInt32 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<UInt32Type>::new(data_type.clone()),
+        )),
+        DataType::Int64 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<Int64Type>::new(data_type.clone()),
+        )),
+        DataType::UInt64 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<UInt64Type>::new(data_type.clone()),
+        )),
+        DataType::Date32 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<Date32Type>::new(data_type.clone()),
+        )),
+        DataType::Date64 => Some(Box::new(
+            GroupValuesPrimitiveAdaptive::<Date64Type>::new(data_type.clone()),
+        )),
+
+        _ => None,
     }
 }

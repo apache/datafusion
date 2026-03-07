@@ -21,7 +21,6 @@ mod boolean;
 mod bytes;
 pub mod bytes_view;
 pub mod primitive;
-
 use std::mem::{self, size_of};
 
 use crate::aggregates::group_values::GroupValues;
