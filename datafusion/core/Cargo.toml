@@ -43,7 +43,7 @@ nested_expressions = ["datafusion-functions-nested"]
 # This feature is deprecated. Use the `nested_expressions` feature instead.
 array_expressions = ["nested_expressions"]
 # Used to enable the avro format
-avro = ["datafusion-common/avro", "datafusion-datasource-avro"]
+avro = ["datafusion-datasource-avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = [
     "liblzma",
