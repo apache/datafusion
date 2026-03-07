@@ -116,12 +116,12 @@ select arrow_typeof(sum(c1)), sum(c1) from decimal_simple;
 Decimal128(20, 6) 0.00055
 
 
-# inferred precision is original precision + 4
-# inferred scale is the original scale + 4
+# precision and scale determined by SUM/COUNT division
+# (SUM widens precision, then CAST to avg return type)
 query TR
 select arrow_typeof(avg(c1)), avg(c1) from decimal_simple;
 ----
-Decimal128(14, 10) 0.0000366666
+Decimal128(28, 14) 0.000036666667
 
 
 query TR
@@ -678,7 +678,7 @@ select * from decimal256_simple where c1 > c5;
 query TR
 select arrow_typeof(avg(c1)), avg(c1) from decimal256_simple;
 ----
-Decimal256(54, 10) 0.0000366666
+Decimal256(68, 14) 0.000036666667
 
 query TR
 select arrow_typeof(min(c1)), min(c1) from decimal256_simple where c4=false;

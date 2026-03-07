@@ -281,16 +281,16 @@ EXPLAIN SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_d
 ----
 logical_plan
 01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST
-02)--Projection: fact_table_ordered.f_dkey, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
-03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
+02)--Projection: fact_table_ordered.f_dkey, count(Int64(1)) AS count(*), CAST(sum(fact_table_ordered.value) AS Float64) / CAST(count(fact_table_ordered.value) AS Float64) AS avg(fact_table_ordered.value)
+03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey]], aggr=[[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)]]
 04)------TableScan: fact_table_ordered projection=[value, f_dkey]
 physical_plan
 01)SortPreservingMergeExec: [f_dkey@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, count(Int64(1))@1 as count(*), avg(fact_table_ordered.value)@2 as avg(fact_table_ordered.value)]
-03)----AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey], aggr=[count(Int64(1)), avg(fact_table_ordered.value)], ordering_mode=Sorted
+02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, count(Int64(1))@1 as count(*), sum(fact_table_ordered.value)@2 / CAST(count(fact_table_ordered.value)@3 AS Float64) as avg(fact_table_ordered.value)]
+03)----AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey], aggr=[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)], ordering_mode=Sorted
 04)------SortExec: expr=[f_dkey@0 ASC NULLS LAST], preserve_partitioning=[true]
 05)--------RepartitionExec: partitioning=Hash([f_dkey@0], 3), input_partitions=3
-06)----------AggregateExec: mode=Partial, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), avg(fact_table_ordered.value)], ordering_mode=Sorted
+06)----------AggregateExec: mode=Partial, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)], ordering_mode=Sorted
 07)------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_ordering=[f_dkey@1 ASC NULLS LAST], file_type=parquet
 
 # Verify results without optimization
@@ -314,13 +314,13 @@ EXPLAIN SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_d
 ----
 logical_plan
 01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST
-02)--Projection: fact_table_ordered.f_dkey, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
-03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
+02)--Projection: fact_table_ordered.f_dkey, count(Int64(1)) AS count(*), CAST(sum(fact_table_ordered.value) AS Float64) / CAST(count(fact_table_ordered.value) AS Float64) AS avg(fact_table_ordered.value)
+03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey]], aggr=[[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)]]
 04)------TableScan: fact_table_ordered projection=[value, f_dkey]
 physical_plan
 01)SortPreservingMergeExec: [f_dkey@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, count(Int64(1))@1 as count(*), avg(fact_table_ordered.value)@2 as avg(fact_table_ordered.value)]
-03)----AggregateExec: mode=SinglePartitioned, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), avg(fact_table_ordered.value)], ordering_mode=Sorted
+02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, count(Int64(1))@1 as count(*), sum(fact_table_ordered.value)@2 / CAST(count(fact_table_ordered.value)@3 AS Float64) as avg(fact_table_ordered.value)]
+03)----AggregateExec: mode=SinglePartitioned, gby=[f_dkey@1 as f_dkey], aggr=[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)], ordering_mode=Sorted
 04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[value, f_dkey], output_ordering=[f_dkey@1 ASC NULLS LAST], file_type=parquet
 
 query TIR

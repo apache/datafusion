@@ -155,16 +155,16 @@ ORDER BY f_dkey, time_bin;
 ----
 logical_plan
 01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST, time_bin ASC NULLS LAST
-02)--Projection: fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp) AS time_bin, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
-03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), fact_table_ordered.timestamp)]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
+02)--Projection: fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp) AS time_bin, count(Int64(1)) AS count(*), CAST(sum(fact_table_ordered.value) AS Float64) / CAST(count(fact_table_ordered.value) AS Float64) AS avg(fact_table_ordered.value)
+03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), fact_table_ordered.timestamp)]], aggr=[[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)]]
 04)------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
 01)SortPreservingMergeExec: [f_dkey@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST]
-02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)@1 as time_bin, count(Int64(1))@2 as count(*), avg(fact_table_ordered.value)@3 as avg(fact_table_ordered.value)]
-03)----AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)], aggr=[count(Int64(1)), avg(fact_table_ordered.value)], ordering_mode=Sorted
+02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)@1 as time_bin, count(Int64(1))@2 as count(*), sum(fact_table_ordered.value)@3 / CAST(count(fact_table_ordered.value)@4 AS Float64) as avg(fact_table_ordered.value)]
+03)----AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)], aggr=[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)], ordering_mode=Sorted
 04)------SortExec: expr=[f_dkey@0 ASC NULLS LAST, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)@1 ASC NULLS LAST], preserve_partitioning=[true]
 05)--------RepartitionExec: partitioning=Hash([f_dkey@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)@1], 3), input_partitions=3
-06)----------AggregateExec: mode=Partial, gby=[f_dkey@2 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@0) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)], aggr=[count(Int64(1)), avg(fact_table_ordered.value)], ordering_mode=Sorted
+06)----------AggregateExec: mode=Partial, gby=[f_dkey@2 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@0) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)], aggr=[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)], ordering_mode=Sorted
 07)------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_ordering=[f_dkey@2 ASC NULLS LAST, timestamp@0 ASC NULLS LAST], file_type=parquet
 
 # Verify results without subset satisfaction
@@ -198,13 +198,13 @@ ORDER BY f_dkey, time_bin;
 ----
 logical_plan
 01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST, time_bin ASC NULLS LAST
-02)--Projection: fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp) AS time_bin, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
-03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), fact_table_ordered.timestamp)]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
+02)--Projection: fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp) AS time_bin, count(Int64(1)) AS count(*), CAST(sum(fact_table_ordered.value) AS Float64) / CAST(count(fact_table_ordered.value) AS Float64) AS avg(fact_table_ordered.value)
+03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), fact_table_ordered.timestamp)]], aggr=[[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)]]
 04)------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
 01)SortPreservingMergeExec: [f_dkey@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST]
-02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)@1 as time_bin, count(Int64(1))@2 as count(*), avg(fact_table_ordered.value)@3 as avg(fact_table_ordered.value)]
-03)----AggregateExec: mode=SinglePartitioned, gby=[f_dkey@2 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@0) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)], aggr=[count(Int64(1)), avg(fact_table_ordered.value)], ordering_mode=Sorted
+02)--ProjectionExec: expr=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)@1 as time_bin, count(Int64(1))@2 as count(*), sum(fact_table_ordered.value)@3 / CAST(count(fact_table_ordered.value)@4 AS Float64) as avg(fact_table_ordered.value)]
+03)----AggregateExec: mode=SinglePartitioned, gby=[f_dkey@2 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@0) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),fact_table_ordered.timestamp)], aggr=[count(Int64(1)), sum(fact_table_ordered.value), count(fact_table_ordered.value)], ordering_mode=Sorted
 04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_ordering=[f_dkey@2 ASC NULLS LAST, timestamp@0 ASC NULLS LAST], file_type=parquet
 
 # Verify results match with subset satisfaction
@@ -352,8 +352,8 @@ ORDER BY env, time_bin;
 ----
 logical_plan
 01)Sort: a.env ASC NULLS LAST, a.time_bin ASC NULLS LAST
-02)--Projection: a.env, a.time_bin, avg(a.max_bin_value) AS avg_max_value
-03)----Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[avg(a.max_bin_value)]]
+02)--Projection: a.env, a.time_bin, CAST(sum(a.max_bin_value) AS Float64) / CAST(count(a.max_bin_value) AS Float64) AS avg(a.max_bin_value) AS avg_max_value
+03)----Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[sum(a.max_bin_value), count(a.max_bin_value)]]
 04)------SubqueryAlias: a
 05)--------Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp) AS time_bin, j.env, max(j.value) AS max_bin_value
 06)----------Aggregate: groupBy=[[j.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), j.timestamp), j.env]], aggr=[[max(j.value)]]
@@ -369,10 +369,10 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST]
 02)--SortExec: expr=[env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[env@0 as env, time_bin@1 as time_bin, avg(a.max_bin_value)@2 as avg_max_value]
-04)------AggregateExec: mode=FinalPartitioned, gby=[env@0 as env, time_bin@1 as time_bin], aggr=[avg(a.max_bin_value)]
+03)----ProjectionExec: expr=[env@0 as env, time_bin@1 as time_bin, sum(a.max_bin_value)@2 / CAST(count(a.max_bin_value)@3 AS Float64) as avg_max_value]
+04)------AggregateExec: mode=FinalPartitioned, gby=[env@0 as env, time_bin@1 as time_bin], aggr=[sum(a.max_bin_value), count(a.max_bin_value)]
 05)--------RepartitionExec: partitioning=Hash([env@0, time_bin@1], 3), input_partitions=3
-06)----------AggregateExec: mode=Partial, gby=[env@1 as env, time_bin@0 as time_bin], aggr=[avg(a.max_bin_value)]
+06)----------AggregateExec: mode=Partial, gby=[env@1 as env, time_bin@0 as time_bin], aggr=[sum(a.max_bin_value), count(a.max_bin_value)]
 07)------------ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as time_bin, env@2 as env, max(j.value)@3 as max_bin_value]
 08)--------------AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp), env@2 as env], aggr=[max(j.value)], ordering_mode=PartiallySorted([0, 1])
 09)----------------SortExec: expr=[f_dkey@0 ASC NULLS LAST, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 ASC NULLS LAST], preserve_partitioning=[true]
@@ -451,8 +451,8 @@ ORDER BY env, time_bin;
 ----
 logical_plan
 01)Sort: a.env ASC NULLS LAST, a.time_bin ASC NULLS LAST
-02)--Projection: a.env, a.time_bin, avg(a.max_bin_value) AS avg_max_value
-03)----Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[avg(a.max_bin_value)]]
+02)--Projection: a.env, a.time_bin, CAST(sum(a.max_bin_value) AS Float64) / CAST(count(a.max_bin_value) AS Float64) AS avg(a.max_bin_value) AS avg_max_value
+03)----Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[sum(a.max_bin_value), count(a.max_bin_value)]]
 04)------SubqueryAlias: a
 05)--------Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp) AS time_bin, j.env, max(j.value) AS max_bin_value
 06)----------Aggregate: groupBy=[[j.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), j.timestamp), j.env]], aggr=[[max(j.value)]]
@@ -468,10 +468,10 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST]
 02)--SortExec: expr=[env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[env@0 as env, time_bin@1 as time_bin, avg(a.max_bin_value)@2 as avg_max_value]
-04)------AggregateExec: mode=FinalPartitioned, gby=[env@0 as env, time_bin@1 as time_bin], aggr=[avg(a.max_bin_value)]
+03)----ProjectionExec: expr=[env@0 as env, time_bin@1 as time_bin, sum(a.max_bin_value)@2 / CAST(count(a.max_bin_value)@3 AS Float64) as avg_max_value]
+04)------AggregateExec: mode=FinalPartitioned, gby=[env@0 as env, time_bin@1 as time_bin], aggr=[sum(a.max_bin_value), count(a.max_bin_value)]
 05)--------RepartitionExec: partitioning=Hash([env@0, time_bin@1], 3), input_partitions=3
-06)----------AggregateExec: mode=Partial, gby=[env@1 as env, time_bin@0 as time_bin], aggr=[avg(a.max_bin_value)]
+06)----------AggregateExec: mode=Partial, gby=[env@1 as env, time_bin@0 as time_bin], aggr=[sum(a.max_bin_value), count(a.max_bin_value)]
 07)------------ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as time_bin, env@2 as env, max(j.value)@3 as max_bin_value]
 08)--------------AggregateExec: mode=SinglePartitioned, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@2) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp), env@1 as env], aggr=[max(j.value)], ordering_mode=PartiallySorted([0, 1])
 09)----------------ProjectionExec: expr=[f_dkey@3 as f_dkey, env@0 as env, timestamp@1 as timestamp, value@2 as value]

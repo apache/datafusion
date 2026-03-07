@@ -635,9 +635,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .and_then(|t| func.return_type(&[t]).ok());
                     let skip_rewrite = matches!(
                         avg_return_type,
-                        Some(DataType::Duration(_))
-                            | Some(DataType::Interval(_))
-                            | None
+                        Some(DataType::Duration(_)) | Some(DataType::Interval(_)) | None
                     );
                     if !skip_rewrite {
                         if let (Some(sum_udaf), Some(count_udaf)) = (
@@ -650,8 +648,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 .map(|a| a.to_string())
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            let display_name = if name.eq_ignore_ascii_case(func.name())
-                            {
+                            let display_name = if name.eq_ignore_ascii_case(func.name()) {
                                 // Build the original AVG expression to get its display name
                                 let orig_avg = expr::AggregateFunction::new_udf(
                                     Arc::clone(&func),
