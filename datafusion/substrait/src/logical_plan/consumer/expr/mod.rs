@@ -93,6 +93,13 @@ pub async fn from_substrait_rex(
             RexType::DynamicParameter(expr) => {
                 consumer.consume_dynamic_parameter(expr, input_schema).await
             }
+            RexType::Lambda(_) => {
+                not_impl_err!("Lambda expressions are not yet supported")
+            }
+            RexType::LambdaInvocation(_) => {
+                not_impl_err!("LambdaInvocation expressions are not yet supported")
+            }
+        },
         },
         None => substrait_err!("Expression must set rex_type: {expression:?}"),
     }
