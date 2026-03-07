@@ -3100,6 +3100,13 @@ to_timestamp_seconds(expression[, ..., format_n])
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
+| Function | Output Precision | Example Result |
+| :--- | :--- | :--- |
+| `to_timestamp_seconds` | Seconds | `2023-01-31T14:26:56` |
+| `to_timestamp_millis` | Milliseconds | `2023-01-31T14:26:56.123` |
+| `to_timestamp_micros` | Microseconds | `2023-01-31T14:26:56.123456` |
+| `to_timestamp_nanos` | Nanoseconds | `2023-01-31T14:26:56.123456789` |
+
 ### `to_unixtime`
 
 Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`).
