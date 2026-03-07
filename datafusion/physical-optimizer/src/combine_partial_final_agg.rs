@@ -73,6 +73,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
             };
 
             let transformed = if *input_agg_exec.mode() == AggregateMode::Partial
+                && input_agg_exec.num_agg_partitions() <= 1
                 && can_combine(
                     (
                         agg_exec.group_expr(),

@@ -17,8 +17,9 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
-use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{Result, not_impl_err};
+use arrow::array::{Array, ArrayRef, BooleanArray, UInt32Array};
+use arrow::compute::{take, take_arrays};
+use datafusion_common::{DataFusionError, Result, not_impl_err};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,6 +199,54 @@ pub trait GroupsAccumulator: Send {
         total_num_groups: usize,
     ) -> Result<()>;
 
+    /// Like [`Self::update_batch`], but only processes the rows at the given
+    /// `indices` positions in `values`.
+    ///
+    /// `group_indices` has one entry per index in `indices` (in the same order).
+    /// `opt_filter` if present is full-length (covers all rows in `values`).
+    ///
+    /// The default implementation uses `take` to extract sub-arrays, then
+    /// delegates to [`Self::update_batch`].
+    fn update_batch_with_indices(
+        &mut self,
+        values: &[ArrayRef],
+        indices: &[u32],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        let (taken_values, taken_filter) =
+            take_values_and_filter(values, indices, opt_filter)?;
+        self.update_batch(
+            &taken_values,
+            group_indices,
+            taken_filter.as_ref(),
+            total_num_groups,
+        )
+    }
+
+    /// Like [`Self::merge_batch`], but only processes the rows at the given
+    /// `indices` positions in `values`.
+    ///
+    /// See [`Self::update_batch_with_indices`] for details on parameters.
+    fn merge_batch_with_indices(
+        &mut self,
+        values: &[ArrayRef],
+        indices: &[u32],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        let (taken_values, taken_filter) =
+            take_values_and_filter(values, indices, opt_filter)?;
+        self.merge_batch(
+            &taken_values,
+            group_indices,
+            taken_filter.as_ref(),
+            total_num_groups,
+        )
+    }
+
     /// Converts an input batch directly to the intermediate aggregate state.
     ///
     /// This is the equivalent of treating each input row as its own group. It
@@ -253,4 +302,28 @@ pub trait GroupsAccumulator: Send {
     /// This function is called once per batch, so it should be `O(n)` to
     /// compute, not `O(num_groups)`
     fn size(&self) -> usize;
+}
+
+/// Extracts sub-arrays and an optional filter at the given `indices`.
+fn take_values_and_filter(
+    values: &[ArrayRef],
+    indices: &[u32],
+    opt_filter: Option<&BooleanArray>,
+) -> Result<(Vec<ArrayRef>, Option<BooleanArray>)> {
+    let indices_array = UInt32Array::from_iter_values(indices.iter().copied());
+    let taken_values =
+        take_arrays(values, &indices_array, None).map_err(DataFusionError::from)?;
+    let taken_filter = opt_filter
+        .map(|f| {
+            let taken = take(f, &indices_array, None)?;
+            Ok::<_, DataFusionError>(
+                taken
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap()
+                    .clone(),
+            )
+        })
+        .transpose()?;
+    Ok((taken_values, taken_filter))
 }

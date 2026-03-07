@@ -19,8 +19,8 @@ use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
-    cast::AsArray,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
+    PrimitiveArray, cast::AsArray,
 };
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
@@ -108,6 +108,60 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     }
 }
 
+impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T>
+where
+    T::Native: HashValue,
+{
+    /// Intern a single value and return its group index.
+    #[inline(always)]
+    fn intern_value(&mut self, v: Option<T::Native>) -> usize {
+        match v {
+            None => self.intern_null(),
+            Some(key) => {
+                let hash = key.hash(&self.random_state);
+                self.intern_key(key, hash)
+            }
+        }
+    }
+
+    /// Intern a single value with a precomputed hash.
+    #[inline(always)]
+    fn intern_value_with_hash(&mut self, v: Option<T::Native>, hash: u64) -> usize {
+        match v {
+            None => self.intern_null(),
+            Some(key) => self.intern_key(key, hash),
+        }
+    }
+
+    #[inline(always)]
+    fn intern_null(&mut self) -> usize {
+        *self.null_group.get_or_insert_with(|| {
+            let group_id = self.values.len();
+            self.values.push(Default::default());
+            group_id
+        })
+    }
+
+    #[inline(always)]
+    fn intern_key(&mut self, key: T::Native, hash: u64) -> usize {
+        let insert = self.map.entry(
+            hash,
+            |&(g, h)| unsafe { hash == h && self.values.get_unchecked(g).is_eq(key) },
+            |&(_, h)| h,
+        );
+
+        match insert {
+            hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
+            hashbrown::hash_table::Entry::Vacant(v) => {
+                let g = self.values.len();
+                v.insert((g, hash));
+                self.values.push(key);
+                g
+            }
+        }
+    }
+}
+
 impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
@@ -117,35 +171,30 @@ where
         groups.clear();
 
         for v in cols[0].as_primitive::<T>() {
-            let group_id = match v {
-                None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(Default::default());
-                    group_id
-                }),
-                Some(key) => {
-                    let state = &self.random_state;
-                    let hash = key.hash(state);
-                    let insert = self.map.entry(
-                        hash,
-                        |&(g, h)| unsafe {
-                            hash == h && self.values.get_unchecked(g).is_eq(key)
-                        },
-                        |&(_, h)| h,
-                    );
+            groups.push(self.intern_value(v));
+        }
+        Ok(())
+    }
 
-                    match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
-                        hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.values.len();
-                            v.insert((g, hash));
-                            self.values.push(key);
-                            g
-                        }
-                    }
-                }
+    fn intern_with_indices(
+        &mut self,
+        cols: &[ArrayRef],
+        hashes: &[u64],
+        indices: &[u32],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
+        assert_eq!(cols.len(), 1);
+        groups.clear();
+
+        let arr = cols[0].as_primitive::<T>();
+        for &idx in indices {
+            let idx = idx as usize;
+            let v = if arr.is_null(idx) {
+                None
+            } else {
+                Some(arr.value(idx))
             };
-            groups.push(group_id)
+            groups.push(self.intern_value_with_hash(v, hashes[idx]));
         }
         Ok(())
     }

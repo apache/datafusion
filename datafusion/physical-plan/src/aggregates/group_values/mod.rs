@@ -22,7 +22,8 @@ use arrow::array::types::{
     Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::array::{ArrayRef, downcast_primitive};
+use arrow::array::{ArrayRef, UInt32Array, downcast_primitive};
+use arrow::compute::take_arrays;
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
 
@@ -98,6 +99,29 @@ pub trait GroupValues: Send {
     /// assigned. If a row has a new value, the next available group id is
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
+
+    /// Like [`Self::intern`], but only processes the rows at the given
+    /// `indices` positions in `cols`.
+    ///
+    /// `hashes` contains precomputed hashes for ALL rows in `cols` (full-length).
+    /// Implementations that need hashes can index into it using the provided `indices`.
+    ///
+    /// When the function returns, `groups` contains one group id per
+    /// index in `indices` (in the same order).
+    ///
+    /// The default implementation uses `take` to extract sub-arrays.
+    fn intern_with_indices(
+        &mut self,
+        cols: &[ArrayRef],
+        hashes: &[u64],
+        indices: &[u32],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
+        let _ = hashes; // unused in default impl
+        let indices_array = UInt32Array::from_iter_values(indices.iter().copied());
+        let sub_cols = take_arrays(cols, &indices_array, None)?;
+        self.intern(&sub_cols, groups)
+    }
 
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;

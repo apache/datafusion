@@ -1043,18 +1043,38 @@ impl DefaultPhysicalPlanner {
                     input_exec
                 };
 
-                let initial_aggr = Arc::new(AggregateExec::try_new(
-                    AggregateMode::Partial,
-                    groups.clone(),
-                    aggregates,
-                    filters.clone(),
-                    input_exec,
-                    Arc::clone(&physical_input_schema),
-                )?);
-
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations();
+
+                let initial_aggr = if can_repartition {
+                    // When repartitioning is enabled, set num_agg_partitions
+                    // so the partial aggregate produces target_partitions
+                    // output partitions directly (eliminating the need for
+                    // a downstream RepartitionExec).
+                    Arc::new(
+                        AggregateExec::try_new(
+                            AggregateMode::Partial,
+                            groups.clone(),
+                            aggregates,
+                            filters.clone(),
+                            input_exec,
+                            Arc::clone(&physical_input_schema),
+                        )?
+                        .with_num_agg_partitions(
+                            session_state.config().target_partitions(),
+                        ),
+                    )
+                } else {
+                    Arc::new(AggregateExec::try_new(
+                        AggregateMode::Partial,
+                        groups.clone(),
+                        aggregates,
+                        filters.clone(),
+                        input_exec,
+                        Arc::clone(&physical_input_schema),
+                    )?)
+                };
 
                 // Some aggregators may be modified during initialization for
                 // optimization purposes. For example, a FIRST_VALUE may turn
