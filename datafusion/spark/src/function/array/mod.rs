@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod array_contains;
+pub mod arrays_overlap;
 pub mod repeat;
 pub mod shuffle;
 pub mod slice;
@@ -26,6 +27,7 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(array_contains::SparkArrayContains, spark_array_contains);
+make_udf_function!(arrays_overlap::SparkArraysOverlap, spark_arrays_overlap);
 make_udf_function!(spark_array::SparkArray, array);
 make_udf_function!(shuffle::SparkShuffle, shuffle);
 make_udf_function!(repeat::SparkArrayRepeat, array_repeat);
@@ -38,6 +40,11 @@ pub mod expr_fn {
         spark_array_contains,
         "Returns true if the array contains the element (Spark semantics).",
         array element
+    ));
+    export_functions!((
+        spark_arrays_overlap,
+        "Returns true if the arrays have any elements in common (Spark semantics).",
+        array1 array2
     ));
     export_functions!((array, "Returns an array with the given elements.", args));
     export_functions!((
@@ -60,6 +67,7 @@ pub mod expr_fn {
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         spark_array_contains(),
+        spark_arrays_overlap(),
         array(),
         shuffle(),
         array_repeat(),
