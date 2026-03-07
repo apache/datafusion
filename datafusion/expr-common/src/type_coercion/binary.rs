@@ -1638,6 +1638,7 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
             string_coercion(lhs_value_type, rhs_value_type).or(None)
         }
+        (Binary, Binary) => Some(Utf8),
         _ => None,
     })
 }

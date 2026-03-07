@@ -18,7 +18,7 @@
 use std::mem::size_of;
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayDataBuilder, ByteView, LargeStringArray,
+    Array, ArrayAccessor, ArrayDataBuilder, BinaryArray, ByteView, LargeStringArray,
     NullBufferBuilder, StringArray, StringViewArray, StringViewBuilder, make_view,
 };
 use arrow::buffer::{MutableBuffer, NullBuffer};
@@ -75,6 +75,11 @@ impl StringArrayBuilder {
                         .extend_from_slice(array.value(i).as_bytes());
                 }
             }
+            ColumnarValueRef::NullableBinaryArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer.extend_from_slice(array.value(i));
+                }
+            }
             ColumnarValueRef::NonNullableArray(array) => {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());
@@ -86,6 +91,9 @@ impl StringArrayBuilder {
             ColumnarValueRef::NonNullableStringViewArray(array) => {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());
+            }
+            ColumnarValueRef::NonNullableBinaryArray(array) => {
+                self.value_buffer.extend_from_slice(array.value(i));
             }
         }
     }
@@ -165,6 +173,12 @@ impl StringViewArrayBuilder {
                     self.block.push_str(array.value(i));
                 }
             }
+            ColumnarValueRef::NullableBinaryArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.block
+                        .push_str(std::str::from_utf8(array.value(i)).unwrap());
+                }
+            }
             ColumnarValueRef::NonNullableArray(array) => {
                 self.block.push_str(array.value(i));
             }
@@ -173,6 +187,10 @@ impl StringViewArrayBuilder {
             }
             ColumnarValueRef::NonNullableStringViewArray(array) => {
                 self.block.push_str(array.value(i));
+            }
+            ColumnarValueRef::NonNullableBinaryArray(array) => {
+                self.block
+                    .push_str(std::str::from_utf8(array.value(i)).unwrap());
             }
         }
     }
@@ -235,6 +253,11 @@ impl LargeStringArrayBuilder {
                         .extend_from_slice(array.value(i).as_bytes());
                 }
             }
+            ColumnarValueRef::NullableBinaryArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer.extend_from_slice(array.value(i));
+                }
+            }
             ColumnarValueRef::NonNullableArray(array) => {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());
@@ -246,6 +269,9 @@ impl LargeStringArrayBuilder {
             ColumnarValueRef::NonNullableStringViewArray(array) => {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());
+            }
+            ColumnarValueRef::NonNullableBinaryArray(array) => {
+                self.value_buffer.extend_from_slice(array.value(i));
             }
         }
     }
@@ -332,6 +358,8 @@ pub enum ColumnarValueRef<'a> {
     NonNullableLargeStringArray(&'a LargeStringArray),
     NullableStringViewArray(&'a StringViewArray),
     NonNullableStringViewArray(&'a StringViewArray),
+    NullableBinaryArray(&'a BinaryArray),
+    NonNullableBinaryArray(&'a BinaryArray),
 }
 
 impl ColumnarValueRef<'_> {
@@ -341,10 +369,12 @@ impl ColumnarValueRef<'_> {
             Self::Scalar(_)
             | Self::NonNullableArray(_)
             | Self::NonNullableLargeStringArray(_)
-            | Self::NonNullableStringViewArray(_) => true,
+            | Self::NonNullableStringViewArray(_)
+            | Self::NonNullableBinaryArray(_) => true,
             Self::NullableArray(array) => array.is_valid(i),
             Self::NullableStringViewArray(array) => array.is_valid(i),
             Self::NullableLargeStringArray(array) => array.is_valid(i),
+            Self::NullableBinaryArray(array) => array.is_valid(i),
         }
     }
 
@@ -354,10 +384,12 @@ impl ColumnarValueRef<'_> {
             Self::Scalar(_)
             | Self::NonNullableArray(_)
             | Self::NonNullableStringViewArray(_)
-            | Self::NonNullableLargeStringArray(_) => None,
+            | Self::NonNullableLargeStringArray(_)
+            | Self::NonNullableBinaryArray(_) => None,
             Self::NullableArray(array) => array.nulls().cloned(),
             Self::NullableStringViewArray(array) => array.nulls().cloned(),
             Self::NullableLargeStringArray(array) => array.nulls().cloned(),
+            Self::NullableBinaryArray(array) => array.nulls().cloned(),
         }
     }
 }
