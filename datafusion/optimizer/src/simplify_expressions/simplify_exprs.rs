@@ -155,6 +155,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
 
+    use datafusion_common::ScalarValue;
     use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::*;
@@ -883,17 +884,17 @@ mod tests {
         "
         )?;
 
-        // Test `!= ".*"` transforms to checking if the column is empty
+        // Test `!~ ".*"` transforms to CASE WHEN col IS NOT NULL THEN FALSE ELSE NULL END
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotMatch, lit(".*")))?
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
-            @ r#"
-        Filter: test.a = Utf8("")
+            @ r"
+        Filter: test.a IS NOT NULL AND Boolean(NULL)
           TableScan: test
-        "#
+        "
         )?;
 
         // Test case-insensitive versions
@@ -911,17 +912,51 @@ mod tests {
         "
         )?;
 
-        // Test `!~ ".*"` (case-insensitive) transforms to checking if the column is empty
+        // Test NULL `!~ ".*"` transforms to Boolean(NULL)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(
+                lit(ScalarValue::Utf8(None)),
+                Operator::RegexNotMatch,
+                lit(".*"),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(NULL)
+          TableScan: test
+        "
+        )?;
+
+        // Test `!~* ".*"` (case-insensitive) transforms to false
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotIMatch, lit(".*")))?
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
-            @ r#"
-        Filter: test.a = Utf8("")
+            @ r"
+        Filter: test.a IS NOT NULL AND Boolean(NULL)
           TableScan: test
-        "#
+        "
+        )?;
+
+        // Test NULL `!~* ".*"` transforms to Boolean(NULL)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(
+                lit(ScalarValue::Utf8(None)),
+                Operator::RegexNotIMatch,
+                lit(".*"),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(NULL)
+          TableScan: test
+        "
         )
     }
 
