@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 use clap::{ColorChoice, Parser, ValueEnum};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;

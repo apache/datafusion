@@ -2648,6 +2648,7 @@ dependencies = [
  "indicatif",
  "itertools 0.14.0",
  "log",
+ "mimalloc",
  "object_store",
  "postgres-types",
  "regex",
