@@ -147,7 +147,7 @@ async fn clickbench_test_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "hits",
-        "tests/data/clickbench_hits_10.parquet",
+        "tests/data/clickbench_hits/clickbench_hits_10.parquet",
         ParquetReadOptions::default(),
     )
     .await?;

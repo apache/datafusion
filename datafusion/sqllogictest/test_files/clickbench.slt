@@ -27,7 +27,7 @@
 statement ok
 CREATE EXTERNAL TABLE hits_raw
 STORED AS PARQUET
-LOCATION '../core/tests/data/clickbench_hits_10.parquet';
+LOCATION '../core/tests/data/clickbench_hits/';
 
 # ClickBench encodes EventDate as UInt16 days since epoch.
 # So we define this view to convert it to the correct DATE type (this is done
@@ -64,13 +64,13 @@ logical_plan
 03)----SubqueryAlias: hits
 04)------TableScan: hits_raw projection=[]
 physical_plan
-01)ProjectionExec: expr=[10 as count(*)]
+01)ProjectionExec: expr=[20 as count(*)]
 02)--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM hits;
 ----
-10
+20
 
 ## Q1
 query TT
@@ -89,8 +89,8 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------FilterExec: AdvEngineID@0 != 0, projection=[]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[AdvEngineID], file_type=parquet, predicate=AdvEngineID@40 != 0, pruning_predicate=AdvEngineID_null_count@2 != row_count@3 AND (AdvEngineID_min@0 != 0 OR 0 != AdvEngineID_max@1), required_guarantees=[AdvEngineID not in (0)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[AdvEngineID], file_type=parquet, predicate=AdvEngineID@40 != 0, pruning_predicate=AdvEngineID_null_count@2 != row_count@3 AND (AdvEngineID_min@0 != 0 OR 0 != AdvEngineID_max@1), required_guarantees=[AdvEngineID not in (0)]
 
 query I
 SELECT COUNT(*) FROM hits WHERE "AdvEngineID" <> 0;
@@ -107,13 +107,15 @@ logical_plan
 04)------TableScan: hits_raw projection=[ResolutionWidth, AdvEngineID]
 physical_plan
 01)ProjectionExec: expr=[sum(hits.AdvEngineID)@0 as sum(hits.AdvEngineID), count(Int64(1))@1 as count(*), avg(hits.ResolutionWidth)@2 as avg(hits.ResolutionWidth)]
-02)--AggregateExec: mode=Single, gby=[], aggr=[sum(hits.AdvEngineID), count(Int64(1)), avg(hits.ResolutionWidth)]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[ResolutionWidth, AdvEngineID], file_type=parquet
+02)--AggregateExec: mode=Final, gby=[], aggr=[sum(hits.AdvEngineID), count(Int64(1)), avg(hits.ResolutionWidth)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[sum(hits.AdvEngineID), count(Int64(1)), avg(hits.ResolutionWidth)]
+05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[ResolutionWidth, AdvEngineID], file_type=parquet
 
 query IIR
 SELECT SUM("AdvEngineID"), COUNT(*), AVG("ResolutionWidth") FROM hits;
 ----
-0 10 0
+0 20 0
 
 ## Q3
 query TT
@@ -124,8 +126,10 @@ logical_plan
 02)--SubqueryAlias: hits
 03)----TableScan: hits_raw projection=[UserID]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[avg(hits.UserID)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID], file_type=parquet
+01)AggregateExec: mode=Final, gby=[], aggr=[avg(hits.UserID)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[avg(hits.UserID)]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[UserID], file_type=parquet
 
 query R
 SELECT AVG("UserID") FROM hits;
@@ -148,9 +152,9 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=2
 07)------------AggregateExec: mode=Partial, gby=[UserID@0 as alias1], aggr=[]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID], file_type=parquet
+08)--------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[UserID], file_type=parquet
 
 query I
 SELECT COUNT(DISTINCT "UserID") FROM hits;
@@ -173,9 +177,9 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=2
 07)------------AggregateExec: mode=Partial, gby=[SearchPhrase@0 as alias1], aggr=[]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase], file_type=parquet
+08)--------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[SearchPhrase], file_type=parquet
 
 query I
 SELECT COUNT(DISTINCT "SearchPhrase") FROM hits;
@@ -192,8 +196,10 @@ logical_plan
 03)----Projection: CAST(CAST(hits_raw.EventDate AS Int32) AS Date32) AS EventDate
 04)------TableScan: hits_raw projection=[EventDate]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[min(hits.EventDate), max(hits.EventDate)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(CAST(EventDate@5 AS Int32) AS Date32) as EventDate], file_type=parquet
+01)AggregateExec: mode=Final, gby=[], aggr=[min(hits.EventDate), max(hits.EventDate)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(hits.EventDate), max(hits.EventDate)]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[CAST(CAST(EventDate@5 AS Int32) AS Date32) as EventDate], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 query DD
 SELECT MIN("EventDate"), MAX("EventDate") FROM hits;
@@ -221,8 +227,8 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([AdvEngineID@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[AdvEngineID@0 as AdvEngineID], aggr=[count(Int64(1))]
 08)--------------FilterExec: AdvEngineID@0 != 0
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[AdvEngineID], file_type=parquet, predicate=AdvEngineID@40 != 0, pruning_predicate=AdvEngineID_null_count@2 != row_count@3 AND (AdvEngineID_min@0 != 0 OR 0 != AdvEngineID_max@1), required_guarantees=[AdvEngineID not in (0)]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+10)------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[AdvEngineID], file_type=parquet, predicate=AdvEngineID@40 != 0, pruning_predicate=AdvEngineID_null_count@2 != row_count@3 AND (AdvEngineID_min@0 != 0 OR 0 != AdvEngineID_max@1), required_guarantees=[AdvEngineID not in (0)]
 
 query II
 SELECT "AdvEngineID", COUNT(*) FROM hits WHERE "AdvEngineID" <> 0 GROUP BY "AdvEngineID" ORDER BY COUNT(*) DESC;
@@ -247,9 +253,9 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([RegionID@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[RegionID@0 as RegionID], aggr=[count(alias1)]
 07)------------AggregateExec: mode=FinalPartitioned, gby=[RegionID@0 as RegionID, alias1@1 as alias1], aggr=[]
-08)--------------RepartitionExec: partitioning=Hash([RegionID@0, alias1@1], 4), input_partitions=1
+08)--------------RepartitionExec: partitioning=Hash([RegionID@0, alias1@1], 4), input_partitions=2
 09)----------------AggregateExec: mode=Partial, gby=[RegionID@0 as RegionID, UserID@1 as alias1], aggr=[]
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID], file_type=parquet
+10)------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[RegionID, UserID], file_type=parquet
 
 query II rowsort
 SELECT "RegionID", COUNT(DISTINCT "UserID") AS u FROM hits GROUP BY "RegionID" ORDER BY u DESC LIMIT 10;
@@ -274,17 +280,17 @@ physical_plan
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[RegionID@0 as RegionID, sum(hits.AdvEngineID)@1 as sum(hits.AdvEngineID), count(Int64(1))@2 as c, avg(hits.ResolutionWidth)@3 as avg(hits.ResolutionWidth), count(DISTINCT hits.UserID)@4 as count(DISTINCT hits.UserID)]
 04)------AggregateExec: mode=FinalPartitioned, gby=[RegionID@0 as RegionID], aggr=[sum(hits.AdvEngineID), count(Int64(1)), avg(hits.ResolutionWidth), count(DISTINCT hits.UserID)]
-05)--------RepartitionExec: partitioning=Hash([RegionID@0], 4), input_partitions=1
+05)--------RepartitionExec: partitioning=Hash([RegionID@0], 4), input_partitions=2
 06)----------AggregateExec: mode=Partial, gby=[RegionID@0 as RegionID], aggr=[sum(hits.AdvEngineID), count(Int64(1)), avg(hits.ResolutionWidth), count(DISTINCT hits.UserID)]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID, ResolutionWidth, AdvEngineID], file_type=parquet
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[RegionID, UserID, ResolutionWidth, AdvEngineID], file_type=parquet
 
 query IIIRI rowsort
 SELECT "RegionID", SUM("AdvEngineID"), COUNT(*) AS c, AVG("ResolutionWidth"), COUNT(DISTINCT "UserID") FROM hits GROUP BY "RegionID" ORDER BY c DESC LIMIT 10;
 ----
-197 0 2 0 1
-229 0 1 0 1
-39 0 1 0 1
-839 0 6 0 2
+197 0 4 0 1
+229 0 2 0 1
+39 0 2 0 1
+839 0 12 0 2
 
 ## Q10
 query TT
@@ -309,8 +315,8 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([MobilePhoneModel@0, alias1@1], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[MobilePhoneModel@1 as MobilePhoneModel, UserID@0 as alias1], aggr=[]
 10)------------------FilterExec: MobilePhoneModel@1 != 
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+12)----------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[UserID, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
 
 query TI
 SELECT "MobilePhoneModel", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "MobilePhoneModel" <> '' GROUP BY "MobilePhoneModel" ORDER BY u DESC LIMIT 10;
@@ -339,8 +345,8 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([MobilePhone@0, MobilePhoneModel@1, alias1@2], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[MobilePhone@1 as MobilePhone, MobilePhoneModel@2 as MobilePhoneModel, UserID@0 as alias1], aggr=[]
 10)------------------FilterExec: MobilePhoneModel@2 != 
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, MobilePhone, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+12)----------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[UserID, MobilePhone, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
 
 query ITI
 SELECT "MobilePhone", "MobilePhoneModel", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "MobilePhoneModel" <> '' GROUP BY "MobilePhone", "MobilePhoneModel" ORDER BY u DESC LIMIT 10;
@@ -365,8 +371,8 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([SearchPhrase@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[SearchPhrase@0 as SearchPhrase], aggr=[count(Int64(1))]
 07)------------FilterExec: SearchPhrase@0 != 
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+09)----------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query TI
 SELECT "SearchPhrase", COUNT(*) AS c FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
@@ -395,8 +401,8 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([SearchPhrase@0, alias1@1], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[SearchPhrase@1 as SearchPhrase, UserID@0 as alias1], aggr=[]
 10)------------------FilterExec: SearchPhrase@1 != 
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+12)----------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query TI
 SELECT "SearchPhrase", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY u DESC LIMIT 10;
@@ -421,8 +427,8 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([SearchEngineID@0, SearchPhrase@1], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[SearchEngineID@0 as SearchEngineID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
 07)------------FilterExec: SearchPhrase@1 != 
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+09)----------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query ITI
 SELECT "SearchEngineID", "SearchPhrase", COUNT(*) AS c FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchEngineID", "SearchPhrase" ORDER BY c DESC LIMIT 10;
@@ -445,18 +451,18 @@ physical_plan
 03)----SortExec: TopK(fetch=10), expr=[count(*)@1 DESC], preserve_partitioning=[true]
 04)------ProjectionExec: expr=[UserID@0 as UserID, count(Int64(1))@1 as count(*), count(Int64(1))@1 as count(Int64(1))]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID], aggr=[count(Int64(1))]
-06)----------RepartitionExec: partitioning=Hash([UserID@0], 4), input_partitions=1
+06)----------RepartitionExec: partitioning=Hash([UserID@0], 4), input_partitions=2
 07)------------AggregateExec: mode=Partial, gby=[UserID@0 as UserID], aggr=[count(Int64(1))]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID], file_type=parquet
+08)--------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[UserID], file_type=parquet
 
 query II rowsort
 SELECT "UserID", COUNT(*) FROM hits GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
--2461439046089301801 5
-376160620089546609 1
-427738049800818189 1
-519640690937130534 2
-7418527520126366595 1
+-2461439046089301801 10
+376160620089546609 2
+427738049800818189 2
+519640690937130534 4
+7418527520126366595 2
 
 ## Q16
 query TT
@@ -475,18 +481,18 @@ physical_plan
 03)----SortExec: TopK(fetch=10), expr=[count(*)@2 DESC], preserve_partitioning=[true]
 04)------ProjectionExec: expr=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase, count(Int64(1))@2 as count(*), count(Int64(1))@2 as count(Int64(1))]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
-06)----------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=1
+06)----------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=2
 07)------------AggregateExec: mode=Partial, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet
+08)--------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet
 
 query ITI rowsort
 SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
--2461439046089301801 (empty) 5
-376160620089546609 (empty) 1
-427738049800818189 (empty) 1
-519640690937130534 (empty) 2
-7418527520126366595 (empty) 1
+-2461439046089301801 (empty) 10
+376160620089546609 (empty) 2
+427738049800818189 (empty) 2
+519640690937130534 (empty) 4
+7418527520126366595 (empty) 2
 
 ## Q17
 query TT
@@ -501,19 +507,20 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase, count(Int64(1))@2 as count(*)]
 02)--CoalescePartitionsExec: fetch=10
-03)----AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
-04)------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet
+03)----LocalLimitExec: fetch=10
+04)------AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
+05)--------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=2
+06)----------AggregateExec: mode=Partial, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(Int64(1))]
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet
 
 query ITI rowsort
 SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" LIMIT 10;
 ----
--2461439046089301801 (empty) 5
-376160620089546609 (empty) 1
-427738049800818189 (empty) 1
-519640690937130534 (empty) 2
-7418527520126366595 (empty) 1
+-2461439046089301801 (empty) 10
+376160620089546609 (empty) 2
+427738049800818189 (empty) 2
+519640690937130534 (empty) 4
+7418527520126366595 (empty) 2
 
 ## Q18
 query TT
@@ -532,23 +539,23 @@ physical_plan
 03)----SortExec: TopK(fetch=10), expr=[count(*)@3 DESC], preserve_partitioning=[true]
 04)------ProjectionExec: expr=[UserID@0 as UserID, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime))@1 as m, SearchPhrase@2 as SearchPhrase, count(Int64(1))@3 as count(*), count(Int64(1))@3 as count(Int64(1))]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime))@1 as date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime)), SearchPhrase@2 as SearchPhrase], aggr=[count(Int64(1))]
-06)----------RepartitionExec: partitioning=Hash([UserID@0, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime))@1, SearchPhrase@2], 4), input_partitions=1
+06)----------RepartitionExec: partitioning=Hash([UserID@0, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime))@1, SearchPhrase@2], 4), input_partitions=2
 07)------------AggregateExec: mode=Partial, gby=[UserID@1 as UserID, date_part(MINUTE, to_timestamp_seconds(EventTime@0)) as date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime)), SearchPhrase@2 as SearchPhrase], aggr=[count(Int64(1))]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, UserID, SearchPhrase], file_type=parquet
+08)--------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[EventTime, UserID, SearchPhrase], file_type=parquet
 
 query IITI rowsort
 SELECT "UserID", extract(minute FROM to_timestamp_seconds("EventTime")) AS m, "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", m, "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
--2461439046089301801 18 (empty) 1
--2461439046089301801 33 (empty) 1
--2461439046089301801 38 (empty) 1
--2461439046089301801 56 (empty) 1
--2461439046089301801 58 (empty) 1
-376160620089546609 30 (empty) 1
-427738049800818189 40 (empty) 1
-519640690937130534 26 (empty) 1
-519640690937130534 36 (empty) 1
-7418527520126366595 18 (empty) 1
+-2461439046089301801 18 (empty) 2
+-2461439046089301801 33 (empty) 2
+-2461439046089301801 38 (empty) 2
+-2461439046089301801 56 (empty) 2
+-2461439046089301801 58 (empty) 2
+376160620089546609 30 (empty) 2
+427738049800818189 40 (empty) 2
+519640690937130534 26 (empty) 2
+519640690937130534 36 (empty) 2
+7418527520126366595 18 (empty) 2
 
 ## Q19
 query TT
@@ -560,8 +567,8 @@ logical_plan
 03)----TableScan: hits_raw projection=[UserID], partial_filters=[hits_raw.UserID = Int64(435090932899640449)]
 physical_plan
 01)FilterExec: UserID@0 = 435090932899640449
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID], file_type=parquet, predicate=UserID@9 = 435090932899640449, pruning_predicate=UserID_null_count@2 != row_count@3 AND UserID_min@0 <= 435090932899640449 AND 435090932899640449 <= UserID_max@1, required_guarantees=[UserID in (435090932899640449)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[UserID], file_type=parquet, predicate=UserID@9 = 435090932899640449, pruning_predicate=UserID_null_count@2 != row_count@3 AND UserID_min@0 <= 435090932899640449 AND 435090932899640449 <= UserID_max@1, required_guarantees=[UserID in (435090932899640449)]
 
 query I
 SELECT "UserID" FROM hits WHERE "UserID" = 435090932899640449;
@@ -584,8 +591,8 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------FilterExec: URL@0 LIKE %google%, projection=[]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[URL], file_type=parquet, predicate=URL@13 LIKE %google%
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[URL], file_type=parquet, predicate=URL@13 LIKE %google%
 
 query I
 SELECT COUNT(*) FROM hits WHERE "URL" LIKE '%google%';
@@ -611,8 +618,8 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([SearchPhrase@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[SearchPhrase@1 as SearchPhrase], aggr=[min(hits.URL), count(Int64(1))]
 07)------------FilterExec: URL@0 LIKE %google% AND SearchPhrase@1 != 
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[URL, SearchPhrase], file_type=parquet, predicate=URL@13 LIKE %google% AND SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@4 != row_count@5 AND (SearchPhrase_min@2 !=  OR  != SearchPhrase_max@3), required_guarantees=[SearchPhrase not in ()]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+09)----------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[URL, SearchPhrase], file_type=parquet, predicate=URL@13 LIKE %google% AND SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@4 != row_count@5 AND (SearchPhrase_min@2 !=  OR  != SearchPhrase_max@3), required_guarantees=[SearchPhrase not in ()]
 
 query TTI
 SELECT "SearchPhrase", MIN("URL"), COUNT(*) AS c FROM hits WHERE "URL" LIKE '%google%' AND "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
@@ -637,8 +644,8 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([SearchPhrase@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[SearchPhrase@3 as SearchPhrase], aggr=[min(hits.URL), min(hits.Title), count(Int64(1)), count(DISTINCT hits.UserID)]
 07)------------FilterExec: Title@0 LIKE %Google% AND URL@2 NOT LIKE %.google.% AND SearchPhrase@3 != 
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[Title, UserID, URL, SearchPhrase], file_type=parquet, predicate=Title@2 LIKE %Google% AND URL@13 NOT LIKE %.google.% AND SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@6 != row_count@7 AND (SearchPhrase_min@4 !=  OR  != SearchPhrase_max@5), required_guarantees=[SearchPhrase not in ()]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+09)----------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[Title, UserID, URL, SearchPhrase], file_type=parquet, predicate=Title@2 LIKE %Google% AND URL@13 NOT LIKE %.google.% AND SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@6 != row_count@7 AND (SearchPhrase_min@4 !=  OR  != SearchPhrase_max@5), required_guarantees=[SearchPhrase not in ()]
 
 query TTTII
 SELECT "SearchPhrase", MIN("URL"), MIN("Title"), COUNT(*) AS c, COUNT(DISTINCT "UserID") FROM hits WHERE "Title" LIKE '%Google%' AND "URL" NOT LIKE '%.google.%' AND "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
@@ -659,8 +666,8 @@ physical_plan
 02)--SortExec: TopK(fetch=10), expr=[EventTime@4 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[WatchID@0 as WatchID, JavaEnable@1 as JavaEnable, Title@2 as Title, GoodEvent@3 as GoodEvent, EventTime@4 as EventTime, CounterID@6 as CounterID, ClientIP@7 as ClientIP, RegionID@8 as RegionID, UserID@9 as UserID, CounterClass@10 as CounterClass, OS@11 as OS, UserAgent@12 as UserAgent, URL@13 as URL, Referer@14 as Referer, IsRefresh@15 as IsRefresh, RefererCategoryID@16 as RefererCategoryID, RefererRegionID@17 as RefererRegionID, URLCategoryID@18 as URLCategoryID, URLRegionID@19 as URLRegionID, ResolutionWidth@20 as ResolutionWidth, ResolutionHeight@21 as ResolutionHeight, ResolutionDepth@22 as ResolutionDepth, FlashMajor@23 as FlashMajor, FlashMinor@24 as FlashMinor, FlashMinor2@25 as FlashMinor2, NetMajor@26 as NetMajor, NetMinor@27 as NetMinor, UserAgentMajor@28 as UserAgentMajor, UserAgentMinor@29 as UserAgentMinor, CookieEnable@30 as CookieEnable, JavascriptEnable@31 as JavascriptEnable, IsMobile@32 as IsMobile, MobilePhone@33 as MobilePhone, MobilePhoneModel@34 as MobilePhoneModel, Params@35 as Params, IPNetworkID@36 as IPNetworkID, TraficSourceID@37 as TraficSourceID, SearchEngineID@38 as SearchEngineID, SearchPhrase@39 as SearchPhrase, AdvEngineID@40 as AdvEngineID, IsArtifical@41 as IsArtifical, WindowClientWidth@42 as WindowClientWidth, WindowClientHeight@43 as WindowClientHeight, ClientTimeZone@44 as ClientTimeZone, ClientEventTime@45 as ClientEventTime, SilverlightVersion1@46 as SilverlightVersion1, SilverlightVersion2@47 as SilverlightVersion2, SilverlightVersion3@48 as SilverlightVersion3, SilverlightVersion4@49 as SilverlightVersion4, PageCharset@50 as PageCharset, CodeVersion@51 as CodeVersion, IsLink@52 as IsLink, IsDownload@53 as IsDownload, IsNotBounce@54 as IsNotBounce, FUniqID@55 as FUniqID, OriginalURL@56 as OriginalURL, HID@57 as HID, IsOldCounter@58 as IsOldCounter, IsEvent@59 as IsEvent, IsParameter@60 as IsParameter, DontCountHits@61 as DontCountHits, WithHash@62 as WithHash, HitColor@63 as HitColor, LocalEventTime@64 as LocalEventTime, Age@65 as Age, Sex@66 as Sex, Income@67 as Income, Interests@68 as Interests, Robotness@69 as Robotness, RemoteIP@70 as RemoteIP, WindowName@71 as WindowName, OpenerName@72 as OpenerName, HistoryLength@73 as HistoryLength, BrowserLanguage@74 as BrowserLanguage, BrowserCountry@75 as BrowserCountry, SocialNetwork@76 as SocialNetwork, SocialAction@77 as SocialAction, HTTPError@78 as HTTPError, SendTiming@79 as SendTiming, DNSTiming@80 as DNSTiming, ConnectTiming@81 as ConnectTiming, ResponseStartTiming@82 as ResponseStartTiming, ResponseEndTiming@83 as ResponseEndTiming, FetchTiming@84 as FetchTiming, SocialSourceNetworkID@85 as SocialSourceNetworkID, SocialSourcePage@86 as SocialSourcePage, ParamPrice@87 as ParamPrice, ParamOrderID@88 as ParamOrderID, ParamCurrency@89 as ParamCurrency, ParamCurrencyID@90 as ParamCurrencyID, OpenstatServiceName@91 as OpenstatServiceName, OpenstatCampaignID@92 as OpenstatCampaignID, OpenstatAdID@93 as OpenstatAdID, OpenstatSourceID@94 as OpenstatSourceID, UTMSource@95 as UTMSource, UTMMedium@96 as UTMMedium, UTMCampaign@97 as UTMCampaign, UTMContent@98 as UTMContent, UTMTerm@99 as UTMTerm, FromTag@100 as FromTag, HasGCLID@101 as HasGCLID, RefererHash@102 as RefererHash, URLHash@103 as URLHash, CLID@104 as CLID, CAST(CAST(EventDate@5 AS Int32) AS Date32) as EventDate]
 04)------FilterExec: URL@13 LIKE %google%
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, JavaEnable, Title, GoodEvent, EventTime, EventDate, CounterID, ClientIP, RegionID, UserID, CounterClass, OS, UserAgent, URL, Referer, IsRefresh, RefererCategoryID, RefererRegionID, URLCategoryID, URLRegionID, ResolutionWidth, ResolutionHeight, ResolutionDepth, FlashMajor, FlashMinor, FlashMinor2, NetMajor, NetMinor, UserAgentMajor, UserAgentMinor, CookieEnable, JavascriptEnable, IsMobile, MobilePhone, MobilePhoneModel, Params, IPNetworkID, TraficSourceID, SearchEngineID, SearchPhrase, AdvEngineID, IsArtifical, WindowClientWidth, WindowClientHeight, ClientTimeZone, ClientEventTime, SilverlightVersion1, SilverlightVersion2, SilverlightVersion3, SilverlightVersion4, PageCharset, CodeVersion, IsLink, IsDownload, IsNotBounce, FUniqID, OriginalURL, HID, IsOldCounter, IsEvent, IsParameter, DontCountHits, WithHash, HitColor, LocalEventTime, Age, Sex, Income, Interests, Robotness, RemoteIP, WindowName, OpenerName, HistoryLength, BrowserLanguage, BrowserCountry, SocialNetwork, SocialAction, HTTPError, SendTiming, DNSTiming, ConnectTiming, ResponseStartTiming, ResponseEndTiming, FetchTiming, SocialSourceNetworkID, SocialSourcePage, ParamPrice, ParamOrderID, ParamCurrency, ParamCurrencyID, OpenstatServiceName, OpenstatCampaignID, OpenstatAdID, OpenstatSourceID, UTMSource, UTMMedium, UTMCampaign, UTMContent, UTMTerm, FromTag, HasGCLID, RefererHash, URLHash, CLID], file_type=parquet, predicate=URL@13 LIKE %google% AND DynamicFilter [ empty ]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[WatchID, JavaEnable, Title, GoodEvent, EventTime, EventDate, CounterID, ClientIP, RegionID, UserID, CounterClass, OS, UserAgent, URL, Referer, IsRefresh, RefererCategoryID, RefererRegionID, URLCategoryID, URLRegionID, ResolutionWidth, ResolutionHeight, ResolutionDepth, FlashMajor, FlashMinor, FlashMinor2, NetMajor, NetMinor, UserAgentMajor, UserAgentMinor, CookieEnable, JavascriptEnable, IsMobile, MobilePhone, MobilePhoneModel, Params, IPNetworkID, TraficSourceID, SearchEngineID, SearchPhrase, AdvEngineID, IsArtifical, WindowClientWidth, WindowClientHeight, ClientTimeZone, ClientEventTime, SilverlightVersion1, SilverlightVersion2, SilverlightVersion3, SilverlightVersion4, PageCharset, CodeVersion, IsLink, IsDownload, IsNotBounce, FUniqID, OriginalURL, HID, IsOldCounter, IsEvent, IsParameter, DontCountHits, WithHash, HitColor, LocalEventTime, Age, Sex, Income, Interests, Robotness, RemoteIP, WindowName, OpenerName, HistoryLength, BrowserLanguage, BrowserCountry, SocialNetwork, SocialAction, HTTPError, SendTiming, DNSTiming, ConnectTiming, ResponseStartTiming, ResponseEndTiming, FetchTiming, SocialSourceNetworkID, SocialSourcePage, ParamPrice, ParamOrderID, ParamCurrency, ParamCurrencyID, OpenstatServiceName, OpenstatCampaignID, OpenstatAdID, OpenstatSourceID, UTMSource, UTMMedium, UTMCampaign, UTMContent, UTMTerm, FromTag, HasGCLID, RefererHash, URLHash, CLID], file_type=parquet, predicate=URL@13 LIKE %google% AND DynamicFilter [ empty ]
 
 query IITIIIIIIIIITTIIIIIIIIIITIIITIIIITTIIITIIIIIIIIIITIIIIITIIIIIITIIIIIIIIIITTTTIIIIIIIITITTITTTTTTTTTTIIIID
 SELECT * FROM hits WHERE "URL" LIKE '%google%' ORDER BY "EventTime" LIMIT 10;
@@ -683,8 +690,8 @@ physical_plan
 03)----SortExec: TopK(fetch=10), expr=[EventTime@1 ASC NULLS LAST], preserve_partitioning=[true]
 04)------ProjectionExec: expr=[SearchPhrase@1 as SearchPhrase, EventTime@0 as EventTime]
 05)--------FilterExec: SearchPhrase@1 != 
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query T
 SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "EventTime" LIMIT 10;
@@ -703,8 +710,8 @@ physical_plan
 01)SortPreservingMergeExec: [SearchPhrase@0 ASC NULLS LAST], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[SearchPhrase@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----FilterExec: SearchPhrase@0 != 
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query T
 SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "SearchPhrase" LIMIT 10;
@@ -727,8 +734,8 @@ physical_plan
 03)----SortExec: TopK(fetch=10), expr=[EventTime@1 ASC NULLS LAST, SearchPhrase@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------ProjectionExec: expr=[SearchPhrase@1 as SearchPhrase, EventTime@0 as EventTime]
 05)--------FilterExec: SearchPhrase@1 != 
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query T
 SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "EventTime", "SearchPhrase" LIMIT 10;
@@ -755,8 +762,8 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([CounterID@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[CounterID@0 as CounterID], aggr=[avg(length(hits.URL)), count(Int64(1))]
 08)--------------FilterExec: URL@1 != 
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CounterID, URL], file_type=parquet, predicate=URL@13 != , pruning_predicate=URL_null_count@2 != row_count@3 AND (URL_min@0 !=  OR  != URL_max@1), required_guarantees=[URL not in ()]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+10)------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[CounterID, URL], file_type=parquet, predicate=URL@13 != , pruning_predicate=URL_null_count@2 != row_count@3 AND (URL_min@0 !=  OR  != URL_max@1), required_guarantees=[URL not in ()]
 
 query IRI
 SELECT "CounterID", AVG(length("URL")) AS l, COUNT(*) AS c FROM hits WHERE "URL" <> '' GROUP BY "CounterID" HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
@@ -783,8 +790,8 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[regexp_replace(Referer@0, ^https?://(?:www\.)?([^/]+)/.*$, \1) as regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))], aggr=[avg(length(hits.Referer)), count(Int64(1)), min(hits.Referer)]
 08)--------------FilterExec: Referer@0 != 
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[Referer], file_type=parquet, predicate=Referer@14 != , pruning_predicate=Referer_null_count@2 != row_count@3 AND (Referer_min@0 !=  OR  != Referer_max@1), required_guarantees=[Referer not in ()]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+10)------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[Referer], file_type=parquet, predicate=Referer@14 != , pruning_predicate=Referer_null_count@2 != row_count@3 AND (Referer_min@0 !=  OR  != Referer_max@1), required_guarantees=[Referer not in ()]
 
 query TRIT
 SELECT REGEXP_REPLACE("Referer", '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k, AVG(length("Referer")) AS l, COUNT(*) AS c, MIN("Referer") FROM hits WHERE "Referer" <> '' GROUP BY k HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
@@ -800,13 +807,15 @@ logical_plan
 03)----SubqueryAlias: hits
 04)------TableScan: hits_raw projection=[ResolutionWidth]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[sum(hits.ResolutionWidth), sum(hits.ResolutionWidth + Int64(1)), sum(hits.ResolutionWidth + Int64(2)), sum(hits.ResolutionWidth + Int64(3)), sum(hits.ResolutionWidth + Int64(4)), sum(hits.ResolutionWidth + Int64(5)), sum(hits.ResolutionWidth + Int64(6)), sum(hits.ResolutionWidth + Int64(7)), sum(hits.ResolutionWidth + Int64(8)), sum(hits.ResolutionWidth + Int64(9)), sum(hits.ResolutionWidth + Int64(10)), sum(hits.ResolutionWidth + Int64(11)), sum(hits.ResolutionWidth + Int64(12)), sum(hits.ResolutionWidth + Int64(13)), sum(hits.ResolutionWidth + Int64(14)), sum(hits.ResolutionWidth + Int64(15)), sum(hits.ResolutionWidth + Int64(16)), sum(hits.ResolutionWidth + Int64(17)), sum(hits.ResolutionWidth + Int64(18)), sum(hits.ResolutionWidth + Int64(19)), sum(hits.ResolutionWidth + Int64(20)), sum(hits.ResolutionWidth + Int64(21)), sum(hits.ResolutionWidth + Int64(22)), sum(hits.ResolutionWidth + Int64(23)), sum(hits.ResolutionWidth + Int64(24)), sum(hits.ResolutionWidth + Int64(25)), sum(hits.ResolutionWidth + Int64(26)), sum(hits.ResolutionWidth + Int64(27)), sum(hits.ResolutionWidth + Int64(28)), sum(hits.ResolutionWidth + Int64(29)), sum(hits.ResolutionWidth + Int64(30)), sum(hits.ResolutionWidth + Int64(31)), sum(hits.ResolutionWidth + Int64(32)), sum(hits.ResolutionWidth + Int64(33)), sum(hits.ResolutionWidth + Int64(34)), sum(hits.ResolutionWidth + Int64(35)), sum(hits.ResolutionWidth + Int64(36)), sum(hits.ResolutionWidth + Int64(37)), sum(hits.ResolutionWidth + Int64(38)), sum(hits.ResolutionWidth + Int64(39)), sum(hits.ResolutionWidth + Int64(40)), sum(hits.ResolutionWidth + Int64(41)), sum(hits.ResolutionWidth + Int64(42)), sum(hits.ResolutionWidth + Int64(43)), sum(hits.ResolutionWidth + Int64(44)), sum(hits.ResolutionWidth + Int64(45)), sum(hits.ResolutionWidth + Int64(46)), sum(hits.ResolutionWidth + Int64(47)), sum(hits.ResolutionWidth + Int64(48)), sum(hits.ResolutionWidth + Int64(49)), sum(hits.ResolutionWidth + Int64(50)), sum(hits.ResolutionWidth + Int64(51)), sum(hits.ResolutionWidth + Int64(52)), sum(hits.ResolutionWidth + Int64(53)), sum(hits.ResolutionWidth + Int64(54)), sum(hits.ResolutionWidth + Int64(55)), sum(hits.ResolutionWidth + Int64(56)), sum(hits.ResolutionWidth + Int64(57)), sum(hits.ResolutionWidth + Int64(58)), sum(hits.ResolutionWidth + Int64(59)), sum(hits.ResolutionWidth + Int64(60)), sum(hits.ResolutionWidth + Int64(61)), sum(hits.ResolutionWidth + Int64(62)), sum(hits.ResolutionWidth + Int64(63)), sum(hits.ResolutionWidth + Int64(64)), sum(hits.ResolutionWidth + Int64(65)), sum(hits.ResolutionWidth + Int64(66)), sum(hits.ResolutionWidth + Int64(67)), sum(hits.ResolutionWidth + Int64(68)), sum(hits.ResolutionWidth + Int64(69)), sum(hits.ResolutionWidth + Int64(70)), sum(hits.ResolutionWidth + Int64(71)), sum(hits.ResolutionWidth + Int64(72)), sum(hits.ResolutionWidth + Int64(73)), sum(hits.ResolutionWidth + Int64(74)), sum(hits.ResolutionWidth + Int64(75)), sum(hits.ResolutionWidth + Int64(76)), sum(hits.ResolutionWidth + Int64(77)), sum(hits.ResolutionWidth + Int64(78)), sum(hits.ResolutionWidth + Int64(79)), sum(hits.ResolutionWidth + Int64(80)), sum(hits.ResolutionWidth + Int64(81)), sum(hits.ResolutionWidth + Int64(82)), sum(hits.ResolutionWidth + Int64(83)), sum(hits.ResolutionWidth + Int64(84)), sum(hits.ResolutionWidth + Int64(85)), sum(hits.ResolutionWidth + Int64(86)), sum(hits.ResolutionWidth + Int64(87)), sum(hits.ResolutionWidth + Int64(88)), sum(hits.ResolutionWidth + Int64(89))]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(ResolutionWidth@20 AS Int64) as __common_expr_1], file_type=parquet
+01)AggregateExec: mode=Final, gby=[], aggr=[sum(hits.ResolutionWidth), sum(hits.ResolutionWidth + Int64(1)), sum(hits.ResolutionWidth + Int64(2)), sum(hits.ResolutionWidth + Int64(3)), sum(hits.ResolutionWidth + Int64(4)), sum(hits.ResolutionWidth + Int64(5)), sum(hits.ResolutionWidth + Int64(6)), sum(hits.ResolutionWidth + Int64(7)), sum(hits.ResolutionWidth + Int64(8)), sum(hits.ResolutionWidth + Int64(9)), sum(hits.ResolutionWidth + Int64(10)), sum(hits.ResolutionWidth + Int64(11)), sum(hits.ResolutionWidth + Int64(12)), sum(hits.ResolutionWidth + Int64(13)), sum(hits.ResolutionWidth + Int64(14)), sum(hits.ResolutionWidth + Int64(15)), sum(hits.ResolutionWidth + Int64(16)), sum(hits.ResolutionWidth + Int64(17)), sum(hits.ResolutionWidth + Int64(18)), sum(hits.ResolutionWidth + Int64(19)), sum(hits.ResolutionWidth + Int64(20)), sum(hits.ResolutionWidth + Int64(21)), sum(hits.ResolutionWidth + Int64(22)), sum(hits.ResolutionWidth + Int64(23)), sum(hits.ResolutionWidth + Int64(24)), sum(hits.ResolutionWidth + Int64(25)), sum(hits.ResolutionWidth + Int64(26)), sum(hits.ResolutionWidth + Int64(27)), sum(hits.ResolutionWidth + Int64(28)), sum(hits.ResolutionWidth + Int64(29)), sum(hits.ResolutionWidth + Int64(30)), sum(hits.ResolutionWidth + Int64(31)), sum(hits.ResolutionWidth + Int64(32)), sum(hits.ResolutionWidth + Int64(33)), sum(hits.ResolutionWidth + Int64(34)), sum(hits.ResolutionWidth + Int64(35)), sum(hits.ResolutionWidth + Int64(36)), sum(hits.ResolutionWidth + Int64(37)), sum(hits.ResolutionWidth + Int64(38)), sum(hits.ResolutionWidth + Int64(39)), sum(hits.ResolutionWidth + Int64(40)), sum(hits.ResolutionWidth + Int64(41)), sum(hits.ResolutionWidth + Int64(42)), sum(hits.ResolutionWidth + Int64(43)), sum(hits.ResolutionWidth + Int64(44)), sum(hits.ResolutionWidth + Int64(45)), sum(hits.ResolutionWidth + Int64(46)), sum(hits.ResolutionWidth + Int64(47)), sum(hits.ResolutionWidth + Int64(48)), sum(hits.ResolutionWidth + Int64(49)), sum(hits.ResolutionWidth + Int64(50)), sum(hits.ResolutionWidth + Int64(51)), sum(hits.ResolutionWidth + Int64(52)), sum(hits.ResolutionWidth + Int64(53)), sum(hits.ResolutionWidth + Int64(54)), sum(hits.ResolutionWidth + Int64(55)), sum(hits.ResolutionWidth + Int64(56)), sum(hits.ResolutionWidth + Int64(57)), sum(hits.ResolutionWidth + Int64(58)), sum(hits.ResolutionWidth + Int64(59)), sum(hits.ResolutionWidth + Int64(60)), sum(hits.ResolutionWidth + Int64(61)), sum(hits.ResolutionWidth + Int64(62)), sum(hits.ResolutionWidth + Int64(63)), sum(hits.ResolutionWidth + Int64(64)), sum(hits.ResolutionWidth + Int64(65)), sum(hits.ResolutionWidth + Int64(66)), sum(hits.ResolutionWidth + Int64(67)), sum(hits.ResolutionWidth + Int64(68)), sum(hits.ResolutionWidth + Int64(69)), sum(hits.ResolutionWidth + Int64(70)), sum(hits.ResolutionWidth + Int64(71)), sum(hits.ResolutionWidth + Int64(72)), sum(hits.ResolutionWidth + Int64(73)), sum(hits.ResolutionWidth + Int64(74)), sum(hits.ResolutionWidth + Int64(75)), sum(hits.ResolutionWidth + Int64(76)), sum(hits.ResolutionWidth + Int64(77)), sum(hits.ResolutionWidth + Int64(78)), sum(hits.ResolutionWidth + Int64(79)), sum(hits.ResolutionWidth + Int64(80)), sum(hits.ResolutionWidth + Int64(81)), sum(hits.ResolutionWidth + Int64(82)), sum(hits.ResolutionWidth + Int64(83)), sum(hits.ResolutionWidth + Int64(84)), sum(hits.ResolutionWidth + Int64(85)), sum(hits.ResolutionWidth + Int64(86)), sum(hits.ResolutionWidth + Int64(87)), sum(hits.ResolutionWidth + Int64(88)), sum(hits.ResolutionWidth + Int64(89))]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[sum(hits.ResolutionWidth), sum(hits.ResolutionWidth + Int64(1)), sum(hits.ResolutionWidth + Int64(2)), sum(hits.ResolutionWidth + Int64(3)), sum(hits.ResolutionWidth + Int64(4)), sum(hits.ResolutionWidth + Int64(5)), sum(hits.ResolutionWidth + Int64(6)), sum(hits.ResolutionWidth + Int64(7)), sum(hits.ResolutionWidth + Int64(8)), sum(hits.ResolutionWidth + Int64(9)), sum(hits.ResolutionWidth + Int64(10)), sum(hits.ResolutionWidth + Int64(11)), sum(hits.ResolutionWidth + Int64(12)), sum(hits.ResolutionWidth + Int64(13)), sum(hits.ResolutionWidth + Int64(14)), sum(hits.ResolutionWidth + Int64(15)), sum(hits.ResolutionWidth + Int64(16)), sum(hits.ResolutionWidth + Int64(17)), sum(hits.ResolutionWidth + Int64(18)), sum(hits.ResolutionWidth + Int64(19)), sum(hits.ResolutionWidth + Int64(20)), sum(hits.ResolutionWidth + Int64(21)), sum(hits.ResolutionWidth + Int64(22)), sum(hits.ResolutionWidth + Int64(23)), sum(hits.ResolutionWidth + Int64(24)), sum(hits.ResolutionWidth + Int64(25)), sum(hits.ResolutionWidth + Int64(26)), sum(hits.ResolutionWidth + Int64(27)), sum(hits.ResolutionWidth + Int64(28)), sum(hits.ResolutionWidth + Int64(29)), sum(hits.ResolutionWidth + Int64(30)), sum(hits.ResolutionWidth + Int64(31)), sum(hits.ResolutionWidth + Int64(32)), sum(hits.ResolutionWidth + Int64(33)), sum(hits.ResolutionWidth + Int64(34)), sum(hits.ResolutionWidth + Int64(35)), sum(hits.ResolutionWidth + Int64(36)), sum(hits.ResolutionWidth + Int64(37)), sum(hits.ResolutionWidth + Int64(38)), sum(hits.ResolutionWidth + Int64(39)), sum(hits.ResolutionWidth + Int64(40)), sum(hits.ResolutionWidth + Int64(41)), sum(hits.ResolutionWidth + Int64(42)), sum(hits.ResolutionWidth + Int64(43)), sum(hits.ResolutionWidth + Int64(44)), sum(hits.ResolutionWidth + Int64(45)), sum(hits.ResolutionWidth + Int64(46)), sum(hits.ResolutionWidth + Int64(47)), sum(hits.ResolutionWidth + Int64(48)), sum(hits.ResolutionWidth + Int64(49)), sum(hits.ResolutionWidth + Int64(50)), sum(hits.ResolutionWidth + Int64(51)), sum(hits.ResolutionWidth + Int64(52)), sum(hits.ResolutionWidth + Int64(53)), sum(hits.ResolutionWidth + Int64(54)), sum(hits.ResolutionWidth + Int64(55)), sum(hits.ResolutionWidth + Int64(56)), sum(hits.ResolutionWidth + Int64(57)), sum(hits.ResolutionWidth + Int64(58)), sum(hits.ResolutionWidth + Int64(59)), sum(hits.ResolutionWidth + Int64(60)), sum(hits.ResolutionWidth + Int64(61)), sum(hits.ResolutionWidth + Int64(62)), sum(hits.ResolutionWidth + Int64(63)), sum(hits.ResolutionWidth + Int64(64)), sum(hits.ResolutionWidth + Int64(65)), sum(hits.ResolutionWidth + Int64(66)), sum(hits.ResolutionWidth + Int64(67)), sum(hits.ResolutionWidth + Int64(68)), sum(hits.ResolutionWidth + Int64(69)), sum(hits.ResolutionWidth + Int64(70)), sum(hits.ResolutionWidth + Int64(71)), sum(hits.ResolutionWidth + Int64(72)), sum(hits.ResolutionWidth + Int64(73)), sum(hits.ResolutionWidth + Int64(74)), sum(hits.ResolutionWidth + Int64(75)), sum(hits.ResolutionWidth + Int64(76)), sum(hits.ResolutionWidth + Int64(77)), sum(hits.ResolutionWidth + Int64(78)), sum(hits.ResolutionWidth + Int64(79)), sum(hits.ResolutionWidth + Int64(80)), sum(hits.ResolutionWidth + Int64(81)), sum(hits.ResolutionWidth + Int64(82)), sum(hits.ResolutionWidth + Int64(83)), sum(hits.ResolutionWidth + Int64(84)), sum(hits.ResolutionWidth + Int64(85)), sum(hits.ResolutionWidth + Int64(86)), sum(hits.ResolutionWidth + Int64(87)), sum(hits.ResolutionWidth + Int64(88)), sum(hits.ResolutionWidth + Int64(89))]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[CAST(ResolutionWidth@20 AS Int64) as __common_expr_1], file_type=parquet
 
 query IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
 SELECT SUM("ResolutionWidth"), SUM("ResolutionWidth" + 1), SUM("ResolutionWidth" + 2), SUM("ResolutionWidth" + 3), SUM("ResolutionWidth" + 4), SUM("ResolutionWidth" + 5), SUM("ResolutionWidth" + 6), SUM("ResolutionWidth" + 7), SUM("ResolutionWidth" + 8), SUM("ResolutionWidth" + 9), SUM("ResolutionWidth" + 10), SUM("ResolutionWidth" + 11), SUM("ResolutionWidth" + 12), SUM("ResolutionWidth" + 13), SUM("ResolutionWidth" + 14), SUM("ResolutionWidth" + 15), SUM("ResolutionWidth" + 16), SUM("ResolutionWidth" + 17), SUM("ResolutionWidth" + 18), SUM("ResolutionWidth" + 19), SUM("ResolutionWidth" + 20), SUM("ResolutionWidth" + 21), SUM("ResolutionWidth" + 22), SUM("ResolutionWidth" + 23), SUM("ResolutionWidth" + 24), SUM("ResolutionWidth" + 25), SUM("ResolutionWidth" + 26), SUM("ResolutionWidth" + 27), SUM("ResolutionWidth" + 28), SUM("ResolutionWidth" + 29), SUM("ResolutionWidth" + 30), SUM("ResolutionWidth" + 31), SUM("ResolutionWidth" + 32), SUM("ResolutionWidth" + 33), SUM("ResolutionWidth" + 34), SUM("ResolutionWidth" + 35), SUM("ResolutionWidth" + 36), SUM("ResolutionWidth" + 37), SUM("ResolutionWidth" + 38), SUM("ResolutionWidth" + 39), SUM("ResolutionWidth" + 40), SUM("ResolutionWidth" + 41), SUM("ResolutionWidth" + 42), SUM("ResolutionWidth" + 43), SUM("ResolutionWidth" + 44), SUM("ResolutionWidth" + 45), SUM("ResolutionWidth" + 46), SUM("ResolutionWidth" + 47), SUM("ResolutionWidth" + 48), SUM("ResolutionWidth" + 49), SUM("ResolutionWidth" + 50), SUM("ResolutionWidth" + 51), SUM("ResolutionWidth" + 52), SUM("ResolutionWidth" + 53), SUM("ResolutionWidth" + 54), SUM("ResolutionWidth" + 55), SUM("ResolutionWidth" + 56), SUM("ResolutionWidth" + 57), SUM("ResolutionWidth" + 58), SUM("ResolutionWidth" + 59), SUM("ResolutionWidth" + 60), SUM("ResolutionWidth" + 61), SUM("ResolutionWidth" + 62), SUM("ResolutionWidth" + 63), SUM("ResolutionWidth" + 64), SUM("ResolutionWidth" + 65), SUM("ResolutionWidth" + 66), SUM("ResolutionWidth" + 67), SUM("ResolutionWidth" + 68), SUM("ResolutionWidth" + 69), SUM("ResolutionWidth" + 70), SUM("ResolutionWidth" + 71), SUM("ResolutionWidth" + 72), SUM("ResolutionWidth" + 73), SUM("ResolutionWidth" + 74), SUM("ResolutionWidth" + 75), SUM("ResolutionWidth" + 76), SUM("ResolutionWidth" + 77), SUM("ResolutionWidth" + 78), SUM("ResolutionWidth" + 79), SUM("ResolutionWidth" + 80), SUM("ResolutionWidth" + 81), SUM("ResolutionWidth" + 82), SUM("ResolutionWidth" + 83), SUM("ResolutionWidth" + 84), SUM("ResolutionWidth" + 85), SUM("ResolutionWidth" + 86), SUM("ResolutionWidth" + 87), SUM("ResolutionWidth" + 88), SUM("ResolutionWidth" + 89) FROM hits;
 ----
-0 10 20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 210 220 230 240 250 260 270 280 290 300 310 320 330 340 350 360 370 380 390 400 410 420 430 440 450 460 470 480 490 500 510 520 530 540 550 560 570 580 590 600 610 620 630 640 650 660 670 680 690 700 710 720 730 740 750 760 770 780 790 800 810 820 830 840 850 860 870 880 890
+0 20 40 60 80 100 120 140 160 180 200 220 240 260 280 300 320 340 360 380 400 420 440 460 480 500 520 540 560 580 600 620 640 660 680 700 720 740 760 780 800 820 840 860 880 900 920 940 960 980 1000 1020 1040 1060 1080 1100 1120 1140 1160 1180 1200 1220 1240 1260 1280 1300 1320 1340 1360 1380 1400 1420 1440 1460 1480 1500 1520 1540 1560 1580 1600 1620 1640 1660 1680 1700 1720 1740 1760 1780
 
 ## Q30
 query TT
@@ -828,8 +837,8 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([SearchEngineID@0, ClientIP@1], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[SearchEngineID@3 as SearchEngineID, ClientIP@0 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), avg(hits.ResolutionWidth)]
 07)------------FilterExec: SearchPhrase@4 != , projection=[ClientIP@0, IsRefresh@1, ResolutionWidth@2, SearchEngineID@3]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[ClientIP, IsRefresh, ResolutionWidth, SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+09)----------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[ClientIP, IsRefresh, ResolutionWidth, SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query IIIIR
 SELECT "SearchEngineID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchEngineID", "ClientIP" ORDER BY c DESC LIMIT 10;
@@ -855,8 +864,8 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([WatchID@0, ClientIP@1], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), avg(hits.ResolutionWidth)]
 07)------------FilterExec: SearchPhrase@4 != , projection=[WatchID@0, ClientIP@1, IsRefresh@2, ResolutionWidth@3]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+09)----------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query IIIIR
 SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits WHERE "SearchPhrase" <> '' GROUP BY "WatchID", "ClientIP" ORDER BY c DESC LIMIT 10;
@@ -877,23 +886,23 @@ physical_plan
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[WatchID@0 as WatchID, ClientIP@1 as ClientIP, count(Int64(1))@2 as c, sum(hits.IsRefresh)@3 as sum(hits.IsRefresh), avg(hits.ResolutionWidth)@4 as avg(hits.ResolutionWidth)]
 04)------AggregateExec: mode=FinalPartitioned, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), avg(hits.ResolutionWidth)]
-05)--------RepartitionExec: partitioning=Hash([WatchID@0, ClientIP@1], 4), input_partitions=1
+05)--------RepartitionExec: partitioning=Hash([WatchID@0, ClientIP@1], 4), input_partitions=2
 06)----------AggregateExec: mode=Partial, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), avg(hits.ResolutionWidth)]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth], file_type=parquet
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth], file_type=parquet
 
 query IIIIR rowsort
 SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits GROUP BY "WatchID", "ClientIP" ORDER BY c DESC LIMIT 10;
 ----
-4894690465724379622 1568366281 1 0 0
-5206346422301499756 -1216690514 1 0 0
-6308646140879811077 -1216690514 1 0 0
-6635790769678439148 1427531677 1 0 0
-6864353419233967042 1568366281 1 0 0
-8120543446287442873 -1216690514 1 0 0
-8156744413230856864 -1216690514 1 0 0
-8740403056911509777 1615432634 1 0 0
-8924809397503602651 -1216690514 1 0 0
-9110818468285196899 -1216690514 1 0 0
+4894690465724379622 1568366281 2 0 0
+5206346422301499756 -1216690514 2 0 0
+6308646140879811077 -1216690514 2 0 0
+6635790769678439148 1427531677 2 0 0
+6864353419233967042 1568366281 2 0 0
+8120543446287442873 -1216690514 2 0 0
+8156744413230856864 -1216690514 2 0 0
+8740403056911509777 1615432634 2 0 0
+8924809397503602651 -1216690514 2 0 0
+9110818468285196899 -1216690514 2 0 0
 
 ## Q33
 query TT
@@ -910,19 +919,19 @@ physical_plan
 02)--SortExec: TopK(fetch=10), expr=[c@1 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[URL@0 as URL, count(Int64(1))@1 as c]
 04)------AggregateExec: mode=FinalPartitioned, gby=[URL@0 as URL], aggr=[count(Int64(1))]
-05)--------RepartitionExec: partitioning=Hash([URL@0], 4), input_partitions=1
+05)--------RepartitionExec: partitioning=Hash([URL@0], 4), input_partitions=2
 06)----------AggregateExec: mode=Partial, gby=[URL@0 as URL], aggr=[count(Int64(1))]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[URL], file_type=parquet
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[URL], file_type=parquet
 
 query TI rowsort
 SELECT "URL", COUNT(*) AS c FROM hits GROUP BY "URL" ORDER BY c DESC LIMIT 10;
 ----
-(empty) 5
-http://afisha.mail.ru/catalog/314/women.ru/ency=1&page3/?errovat-pinniki 1
-http://bonprix.ru/index.ru/cinema/art/0 986 424 233 сезон 1
-http://bonprix.ru/index.ru/cinema/art/A00387,3797); ru)&bL 1
-http://holodilnik.ru/russia/05jul2013&model=0 1
-http://tours/Ekategoriya%2F&sr=http://slovareniye 1
+(empty) 10
+http://afisha.mail.ru/catalog/314/women.ru/ency=1&page3/?errovat-pinniki 2
+http://bonprix.ru/index.ru/cinema/art/0 986 424 233 сезон 2
+http://bonprix.ru/index.ru/cinema/art/A00387,3797); ru)&bL 2
+http://holodilnik.ru/russia/05jul2013&model=0 2
+http://tours/Ekategoriya%2F&sr=http://slovareniye 2
 
 ## Q34
 query TT
@@ -939,19 +948,19 @@ physical_plan
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[1 as Int64(1), URL@0 as URL, count(Int64(1))@1 as c]
 04)------AggregateExec: mode=FinalPartitioned, gby=[URL@0 as URL], aggr=[count(Int64(1))]
-05)--------RepartitionExec: partitioning=Hash([URL@0], 4), input_partitions=1
+05)--------RepartitionExec: partitioning=Hash([URL@0], 4), input_partitions=2
 06)----------AggregateExec: mode=Partial, gby=[URL@0 as URL], aggr=[count(Int64(1))]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[URL], file_type=parquet
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[URL], file_type=parquet
 
 query ITI rowsort
 SELECT 1, "URL", COUNT(*) AS c FROM hits GROUP BY 1, "URL" ORDER BY c DESC LIMIT 10;
 ----
-1 (empty) 5
-1 http://afisha.mail.ru/catalog/314/women.ru/ency=1&page3/?errovat-pinniki 1
-1 http://bonprix.ru/index.ru/cinema/art/0 986 424 233 сезон 1
-1 http://bonprix.ru/index.ru/cinema/art/A00387,3797); ru)&bL 1
-1 http://holodilnik.ru/russia/05jul2013&model=0 1
-1 http://tours/Ekategoriya%2F&sr=http://slovareniye 1
+1 (empty) 10
+1 http://afisha.mail.ru/catalog/314/women.ru/ency=1&page3/?errovat-pinniki 2
+1 http://bonprix.ru/index.ru/cinema/art/0 986 424 233 сезон 2
+1 http://bonprix.ru/index.ru/cinema/art/A00387,3797); ru)&bL 2
+1 http://holodilnik.ru/russia/05jul2013&model=0 2
+1 http://tours/Ekategoriya%2F&sr=http://slovareniye 2
 
 ## Q35
 query TT
@@ -969,17 +978,17 @@ physical_plan
 02)--SortExec: TopK(fetch=10), expr=[c@4 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[ClientIP@0 as ClientIP, hits.ClientIP - Int64(1)@1 as hits.ClientIP - Int64(1), hits.ClientIP - Int64(2)@2 as hits.ClientIP - Int64(2), hits.ClientIP - Int64(3)@3 as hits.ClientIP - Int64(3), count(Int64(1))@4 as c]
 04)------AggregateExec: mode=FinalPartitioned, gby=[ClientIP@0 as ClientIP, hits.ClientIP - Int64(1)@1 as hits.ClientIP - Int64(1), hits.ClientIP - Int64(2)@2 as hits.ClientIP - Int64(2), hits.ClientIP - Int64(3)@3 as hits.ClientIP - Int64(3)], aggr=[count(Int64(1))]
-05)--------RepartitionExec: partitioning=Hash([ClientIP@0, hits.ClientIP - Int64(1)@1, hits.ClientIP - Int64(2)@2, hits.ClientIP - Int64(3)@3], 4), input_partitions=1
+05)--------RepartitionExec: partitioning=Hash([ClientIP@0, hits.ClientIP - Int64(1)@1, hits.ClientIP - Int64(2)@2, hits.ClientIP - Int64(3)@3], 4), input_partitions=2
 06)----------AggregateExec: mode=Partial, gby=[ClientIP@1 as ClientIP, __common_expr_1@0 - 1 as hits.ClientIP - Int64(1), __common_expr_1@0 - 2 as hits.ClientIP - Int64(2), __common_expr_1@0 - 3 as hits.ClientIP - Int64(3)], aggr=[count(Int64(1))]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(ClientIP@7 AS Int64) as __common_expr_1, ClientIP], file_type=parquet
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[CAST(ClientIP@7 AS Int64) as __common_expr_1, ClientIP], file_type=parquet
 
 query IIIII rowsort
 SELECT "ClientIP", "ClientIP" - 1, "ClientIP" - 2, "ClientIP" - 3, COUNT(*) AS c FROM hits GROUP BY "ClientIP", "ClientIP" - 1, "ClientIP" - 2, "ClientIP" - 3 ORDER BY c DESC LIMIT 10;
 ----
--1216690514 -1216690515 -1216690516 -1216690517 6
-1427531677 1427531676 1427531675 1427531674 1
-1568366281 1568366280 1568366279 1568366278 2
-1615432634 1615432633 1615432632 1615432631 1
+-1216690514 -1216690515 -1216690516 -1216690517 12
+1427531677 1427531676 1427531675 1427531674 2
+1568366281 1568366280 1568366279 1568366278 4
+1615432634 1615432633 1615432632 1615432631 2
 
 ## Q36
 query TT
@@ -1001,8 +1010,8 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([URL@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[URL@0 as URL], aggr=[count(Int64(1))]
 07)------------FilterExec: CounterID@1 = 62 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits@4 = 0 AND IsRefresh@3 = 0 AND URL@2 != , projection=[URL@2]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventDate, CounterID, URL, IsRefresh, DontCountHits], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits@61 = 0 AND IsRefresh@15 = 0 AND URL@13 != , pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits_null_count@9 != row_count@3 AND DontCountHits_min@7 <= 0 AND 0 <= DontCountHits_max@8 AND IsRefresh_null_count@12 != row_count@3 AND IsRefresh_min@10 <= 0 AND 0 <= IsRefresh_max@11 AND URL_null_count@15 != row_count@3 AND (URL_min@13 !=  OR  != URL_max@14), required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), URL not in ()]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+09)----------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[EventDate, CounterID, URL, IsRefresh, DontCountHits], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits@61 = 0 AND IsRefresh@15 = 0 AND URL@13 != , pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits_null_count@9 != row_count@3 AND DontCountHits_min@7 <= 0 AND 0 <= DontCountHits_max@8 AND IsRefresh_null_count@12 != row_count@3 AND IsRefresh_min@10 <= 0 AND 0 <= IsRefresh_max@11 AND URL_null_count@15 != row_count@3 AND (URL_min@13 !=  OR  != URL_max@14), required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), URL not in ()]
 
 query TI
 SELECT "URL", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "DontCountHits" = 0 AND "IsRefresh" = 0 AND "URL" <> '' GROUP BY "URL" ORDER BY PageViews DESC LIMIT 10;
@@ -1028,8 +1037,8 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([Title@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[Title@0 as Title], aggr=[count(Int64(1))]
 07)------------FilterExec: CounterID@2 = 62 AND CAST(CAST(EventDate@1 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@1 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits@4 = 0 AND IsRefresh@3 = 0 AND Title@0 != , projection=[Title@0]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[Title, EventDate, CounterID, IsRefresh, DontCountHits], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits@61 = 0 AND IsRefresh@15 = 0 AND Title@2 != , pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits_null_count@9 != row_count@3 AND DontCountHits_min@7 <= 0 AND 0 <= DontCountHits_max@8 AND IsRefresh_null_count@12 != row_count@3 AND IsRefresh_min@10 <= 0 AND 0 <= IsRefresh_max@11 AND Title_null_count@15 != row_count@3 AND (Title_min@13 !=  OR  != Title_max@14), required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), Title not in ()]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+09)----------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[Title, EventDate, CounterID, IsRefresh, DontCountHits], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits@61 = 0 AND IsRefresh@15 = 0 AND Title@2 != , pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND DontCountHits_null_count@9 != row_count@3 AND DontCountHits_min@7 <= 0 AND 0 <= DontCountHits_max@8 AND IsRefresh_null_count@12 != row_count@3 AND IsRefresh_min@10 <= 0 AND 0 <= IsRefresh_max@11 AND Title_null_count@15 != row_count@3 AND (Title_min@13 !=  OR  != Title_max@14), required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), Title not in ()]
 
 query TI
 SELECT "Title", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "DontCountHits" = 0 AND "IsRefresh" = 0 AND "Title" <> '' GROUP BY "Title" ORDER BY PageViews DESC LIMIT 10;
@@ -1057,8 +1066,8 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([URL@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[URL@0 as URL], aggr=[count(Int64(1))]
 08)--------------FilterExec: CounterID@1 = 62 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@3 = 0 AND IsLink@4 != 0 AND IsDownload@5 = 0, projection=[URL@2]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventDate, CounterID, URL, IsRefresh, IsLink, IsDownload], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@15 = 0 AND IsLink@52 != 0 AND IsDownload@53 = 0, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND IsLink_null_count@12 != row_count@3 AND (IsLink_min@10 != 0 OR 0 != IsLink_max@11) AND IsDownload_null_count@15 != row_count@3 AND IsDownload_min@13 <= 0 AND 0 <= IsDownload_max@14, required_guarantees=[CounterID in (62), IsDownload in (0), IsLink not in (0), IsRefresh in (0)]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+10)------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[EventDate, CounterID, URL, IsRefresh, IsLink, IsDownload], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@15 = 0 AND IsLink@52 != 0 AND IsDownload@53 = 0, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND IsLink_null_count@12 != row_count@3 AND (IsLink_min@10 != 0 OR 0 != IsLink_max@11) AND IsDownload_null_count@15 != row_count@3 AND IsDownload_min@13 <= 0 AND 0 <= IsDownload_max@14, required_guarantees=[CounterID in (62), IsDownload in (0), IsLink not in (0), IsRefresh in (0)]
 
 query TI
 SELECT "URL", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "IsRefresh" = 0 AND "IsLink" <> 0 AND "IsDownload" = 0 GROUP BY "URL" ORDER BY PageViews DESC LIMIT 10 OFFSET 1000;
@@ -1086,8 +1095,8 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([TraficSourceID@0, SearchEngineID@1, AdvEngineID@2, CASE WHEN hits.SearchEngineID = Int64(0) AND hits.AdvEngineID = Int64(0) THEN hits.Referer ELSE Utf8("") END@3, URL@4], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[TraficSourceID@2 as TraficSourceID, SearchEngineID@3 as SearchEngineID, AdvEngineID@4 as AdvEngineID, CASE WHEN SearchEngineID@3 = 0 AND AdvEngineID@4 = 0 THEN Referer@1 ELSE  END as CASE WHEN hits.SearchEngineID = Int64(0) AND hits.AdvEngineID = Int64(0) THEN hits.Referer ELSE Utf8("") END, URL@0 as URL], aggr=[count(Int64(1))]
 08)--------------FilterExec: CounterID@1 = 62 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@4 = 0, projection=[URL@2, Referer@3, TraficSourceID@5, SearchEngineID@6, AdvEngineID@7]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventDate, CounterID, URL, Referer, IsRefresh, TraficSourceID, SearchEngineID, AdvEngineID], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@15 = 0, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8, required_guarantees=[CounterID in (62), IsRefresh in (0)]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+10)------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[EventDate, CounterID, URL, Referer, IsRefresh, TraficSourceID, SearchEngineID, AdvEngineID], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@15 = 0, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8, required_guarantees=[CounterID in (62), IsRefresh in (0)]
 
 query IIITTI
 SELECT "TraficSourceID", "SearchEngineID", "AdvEngineID", CASE WHEN ("SearchEngineID" = 0 AND "AdvEngineID" = 0) THEN "Referer" ELSE '' END AS Src, "URL" AS Dst, COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "IsRefresh" = 0 GROUP BY "TraficSourceID", "SearchEngineID", "AdvEngineID", Src, Dst ORDER BY PageViews DESC LIMIT 10 OFFSET 1000;
@@ -1116,8 +1125,8 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[URLHash@0 as URLHash, EventDate@1 as EventDate], aggr=[count(Int64(1))]
 08)--------------ProjectionExec: expr=[URLHash@1 as URLHash, CAST(CAST(EventDate@0 AS Int32) AS Date32) as EventDate]
 09)----------------FilterExec: CounterID@1 = 62 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@2 = 0 AND (TraficSourceID@3 = -1 OR TraficSourceID@3 = 6) AND RefererHash@4 = 3594120000172545465, projection=[EventDate@0, URLHash@5]
-10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventDate, CounterID, IsRefresh, TraficSourceID, RefererHash, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@15 = 0 AND (TraficSourceID@37 = -1 OR TraficSourceID@37 = 6) AND RefererHash@102 = 3594120000172545465, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND (TraficSourceID_null_count@12 != row_count@3 AND TraficSourceID_min@10 <= -1 AND -1 <= TraficSourceID_max@11 OR TraficSourceID_null_count@12 != row_count@3 AND TraficSourceID_min@10 <= 6 AND 6 <= TraficSourceID_max@11) AND RefererHash_null_count@15 != row_count@3 AND RefererHash_min@13 <= 3594120000172545465 AND 3594120000172545465 <= RefererHash_max@14, required_guarantees=[CounterID in (62), IsRefresh in (0), RefererHash in (3594120000172545465), TraficSourceID in (-1, 6)]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+11)--------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[EventDate, CounterID, IsRefresh, TraficSourceID, RefererHash, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@15 = 0 AND (TraficSourceID@37 = -1 OR TraficSourceID@37 = 6) AND RefererHash@102 = 3594120000172545465, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND (TraficSourceID_null_count@12 != row_count@3 AND TraficSourceID_min@10 <= -1 AND -1 <= TraficSourceID_max@11 OR TraficSourceID_null_count@12 != row_count@3 AND TraficSourceID_min@10 <= 6 AND 6 <= TraficSourceID_max@11) AND RefererHash_null_count@15 != row_count@3 AND RefererHash_min@13 <= 3594120000172545465 AND 3594120000172545465 <= RefererHash_max@14, required_guarantees=[CounterID in (62), IsRefresh in (0), RefererHash in (3594120000172545465), TraficSourceID in (-1, 6)]
 
 query IDI
 SELECT "URLHash", "EventDate", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "IsRefresh" = 0 AND "TraficSourceID" IN (-1, 6) AND "RefererHash" = 3594120000172545465 GROUP BY "URLHash", "EventDate" ORDER BY PageViews DESC LIMIT 10 OFFSET 100;
@@ -1145,8 +1154,8 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([WindowClientWidth@0, WindowClientHeight@1], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[WindowClientWidth@0 as WindowClientWidth, WindowClientHeight@1 as WindowClientHeight], aggr=[count(Int64(1))]
 08)--------------FilterExec: CounterID@1 = 62 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@0 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@2 = 0 AND DontCountHits@5 = 0 AND URLHash@6 = 2868770270353813622, projection=[WindowClientWidth@3, WindowClientHeight@4]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventDate, CounterID, IsRefresh, WindowClientWidth, WindowClientHeight, DontCountHits, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@15 = 0 AND DontCountHits@61 = 0 AND URLHash@103 = 2868770270353813622, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND DontCountHits_null_count@12 != row_count@3 AND DontCountHits_min@10 <= 0 AND 0 <= DontCountHits_max@11 AND URLHash_null_count@15 != row_count@3 AND URLHash_min@13 <= 2868770270353813622 AND 2868770270353813622 <= URLHash_max@14, required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), URLHash in (2868770270353813622)]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+10)------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[EventDate, CounterID, IsRefresh, WindowClientWidth, WindowClientHeight, DontCountHits, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-01 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh@15 = 0 AND DontCountHits@61 = 0 AND URLHash@103 = 2868770270353813622, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-01 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-31 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND DontCountHits_null_count@12 != row_count@3 AND DontCountHits_min@10 <= 0 AND 0 <= DontCountHits_max@11 AND URLHash_null_count@15 != row_count@3 AND URLHash_min@13 <= 2868770270353813622 AND 2868770270353813622 <= URLHash_max@14, required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), URLHash in (2868770270353813622)]
 
 query III
 SELECT "WindowClientWidth", "WindowClientHeight", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "IsRefresh" = 0 AND "DontCountHits" = 0 AND "URLHash" = 2868770270353813622 GROUP BY "WindowClientWidth", "WindowClientHeight" ORDER BY PageViews DESC LIMIT 10 OFFSET 10000;
@@ -1174,8 +1183,8 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([date_trunc(Utf8("minute"),to_timestamp_seconds(hits.EventTime))@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[date_trunc(minute, to_timestamp_seconds(EventTime@0)) as date_trunc(Utf8("minute"),to_timestamp_seconds(hits.EventTime))], aggr=[count(Int64(1))]
 08)--------------FilterExec: CounterID@2 = 62 AND CAST(CAST(EventDate@1 AS Int32) AS Date32) >= 2013-07-14 AND CAST(CAST(EventDate@1 AS Int32) AS Date32) <= 2013-07-15 AND IsRefresh@3 = 0 AND DontCountHits@4 = 0, projection=[EventTime@0]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, EventDate, CounterID, IsRefresh, DontCountHits], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-14 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-15 AND IsRefresh@15 = 0 AND DontCountHits@61 = 0, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-14 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-15 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND DontCountHits_null_count@12 != row_count@3 AND DontCountHits_min@10 <= 0 AND 0 <= DontCountHits_max@11, required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0)]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+10)------------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[EventTime, EventDate, CounterID, IsRefresh, DontCountHits], file_type=parquet, predicate=CounterID@6 = 62 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) >= 2013-07-14 AND CAST(CAST(EventDate@5 AS Int32) AS Date32) <= 2013-07-15 AND IsRefresh@15 = 0 AND DontCountHits@61 = 0, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_max@4 AS Int32) AS Date32) >= 2013-07-14 AND EventDate_null_count@5 != row_count@3 AND CAST(CAST(EventDate_min@6 AS Int32) AS Date32) <= 2013-07-15 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND DontCountHits_null_count@12 != row_count@3 AND DontCountHits_min@10 <= 0 AND 0 <= DontCountHits_max@11, required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0)]
 
 query PI
 SELECT DATE_TRUNC('minute', to_timestamp_seconds("EventTime")) AS M, COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-14' AND "EventDate" <= '2013-07-15' AND "IsRefresh" = 0 AND "DontCountHits" = 0 GROUP BY DATE_TRUNC('minute', to_timestamp_seconds("EventTime")) ORDER BY DATE_TRUNC('minute', M) LIMIT 10 OFFSET 1000;
@@ -1191,8 +1200,10 @@ logical_plan
 02)--SubqueryAlias: hits
 03)----TableScan: hits_raw projection=[MobilePhone, MobilePhoneModel, SearchPhrase]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(DISTINCT hits.SearchPhrase), count(DISTINCT hits.MobilePhone), count(DISTINCT hits.MobilePhoneModel)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[MobilePhone, MobilePhoneModel, SearchPhrase], file_type=parquet
+01)AggregateExec: mode=Final, gby=[], aggr=[count(DISTINCT hits.SearchPhrase), count(DISTINCT hits.MobilePhone), count(DISTINCT hits.MobilePhoneModel)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[count(DISTINCT hits.SearchPhrase), count(DISTINCT hits.MobilePhone), count(DISTINCT hits.MobilePhoneModel)]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[MobilePhone, MobilePhoneModel, SearchPhrase], file_type=parquet
 
 query III
 SELECT COUNT(DISTINCT "SearchPhrase"), COUNT(DISTINCT "MobilePhone"), COUNT(DISTINCT "MobilePhoneModel") FROM hits;
@@ -1207,8 +1218,10 @@ logical_plan
 02)--SubqueryAlias: hits
 03)----TableScan: hits_raw projection=[HitColor, BrowserLanguage, BrowserCountry]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(DISTINCT hits.HitColor), count(DISTINCT hits.BrowserCountry), count(DISTINCT hits.BrowserLanguage)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[HitColor, BrowserLanguage, BrowserCountry], file_type=parquet
+01)AggregateExec: mode=Final, gby=[], aggr=[count(DISTINCT hits.HitColor), count(DISTINCT hits.BrowserCountry), count(DISTINCT hits.BrowserLanguage)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[count(DISTINCT hits.HitColor), count(DISTINCT hits.BrowserCountry), count(DISTINCT hits.BrowserLanguage)]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[HitColor, BrowserLanguage, BrowserCountry], file_type=parquet
 
 query III
 SELECT COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")  FROM hits;
@@ -1227,9 +1240,9 @@ physical_plan
 01)SortPreservingMergeExec: [count(DISTINCT hits.SocialNetwork)@1 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[count(DISTINCT hits.SocialNetwork)@1 DESC], preserve_partitioning=[true]
 03)----AggregateExec: mode=FinalPartitioned, gby=[BrowserCountry@0 as BrowserCountry], aggr=[count(DISTINCT hits.SocialNetwork), count(DISTINCT hits.HitColor), count(DISTINCT hits.BrowserLanguage), count(DISTINCT hits.SocialAction)]
-04)------RepartitionExec: partitioning=Hash([BrowserCountry@0], 4), input_partitions=1
+04)------RepartitionExec: partitioning=Hash([BrowserCountry@0], 4), input_partitions=2
 05)--------AggregateExec: mode=Partial, gby=[BrowserCountry@2 as BrowserCountry], aggr=[count(DISTINCT hits.SocialNetwork), count(DISTINCT hits.HitColor), count(DISTINCT hits.BrowserLanguage), count(DISTINCT hits.SocialAction)]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[HitColor, BrowserLanguage, BrowserCountry, SocialNetwork, SocialAction], file_type=parquet
+06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits/clickbench_hits_10_link.parquet]]}, projection=[HitColor, BrowserLanguage, BrowserCountry, SocialNetwork, SocialAction], file_type=parquet
 
 query TIIII
 SELECT "BrowserCountry",  COUNT(DISTINCT "SocialNetwork"), COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserLanguage"), COUNT(DISTINCT "SocialAction") FROM hits GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
