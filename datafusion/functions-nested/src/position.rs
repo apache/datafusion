@@ -178,7 +178,7 @@ fn try_array_position_scalar(args: &[ColumnarValue]) -> Result<Option<ColumnarVa
             let list = as_large_list_array(&haystack)?;
             array_position_scalar::<i64>(list, &needle, &arr_from)
         }
-        t => exec_err!("array_position does not support type '{t}'."),
+        t => exec_err!("array_position does not support type '{t}'"),
     }?;
 
     if all_inputs_scalar {
@@ -197,7 +197,7 @@ fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         List(_) => general_position_dispatch::<i32>(args),
         LargeList(_) => general_position_dispatch::<i64>(args),
-        array_type => exec_err!("array_position does not support type '{array_type}'"),
+        t => exec_err!("array_position does not support type '{t}'"),
     }
 }
 
@@ -485,7 +485,7 @@ fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &haystack.data_type() {
         List(_) => general_positions::<i32>(as_list_array(&haystack)?, needle),
         LargeList(_) => general_positions::<i64>(as_large_list_array(&haystack)?, needle),
-        t => exec_err!("array_positions does not support type '{t}'."),
+        t => exec_err!("array_positions does not support type '{t}'"),
     }
 }
 
