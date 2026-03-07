@@ -2294,46 +2294,22 @@ fn extract_update_assignments(
 
     // Find the top-level projection
     if let LogicalPlan::Projection(projection) = input.as_ref() {
-        for expr in &projection.expr {
-            if let Expr::Alias(alias) = expr {
-                // The alias name is the column name being updated
-                // The inner expression is the new value
-                let column_name = alias.name.clone();
-                // Only include if it's not just a column reference to itself
-                // (those are columns that aren't being updated)
-                if !is_identity_assignment(&alias.expr, &column_name, &target_refs) {
-                    let assignment_expr = if is_multi_table_update {
-                        (*alias.expr).clone()
-                    } else {
-                        // Preserve existing single-table behavior for table providers
-                        // that expect unqualified assignment columns.
-                        strip_column_qualifiers((*alias.expr).clone())?
-                    };
-                    assignments.push((column_name, assignment_expr));
-                }
-            }
-        }
+        append_update_assignments_from_projection(
+            &mut assignments,
+            projection,
+            is_multi_table_update,
+            &target_refs,
+        )?;
     } else {
         // Try to find projection deeper in the plan
         input.apply(|node| {
             if let LogicalPlan::Projection(projection) = node {
-                for expr in &projection.expr {
-                    if let Expr::Alias(alias) = expr {
-                        let column_name = alias.name.clone();
-                        if !is_identity_assignment(
-                            &alias.expr,
-                            &column_name,
-                            &target_refs,
-                        ) {
-                            let assignment_expr = if is_multi_table_update {
-                                (*alias.expr).clone()
-                            } else {
-                                strip_column_qualifiers((*alias.expr).clone())?
-                            };
-                            assignments.push((column_name, assignment_expr));
-                        }
-                    }
-                }
+                append_update_assignments_from_projection(
+                    &mut assignments,
+                    projection,
+                    is_multi_table_update,
+                    &target_refs,
+                )?;
                 return Ok(TreeNodeRecursion::Stop);
             }
             Ok(TreeNodeRecursion::Continue)
@@ -2341,6 +2317,43 @@ fn extract_update_assignments(
     }
 
     Ok(assignments)
+}
+
+fn projection_alias_assignments(projection: &Projection) -> Vec<(String, Expr)> {
+    projection
+        .expr
+        .iter()
+        .filter_map(|expr| {
+            if let Expr::Alias(alias) = expr {
+                Some((alias.name.clone(), alias.expr.as_ref().clone()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn append_update_assignments_from_projection(
+    assignments: &mut Vec<(String, Expr)>,
+    projection: &Projection,
+    is_multi_table_update: bool,
+    target_refs: &[TableReference],
+) -> Result<()> {
+    for (column_name, assignment_expr) in projection_alias_assignments(projection) {
+        // Only include assignments that modify the target column value.
+        if !is_identity_assignment(&assignment_expr, &column_name, target_refs) {
+            let assignment_expr = if is_multi_table_update {
+                assignment_expr
+            } else {
+                // Preserve existing single-table behavior for table providers
+                // that expect unqualified assignment columns.
+                strip_column_qualifiers(assignment_expr)?
+            };
+            assignments.push((column_name, assignment_expr));
+        }
+    }
+
+    Ok(())
 }
 
 /// Check if an assignment is an identity assignment (column = column)
