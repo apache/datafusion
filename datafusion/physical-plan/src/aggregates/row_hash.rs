@@ -18,6 +18,7 @@
 //! Hash aggregation
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::vec;
 
@@ -32,6 +33,7 @@ use crate::aggregates::{
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::execution_plan::ExecutionPlanProperties;
 use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -455,6 +457,19 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Reduction factor metric, calculated as `output_rows/input_rows` (only for partial aggregation)
     reduction_factor: Option<metrics::RatioMetrics>,
+
+    /// Shared counter for the number of groups emitted by partial aggregation.
+    /// Written by partial streams, read by final streams for hash map
+    /// preallocation.
+    partial_group_count: Arc<AtomicUsize>,
+
+    /// Number of input partitions (used to scale down the partial group count
+    /// hint for preallocation in final aggregation).
+    num_input_partitions: usize,
+
+    /// Whether the hash map has already been preallocated (prevents repeated
+    /// preallocation after spill-and-reload cycles).
+    preallocated: bool,
 }
 
 impl GroupedHashAggregateStream {
@@ -679,6 +694,13 @@ impl GroupedHashAggregateStream {
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
             reduction_factor,
+            partial_group_count: Arc::clone(agg.partial_group_count()),
+            num_input_partitions: agg
+                .input
+                .output_partitioning()
+                .partition_count()
+                .max(1),
+            preallocated: false,
         })
     }
 }
@@ -941,6 +963,36 @@ impl GroupedHashAggregateStream {
         } else {
             evaluate_optional(&self.filter_expressions, batch)?
         };
+
+        // In Final/FinalPartitioned mode, use the runtime group count from
+        // partial aggregation to preallocate the hash map.
+        //
+        // partial_group_count sums groups across all partial partitions,
+        // over-counting when the same group appears in multiple partitions.
+        // Dividing by num_input_partitions gives a reasonable estimate:
+        // - If groups are shared across all partitions (common case):
+        //   each partition reports ~unique_groups, so sum / N ≈ unique_groups
+        // - If groups are disjoint across partitions:
+        //   sum = unique_groups, so sum / N underestimates, but the map will
+        //   grow as needed (still avoids the worst-case growth from 0)
+        if !self.preallocated
+            && matches!(
+                self.mode,
+                AggregateMode::Final | AggregateMode::FinalPartitioned
+            )
+        {
+            self.preallocated = true;
+            let group_count = self.partial_group_count.load(Ordering::Relaxed);
+            if group_count > 0 {
+                let hint = group_count / self.num_input_partitions;
+                if hint > 0 {
+                    self.group_values.prealloc(hint);
+                    // Update reservation immediately so the memory pool is
+                    // aware of the preallocation.
+                    self.update_memory_reservation()?;
+                }
+            }
+        }
 
         for group_values in &group_by_values {
             let groups_start_time = Instant::now();
@@ -1226,6 +1278,15 @@ impl GroupedHashAggregateStream {
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
         self.group_ordering.input_done();
+
+        // Record the number of groups for downstream consumers (e.g. final
+        // aggregation) before we start emitting. Multiple partial partitions
+        // may contribute via fetch_add.
+        if self.mode == AggregateMode::Partial {
+            self.partial_group_count
+                .fetch_add(self.group_values.len(), Ordering::Relaxed);
+        }
+
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {

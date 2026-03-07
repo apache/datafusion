@@ -1195,6 +1195,12 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             self.vectorized_operation_buffers.clear();
         }
     }
+
+    fn prealloc(&mut self, capacity: usize) {
+        self.map.reserve(capacity, |_| 0);
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
+        self.hashes_buffer.reserve(capacity);
+    }
 }
 
 /// Returns true if [`GroupValuesColumn`] supported for the specified schema

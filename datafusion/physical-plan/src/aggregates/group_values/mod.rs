@@ -113,6 +113,14 @@ pub trait GroupValues: Send {
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);
+
+    /// Preallocate internal storage for the given number of groups.
+    ///
+    /// This is a hint and implementations may ignore it.
+    /// Used to avoid repeated rehashing when the approximate number of
+    /// groups is known ahead of time (e.g. from input statistics in
+    /// Final/FinalPartitioned aggregation).
+    fn prealloc(&mut self, _capacity: usize) {}
 }
 
 /// Return a specialized implementation of [`GroupValues`] for the given schema.

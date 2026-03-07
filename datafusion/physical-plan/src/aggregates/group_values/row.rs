@@ -254,6 +254,12 @@ impl GroupValues for GroupValuesRows {
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(num_rows);
     }
+
+    fn prealloc(&mut self, capacity: usize) {
+        self.map.reserve(capacity, |_| 0); // hasher does not matter for reservation
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
+        self.hashes_buffer.reserve(capacity);
+    }
 }
 
 fn dictionary_encode_if_necessary(

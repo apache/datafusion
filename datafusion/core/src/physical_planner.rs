@@ -1043,14 +1043,22 @@ impl DefaultPhysicalPlanner {
                     input_exec
                 };
 
-                let initial_aggr = Arc::new(AggregateExec::try_new(
-                    AggregateMode::Partial,
-                    groups.clone(),
-                    aggregates,
-                    filters.clone(),
-                    input_exec,
-                    Arc::clone(&physical_input_schema),
-                )?);
+                // Share the partial group count between partial and final
+                // aggregation so the final stage can preallocate its hash map.
+                let partial_group_count =
+                    Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+                let initial_aggr = Arc::new(
+                    AggregateExec::try_new(
+                        AggregateMode::Partial,
+                        groups.clone(),
+                        aggregates,
+                        filters.clone(),
+                        input_exec,
+                        Arc::clone(&physical_input_schema),
+                    )?
+                    .with_partial_group_count(Arc::clone(&partial_group_count)),
+                );
 
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
@@ -1074,14 +1082,17 @@ impl DefaultPhysicalPlanner {
 
                 let final_grouping_set = initial_aggr.group_expr().as_final();
 
-                Arc::new(AggregateExec::try_new(
-                    next_partition_mode,
-                    final_grouping_set,
-                    updated_aggregates,
-                    filters,
-                    initial_aggr,
-                    Arc::clone(&physical_input_schema),
-                )?)
+                Arc::new(
+                    AggregateExec::try_new(
+                        next_partition_mode,
+                        final_grouping_set,
+                        updated_aggregates,
+                        filters,
+                        initial_aggr,
+                        Arc::clone(&physical_input_schema),
+                    )?
+                    .with_partial_group_count(partial_group_count),
+                )
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec(

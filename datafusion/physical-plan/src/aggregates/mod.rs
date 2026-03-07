@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
@@ -660,6 +661,10 @@ pub struct AggregateExec {
     /// it remains `Some(..)` to enable dynamic filtering during aggregate execution;
     /// otherwise, it is cleared to `None`.
     dynamic_filter: Option<Arc<AggrDynFilter>>,
+    /// Shared counter for the total number of groups emitted by partial
+    /// aggregation. Written by partial aggregation streams (via `fetch_add`)
+    /// and read by final aggregation streams to preallocate hash maps.
+    partial_group_count: Arc<AtomicUsize>,
 }
 
 impl AggregateExec {
@@ -685,6 +690,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            partial_group_count: Arc::clone(&self.partial_group_count),
         }
     }
 
@@ -705,6 +711,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            partial_group_count: Arc::clone(&self.partial_group_count),
         }
     }
 
@@ -839,6 +846,7 @@ impl AggregateExec {
             input_order_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
+            partial_group_count: Arc::new(AtomicUsize::new(0)),
         };
 
         exec.init_dynamic_filter();
@@ -890,6 +898,21 @@ impl AggregateExec {
     /// Get the input schema before any aggregates are applied
     pub fn input_schema(&self) -> SchemaRef {
         Arc::clone(&self.input_schema)
+    }
+
+    /// Returns the shared partial group count counter.
+    pub fn partial_group_count(&self) -> &Arc<AtomicUsize> {
+        &self.partial_group_count
+    }
+
+    /// Set the shared partial group count counter (used to share between
+    /// partial and final aggregation).
+    pub fn with_partial_group_count(
+        mut self,
+        group_count: Arc<AtomicUsize>,
+    ) -> Self {
+        self.partial_group_count = group_count;
+        self
     }
 
     fn execute_typed(
@@ -1448,6 +1471,21 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        // For partial aggregation, if the runtime group count has been
+        // recorded (input fully consumed), use the actual count instead
+        // of the static estimate. The raw count is the sum across all
+        // partial partitions and may over-count because the same group
+        // can appear in multiple partitions.
+        if self.mode == AggregateMode::Partial {
+            let runtime_count = self.partial_group_count.load(Ordering::Relaxed);
+            if runtime_count > 0 {
+                let child_statistics = self.input().partition_statistics(partition)?;
+                let mut stats = self.statistics_inner(&child_statistics)?;
+                stats.num_rows = Precision::Inexact(runtime_count);
+                return Ok(stats);
+            }
+        }
+
         let child_statistics = self.input().partition_statistics(partition)?;
         self.statistics_inner(&child_statistics)
     }

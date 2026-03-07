@@ -220,4 +220,9 @@ where
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
     }
+
+    fn prealloc(&mut self, capacity: usize) {
+        self.map.reserve(capacity, |_| 0);
+        self.values.reserve(capacity);
+    }
 }
