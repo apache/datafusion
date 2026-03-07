@@ -27,11 +27,12 @@ use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{EquivalenceProperties, PhysicalExpr};
 
 use arrow::array::{ArrayRef, new_empty_array};
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::{FieldRef, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::WindowFrame;
+use datafusion_expr::window_frame::WindowFrameBoundsComparators;
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -42,6 +43,8 @@ pub struct StandardWindowExpr {
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
+    schema: SchemaRef,
+    frame_comparators: Option<WindowFrameBoundsComparators>,
 }
 
 impl StandardWindowExpr {
@@ -51,12 +54,22 @@ impl StandardWindowExpr {
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
+        schema: SchemaRef,
     ) -> Self {
+        let frame_comparators = {
+            let cols: Option<Vec<_>> = order_by
+                .iter()
+                .map(|o| o.expr.data_type(&schema).ok().map(|dt| (dt, o.options)))
+                .collect();
+            cols.and_then(|c| WindowFrameBoundsComparators::new(&window_frame, &c))
+        };
         Self {
             expr,
             partition_by: partition_by.to_vec(),
             order_by: order_by.to_vec(),
             window_frame,
+            schema,
+            frame_comparators,
         }
     }
 
@@ -116,7 +129,6 @@ impl WindowExpr for StandardWindowExpr {
         let mut evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
         if evaluator.uses_window_frame() {
-            let sort_options = self.order_by.iter().map(|o| o.options).collect();
             let mut row_wise_results = vec![];
 
             let mut values = self.evaluate_args(batch)?;
@@ -125,10 +137,13 @@ impl WindowExpr for StandardWindowExpr {
             values.extend(order_bys);
             let order_bys_ref = &values[n_args..];
 
-            let mut window_frame_ctx =
-                WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
+            let mut window_frame_ctx = WindowFrameContext::new(
+                Arc::clone(&self.window_frame),
+                self.frame_comparators.clone(),
+            );
             let mut last_range = Range { start: 0, end: 0 };
-            // We iterate on each row to calculate window frame range and and window function result
+
+            // We iterate on each row to calculate window frame range and window function result
             for idx in 0..num_rows {
                 let range = window_frame_ctx.calculate_range(
                     order_bys_ref,
@@ -203,6 +218,7 @@ impl WindowExpr for StandardWindowExpr {
             } else {
                 evaluator.is_causal()
             };
+
             for idx in state.last_calculated_index..num_rows {
                 let frame_range = if evaluator.uses_window_frame() {
                     state
@@ -210,7 +226,7 @@ impl WindowExpr for StandardWindowExpr {
                         .get_or_insert_with(|| {
                             WindowFrameContext::new(
                                 Arc::clone(&self.window_frame),
-                                sort_options.clone(),
+                                self.frame_comparators.clone(),
                             )
                         })
                         .calculate_range(
@@ -268,6 +284,7 @@ impl WindowExpr for StandardWindowExpr {
                     .map(|e| e.reverse())
                     .collect::<Vec<_>>(),
                 Arc::new(self.window_frame.reverse()),
+                Arc::clone(&self.schema),
             )) as _
         })
     }
@@ -284,6 +301,10 @@ impl WindowExpr for StandardWindowExpr {
 
     fn create_window_fn(&self) -> Result<WindowFn> {
         Ok(WindowFn::Builtin(self.expr.create_evaluator()?))
+    }
+
+    fn frame_bounds_comparators(&self) -> Option<WindowFrameBoundsComparators> {
+        self.frame_comparators.clone()
     }
 }
 

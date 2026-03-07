@@ -30,10 +30,12 @@ use arrow::compute::kernels::sort::SortColumn;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{
     Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, internal_err,
 };
+use datafusion_expr::window_frame::WindowFrameBoundsComparators;
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
 };
@@ -69,6 +71,8 @@ use indexmap::IndexMap;
 /// [`PlainAggregateWindowExpr`]: crate::window::PlainAggregateWindowExpr
 /// [`SlidingAggregateWindowExpr`]: crate::window::SlidingAggregateWindowExpr
 pub trait WindowExpr: Send + Sync + Debug {
+    fn frame_bounds_comparators(&self) -> Option<WindowFrameBoundsComparators>;
+
     /// Returns the window expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -205,9 +209,10 @@ pub trait AggregateWindowExpr: WindowExpr {
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut accumulator = self.get_accumulator()?;
         let mut last_range = Range { start: 0, end: 0 };
-        let sort_options = self.order_by().iter().map(|o| o.options).collect();
-        let mut window_frame_ctx =
-            WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options);
+        let mut window_frame_ctx = WindowFrameContext::new(
+            Arc::clone(self.get_window_frame()),
+            self.frame_bounds_comparators(),
+        );
         self.get_result_column(
             &mut accumulator,
             batch,
@@ -252,8 +257,10 @@ pub trait AggregateWindowExpr: WindowExpr {
 
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
-                let sort_options = self.order_by().iter().map(|o| o.options).collect();
-                WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options)
+                WindowFrameContext::new(
+                    Arc::clone(self.get_window_frame()),
+                    self.frame_bounds_comparators(),
+                )
             });
             let out_col = self.get_result_column(
                 accumulator,
@@ -335,6 +342,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         let is_causal = self.get_window_frame().is_causal();
+
         while idx < length {
             // Start search from the last_range. This squeezes searched range.
             let cur_range =

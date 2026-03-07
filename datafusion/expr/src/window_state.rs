@@ -19,7 +19,10 @@
 
 use std::{collections::VecDeque, ops::Range, sync::Arc};
 
-use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use crate::{
+    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    window_frame::WindowFrameBoundsComparators,
+};
 
 use arrow::{
     array::ArrayRef,
@@ -29,7 +32,8 @@ use arrow::{
 };
 use datafusion_common::{
     Result, ScalarValue, internal_datafusion_err, internal_err,
-    utils::{compare_rows, get_row_at_idx, search_in_slice},
+    ord::ArrayComparator,
+    utils::{get_row_at_idx, search_in_slice},
 };
 
 /// Holds the state of evaluating a window function
@@ -138,12 +142,15 @@ pub enum WindowFrameContext {
 
 impl WindowFrameContext {
     /// Create a new state object for the given window frame.
-    pub fn new(window_frame: Arc<WindowFrame>, sort_options: Vec<SortOptions>) -> Self {
+    pub fn new(
+        window_frame: Arc<WindowFrame>,
+        frame_bounds_comparators: Option<WindowFrameBoundsComparators>,
+    ) -> Self {
         match window_frame.units {
             WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
             WindowFrameUnits::Range => WindowFrameContext::Range {
                 window_frame,
-                state: WindowFrameStateRange::new(sort_options),
+                state: WindowFrameStateRange::new(frame_bounds_comparators),
             },
             WindowFrameUnits::Groups => WindowFrameContext::Groups {
                 window_frame,
@@ -172,8 +179,8 @@ impl WindowFrameContext {
                 state,
             } => state.calculate_range(
                 window_frame,
-                last_range,
                 range_columns,
+                last_range,
                 length,
                 idx,
             ),
@@ -293,153 +300,120 @@ impl PartitionBatchState {
 
 /// This structure encapsulates all the state information we require as we scan
 /// ranges of data while processing RANGE frames.
-/// Attribute `sort_options` stores the column ordering specified by the ORDER
-/// BY clause. This information is used to calculate the range.
 #[derive(Debug, Default, Clone)]
 pub struct WindowFrameStateRange {
-    sort_options: Vec<SortOptions>,
+    frame_comparators: Option<WindowFrameBoundsComparators>,
 }
 
 impl WindowFrameStateRange {
     /// Create a new object to store the search state.
-    fn new(sort_options: Vec<SortOptions>) -> Self {
-        Self { sort_options }
+    fn new(frame_comparators: Option<WindowFrameBoundsComparators>) -> Self {
+        Self { frame_comparators }
     }
 
-    /// This function calculates beginning/ending indices for the frame of the current row.
-    // Argument `last_range` stores the resulting indices from the previous search. Since the indices only
-    // advance forward, we start from `last_range` subsequently. Thus, the overall
-    // time complexity of linear search amortizes to O(n) where n denotes the total
-    // row count.
     fn calculate_range(
-        &mut self,
+        &self,
         window_frame: &Arc<WindowFrame>,
-        last_range: &Range<usize>,
         range_columns: &[ArrayRef],
+        last_range: &Range<usize>,
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
+        let frame_comparators = self.frame_comparators.as_ref().ok_or_else(|| {
+            internal_datafusion_err!(
+                "Missing WindowFrameBoundsComparators for RANGE frame"
+            )
+        })?;
+
         let start = match window_frame.start_bound {
-            WindowFrameBound::Preceding(ref n) => {
-                if n.is_null() {
-                    // UNBOUNDED PRECEDING
-                    0
-                } else {
-                    self.calculate_index_of_row::<true, true>(
-                        range_columns,
-                        last_range,
-                        idx,
-                        Some(n),
-                        length,
-                    )?
-                }
+            WindowFrameBound::Preceding(ref n) if n.is_null() => 0,
+            WindowFrameBound::Preceding(_)
+            | WindowFrameBound::CurrentRow
+            | WindowFrameBound::Following(_) => {
+                let comparators = frame_comparators
+                    .start_bound_comparators
+                    .as_ref()
+                    .ok_or_else(|| {
+                        internal_datafusion_err!("Missing start_bound comparators")
+                    })?;
+                self.search_index_of_row::<true>(
+                    comparators,
+                    range_columns,
+                    last_range.start,
+                    length,
+                    idx,
+                )
             }
-            WindowFrameBound::CurrentRow => self.calculate_index_of_row::<true, true>(
-                range_columns,
-                last_range,
-                idx,
-                None,
-                length,
-            )?,
-            WindowFrameBound::Following(ref n) => self
-                .calculate_index_of_row::<true, false>(
-                    range_columns,
-                    last_range,
-                    idx,
-                    Some(n),
-                    length,
-                )?,
         };
+
         let end = match window_frame.end_bound {
-            WindowFrameBound::Preceding(ref n) => self
-                .calculate_index_of_row::<false, true>(
+            WindowFrameBound::Following(ref n) if n.is_null() => length,
+            WindowFrameBound::Preceding(_)
+            | WindowFrameBound::CurrentRow
+            | WindowFrameBound::Following(_) => {
+                let comparators = frame_comparators
+                    .end_bound_comparators
+                    .as_ref()
+                    // .map(|c| c as &[ArrayComparator])
+                    // .unwrap_or_else(|| &[]);
+                    .ok_or_else(|| {
+                        internal_datafusion_err!("Missing end_bound comparators")
+                    })?;
+                self.search_index_of_row::<false>(
+                    comparators,
                     range_columns,
-                    last_range,
-                    idx,
-                    Some(n),
+                    last_range.end,
                     length,
-                )?,
-            WindowFrameBound::CurrentRow => self.calculate_index_of_row::<false, false>(
-                range_columns,
-                last_range,
-                idx,
-                None,
-                length,
-            )?,
-            WindowFrameBound::Following(ref n) => {
-                if n.is_null() {
-                    // UNBOUNDED FOLLOWING
-                    length
-                } else {
-                    self.calculate_index_of_row::<false, false>(
-                        range_columns,
-                        last_range,
-                        idx,
-                        Some(n),
-                        length,
-                    )?
-                }
+                    idx,
+                )
             }
         };
         Ok(Range { start, end })
     }
 
-    /// This function does the heavy lifting when finding range boundaries. It is meant to be
-    /// called twice, in succession, to get window frame start and end indices (with `SIDE`
-    /// supplied as true and false, respectively).
-    fn calculate_index_of_row<const SIDE: bool, const SEARCH_SIDE: bool>(
-        &mut self,
+    /// Scans `range_columns` starting from `search_start` to find the first index
+    /// where the comparator no longer satisfies the bound condition.
+    ///
+    /// - `SIDE = true`  → start bound: stop when `search_val >= current_val ± delta` (i.e. `!cmp.is_lt()`)
+    /// - `SIDE = false` → end bound:   stop when `search_val >  current_val ± delta` (i.e. `!cmp.is_le()`)
+    fn search_index_of_row<const SIDE: bool>(
+        &self,
+        comparators: &[ArrayComparator],
         range_columns: &[ArrayRef],
-        last_range: &Range<usize>,
-        idx: usize,
-        delta: Option<&ScalarValue>,
+        mut search_start: usize,
         length: usize,
-    ) -> Result<usize> {
-        let current_row_values = get_row_at_idx(range_columns, idx)?;
-        let end_range = if let Some(delta) = delta {
-            let is_descending: bool = self
-                .sort_options
-                .first()
-                .ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "Sort options unexpectedly absent in a window frame"
-                    )
-                })?
-                .descending;
+        current_idx: usize,
+    ) -> usize {
+        while search_start < length {
+            let cmp = self.compare_indexes(
+                comparators,
+                range_columns,
+                search_start,
+                current_idx,
+            );
+            let stop = if SIDE { !cmp.is_lt() } else { !cmp.is_le() };
+            if stop {
+                break;
+            }
+            search_start += 1;
+        }
+        search_start
+    }
 
-            current_row_values
-                .iter()
-                .map(|value| {
-                    if value.is_null() {
-                        return Ok(value.clone());
-                    }
-                    if SEARCH_SIDE == is_descending {
-                        // TODO: Handle positive overflows.
-                        value.add(delta)
-                    } else if value.is_unsigned() && value < delta {
-                        // NOTE: This gets a polymorphic zero without having long coercion code for ScalarValue.
-                        //       If we decide to implement a "default" construction mechanism for ScalarValue,
-                        //       change the following statement to use that.
-                        value.sub(value)
-                    } else {
-                        // TODO: Handle negative overflows.
-                        value.sub(delta)
-                    }
-                })
-                .collect::<Result<Vec<ScalarValue>>>()?
-        } else {
-            current_row_values
-        };
-        let search_start = if SIDE {
-            last_range.start
-        } else {
-            last_range.end
-        };
-        let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
-            let cmp = compare_rows(current, target, &self.sort_options)?;
-            Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
-        };
-        search_in_slice(range_columns, &end_range, compare_fn, search_start, length)
+    fn compare_indexes(
+        &self,
+        comparators: &[ArrayComparator],
+        range_columns: &[ArrayRef],
+        search_idx: usize,
+        current_idx: usize,
+    ) -> std::cmp::Ordering {
+        for (comparator, col) in comparators.iter().zip(range_columns.iter()) {
+            let cmp = comparator(col.as_ref(), search_idx, col.as_ref(), current_idx);
+            if cmp != std::cmp::Ordering::Equal {
+                return cmp;
+            }
+        }
+        std::cmp::Ordering::Equal
     }
 }
 
@@ -714,9 +688,10 @@ mod tests {
         window_frame: &Arc<WindowFrame>,
         expected_results: Vec<Range<usize>>,
     ) -> Result<()> {
-        let mut window_frame_context =
-            WindowFrameContext::new(Arc::clone(window_frame), vec![]);
         let (range_columns, _) = get_test_data();
+        let frame_comparators = WindowFrameBoundsComparators::new(window_frame, &[]);
+        let mut window_frame_context =
+            WindowFrameContext::new(Arc::clone(window_frame), frame_comparators);
         let n_row = range_columns[0].len();
         let mut last_range = Range { start: 0, end: 0 };
         for (idx, expected_range) in expected_results.into_iter().enumerate() {

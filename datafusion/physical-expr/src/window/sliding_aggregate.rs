@@ -29,9 +29,11 @@ use crate::window::{
 use crate::{PhysicalExpr, expressions::PhysicalSortExpr};
 
 use arrow::array::{ArrayRef, BooleanArray};
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::{FieldRef, SchemaRef};
 use arrow::record_batch::RecordBatch;
+
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::window_frame::WindowFrameBoundsComparators;
 use datafusion_expr::{Accumulator, WindowFrame};
 
 /// A window expr that takes the form of an aggregate function that
@@ -45,6 +47,8 @@ pub struct SlidingAggregateWindowExpr {
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
     filter: Option<Arc<dyn PhysicalExpr>>,
+    schema: SchemaRef,
+    frame_comparators: Option<WindowFrameBoundsComparators>,
 }
 
 impl SlidingAggregateWindowExpr {
@@ -55,13 +59,23 @@ impl SlidingAggregateWindowExpr {
         order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
         filter: Option<Arc<dyn PhysicalExpr>>,
+        schema: SchemaRef,
     ) -> Self {
+        let frame_comparators = {
+            let cols: Option<Vec<_>> = order_by
+                .iter()
+                .map(|o| o.expr.data_type(&schema).ok().map(|dt| (dt, o.options)))
+                .collect();
+            cols.and_then(|c| WindowFrameBoundsComparators::new(&window_frame, &c))
+        };
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
             order_by: order_by.to_vec(),
             window_frame,
             filter,
+            schema,
+            frame_comparators,
         }
     }
 
@@ -121,17 +135,16 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
         self.aggregate.reverse_expr().map(|reverse_expr| {
             let reverse_window_frame = self.window_frame.reverse();
+            let reversed_order_by: Vec<PhysicalSortExpr> =
+                self.order_by.iter().map(|e| e.reverse()).collect();
             if reverse_window_frame.is_ever_expanding() {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    &self
-                        .order_by
-                        .iter()
-                        .map(|e| e.reverse())
-                        .collect::<Vec<_>>(),
-                    Arc::new(self.window_frame.reverse()),
+                    &reversed_order_by,
+                    Arc::new(reverse_window_frame),
                     self.filter.clone(),
+                    self.schema.clone(),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
@@ -144,6 +157,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                         .collect::<Vec<_>>(),
                     Arc::new(self.window_frame.reverse()),
                     self.filter.clone(),
+                    self.schema.clone(),
                 )) as _
             }
         })
@@ -161,7 +175,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     ) -> Option<Arc<dyn WindowExpr>> {
         debug_assert_eq!(self.order_by.len(), order_by_exprs.len());
 
-        let new_order_by = self
+        let new_order_by: Vec<PhysicalSortExpr> = self
             .order_by
             .iter()
             .zip(order_by_exprs)
@@ -170,20 +184,25 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 options: req.options,
             })
             .collect();
-        Some(Arc::new(SlidingAggregateWindowExpr {
-            aggregate: self
-                .aggregate
+
+        Some(Arc::new(SlidingAggregateWindowExpr::new(
+            self.aggregate
                 .with_new_expressions(args, vec![])
                 .map(Arc::new)?,
-            partition_by: partition_bys,
-            order_by: new_order_by,
-            window_frame: Arc::clone(&self.window_frame),
-            filter: self.filter.clone(),
-        }))
+            &partition_bys,
+            &new_order_by,
+            Arc::clone(&self.window_frame),
+            self.filter.clone(),
+            self.schema.clone(),
+        )))
     }
 
     fn create_window_fn(&self) -> Result<WindowFn> {
         Ok(WindowFn::Aggregate(self.get_accumulator()?))
+    }
+
+    fn frame_bounds_comparators(&self) -> Option<WindowFrameBoundsComparators> {
+        self.frame_comparators.clone()
     }
 }
 

@@ -50,6 +50,7 @@ pub mod instant;
 pub mod metadata;
 pub mod nested_struct;
 mod null_equality;
+pub mod ord;
 pub mod parquet_config;
 pub mod parsers;
 pub mod pruning;
