@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DFSchemaRef, TableReference};
 
-use crate::{LogicalPlan, TableSource};
+use crate::{Expr, LogicalPlan, TableSource};
 
 /// Operator that copies the contents of a database to file(s)
 #[derive(Clone)]
@@ -239,6 +239,8 @@ pub enum WriteOp {
     Ctas,
     /// `TRUNCATE` operation
     Truncate,
+    /// `MERGE INTO` operation
+    MergeInto(MergeIntoOp),
 }
 
 impl WriteOp {
@@ -250,6 +252,7 @@ impl WriteOp {
             WriteOp::Update => "Update",
             WriteOp::Ctas => "Ctas",
             WriteOp::Truncate => "Truncate",
+            WriteOp::MergeInto(_) => "MergeInto",
         }
     }
 }
@@ -289,6 +292,62 @@ impl Display for InsertOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
     }
+}
+
+/// Describes a MERGE INTO operation's parameters.
+///
+/// This is carried inside `WriteOp::MergeInto` and contains
+/// the ON condition and WHEN clauses that the TableProvider
+/// needs to execute the merge.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct MergeIntoOp {
+    /// The join condition from `ON <expr>`.
+    /// Kept as a general logical Expr; downstream providers
+    /// (e.g., Iceberg) can decompose into column pairs if needed.
+    pub on: Expr,
+    /// The WHEN clauses, in the order they appeared in the SQL.
+    pub clauses: Vec<MergeIntoClause>,
+}
+
+/// A single WHEN clause within a MERGE INTO statement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct MergeIntoClause {
+    /// Whether this fires on matched or unmatched rows.
+    pub kind: MergeIntoClauseKind,
+    /// Optional additional predicate (`AND <expr>`).
+    pub predicate: Option<Expr>,
+    /// The action to take.
+    pub action: MergeIntoAction,
+}
+
+/// Which rows a MERGE WHEN clause applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+pub enum MergeIntoClauseKind {
+    /// WHEN MATCHED
+    Matched,
+    /// WHEN NOT MATCHED (synonymous with NOT MATCHED BY TARGET)
+    NotMatched,
+    /// WHEN NOT MATCHED BY TARGET
+    NotMatchedByTarget,
+    /// WHEN NOT MATCHED BY SOURCE
+    NotMatchedBySource,
+}
+
+/// The action for a single WHEN clause.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum MergeIntoAction {
+    /// UPDATE SET col1 = expr1, col2 = expr2, ...
+    /// Stored as (column_name, value_expr) pairs.
+    Update(Vec<(String, Expr)>),
+    /// INSERT (col1, col2, ...) VALUES (expr1, expr2, ...)
+    /// `columns` may be empty (meaning all columns).
+    /// `values` contains one expression per inserted column.
+    Insert {
+        columns: Vec<String>,
+        values: Vec<Expr>,
+    },
+    /// DELETE (no additional data needed)
+    Delete,
 }
 
 fn make_count_schema() -> DFSchemaRef {
