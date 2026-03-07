@@ -1075,6 +1075,7 @@ message FileScanExecConf {
   optional uint64 batch_size = 12;
 
   optional ProjectionExprs projection_exprs = 13;
+  bool morsel_driven = 14;
 }
 
 message ParquetScanExecNode {
