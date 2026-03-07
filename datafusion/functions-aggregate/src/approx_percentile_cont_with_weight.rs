@@ -45,18 +45,18 @@ create_func!(
 
 /// Computes the approximate percentile continuous with weight of a set of numbers
 pub fn approx_percentile_cont_with_weight(
-    order_by: Sort,
+    expr: Expr,
     weight: Expr,
     percentile: Expr,
     centroids: Option<Expr>,
+    asc: bool,
 ) -> Expr {
-    let expr = order_by.expr.clone();
-
     let args = if let Some(centroids) = centroids {
-        vec![expr, weight, percentile, centroids]
+        vec![expr.clone(), weight, percentile, centroids]
     } else {
-        vec![expr, weight, percentile]
+        vec![expr.clone(), weight, percentile]
     };
+    let order_by = Sort::new(expr, asc, false);
 
     Expr::AggregateFunction(AggregateFunction::new_udf(
         approx_percentile_cont_with_weight_udaf(),
