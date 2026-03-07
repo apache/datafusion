@@ -22,9 +22,7 @@ use std::fmt::{self, Debug, Display};
 use crate::{Result, ScalarValue};
 
 use crate::error::_plan_err;
-use crate::utils::aggregate::{
-    is_primitive_scalar, vectorized_max, vectorized_min, vectorized_sum,
-};
+use crate::utils::aggregate::precision_add;
 use arrow::datatypes::{DataType, Schema};
 
 /// Represents a value with a degree of certainty. `Precision` is used to
@@ -651,23 +649,6 @@ impl Statistics {
             total_byte_size = total_byte_size.add(&stat.total_byte_size);
         }
 
-        // We look at the first available value type for each column to decide whether to
-        // use vectorized aggregation
-        let col_is_primitive: Vec<bool> =
-            (0..num_cols)
-                .map(|col_idx| {
-                    items
-                        .first()
-                        .and_then(|s| {
-                            s.column_statistics[col_idx].sum_value.get_value().or_else(
-                                || s.column_statistics[col_idx].min_value.get_value(),
-                            )
-                        })
-                        .map(is_primitive_scalar)
-                        .unwrap_or(false)
-                })
-                .collect();
-
         let first = items[0];
         let mut column_statistics: Vec<ColumnStatistics> = first
             .column_statistics
@@ -682,98 +663,21 @@ impl Statistics {
             })
             .collect();
 
-        // fold non-primitive columns and accumulate usize
-        // stats for all columns.
+        // Accumulate all statistics in a single pass.
+        // Uses precision_add for sum (avoids the expensive
+        // ScalarValue::add round-trip through Arrow arrays), and
+        // Precision::min/max which use cheap PartialOrd comparison.
         for stat in items.iter().skip(1) {
             for (col_idx, col_stats) in column_statistics.iter_mut().enumerate() {
                 let item_cs = &stat.column_statistics[col_idx];
 
                 col_stats.null_count = col_stats.null_count.add(&item_cs.null_count);
                 col_stats.byte_size = col_stats.byte_size.add(&item_cs.byte_size);
-
-                // Non-primitive columns: fold sum/min/max directly using
-                // Precision::add/min/max
-                if !col_is_primitive[col_idx] {
-                    col_stats.sum_value = col_stats.sum_value.add(&item_cs.sum_value);
-                    col_stats.min_value = col_stats.min_value.min(&item_cs.min_value);
-                    col_stats.max_value = col_stats.max_value.max(&item_cs.max_value);
-                }
+                col_stats.sum_value =
+                    precision_add(&col_stats.sum_value, &item_cs.sum_value);
+                col_stats.min_value = col_stats.min_value.min(&item_cs.min_value);
+                col_stats.max_value = col_stats.max_value.max(&item_cs.max_value);
             }
-        }
-
-        // Column-major vectorized pass: only for primitive columns.
-        // Collects values into Vecs and uses Arrow kernels for sum/min/max.
-        for col_idx in 0..num_cols {
-            if !col_is_primitive[col_idx] {
-                continue;
-            }
-
-            // These booleans check whether the values were either all exact or if there
-            // were any inexact
-            let mut sum_values: Vec<ScalarValue> = Vec::with_capacity(items.len());
-            let mut min_values: Vec<ScalarValue> = Vec::with_capacity(items.len());
-            let mut max_values: Vec<ScalarValue> = Vec::with_capacity(items.len());
-            let mut sum_all_exact = true;
-            let mut min_all_exact = true;
-            let mut max_all_exact = true;
-            let mut sum_any_absent = false;
-            let mut min_any_absent = false;
-            let mut max_any_absent = false;
-
-            for stat in &items {
-                let cs = &stat.column_statistics[col_idx];
-
-                match &cs.sum_value {
-                    Precision::Exact(v) => sum_values.push(v.clone()),
-                    Precision::Inexact(v) => {
-                        sum_all_exact = false;
-                        sum_values.push(v.clone());
-                    }
-                    Precision::Absent => {
-                        sum_any_absent = true;
-                    }
-                }
-                match &cs.min_value {
-                    Precision::Exact(v) => min_values.push(v.clone()),
-                    Precision::Inexact(v) => {
-                        min_all_exact = false;
-                        min_values.push(v.clone());
-                    }
-                    Precision::Absent => {
-                        min_any_absent = true;
-                    }
-                }
-                match &cs.max_value {
-                    Precision::Exact(v) => max_values.push(v.clone()),
-                    Precision::Inexact(v) => {
-                        max_all_exact = false;
-                        max_values.push(v.clone());
-                    }
-                    Precision::Absent => {
-                        max_any_absent = true;
-                    }
-                }
-            }
-
-            let col_stats = &mut column_statistics[col_idx];
-
-            col_stats.sum_value = if sum_any_absent || sum_values.is_empty() {
-                Precision::Absent
-            } else {
-                vectorized_sum(&sum_values, sum_all_exact)?
-            };
-
-            col_stats.min_value = if min_any_absent || min_values.is_empty() {
-                Precision::Absent
-            } else {
-                vectorized_min(&min_values, min_all_exact)?
-            };
-
-            col_stats.max_value = if max_any_absent || max_values.is_empty() {
-                Precision::Absent
-            } else {
-                vectorized_max(&max_values, max_all_exact)?
-            };
         }
 
         Ok(Statistics {

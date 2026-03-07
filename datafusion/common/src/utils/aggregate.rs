@@ -15,231 +15,103 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Scalar-level aggregation utilities (sum, min, max).
+//! Scalar-level aggregation utilities for statistics merging.
 //!
-//! These functions compute aggregate values over slices of [`ScalarValue`]s
-//! by directly extracting the inner primitive values and accumulating.
-
-use arrow::datatypes::i256;
-use half::f16;
+//! Provides a cheap pairwise [`ScalarValue`] addition that directly
+//! extracts inner primitive values, avoiding the expensive
+//! `ScalarValue::add` path (which round-trips through Arrow arrays).
 
 use crate::stats::Precision;
 use crate::{Result, ScalarValue};
 
-/// Returns true if the [`ScalarValue`] is a primitive numeric type.
-pub(crate) fn is_primitive_scalar(value: &ScalarValue) -> bool {
-    matches!(
-        value,
-        ScalarValue::Int8(_)
-            | ScalarValue::Int16(_)
-            | ScalarValue::Int32(_)
-            | ScalarValue::Int64(_)
-            | ScalarValue::UInt8(_)
-            | ScalarValue::UInt16(_)
-            | ScalarValue::UInt32(_)
-            | ScalarValue::UInt64(_)
-            | ScalarValue::Float16(_)
-            | ScalarValue::Float32(_)
-            | ScalarValue::Float64(_)
-            | ScalarValue::Decimal32(_, _, _)
-            | ScalarValue::Decimal64(_, _, _)
-            | ScalarValue::Decimal128(_, _, _)
-            | ScalarValue::Decimal256(_, _, _)
-            | ScalarValue::Date32(_)
-            | ScalarValue::Date64(_)
-    )
-}
-
-/// Compute the minimum of [`ScalarValue`]s using direct `PartialOrd`
-/// comparison.
-pub(crate) fn scalar_min(values: &[ScalarValue]) -> ScalarValue {
-    debug_assert!(!values.is_empty());
-    let mut result = values[0].clone();
-    for v in &values[1..] {
-        if v.is_null() {
-            continue;
-        }
-        if result.is_null() || v < &result {
-            result = v.clone();
-        }
-    }
-    result
-}
-
-/// Compute the maximum of [`ScalarValue`]s using direct `PartialOrd`
-/// comparison.
-pub(crate) fn scalar_max(values: &[ScalarValue]) -> ScalarValue {
-    debug_assert!(!values.is_empty());
-    let mut result = values[0].clone();
-    for v in &values[1..] {
-        if v.is_null() {
-            continue;
-        }
-        if result.is_null() || v > &result {
-            result = v.clone();
-        }
-    }
-    result
-}
-
-/// Compute the sum of [`ScalarValue`]s by directly extracting and
-/// accumulating primitive values without any Arrow array allocation.
+/// Add two [`ScalarValue`]s by directly extracting and adding their
+/// inner primitive values.
+///
+/// This avoids `ScalarValue::add` which converts both operands to
+/// single-element Arrow arrays, runs the `add_wrapping` kernel, and
+/// converts the result back — 3 heap allocations per call.
 ///
 /// For non-primitive types, falls back to `ScalarValue::add`.
-pub(crate) fn scalar_sum(values: &[ScalarValue]) -> Result<ScalarValue> {
-    debug_assert!(!values.is_empty());
-
-    macro_rules! sum_wrapping {
-        ($values:expr, $VARIANT:ident, $T:ty) => {{
-            let mut has_value = false;
-            let mut acc: $T = Default::default();
-            for sv in $values {
-                if let ScalarValue::$VARIANT(Some(v)) = sv {
-                    if has_value {
-                        acc = acc.wrapping_add(*v);
-                    } else {
-                        acc = *v;
-                        has_value = true;
-                    }
+pub(crate) fn scalar_add(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+    macro_rules! add_wrapping {
+        ($lhs:expr, $rhs:expr, $VARIANT:ident) => {
+            match ($lhs, $rhs) {
+                (ScalarValue::$VARIANT(Some(a)), ScalarValue::$VARIANT(Some(b))) => {
+                    Ok(ScalarValue::$VARIANT(Some(a.wrapping_add(*b))))
                 }
-            }
-            if has_value {
-                ScalarValue::$VARIANT(Some(acc))
-            } else {
-                $values[0].clone() // all null
-            }
-        }};
-    }
-
-    /// Accumulate a wrapping sum for a decimal ScalarValue variant that
-    /// carries precision and scale fields.
-    macro_rules! sum_decimal {
-        ($values:expr, $VARIANT:ident, $T:ty) => {{
-            let (p, s) = match &$values[0] {
-                ScalarValue::$VARIANT(_, p, s) => (*p, *s),
+                (ScalarValue::$VARIANT(None), other)
+                | (other, ScalarValue::$VARIANT(None)) => Ok(other.clone()),
                 _ => unreachable!(),
-            };
-            let mut has_value = false;
-            let mut acc: $T = Default::default();
-            for sv in $values {
-                if let ScalarValue::$VARIANT(Some(v), _, _) = sv {
-                    if has_value {
-                        acc = acc.wrapping_add(*v);
-                    } else {
-                        acc = *v;
-                        has_value = true;
-                    }
-                }
             }
-            if has_value {
-                ScalarValue::$VARIANT(Some(acc), p, s)
-            } else {
-                $values[0].clone() // all null
-            }
-        }};
+        };
     }
 
-    macro_rules! sum_float {
-        ($values:expr, $VARIANT:ident, $T:ty) => {{
-            let mut has_value = false;
-            let mut acc: $T = Default::default();
-            for sv in $values {
-                if let ScalarValue::$VARIANT(Some(v)) = sv {
-                    if has_value {
-                        acc += *v;
-                    } else {
-                        acc = *v;
-                        has_value = true;
-                    }
-                }
+    macro_rules! add_decimal {
+        ($lhs:expr, $rhs:expr, $VARIANT:ident) => {
+            match ($lhs, $rhs) {
+                (
+                    ScalarValue::$VARIANT(Some(a), p, s),
+                    ScalarValue::$VARIANT(Some(b), _, _),
+                ) => Ok(ScalarValue::$VARIANT(Some(a.wrapping_add(*b)), *p, *s)),
+                (ScalarValue::$VARIANT(None, _, _), other)
+                | (other, ScalarValue::$VARIANT(None, _, _)) => Ok(other.clone()),
+                _ => unreachable!(),
             }
-            if has_value {
-                ScalarValue::$VARIANT(Some(acc))
-            } else {
-                $values[0].clone() // all null
-            }
-        }};
+        };
     }
 
-    let result = match &values[0] {
-        ScalarValue::Int8(_) => sum_wrapping!(values, Int8, i8),
-        ScalarValue::Int16(_) => sum_wrapping!(values, Int16, i16),
-        ScalarValue::Int32(_) => sum_wrapping!(values, Int32, i32),
-        ScalarValue::Int64(_) => sum_wrapping!(values, Int64, i64),
-        ScalarValue::UInt8(_) => sum_wrapping!(values, UInt8, u8),
-        ScalarValue::UInt16(_) => sum_wrapping!(values, UInt16, u16),
-        ScalarValue::UInt32(_) => sum_wrapping!(values, UInt32, u32),
-        ScalarValue::UInt64(_) => sum_wrapping!(values, UInt64, u64),
-        ScalarValue::Float16(_) => sum_float!(values, Float16, f16),
-        ScalarValue::Float32(_) => sum_float!(values, Float32, f32),
-        ScalarValue::Float64(_) => sum_float!(values, Float64, f64),
-        ScalarValue::Decimal32(_, _, _) => sum_decimal!(values, Decimal32, i32),
-        ScalarValue::Decimal64(_, _, _) => sum_decimal!(values, Decimal64, i64),
-        ScalarValue::Decimal128(_, _, _) => sum_decimal!(values, Decimal128, i128),
-        ScalarValue::Decimal256(_, _, _) => sum_decimal!(values, Decimal256, i256),
-        _ => {
-            // Fallback for non-primitive types: use ScalarValue::add
-            let mut acc = values[0].clone();
-            for v in &values[1..] {
-                if !v.is_null() {
-                    if acc.is_null() {
-                        acc = v.clone();
-                    } else {
-                        acc = acc.add(v)?;
-                    }
+    macro_rules! add_float {
+        ($lhs:expr, $rhs:expr, $VARIANT:ident) => {
+            match ($lhs, $rhs) {
+                (ScalarValue::$VARIANT(Some(a)), ScalarValue::$VARIANT(Some(b))) => {
+                    Ok(ScalarValue::$VARIANT(Some(*a + *b)))
                 }
+                (ScalarValue::$VARIANT(None), other)
+                | (other, ScalarValue::$VARIANT(None)) => Ok(other.clone()),
+                _ => unreachable!(),
             }
-            acc
-        }
-    };
+        };
+    }
 
-    Ok(result)
+    match lhs {
+        ScalarValue::Int8(_) => add_wrapping!(lhs, rhs, Int8),
+        ScalarValue::Int16(_) => add_wrapping!(lhs, rhs, Int16),
+        ScalarValue::Int32(_) => add_wrapping!(lhs, rhs, Int32),
+        ScalarValue::Int64(_) => add_wrapping!(lhs, rhs, Int64),
+        ScalarValue::UInt8(_) => add_wrapping!(lhs, rhs, UInt8),
+        ScalarValue::UInt16(_) => add_wrapping!(lhs, rhs, UInt16),
+        ScalarValue::UInt32(_) => add_wrapping!(lhs, rhs, UInt32),
+        ScalarValue::UInt64(_) => add_wrapping!(lhs, rhs, UInt64),
+        ScalarValue::Float16(_) => add_float!(lhs, rhs, Float16),
+        ScalarValue::Float32(_) => add_float!(lhs, rhs, Float32),
+        ScalarValue::Float64(_) => add_float!(lhs, rhs, Float64),
+        ScalarValue::Decimal32(_, _, _) => add_decimal!(lhs, rhs, Decimal32),
+        ScalarValue::Decimal64(_, _, _) => add_decimal!(lhs, rhs, Decimal64),
+        ScalarValue::Decimal128(_, _, _) => add_decimal!(lhs, rhs, Decimal128),
+        ScalarValue::Decimal256(_, _, _) => add_decimal!(lhs, rhs, Decimal256),
+        // Fallback: use the existing ScalarValue::add
+        _ => lhs.add(rhs),
+    }
 }
 
-/// Wrap a [`ScalarValue`] result with the appropriate [`Precision`] level.
-pub(crate) fn wrap_precision(
-    value: ScalarValue,
-    all_exact: bool,
+/// [`Precision`]-aware sum of two [`ScalarValue`] precisions using
+/// cheap direct addition via [`scalar_add`].
+///
+/// Mirrors the semantics of `Precision<ScalarValue>::add` but avoids
+/// the expensive `ScalarValue::add` round-trip through Arrow arrays.
+pub(crate) fn precision_add(
+    lhs: &Precision<ScalarValue>,
+    rhs: &Precision<ScalarValue>,
 ) -> Precision<ScalarValue> {
-    if value.is_null() {
-        return Precision::Absent;
+    match (lhs, rhs) {
+        (Precision::Exact(a), Precision::Exact(b)) => scalar_add(a, b)
+            .map(Precision::Exact)
+            .unwrap_or(Precision::Absent),
+        (Precision::Inexact(a), Precision::Exact(b))
+        | (Precision::Exact(a), Precision::Inexact(b))
+        | (Precision::Inexact(a), Precision::Inexact(b)) => scalar_add(a, b)
+            .map(Precision::Inexact)
+            .unwrap_or(Precision::Absent),
+        (_, _) => Precision::Absent,
     }
-    if all_exact {
-        Precision::Exact(value)
-    } else {
-        Precision::Inexact(value)
-    }
-}
-
-/// Compute the sum of a collection of [`ScalarValue`]s by directly
-/// extracting primitive values and accumulating without array allocation.
-pub(crate) fn vectorized_sum(
-    values: &[ScalarValue],
-    all_exact: bool,
-) -> Result<Precision<ScalarValue>> {
-    debug_assert!(!values.is_empty());
-    let result = scalar_sum(values)?;
-    Ok(wrap_precision(result, all_exact))
-}
-
-/// Compute minimum of a collection of [`ScalarValue`]s using direct
-/// `PartialOrd` comparison.
-pub(crate) fn vectorized_min(
-    values: &[ScalarValue],
-    all_exact: bool,
-) -> Result<Precision<ScalarValue>> {
-    debug_assert!(!values.is_empty());
-    let result = scalar_min(values);
-    Ok(wrap_precision(result, all_exact))
-}
-
-/// Compute the maximum of a collection of [`ScalarValue`]s using direct
-/// `PartialOrd` comparison.
-pub(crate) fn vectorized_max(
-    values: &[ScalarValue],
-    all_exact: bool,
-) -> Result<Precision<ScalarValue>> {
-    debug_assert!(!values.is_empty());
-    let result = scalar_max(values);
-    Ok(wrap_precision(result, all_exact))
 }
