@@ -840,8 +840,10 @@ datafusion public string_agg 1 OUT NULL String NULL false 1
 query TTTBI rowsort
 select specific_name, data_type, parameter_mode, is_variadic, rid from information_schema.parameters where specific_name = 'concat';
 ----
-concat String IN true 0
+concat Binary IN true 0
+concat String IN true 1
 concat String OUT false 0
+concat String OUT false 1
 
 # test ceorcion signature
 query TTITI rowsort
