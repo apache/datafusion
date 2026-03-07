@@ -70,3 +70,27 @@ query TT
 SELECT concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')), arrow_typeof(concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')));
 ----
 abc Utf8View
+
+# Test mixed types: Utf8 + Binary
+query TT
+SELECT concat(arrow_cast('hello', 'Utf8'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Utf8'), arrow_cast(' world', 'Binary')));
+----
+hello world Utf8
+
+# Test mixed types: Utf8View + Binary
+query TT
+SELECT concat(arrow_cast('hello', 'Utf8View'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Utf8View'), arrow_cast(' world', 'Binary')));
+----
+hello world Utf8View
+
+# Test mixed types: Binary + Binary
+query TT
+SELECT concat(arrow_cast('hello', 'Binary'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Binary'), arrow_cast(' world', 'Binary')));
+----
+hello world Utf8
+
+# Test mixed types with ws: Binary + Binary
+query TT
+SELECT concat_ws('|', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')), arrow_typeof(concat_ws('|', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')));
+----
+hello|world Utf8
