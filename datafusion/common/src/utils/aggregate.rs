@@ -380,3 +380,30 @@ pub(crate) fn max_array(array: &ArrayRef) -> Result<ScalarValue> {
 
     Ok(result)
 }
+
+fn scalar_min_max_fallback(array: &ArrayRef, is_min: bool) -> Result<ScalarValue> {
+    if array.len() == array.null_count() {
+        return ScalarValue::try_from(array.data_type());
+    }
+
+    let mut result = ScalarValue::try_from_array(array, 0)?;
+    for i in 1..array.len() {
+        let current = ScalarValue::try_from_array(array, i)?;
+        if current.is_null() {
+            continue;
+        }
+        if result.is_null() {
+            result = current;
+            continue;
+        }
+        if is_min {
+            if current < result {
+                result = current;
+            }
+        } else if current > result {
+            result = current;
+        }
+    }
+
+    Ok(result)
+}
