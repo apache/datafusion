@@ -725,7 +725,7 @@ async fn test_delete_target_table_scoping() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_from_drops_non_target_predicates() -> Result<()> {
-    // UPDATE ... FROM is currently not working
+    // UPDATE ... FROM should plan successfully but fail at execution time.
     // TODO fix https://github.com/apache/datafusion/issues/19950
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
         test_schema(),
@@ -743,20 +743,20 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
-    let result = ctx
+    let df = ctx
         .sql(
             "UPDATE t1 SET value = 1 FROM t2 \
              WHERE t1.id = t2.id AND t2.src_only = 'active' AND t1.value > 10",
         )
-        .await;
+        .await?;
 
-    // Verify UPDATE ... FROM is rejected with appropriate error
+    // Verify execution-layer rejection to preserve planner/executor boundary
     // TODO fix https://github.com/apache/datafusion/issues/19950
-    assert!(result.is_err());
-    let err = result.unwrap_err();
+    let err = df.collect().await.unwrap_err();
     assert!(
-        err.to_string().contains("UPDATE ... FROM is not supported"),
-        "Expected 'UPDATE ... FROM is not supported' error, got: {err}"
+        err.to_string()
+            .contains("UPDATE ... FROM execution is not yet supported"),
+        "Expected 'UPDATE ... FROM execution is not yet supported' error, got: {err}"
     );
     Ok(())
 }
