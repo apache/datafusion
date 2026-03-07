@@ -1453,3 +1453,15 @@ message BufferExecNode {
   PhysicalPlanNode input = 1;
   uint64 capacity = 2;
 }
+
+enum FileFormatKind {
+  CSV = 0;
+  JSON = 1;
+  PARQUET = 2;
+  ARROW = 3;
+}
+
+message FileFormatWrapper {
+  FileFormatKind kind = 1;
+  bytes blob = 2;
+}

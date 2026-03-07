@@ -47,7 +47,9 @@ use datafusion::datasource::DefaultTableSource;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
-use datafusion::datasource::file_format::{DefaultFileType, format_as_file_type};
+use datafusion::datasource::file_format::{
+    DefaultFileType, FileFormatFactory, format_as_file_type,
+};
 use datafusion::execution::FunctionRegistry;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_aggregate::count::count_udaf;
@@ -2855,6 +2857,85 @@ async fn roundtrip_arrow_scan() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+async fn roundtrip_copy_to_with_format(
+    ctx: &SessionContext,
+    format_factory: Arc<dyn FileFormatFactory>,
+    output_path: &str,
+) -> Result<LogicalPlan> {
+    let input = create_csv_scan(ctx).await?;
+    let file_type = format_as_file_type(format_factory);
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        output_path.to_string(),
+        vec![],
+        file_type,
+        Default::default(),
+    ));
+    let bytes = logical_plan_to_bytes(&plan)?;
+    logical_plan_from_bytes(&bytes, &ctx.task_ctx())
+}
+
+#[tokio::test]
+async fn roundtrip_copy_to_csv_with_default_codec() -> Result<()> {
+    let ctx = SessionContext::new();
+    let factory = Arc::new(CsvFormatFactory::new());
+    let roundtrip = roundtrip_copy_to_with_format(&ctx, factory, "output.csv").await?;
+    match &roundtrip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!(copy_to.output_url, "output.csv");
+            assert_eq!(copy_to.file_type.get_ext(), "csv");
+        }
+        other => panic!("Expected CopyTo plan, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_copy_to_json_with_default_codec() -> Result<()> {
+    let ctx = SessionContext::new();
+    let factory = Arc::new(JsonFormatFactory::new());
+    let roundtrip = roundtrip_copy_to_with_format(&ctx, factory, "output.json").await?;
+    match &roundtrip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!(copy_to.output_url, "output.json");
+            assert_eq!(copy_to.file_type.get_ext(), "json");
+        }
+        other => panic!("Expected CopyTo plan, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_copy_to_parquet_with_default_codec() -> Result<()> {
+    let ctx = SessionContext::new();
+    let factory = Arc::new(ParquetFormatFactory::new());
+    let roundtrip =
+        roundtrip_copy_to_with_format(&ctx, factory, "output.parquet").await?;
+    match &roundtrip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!(copy_to.output_url, "output.parquet");
+            assert_eq!(copy_to.file_type.get_ext(), "parquet");
+        }
+        other => panic!("Expected CopyTo plan, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_copy_to_arrow_with_default_codec() -> Result<()> {
+    let ctx = SessionContext::new();
+    let factory = Arc::new(ArrowFormatFactory::new());
+    let roundtrip = roundtrip_copy_to_with_format(&ctx, factory, "output.arrow").await?;
+    match &roundtrip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!(copy_to.output_url, "output.arrow");
+            assert_eq!(copy_to.file_type.get_ext(), "arrow");
+        }
+        other => panic!("Expected CopyTo plan, got {other:?}"),
+    }
     Ok(())
 }
 

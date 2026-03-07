@@ -2185,6 +2185,13 @@ pub struct BufferExecNode {
     #[prost(uint64, tag = "2")]
     pub capacity: u64,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FileFormatWrapper {
+    #[prost(enumeration = "FileFormatKind", tag = "1")]
+    pub kind: i32,
+    #[prost(bytes = "vec", tag = "2")]
+    pub blob: ::prost::alloc::vec::Vec<u8>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum WindowFrameUnits {
@@ -2472,6 +2479,38 @@ impl GenerateSeriesName {
         match value {
             "GS_GENERATE_SERIES" => Some(Self::GsGenerateSeries),
             "GS_RANGE" => Some(Self::GsRange),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum FileFormatKind {
+    Csv = 0,
+    Json = 1,
+    Parquet = 2,
+    Arrow = 3,
+}
+impl FileFormatKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Csv => "CSV",
+            Self::Json => "JSON",
+            Self::Parquet => "PARQUET",
+            Self::Arrow => "ARROW",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CSV" => Some(Self::Csv),
+            "JSON" => Some(Self::Json),
+            "PARQUET" => Some(Self::Parquet),
+            "ARROW" => Some(Self::Arrow),
             _ => None,
         }
     }
