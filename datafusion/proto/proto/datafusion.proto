@@ -1034,6 +1034,7 @@ message FilterExecNode {
   uint32 default_filter_selectivity = 3;
   repeated uint32 projection = 9;
   uint32 batch_size = 10;
+  optional uint32 fetch = 11;
 }
 
 message FileGroup {

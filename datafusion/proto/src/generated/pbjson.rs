@@ -6930,6 +6930,9 @@ impl serde::Serialize for FilterExecNode {
         if self.batch_size != 0 {
             len += 1;
         }
+        if self.fetch.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FilterExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -6945,6 +6948,9 @@ impl serde::Serialize for FilterExecNode {
         }
         if self.batch_size != 0 {
             struct_ser.serialize_field("batchSize", &self.batch_size)?;
+        }
+        if let Some(v) = self.fetch.as_ref() {
+            struct_ser.serialize_field("fetch", v)?;
         }
         struct_ser.end()
     }
@@ -6963,6 +6969,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
             "projection",
             "batch_size",
             "batchSize",
+            "fetch",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6972,6 +6979,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
             DefaultFilterSelectivity,
             Projection,
             BatchSize,
+            Fetch,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6998,6 +7006,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             "defaultFilterSelectivity" | "default_filter_selectivity" => Ok(GeneratedField::DefaultFilterSelectivity),
                             "projection" => Ok(GeneratedField::Projection),
                             "batchSize" | "batch_size" => Ok(GeneratedField::BatchSize),
+                            "fetch" => Ok(GeneratedField::Fetch),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7022,6 +7031,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                 let mut default_filter_selectivity__ = None;
                 let mut projection__ = None;
                 let mut batch_size__ = None;
+                let mut fetch__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -7061,6 +7071,14 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(FilterExecNode {
@@ -7069,6 +7087,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                     default_filter_selectivity: default_filter_selectivity__.unwrap_or_default(),
                     projection: projection__.unwrap_or_default(),
                     batch_size: batch_size__.unwrap_or_default(),
+                    fetch: fetch__,
                 })
             }
         }
