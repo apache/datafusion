@@ -164,7 +164,7 @@ impl ExecutionPlan for EmptyExec {
         )?))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             assert_or_internal_err!(
                 partition < self.partitions,
@@ -191,7 +191,7 @@ impl ExecutionPlan for EmptyExec {
             });
         }
 
-        Ok(stats)
+        Ok(Arc::new(stats))
     }
 }
 

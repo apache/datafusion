@@ -311,7 +311,7 @@ impl ExecutionPlan for CooperativeExec {
         Ok(make_cooperative(child_stream))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 

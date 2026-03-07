@@ -262,9 +262,9 @@ impl ExecutionPlan for MockExec {
     }
 
     // Panics if one of the batches is an error
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema));
+            return Ok(Arc::new(Statistics::new_unknown(&self.schema)));
         }
         let data: Result<Vec<_>> = self
             .data
@@ -277,11 +277,11 @@ impl ExecutionPlan for MockExec {
 
         let data = data?;
 
-        Ok(common::compute_record_batch_statistics(
+        Ok(Arc::new(common::compute_record_batch_statistics(
             &[data],
             &self.schema,
             None,
-        ))
+        )))
     }
 }
 
@@ -498,15 +498,15 @@ impl ExecutionPlan for BarrierExec {
         Ok(builder.build())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema));
+            return Ok(Arc::new(Statistics::new_unknown(&self.schema)));
         }
-        Ok(common::compute_record_batch_statistics(
+        Ok(Arc::new(common::compute_record_batch_statistics(
             &self.data,
             &self.schema,
             None,
-        ))
+        )))
     }
 }
 
@@ -700,12 +700,12 @@ impl ExecutionPlan for StatisticsExec {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        Ok(if partition.is_some() {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(if partition.is_some() {
             Statistics::new_unknown(&self.schema)
         } else {
             self.stats.clone()
-        })
+        }))
     }
 }
 

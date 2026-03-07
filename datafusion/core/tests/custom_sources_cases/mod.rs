@@ -184,12 +184,12 @@ impl ExecutionPlan for CustomExecutionPlan {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
+            return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
         }
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
-        Ok(Statistics {
+        Ok(Arc::new(Statistics {
             num_rows: Precision::Exact(batch.num_rows()),
             total_byte_size: Precision::Absent,
             column_statistics: self
@@ -208,7 +208,7 @@ impl ExecutionPlan for CustomExecutionPlan {
                     ..Default::default()
                 })
                 .collect(),
-        })
+        }))
     }
 
     fn apply_expressions(

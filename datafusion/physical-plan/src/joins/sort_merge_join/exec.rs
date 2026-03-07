@@ -552,7 +552,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // SortMergeJoinExec uses symmetric hash partitioning where both left and right
         // inputs are hash-partitioned on the join keys. This means partition `i` of the
         // left input is joined with partition `i` of the right input.
@@ -564,13 +564,16 @@ impl ExecutionPlan for SortMergeJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        estimate_join_statistics(
-            self.left.partition_statistics(partition)?,
-            self.right.partition_statistics(partition)?,
+        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(partition)?);
+        let right_stats =
+            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
+        Ok(Arc::new(estimate_join_statistics(
+            left_stats,
+            right_stats,
             &self.on,
             &self.join_type,
             &self.schema,
-        )
+        )?))
     }
 
     /// Tries to swap the projection with its input [`SortMergeJoinExec`]. If it can be done,

@@ -298,8 +298,9 @@ impl ExecutionPlan for WindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stat = self.input.partition_statistics(partition)?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let input_stat =
+            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let win_cols = self.window_expr.len();
         let input_cols = self.input.schema().fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...
@@ -309,11 +310,11 @@ impl ExecutionPlan for WindowAggExec {
         for _ in 0..win_cols {
             column_statistics.push(ColumnStatistics::new_unknown())
         }
-        Ok(Statistics {
+        Ok(Arc::new(Statistics {
             num_rows: input_stat.num_rows,
             column_statistics,
             total_byte_size: Precision::Absent,
-        })
+        }))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
