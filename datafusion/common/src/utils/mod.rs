@@ -17,6 +17,7 @@
 
 //! This module provides the bisect function, which implements binary search.
 
+pub(crate) mod aggregate;
 pub mod expr;
 pub mod memory;
 pub mod proxy;
