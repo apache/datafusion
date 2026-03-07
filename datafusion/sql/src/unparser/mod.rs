@@ -25,6 +25,7 @@ mod utils;
 
 use self::dialect::{DefaultDialect, Dialect};
 use crate::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
+use datafusion_common::alias::AliasGenerator;
 pub use expr::expr_to_sql;
 pub use plan::plan_to_sql;
 use std::sync::Arc;
@@ -58,6 +59,7 @@ pub struct Unparser<'a> {
     dialect: &'a dyn Dialect,
     pretty: bool,
     extension_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
+    pub alias_generator: AliasGenerator,
 }
 
 impl<'a> Unparser<'a> {
@@ -66,6 +68,7 @@ impl<'a> Unparser<'a> {
             dialect,
             pretty: false,
             extension_unparsers: vec![],
+            alias_generator: AliasGenerator::new(),
         }
     }
 
@@ -136,6 +139,7 @@ impl Default for Unparser<'_> {
             dialect: &DefaultDialect {},
             pretty: false,
             extension_unparsers: vec![],
+            alias_generator: AliasGenerator::new(),
         }
     }
 }

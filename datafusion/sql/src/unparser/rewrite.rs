@@ -27,6 +27,8 @@ use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
 use sqlparser::ast::Ident;
 
+use crate::unparser::Unparser;
+
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
 ///
 /// DataFusion will return an error if two columns in the schema have the same name with no table qualifiers.
@@ -255,83 +257,6 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     }
 }
 
-/// This logic is to work out the columns and inner query for SubqueryAlias plan for some types of
-/// subquery or unnest
-/// - `(SELECT column_a as a from table) AS A`
-/// - `(SELECT column_a from table) AS A (a)`
-/// - `SELECT * FROM t1 CROSS JOIN UNNEST(t1.c1) AS u(c1)` (see [find_unnest_column_alias])
-///
-/// A roundtrip example for table alias with columns
-///
-/// query: SELECT id FROM (SELECT j1_id from j1) AS c (id)
-///
-/// LogicPlan:
-/// Projection: c.id
-///   SubqueryAlias: c
-///     Projection: j1.j1_id AS id
-///       Projection: j1.j1_id
-///         TableScan: j1
-///
-/// Before introducing this logic, the unparsed query would be `SELECT c.id FROM (SELECT j1.j1_id AS
-/// id FROM (SELECT j1.j1_id FROM j1)) AS c`.
-/// The query is invalid as `j1.j1_id` is not a valid identifier in the derived table
-/// `(SELECT j1.j1_id FROM j1)`
-///
-/// With this logic, the unparsed query will be:
-/// `SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)`
-///
-/// Caveat: this won't handle the case like `select * from (select 1, 2) AS a (b, c)`
-/// as the parser gives a wrong plan which has mismatch `Int(1)` types: Literal and
-/// Column in the Projections. Once the parser side is fixed, this logic should work
-pub(super) fn subquery_alias_inner_query_and_columns(
-    subquery_alias: &datafusion_expr::SubqueryAlias,
-) -> (&LogicalPlan, Vec<Ident>) {
-    let plan: &LogicalPlan = subquery_alias.input.as_ref();
-
-    if let LogicalPlan::Subquery(subquery) = plan {
-        let (inner_projection, Some(column)) =
-            find_unnest_column_alias(subquery.subquery.as_ref())
-        else {
-            return (plan, vec![]);
-        };
-        return (inner_projection, vec![Ident::new(column)]);
-    }
-
-    let LogicalPlan::Projection(outer_projections) = plan else {
-        return (plan, vec![]);
-    };
-
-    // Check if it's projection inside projection
-    let Some(inner_projection) = find_projection(outer_projections.input.as_ref()) else {
-        return (plan, vec![]);
-    };
-
-    let mut columns: Vec<Ident> = vec![];
-    // Check if the inner projection and outer projection have a matching pattern like
-    //     Projection: j1.j1_id AS id
-    //       Projection: j1.j1_id
-    for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
-        let Expr::Alias(outer_alias) = &outer_projections.expr[i] else {
-            return (plan, vec![]);
-        };
-
-        // Inner projection schema fields store the projection name which is used in outer
-        // projection expr
-        let inner_expr_string = match inner_expr {
-            Expr::Column(_) => inner_expr.to_string(),
-            _ => inner_projection.schema.field(i).name().clone(),
-        };
-
-        if outer_alias.expr.to_string() != inner_expr_string {
-            return (plan, vec![]);
-        };
-
-        columns.push(outer_alias.name.as_str().into());
-    }
-
-    (outer_projections.input.as_ref(), columns)
-}
-
 /// Try to find the column alias for UNNEST in the inner projection.
 /// For example:
 /// ```sql
@@ -444,6 +369,90 @@ fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {
         LogicalPlan::Distinct(p) => find_projection(p.input().as_ref()),
         LogicalPlan::Sort(p) => find_projection(p.input.as_ref()),
         _ => None,
+    }
+}
+
+impl<'a> Unparser<'a> {
+    /// This logic is to work out the columns and inner query for SubqueryAlias plan for some types of
+    /// subquery or unnest
+    /// - `(SELECT column_a as a from table) AS A`
+    /// - `(SELECT column_a from table) AS A (a)`
+    /// - `SELECT * FROM t1 CROSS JOIN UNNEST(t1.c1) AS u(c1)` (see [find_unnest_column_alias])
+    ///
+    /// A roundtrip example for table alias with columns
+    ///
+    /// query: SELECT id FROM (SELECT j1_id from j1) AS c (id)
+    ///
+    /// LogicPlan:
+    /// Projection: c.id
+    ///   SubqueryAlias: c
+    ///     Projection: j1.j1_id AS id
+    ///       Projection: j1.j1_id
+    ///         TableScan: j1
+    ///
+    /// Before introducing this logic, the unparsed query would be `SELECT c.id FROM (SELECT j1.j1_id AS
+    /// id FROM (SELECT j1.j1_id FROM j1)) AS c`.
+    /// The query is invalid as `j1.j1_id` is not a valid identifier in the derived table
+    /// `(SELECT j1.j1_id FROM j1)`
+    ///
+    /// With this logic, the unparsed query will be:
+    /// `SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)`
+    ///
+    /// Caveat: this won't handle the case like `select * from (select 1, 2) AS a (b, c)`
+    /// as the parser gives a wrong plan which has mismatch `Int(1)` types: Literal and
+    /// Column in the Projections. Once the parser side is fixed, this logic should work
+    pub(super) fn subquery_alias_inner_query_and_columns(
+        &'a self,
+        subquery_alias: &'a datafusion_expr::SubqueryAlias,
+    ) -> (&'a LogicalPlan, Vec<Ident>) {
+        let plan: &LogicalPlan = subquery_alias.input.as_ref();
+
+        if let LogicalPlan::Subquery(subquery) = plan {
+            let (inner_projection, Some(column)) =
+                find_unnest_column_alias(subquery.subquery.as_ref())
+            else {
+                return (plan, vec![]);
+            };
+            return (
+                inner_projection,
+                vec![self.new_ident_quoted_if_needs(column)],
+            );
+        }
+
+        let LogicalPlan::Projection(outer_projections) = plan else {
+            return (plan, vec![]);
+        };
+
+        // Check if it's projection inside projection
+        let Some(inner_projection) = find_projection(outer_projections.input.as_ref())
+        else {
+            return (plan, vec![]);
+        };
+
+        let mut columns: Vec<Ident> = vec![];
+        // Check if the inner projection and outer projection have a matching pattern like
+        //     Projection: j1.j1_id AS id
+        //       Projection: j1.j1_id
+        for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
+            let Expr::Alias(outer_alias) = &outer_projections.expr[i] else {
+                return (plan, vec![]);
+            };
+
+            // Inner projection schema fields store the projection name which is used in outer
+            // projection expr
+            let inner_expr_string = match inner_expr {
+                Expr::Column(_) => inner_expr.to_string(),
+                _ => inner_projection.schema.field(i).name().clone(),
+            };
+
+            if outer_alias.expr.to_string() != inner_expr_string {
+                return (plan, vec![]);
+            };
+
+            columns.push(self.new_ident_quoted_if_needs(outer_alias.name.clone()));
+        }
+
+        (outer_projections.input.as_ref(), columns)
     }
 }
 

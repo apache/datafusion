@@ -428,15 +428,16 @@ impl Default for TableWithJoinsBuilder {
 
 #[derive(Clone)]
 pub struct RelationBuilder {
-    relation: Option<TableFactorBuilder>,
+    pub relation: Option<TableFactorBuilder>,
 }
 
 #[derive(Clone)]
-#[expect(clippy::large_enum_variant)]
-enum TableFactorBuilder {
+#[non_exhaustive]
+pub enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
     Unnest(UnnestRelationBuilder),
+    TableFunction(TableFunctionRelationBuilder),
     Empty,
 }
 
@@ -458,6 +459,11 @@ impl RelationBuilder {
         self
     }
 
+    pub fn table_function(&mut self, value: TableFunctionRelationBuilder) -> &mut Self {
+        self.relation = Some(TableFactorBuilder::TableFunction(value));
+        self
+    }
+
     pub fn empty(&mut self) -> &mut Self {
         self.relation = Some(TableFactorBuilder::Empty);
         self
@@ -474,6 +480,9 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Unnest(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
+            Some(TableFactorBuilder::TableFunction(ref mut rel_builder)) => {
+                rel_builder.alias = value;
+            }
             Some(TableFactorBuilder::Empty) => (),
             None => (),
         }
@@ -484,6 +493,7 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Unnest(ref value)) => Some(value.build()?),
+            Some(TableFactorBuilder::TableFunction(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Empty) => None,
             None => return Err(Into::into(UninitializedFieldError::from("relation"))),
         })
@@ -683,6 +693,47 @@ impl UnnestRelationBuilder {
 }
 
 impl Default for UnnestRelationBuilder {
+    fn default() -> Self {
+        Self::create_empty()
+    }
+}
+
+#[derive(Clone)]
+pub struct TableFunctionRelationBuilder {
+    pub expr: Option<ast::Expr>,
+    pub alias: Option<ast::TableAlias>,
+}
+
+impl TableFunctionRelationBuilder {
+    pub fn expr(&mut self, value: ast::Expr) -> &mut Self {
+        self.expr = Some(value);
+        self
+    }
+
+    pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
+        self.alias = value;
+        self
+    }
+
+    pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
+        Ok(ast::TableFactor::TableFunction {
+            expr: match self.expr {
+                Some(ref value) => value.clone(),
+                None => return Err(Into::into(UninitializedFieldError::from("expr"))),
+            },
+            alias: self.alias.clone(),
+        })
+    }
+
+    fn create_empty() -> Self {
+        Self {
+            expr: Default::default(),
+            alias: Default::default(),
+        }
+    }
+}
+
+impl Default for TableFunctionRelationBuilder {
     fn default() -> Self {
         Self::create_empty()
     }
