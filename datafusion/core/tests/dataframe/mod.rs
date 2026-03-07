@@ -3004,11 +3004,10 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     +---------------+------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                               |
     +---------------+------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: t1.b, count(*)                                                         |
-    |               |   Sort: count(Int64(1)) AS count(*) AS count(*) ASC NULLS LAST                     |
-    |               |     Projection: t1.b, count(Int64(1)) AS count(*), count(Int64(1))                 |
-    |               |       Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                        |
-    |               |         TableScan: t1 projection=[b]                                               |
+    | logical_plan  | Sort: count(*) AS count(*) ASC NULLS LAST                                          |
+    |               |   Projection: t1.b, count(Int64(1)) AS count(*)                                    |
+    |               |     Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                          |
+    |               |       TableScan: t1 projection=[b]                                                 |
     | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                               |
     |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]         |
     |               |     ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*)]                 |
@@ -3027,7 +3026,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     +---------------+----------------------------------------------------------------------------+
     | plan_type     | plan                                                                       |
     +---------------+----------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) ASC NULLS LAST                                              |
+    | logical_plan  | Sort: count(*) AS count(*) ASC NULLS LAST                                  |
     |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]        |
     |               |     TableScan: t1 projection=[b]                                           |
     | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                       |
