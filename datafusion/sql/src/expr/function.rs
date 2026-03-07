@@ -542,32 +542,70 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // accept a WITHIN GROUP clause.
                 let supports_within_group = fm.supports_within_group_clause();
 
-                if !within_group.is_empty() && !supports_within_group {
+                // Built-in ordered-set aggregates must also support WITHIN GROUP
+                let is_builtin_ordered_set = matches!(
+                    name.as_str(),
+                    "percentile_cont"
+                        | "quantile_cont"
+                        | "approx_percentile_cont"
+                        | "approx_percentile_cont_with_weight"
+                );
+
+                let supports_within_group =
+                    supports_within_group || is_builtin_ordered_set;
+
+                let mut within_group = within_group;
+                let mut order_by = order_by;
+
+                if supports_within_group
+                    && within_group.is_empty()
+                    && !order_by.is_empty()
+                {
+                    // Inline ORDER BY syntax:
+                    // quantile_cont(value, percentile ORDER BY value)
+                    if args.len() >= 2 {
+                        args.remove(0);
+                        arg_names.remove(0);
+                    }
+
+                    within_group = order_by;
+                    order_by = vec![];
+                }
+
+                if !supports_within_group && !within_group.is_empty() {
                     return plan_err!(
                         "WITHIN GROUP is only supported for ordered-set aggregate functions"
                     );
                 }
 
-                // If the UDAF supports WITHIN GROUP, convert the ordering into
-                // sort expressions and prepend them as unnamed function args.
-                let order_by = if supports_within_group {
-                    let (within_group_sorts, new_args, new_arg_names) = self
-                        .extract_and_prepend_within_group_args(
+                let order_by: Vec<SortExpr> = if supports_within_group {
+                    if !within_group.is_empty() {
+                        // WITHIN GROUP syntax
+                        let sorts = self.order_by_to_sort_expr(
                             within_group,
-                            args,
-                            arg_names,
                             schema,
                             planner_context,
+                            false,
+                            None,
                         )?;
-                    args = new_args;
-                    arg_names = new_arg_names;
-                    within_group_sorts
-                } else {
-                    let order_by = if !order_by.is_empty() {
-                        order_by
+
+                        if sorts.len() != 1 {
+                            return plan_err!(
+                                "Only a single ordering expression is permitted in WITHIN GROUP clause"
+                            );
+                        }
+
+                        // Prepend ordered value expression to args
+                        let value_expr = sorts[0].expr.clone();
+                        arg_names = std::iter::once(None).chain(arg_names).collect();
+                        args = std::iter::once(value_expr).chain(args).collect();
+
+                        sorts
                     } else {
-                        within_group
-                    };
+                        vec![]
+                    }
+                } else {
+                    // Normal aggregate behavior
                     self.order_by_to_sort_expr(
                         order_by,
                         schema,
@@ -867,6 +905,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok((exprs, names))
     }
 
+    #[expect(dead_code)]
     fn extract_and_prepend_within_group_args(
         &self,
         within_group: Vec<OrderByExpr>,
