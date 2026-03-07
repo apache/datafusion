@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::RecordBatch;
+use arrow::array::{PrimitiveArray, RecordBatch};
 use arrow::compute::BatchCoalescer;
-use arrow::datatypes::SchemaRef;
-use datafusion_common::{Result, assert_or_internal_err};
+use arrow::datatypes::{SchemaRef, UInt32Type};
+use datafusion_common::{DataFusionError, Result, assert_or_internal_err};
 
 /// Concatenate multiple [`RecordBatch`]es and apply a limit
 ///
@@ -136,6 +136,45 @@ impl LimitedBatchCoalescer {
 
     pub(crate) fn is_finished(&self) -> bool {
         self.finished
+    }
+
+    /// Push a batch with indices into the coalescer, selecting only the rows
+    /// indicated by `indices`. Returns the push status.
+    pub fn push_batch_with_indices(
+        &mut self,
+        batch: RecordBatch,
+        indices: &PrimitiveArray<UInt32Type>,
+    ) -> Result<PushBatchStatus> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot push batch after finish"
+        );
+
+        let num_rows = indices.len();
+
+        if let Some(fetch) = self.fetch {
+            if self.total_rows >= fetch {
+                return Ok(PushBatchStatus::LimitReached);
+            }
+
+            if self.total_rows + num_rows >= fetch {
+                let remaining_rows = fetch - self.total_rows;
+                debug_assert!(remaining_rows > 0);
+                let indices = indices.slice(0, remaining_rows);
+                self.total_rows += remaining_rows;
+                self.inner
+                    .push_batch_with_indices(batch, &indices)
+                    .map_err(DataFusionError::from)?;
+                return Ok(PushBatchStatus::LimitReached);
+            }
+        }
+
+        self.total_rows += num_rows;
+        self.inner
+            .push_batch_with_indices(batch, indices)
+            .map_err(DataFusionError::from)?;
+
+        Ok(PushBatchStatus::Continue)
     }
 
     /// Return the next completed batch, if any
