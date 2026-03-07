@@ -927,6 +927,73 @@ async fn test_update_from_with_join_only_predicates_executes() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_update_from_with_only_join_predicate_executes() -> Result<()> {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
+
+    let t1_schema = abcd_schema_no_extra();
+    let t1_batch = RecordBatch::try_new(
+        Arc::clone(&t1_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["zoo", "qux", "bar"])),
+            Arc::new(Float64Array::from(vec![2.0, 3.0, 4.0])),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+        ],
+    )?;
+    let t1 = MemTable::try_new(Arc::clone(&t1_schema), vec![vec![t1_batch]])?;
+    ctx.register_table("t1", Arc::new(t1))?;
+
+    let t2_schema = abcd_schema_no_extra();
+    let t2_batch = RecordBatch::try_new(
+        Arc::clone(&t2_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 4])),
+            Arc::new(StringArray::from(vec![
+                "updated_b",
+                "updated_b2",
+                "updated_b3",
+            ])),
+            Arc::new(Float64Array::from(vec![5.0, 2.5, 1.5])),
+            Arc::new(Int32Array::from(vec![40, 50, 60])),
+        ],
+    )?;
+    let t2 = MemTable::try_new(Arc::clone(&t2_schema), vec![vec![t2_batch]])?;
+    ctx.register_table("t2", Arc::new(t2))?;
+
+    // Regression case: UPDATE ... FROM with only join predicates in WHERE.
+    ctx.sql(
+        "UPDATE t1 AS dst \
+         SET b = src.b, c = src.a, d = src.d \
+         FROM t2 AS src \
+         WHERE dst.a = src.a",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let actual = ctx
+        .sql("SELECT * FROM t1 ORDER BY a")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        [
+            "+---+------------+-----+----+",
+            "| a | b          | c   | d  |",
+            "+---+------------+-----+----+",
+            "| 1 | updated_b  | 1.0 | 40 |",
+            "| 2 | updated_b2 | 2.0 | 50 |",
+            "| 3 | bar        | 4.0 | 30 |",
+            "+---+------------+-----+----+",
+        ],
+        &actual
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_update_from_self_join_drops_source_side_predicates() -> Result<()> {
     let target_schema = abcd_schema_no_extra();
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
