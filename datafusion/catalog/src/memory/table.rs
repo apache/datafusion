@@ -18,7 +18,7 @@
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -34,7 +34,9 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{Constraints, DFSchema, SchemaExt, not_impl_err, plan_err};
+use datafusion_common::{
+    Constraints, DFSchema, ScalarValue, SchemaExt, not_impl_err, plan_err,
+};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
@@ -60,6 +62,8 @@ use tokio::sync::RwLock;
 
 // backward compatibility
 pub use datafusion_datasource::memory::PartitionData;
+
+const UPDATE_FROM_OLD_COLUMN_PREFIX: &str = "__df_update_old_";
 
 /// In-memory data source for presenting a `Vec<RecordBatch>` as a
 /// data source that can be queried by DataFusion. This allows data to
@@ -506,20 +510,39 @@ impl TableProvider for MemTable {
         &self,
         state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        filters: Vec<Expr>,
+        _filters: Vec<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if self.batches.is_empty() {
             return Ok(Arc::new(DmlResultExec::new(0)));
         }
 
-        self.schema()
-            .logically_equivalent_names_and_types(&input.schema())?;
+        validate_update_from_input_schema(&self.schema, &input.schema())?;
 
-        let replacement_batches = collect(input, state.task_ctx()).await?;
-        let replacement_row_count = replacement_batches
-            .iter()
-            .map(ArrowRecordBatch::num_rows)
-            .sum::<usize>();
+        let input_batches = collect(input, state.task_ctx()).await?;
+        let mut original_row_matches: HashMap<Vec<ScalarValue>, VecDeque<usize>> =
+            HashMap::new();
+        let mut replacement_batches = Vec::with_capacity(input_batches.len());
+        let mut replacement_row_count = 0usize;
+
+        for batch in input_batches {
+            replacement_row_count += batch.num_rows();
+            let replacement_batch = ArrowRecordBatch::try_new(
+                Arc::clone(&self.schema),
+                replacement_columns(&batch, self.schema.fields().len()),
+            )?;
+
+            for row_idx in 0..batch.num_rows() {
+                original_row_matches
+                    .entry(row_signature(
+                        original_columns(&batch, self.schema.fields().len()),
+                        row_idx,
+                    )?)
+                    .or_default()
+                    .push_back(replacement_row_count - batch.num_rows() + row_idx);
+            }
+
+            replacement_batches.push(replacement_batch);
+        }
 
         *self.sort_order.lock() = vec![];
 
@@ -528,34 +551,7 @@ impl TableProvider for MemTable {
         } else {
             concat_batches(&self.schema, &replacement_batches)?
         };
-
-        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
-        let mut expected_updates = 0usize;
-
-        for partition_data in &self.batches {
-            let partition = partition_data.read().await;
-            for batch in partition.iter() {
-                let filter_mask = evaluate_filters_to_mask(
-                    &filters,
-                    batch,
-                    &df_schema,
-                    state.execution_props(),
-                )?;
-                let update_count = match filter_mask {
-                    Some(mask) => mask.iter().filter(|v| v == &Some(true)).count(),
-                    None => batch.num_rows(),
-                };
-                expected_updates += update_count;
-            }
-        }
-
-        if expected_updates != replacement_row_count {
-            return plan_err!(
-                "UPDATE ... FROM produced {replacement_row_count} replacement rows but target filters matched {expected_updates} rows"
-            );
-        }
-
-        let mut replace_cursor = 0usize;
+        let mut matched_updates = 0usize;
 
         for partition_data in &self.batches {
             let mut partition = partition_data.write().await;
@@ -566,90 +562,183 @@ impl TableProvider for MemTable {
                     continue;
                 }
 
-                let filter_mask = evaluate_filters_to_mask(
-                    &filters,
-                    batch,
-                    &df_schema,
-                    state.execution_props(),
-                )?;
-
-                let (update_count, update_mask) = match filter_mask {
-                    Some(mask) => {
-                        let count = mask.iter().filter(|v| v == &Some(true)).count();
-                        let normalized: BooleanArray =
-                            mask.iter().map(|v| Some(v == Some(true))).collect();
-                        (count, normalized)
-                    }
-                    None => (
-                        batch.num_rows(),
-                        BooleanArray::from(vec![true; batch.num_rows()]),
-                    ),
-                };
+                let replacement_indices =
+                    find_replacement_indices(batch, &mut original_row_matches)?;
+                let update_count = replacement_indices.iter().flatten().count();
 
                 if update_count == 0 {
                     new_batches.push(batch.clone());
                     continue;
                 }
 
-                let mut new_columns = Vec::with_capacity(batch.num_columns());
-                for column_idx in 0..batch.num_columns() {
-                    let original_column = batch.column(column_idx);
-                    let replacement_segment = replacement_batch
-                        .column(column_idx)
-                        .slice(replace_cursor, update_count);
-                    let merged = merge_with_update_mask(
-                        original_column,
-                        replacement_segment.as_ref(),
-                        &update_mask,
-                    )?;
-                    new_columns.push(merged);
-                }
-
-                replace_cursor += update_count;
-                let updated_batch =
-                    ArrowRecordBatch::try_new(Arc::clone(&self.schema), new_columns)?;
+                matched_updates += update_count;
+                let updated_batch = build_updated_batch_from_replacement_indices(
+                    batch,
+                    &replacement_batch,
+                    &replacement_indices,
+                    &self.schema,
+                )?;
                 new_batches.push(updated_batch);
             }
 
             *partition = new_batches;
         }
 
-        Ok(Arc::new(DmlResultExec::new(expected_updates as u64)))
+        if matched_updates != replacement_row_count {
+            return plan_err!(
+                "UPDATE ... FROM produced {replacement_row_count} replacement rows but matched {matched_updates} target rows"
+            );
+        }
+
+        Ok(Arc::new(DmlResultExec::new(matched_updates as u64)))
     }
 }
 
-fn merge_with_update_mask(
+fn validate_update_from_input_schema(
+    target_schema: &SchemaRef,
+    input_schema: &SchemaRef,
+) -> Result<()> {
+    let target_fields = target_schema.fields();
+    let input_fields = input_schema.fields();
+    let expected_len = target_fields.len() * 2;
+
+    if input_fields.len() != expected_len {
+        return plan_err!(
+            "Invalid UPDATE ... FROM input schema: expected {expected_len} columns, got {}",
+            input_fields.len()
+        );
+    }
+
+    for (idx, target_field) in target_fields.iter().enumerate() {
+        let replacement_field = &input_fields[idx];
+        if replacement_field.name() != target_field.name()
+            || replacement_field.data_type() != target_field.data_type()
+        {
+            return plan_err!(
+                "Invalid UPDATE ... FROM replacement column at index {idx}: expected '{}', got '{}'",
+                target_field.name(),
+                replacement_field.name()
+            );
+        }
+
+        let original_field = &input_fields[idx + target_fields.len()];
+        let expected_original_name = update_from_old_column_name(target_field.name());
+        if original_field.name() != &expected_original_name
+            || original_field.data_type() != target_field.data_type()
+        {
+            return plan_err!(
+                "Invalid UPDATE ... FROM original row column at index {}: expected '{}', got '{}'",
+                idx + target_fields.len(),
+                expected_original_name,
+                original_field.name()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn replacement_columns(
+    batch: &ArrowRecordBatch,
+    target_column_count: usize,
+) -> Vec<ArrayRef> {
+    (0..target_column_count)
+        .map(|idx| Arc::clone(batch.column(idx)))
+        .collect()
+}
+
+fn original_columns(batch: &ArrowRecordBatch, target_column_count: usize) -> &[ArrayRef] {
+    &batch.columns()[target_column_count..]
+}
+
+fn row_signature(columns: &[ArrayRef], row_idx: usize) -> Result<Vec<ScalarValue>> {
+    columns
+        .iter()
+        .map(|column| ScalarValue::try_from_array(column, row_idx))
+        .collect()
+}
+
+fn find_replacement_indices(
+    batch: &ArrowRecordBatch,
+    original_row_matches: &mut HashMap<Vec<ScalarValue>, VecDeque<usize>>,
+) -> Result<Vec<Option<usize>>> {
+    let mut replacement_indices = Vec::with_capacity(batch.num_rows());
+
+    for row_idx in 0..batch.num_rows() {
+        let signature = row_signature(batch.columns(), row_idx)?;
+        let replacement_idx =
+            if let Some(indices) = original_row_matches.get_mut(&signature) {
+                let next = indices.pop_front();
+                let should_remove = indices.is_empty();
+                if should_remove {
+                    original_row_matches.remove(&signature);
+                }
+                next
+            } else {
+                None
+            };
+        replacement_indices.push(replacement_idx);
+    }
+
+    Ok(replacement_indices)
+}
+
+fn build_updated_batch_from_replacement_indices(
+    batch: &ArrowRecordBatch,
+    replacement_batch: &ArrowRecordBatch,
+    replacement_indices: &[Option<usize>],
+    schema: &SchemaRef,
+) -> Result<ArrowRecordBatch> {
+    let mut new_columns = Vec::with_capacity(batch.num_columns());
+    for column_idx in 0..batch.num_columns() {
+        let original_column = batch.column(column_idx);
+        let merged = merge_with_replacement_indices(
+            original_column,
+            replacement_batch.column(column_idx).as_ref(),
+            replacement_indices,
+        )?;
+        new_columns.push(merged);
+    }
+
+    Ok(ArrowRecordBatch::try_new(Arc::clone(schema), new_columns)?)
+}
+
+fn merge_with_replacement_indices(
     original: &ArrayRef,
     replacement_rows: &dyn Array,
-    update_mask: &BooleanArray,
+    replacement_indices: &[Option<usize>],
 ) -> Result<ArrayRef> {
     let original_data = original.to_data();
     let replacement_data = replacement_rows.to_data();
     let mut mutable = MutableArrayData::new(
         vec![&original_data, &replacement_data],
         false,
-        update_mask.len(),
+        replacement_indices.len(),
     );
-    let mut replacement_idx = 0usize;
+    let mut consumed_replacement_rows = 0usize;
 
-    for row_idx in 0..update_mask.len() {
-        if update_mask.value(row_idx) {
-            mutable.extend(1, replacement_idx, replacement_idx + 1);
-            replacement_idx += 1;
+    for (row_idx, replacement_idx) in replacement_indices.iter().enumerate() {
+        if let Some(replacement_idx) = replacement_idx {
+            mutable.extend(1, *replacement_idx, *replacement_idx + 1);
+            consumed_replacement_rows += 1;
         } else {
             mutable.extend(0, row_idx, row_idx + 1);
         }
     }
 
-    if replacement_idx != replacement_rows.len() {
+    if consumed_replacement_rows > replacement_rows.len() {
         return plan_err!(
             "Invalid UPDATE ... FROM replacement rows: expected {}, consumed {}",
             replacement_rows.len(),
-            replacement_idx
+            consumed_replacement_rows
         );
     }
 
     Ok(make_array(mutable.freeze()))
+}
+
+fn update_from_old_column_name(column_name: &str) -> String {
+    format!("{UPDATE_FROM_OLD_COLUMN_PREFIX}{column_name}")
 }
 
 /// Evaluate filter expressions against a batch and return a combined boolean mask.
