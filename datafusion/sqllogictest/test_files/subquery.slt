@@ -1615,19 +1615,19 @@ WHERE e1.salary > (
 ----
 logical_plan
 01)Projection: e1.employee_name, e1.salary
-02)--Inner Join: e1.dept_id = __scalar_sq_1.dept_id Filter: CAST(e1.salary AS Decimal128(38, 14)) > __scalar_sq_1.avg(e2.salary)
+02)--Inner Join: e1.dept_id = __scalar_sq_1.dept_id Filter: CAST(e1.salary AS Decimal128(38, 18)) > __scalar_sq_1.avg(e2.salary)
 03)----SubqueryAlias: e1
 04)------TableScan: employees projection=[employee_name, dept_id, salary]
 05)----SubqueryAlias: __scalar_sq_1
-06)------Projection: avg(e2.salary), e2.dept_id
-07)--------Aggregate: groupBy=[[e2.dept_id]], aggr=[[avg(e2.salary)]]
+06)------Projection: CAST(sum(e2.salary) AS Decimal128(38, 14)) / CAST(count(e2.salary) AS Decimal128(38, 14)) AS avg(e2.salary), e2.dept_id
+07)--------Aggregate: groupBy=[[e2.dept_id]], aggr=[[sum(e2.salary), count(e2.salary)]]
 08)----------Projection: e2.dept_id, e2.salary
-09)------------Inner Join:  Filter: CAST(e2.salary AS Decimal128(38, 14)) > __scalar_sq_2.avg(e3.salary) AND __scalar_sq_2.dept_id = e1.dept_id
+09)------------Inner Join:  Filter: CAST(e2.salary AS Decimal128(38, 18)) > __scalar_sq_2.avg(e3.salary) AND __scalar_sq_2.dept_id = e1.dept_id
 10)--------------SubqueryAlias: e2
 11)----------------TableScan: employees projection=[dept_id, salary]
 12)--------------SubqueryAlias: __scalar_sq_2
-13)----------------Projection: avg(e3.salary), e3.dept_id
-14)------------------Aggregate: groupBy=[[e3.dept_id]], aggr=[[avg(e3.salary)]]
+13)----------------Projection: CAST(sum(e3.salary) AS Decimal128(38, 14)) / CAST(count(e3.salary) AS Decimal128(38, 14)) AS avg(e3.salary), e3.dept_id
+14)------------------Aggregate: groupBy=[[e3.dept_id]], aggr=[[sum(e3.salary), count(e3.salary)]]
 15)--------------------SubqueryAlias: e3
 16)----------------------TableScan: employees projection=[dept_id, salary]
 

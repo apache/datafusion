@@ -192,17 +192,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })
                 .collect::<Result<Vec<Expr>>>()?
         } else {
-            // 'group by all' groups wrt. all select expressions except 'AggregateFunction's.
-            // Filter and collect non-aggregate select expressions
+            // 'group by all' groups wrt. all select expressions except those
+            // containing aggregate functions.
+            fn contains_aggregate(expr: &Expr) -> bool {
+                let mut has_agg = false;
+                expr.apply(|e| {
+                    if matches!(e, Expr::AggregateFunction(_)) {
+                        has_agg = true;
+                        Ok(TreeNodeRecursion::Stop)
+                    } else {
+                        Ok(TreeNodeRecursion::Continue)
+                    }
+                })
+                .ok();
+                has_agg
+            }
             select_exprs
                 .iter()
-                .filter(|select_expr| match select_expr {
-                    Expr::AggregateFunction(_) => false,
-                    Expr::Alias(Alias { expr, name: _, .. }) => {
-                        !matches!(**expr, Expr::AggregateFunction(_))
-                    }
-                    _ => true,
-                })
+                .filter(|select_expr| !contains_aggregate(select_expr))
                 .cloned()
                 .collect()
         };

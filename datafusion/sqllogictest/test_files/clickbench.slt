@@ -101,13 +101,13 @@ query TT
 EXPLAIN SELECT SUM("AdvEngineID"), COUNT(*), AVG("ResolutionWidth") FROM hits;
 ----
 logical_plan
-01)Projection: sum(hits.AdvEngineID), count(Int64(1)) AS count(*), avg(hits.ResolutionWidth)
-02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(hits.AdvEngineID AS Int64)), count(Int64(1)), avg(CAST(hits.ResolutionWidth AS Float64))]]
+01)Projection: sum(hits.AdvEngineID), count(Int64(1)) AS count(*), CAST(sum(hits.ResolutionWidth) AS Float64) / CAST(count(hits.ResolutionWidth) AS Float64) AS avg(hits.ResolutionWidth)
+02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(hits.AdvEngineID AS Int64)), count(Int64(1)), sum(CAST(hits.ResolutionWidth AS Int64)), count(hits.ResolutionWidth)]]
 03)----SubqueryAlias: hits
 04)------TableScan: hits_raw projection=[ResolutionWidth, AdvEngineID]
 physical_plan
-01)ProjectionExec: expr=[sum(hits.AdvEngineID)@0 as sum(hits.AdvEngineID), count(Int64(1))@1 as count(*), avg(hits.ResolutionWidth)@2 as avg(hits.ResolutionWidth)]
-02)--AggregateExec: mode=Single, gby=[], aggr=[sum(hits.AdvEngineID), count(Int64(1)), avg(hits.ResolutionWidth)]
+01)ProjectionExec: expr=[sum(hits.AdvEngineID)@0 as sum(hits.AdvEngineID), count(Int64(1))@1 as count(*), CAST(sum(hits.ResolutionWidth)@2 AS Float64) / CAST(count(hits.ResolutionWidth)@3 AS Float64) as avg(hits.ResolutionWidth)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(hits.AdvEngineID), count(Int64(1)), sum(hits.ResolutionWidth), count(hits.ResolutionWidth)]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[ResolutionWidth, AdvEngineID], file_type=parquet
 
 query IIR
@@ -120,17 +120,19 @@ query TT
 EXPLAIN SELECT AVG("UserID") FROM hits;
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[avg(CAST(hits.UserID AS Float64))]]
-02)--SubqueryAlias: hits
-03)----TableScan: hits_raw projection=[UserID]
+01)Projection: CAST(sum(hits.UserID) AS Float64) / CAST(count(hits.UserID) AS Float64) AS avg(hits.UserID)
+02)--Aggregate: groupBy=[[]], aggr=[[sum(hits.UserID), count(hits.UserID)]]
+03)----SubqueryAlias: hits
+04)------TableScan: hits_raw projection=[UserID]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[avg(hits.UserID)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID], file_type=parquet
+01)ProjectionExec: expr=[CAST(sum(hits.UserID)@0 AS Float64) / CAST(count(hits.UserID)@1 AS Float64) as avg(hits.UserID)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(hits.UserID), count(hits.UserID)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID], file_type=parquet
 
 query R
 SELECT AVG("UserID") FROM hits;
 ----
--304548765855551740
+-304548765855551600
 
 ## Q4
 query TT
@@ -841,8 +843,8 @@ EXPLAIN SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("Reso
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.WatchID, hits.ClientIP, count(Int64(1)) AS count(*) AS c, sum(hits.IsRefresh), avg(hits.ResolutionWidth)
-03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)), sum(CAST(hits.IsRefresh AS Int64)), avg(CAST(hits.ResolutionWidth AS Float64))]]
+02)--Projection: hits.WatchID, hits.ClientIP, count(Int64(1)) AS count(*) AS c, sum(hits.IsRefresh), CAST(sum(hits.ResolutionWidth) AS Float64) / CAST(count(hits.ResolutionWidth) AS Float64) AS avg(hits.ResolutionWidth)
+03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)), sum(CAST(hits.IsRefresh AS Int64)), sum(CAST(hits.ResolutionWidth AS Int64)), count(hits.ResolutionWidth)]]
 04)------SubqueryAlias: hits
 05)--------Projection: hits_raw.WatchID, hits_raw.ClientIP, hits_raw.IsRefresh, hits_raw.ResolutionWidth
 06)----------Filter: hits_raw.SearchPhrase != Utf8View("")
@@ -850,10 +852,10 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [c@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[WatchID@0 as WatchID, ClientIP@1 as ClientIP, count(Int64(1))@2 as c, sum(hits.IsRefresh)@3 as sum(hits.IsRefresh), avg(hits.ResolutionWidth)@4 as avg(hits.ResolutionWidth)]
-04)------AggregateExec: mode=FinalPartitioned, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), avg(hits.ResolutionWidth)]
+03)----ProjectionExec: expr=[WatchID@0 as WatchID, ClientIP@1 as ClientIP, count(Int64(1))@2 as c, sum(hits.IsRefresh)@3 as sum(hits.IsRefresh), CAST(sum(hits.ResolutionWidth)@4 AS Float64) / CAST(count(hits.ResolutionWidth)@5 AS Float64) as avg(hits.ResolutionWidth)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), sum(hits.ResolutionWidth), count(hits.ResolutionWidth)]
 05)--------RepartitionExec: partitioning=Hash([WatchID@0, ClientIP@1], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), avg(hits.ResolutionWidth)]
+06)----------AggregateExec: mode=Partial, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), sum(hits.ResolutionWidth), count(hits.ResolutionWidth)]
 07)------------FilterExec: SearchPhrase@4 != , projection=[WatchID@0, ClientIP@1, IsRefresh@2, ResolutionWidth@3]
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
@@ -868,17 +870,17 @@ EXPLAIN SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("Reso
 ----
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
-02)--Projection: hits.WatchID, hits.ClientIP, count(Int64(1)) AS count(*) AS c, sum(hits.IsRefresh), avg(hits.ResolutionWidth)
-03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)), sum(CAST(hits.IsRefresh AS Int64)), avg(CAST(hits.ResolutionWidth AS Float64))]]
+02)--Projection: hits.WatchID, hits.ClientIP, count(Int64(1)) AS count(*) AS c, sum(hits.IsRefresh), CAST(sum(hits.ResolutionWidth) AS Float64) / CAST(count(hits.ResolutionWidth) AS Float64) AS avg(hits.ResolutionWidth)
+03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)), sum(CAST(hits.IsRefresh AS Int64)), sum(CAST(hits.ResolutionWidth AS Int64)), count(hits.ResolutionWidth)]]
 04)------SubqueryAlias: hits
 05)--------TableScan: hits_raw projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth]
 physical_plan
 01)SortPreservingMergeExec: [c@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[WatchID@0 as WatchID, ClientIP@1 as ClientIP, count(Int64(1))@2 as c, sum(hits.IsRefresh)@3 as sum(hits.IsRefresh), avg(hits.ResolutionWidth)@4 as avg(hits.ResolutionWidth)]
-04)------AggregateExec: mode=FinalPartitioned, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), avg(hits.ResolutionWidth)]
+03)----ProjectionExec: expr=[WatchID@0 as WatchID, ClientIP@1 as ClientIP, count(Int64(1))@2 as c, sum(hits.IsRefresh)@3 as sum(hits.IsRefresh), CAST(sum(hits.ResolutionWidth)@4 AS Float64) / CAST(count(hits.ResolutionWidth)@5 AS Float64) as avg(hits.ResolutionWidth)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), sum(hits.ResolutionWidth), count(hits.ResolutionWidth)]
 05)--------RepartitionExec: partitioning=Hash([WatchID@0, ClientIP@1], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), avg(hits.ResolutionWidth)]
+06)----------AggregateExec: mode=Partial, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[count(Int64(1)), sum(hits.IsRefresh), sum(hits.ResolutionWidth), count(hits.ResolutionWidth)]
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth], file_type=parquet
 
 query IIIIR rowsort

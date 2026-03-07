@@ -3030,7 +3030,7 @@ create table t (c1 decimal(10, 0)) as values (1), (2), (3), (4), (5), (6);
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-3.5 Decimal128(14, 4)
+3.5 Decimal128(22, 8)
 
 statement ok
 drop table t;
@@ -3042,7 +3042,7 @@ create table t (c1 decimal(10, 0)) as values (1), (NULL), (3), (4), (5);
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-3.25 Decimal128(14, 4)
+3.25 Decimal128(22, 8)
 
 statement ok
 drop table t;
@@ -3054,7 +3054,7 @@ create table t (c1 decimal(10, 0)) as values (NULL), (NULL), (NULL), (NULL), (NU
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-NULL Decimal128(14, 4)
+NULL Decimal128(22, 8)
 
 statement ok
 drop table t;
@@ -6029,13 +6029,13 @@ B -1000.045 Decimal128(20, 3)
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from d_table
 ----
-5 Decimal128(14, 7)
+5 Decimal128(25, 11)
 
 query TRT
 select c2, avg(c1), arrow_typeof(avg(c1)) from d_table GROUP BY c2 ORDER BY c2
 ----
-A 110.0045 Decimal128(14, 7)
-B -100.0045 Decimal128(14, 7)
+A 110.0045 Decimal128(25, 11)
+B -100.0045 Decimal128(25, 11)
 
 # aggregate_decimal_count_distinct
 query I
@@ -8427,7 +8427,7 @@ select
 	avg(d)
 from distinct_avg;
 ----
-3 Float64 37.4255 Float64 698.56005 Decimal128(14, 8) 15041.868333 Decimal256(54, 6) 4 56.52525 957.11074444 1272562.81625
+3 Float64 37.4255 Float64 698.56005 Decimal128(14, 8) 15041.868333 Decimal256(54, 6) 4 56.52525 957.110744444444 1272562.81625
 
 query RRRR rowsort
 select
@@ -8556,15 +8556,17 @@ ORDER BY g;
 ----
 logical_plan
 01)Sort: stream_test.g ASC NULLS LAST
-02)--Projection: stream_test.g, count(Int64(1)) AS count(*), sum(stream_test.x), avg(stream_test.x), avg(stream_test.x) AS mean(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), Int32(0) AS grouping(stream_test.g), var(stream_test.x), var(stream_test.x) AS var_samp(stream_test.x), var_pop(stream_test.x), var(stream_test.x) AS var_sample(stream_test.x), var_pop(stream_test.x) AS var_population(stream_test.x), stddev(stream_test.x), stddev(stream_test.x) AS stddev_samp(stream_test.x), stddev_pop(stream_test.x)
-03)----Aggregate: groupBy=[[stream_test.g]], aggr=[[count(Int64(1)), sum(stream_test.x), avg(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), var(stream_test.x), var_pop(stream_test.x), stddev(stream_test.x), stddev_pop(stream_test.x)]]
-04)------Sort: stream_test.g ASC NULLS LAST, fetch=10000
-05)--------TableScan: stream_test projection=[g, x, y, i, b]
+02)--Projection: stream_test.g, count(Int64(1)) AS count(*), sum(stream_test.x), __common_expr_1 AS avg(stream_test.x), __common_expr_1 AS mean(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), grouping(stream_test.g), var(stream_test.x), var(stream_test.x) AS var_samp(stream_test.x), var_pop(stream_test.x), var(stream_test.x) AS var_sample(stream_test.x), var_pop(stream_test.x) AS var_population(stream_test.x), stddev(stream_test.x), stddev(stream_test.x) AS stddev_samp(stream_test.x), stddev_pop(stream_test.x)
+03)----Projection: CAST(sum(stream_test.x) AS Float64) / CAST(count(stream_test.x) AS Float64) AS __common_expr_1, stream_test.g, count(Int64(1)), sum(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), Int32(0) AS grouping(stream_test.g), var(stream_test.x), var_pop(stream_test.x), stddev(stream_test.x), stddev_pop(stream_test.x)
+04)------Aggregate: groupBy=[[stream_test.g]], aggr=[[count(Int64(1)), sum(stream_test.x), count(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), var(stream_test.x), var_pop(stream_test.x), stddev(stream_test.x), stddev_pop(stream_test.x)]]
+05)--------Sort: stream_test.g ASC NULLS LAST, fetch=10000
+06)----------TableScan: stream_test projection=[g, x, y, i, b]
 physical_plan
-01)ProjectionExec: expr=[g@0 as g, count(Int64(1))@1 as count(*), sum(stream_test.x)@2 as sum(stream_test.x), avg(stream_test.x)@3 as avg(stream_test.x), avg(stream_test.x)@3 as mean(stream_test.x), min(stream_test.x)@4 as min(stream_test.x), max(stream_test.y)@5 as max(stream_test.y), bit_and(stream_test.i)@6 as bit_and(stream_test.i), bit_or(stream_test.i)@7 as bit_or(stream_test.i), bit_xor(stream_test.i)@8 as bit_xor(stream_test.i), bool_and(stream_test.b)@9 as bool_and(stream_test.b), bool_or(stream_test.b)@10 as bool_or(stream_test.b), median(stream_test.x)@11 as median(stream_test.x), 0 as grouping(stream_test.g), var(stream_test.x)@12 as var(stream_test.x), var(stream_test.x)@12 as var_samp(stream_test.x), var_pop(stream_test.x)@13 as var_pop(stream_test.x), var(stream_test.x)@12 as var_sample(stream_test.x), var_pop(stream_test.x)@13 as var_population(stream_test.x), stddev(stream_test.x)@14 as stddev(stream_test.x), stddev(stream_test.x)@14 as stddev_samp(stream_test.x), stddev_pop(stream_test.x)@15 as stddev_pop(stream_test.x)]
-02)--AggregateExec: mode=Single, gby=[g@0 as g], aggr=[count(Int64(1)), sum(stream_test.x), avg(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), var(stream_test.x), var_pop(stream_test.x), stddev(stream_test.x), stddev_pop(stream_test.x)], ordering_mode=Sorted
-03)----SortExec: TopK(fetch=10000), expr=[g@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[g@1 as g, count(Int64(1))@2 as count(*), sum(stream_test.x)@3 as sum(stream_test.x), __common_expr_1@0 as avg(stream_test.x), __common_expr_1@0 as mean(stream_test.x), min(stream_test.x)@4 as min(stream_test.x), max(stream_test.y)@5 as max(stream_test.y), bit_and(stream_test.i)@6 as bit_and(stream_test.i), bit_or(stream_test.i)@7 as bit_or(stream_test.i), bit_xor(stream_test.i)@8 as bit_xor(stream_test.i), bool_and(stream_test.b)@9 as bool_and(stream_test.b), bool_or(stream_test.b)@10 as bool_or(stream_test.b), median(stream_test.x)@11 as median(stream_test.x), grouping(stream_test.g)@12 as grouping(stream_test.g), var(stream_test.x)@13 as var(stream_test.x), var(stream_test.x)@13 as var_samp(stream_test.x), var_pop(stream_test.x)@14 as var_pop(stream_test.x), var(stream_test.x)@13 as var_sample(stream_test.x), var_pop(stream_test.x)@14 as var_population(stream_test.x), stddev(stream_test.x)@15 as stddev(stream_test.x), stddev(stream_test.x)@15 as stddev_samp(stream_test.x), stddev_pop(stream_test.x)@16 as stddev_pop(stream_test.x)]
+02)--ProjectionExec: expr=[sum(stream_test.x)@2 / CAST(count(stream_test.x)@3 AS Float64) as __common_expr_1, g@0 as g, count(Int64(1))@1 as count(Int64(1)), sum(stream_test.x)@2 as sum(stream_test.x), min(stream_test.x)@4 as min(stream_test.x), max(stream_test.y)@5 as max(stream_test.y), bit_and(stream_test.i)@6 as bit_and(stream_test.i), bit_or(stream_test.i)@7 as bit_or(stream_test.i), bit_xor(stream_test.i)@8 as bit_xor(stream_test.i), bool_and(stream_test.b)@9 as bool_and(stream_test.b), bool_or(stream_test.b)@10 as bool_or(stream_test.b), median(stream_test.x)@11 as median(stream_test.x), 0 as grouping(stream_test.g), var(stream_test.x)@12 as var(stream_test.x), var_pop(stream_test.x)@13 as var_pop(stream_test.x), stddev(stream_test.x)@14 as stddev(stream_test.x), stddev_pop(stream_test.x)@15 as stddev_pop(stream_test.x)]
+03)----AggregateExec: mode=Single, gby=[g@0 as g], aggr=[count(Int64(1)), sum(stream_test.x), count(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), var(stream_test.x), var_pop(stream_test.x), stddev(stream_test.x), stddev_pop(stream_test.x)], ordering_mode=Sorted
+04)------SortExec: TopK(fetch=10000), expr=[g@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IIRRRRRIIIBBRIRRRRRRRR
 SELECT

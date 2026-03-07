@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
@@ -27,6 +29,7 @@ use datafusion_expr::{
     arguments::ArgumentName,
     expr,
     expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction},
+    expr_fn::cast,
     planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
 };
 use sqlparser::ast::{
@@ -622,6 +625,76 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     order_by,
                     null_treatment,
                 } = aggregate_expr;
+
+                // Rewrite AVG(x) as CAST(SUM(x) AS avg_type) / CAST(COUNT(x) AS avg_type)
+                // Skip Duration/Interval types since Duration/Duration division is not supported
+                if func.name() == "avg" && !distinct {
+                    let avg_return_type = args
+                        .first()
+                        .and_then(|a| a.get_type(schema).ok())
+                        .and_then(|t| func.return_type(&[t]).ok());
+                    let skip_rewrite = matches!(
+                        avg_return_type,
+                        Some(DataType::Duration(_))
+                            | Some(DataType::Interval(_))
+                            | None
+                    );
+                    if !skip_rewrite {
+                        if let (Some(sum_udaf), Some(count_udaf)) = (
+                            self.context_provider.get_aggregate_meta("sum"),
+                            self.context_provider.get_aggregate_meta("count"),
+                        ) {
+                            // Use the SQL-level name (e.g. "avg" or "mean") for the alias
+                            let arg_str = args
+                                .iter()
+                                .map(|a| a.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let display_name = if name.eq_ignore_ascii_case(func.name())
+                            {
+                                // Build the original AVG expression to get its display name
+                                let orig_avg = expr::AggregateFunction::new_udf(
+                                    Arc::clone(&func),
+                                    args.clone(),
+                                    false,
+                                    filter.clone(),
+                                    order_by.clone(),
+                                    null_treatment,
+                                );
+                                Expr::AggregateFunction(orig_avg)
+                                    .schema_name()
+                                    .to_string()
+                            } else {
+                                format!("{name}({arg_str})")
+                            };
+
+                            let sum_expr = Expr::AggregateFunction(
+                                expr::AggregateFunction::new_udf(
+                                    sum_udaf,
+                                    args.clone(),
+                                    false,
+                                    filter.clone(),
+                                    order_by.clone(),
+                                    null_treatment,
+                                ),
+                            );
+                            let count_expr = Expr::AggregateFunction(
+                                expr::AggregateFunction::new_udf(
+                                    count_udaf,
+                                    args.clone(),
+                                    false,
+                                    filter,
+                                    order_by,
+                                    None,
+                                ),
+                            );
+                            let return_type = avg_return_type.unwrap();
+                            let avg_expr = cast(sum_expr, return_type.clone())
+                                / cast(count_expr, return_type);
+                            return Ok(avg_expr.alias(display_name));
+                        }
+                    }
+                }
 
                 let inner = expr::AggregateFunction::new_udf(
                     func,
