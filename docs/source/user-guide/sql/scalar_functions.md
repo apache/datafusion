@@ -3823,7 +3823,7 @@ array_positions(array, element)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 
 #### Example
 
