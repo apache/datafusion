@@ -39,6 +39,7 @@ pub mod optimizer;
 pub mod output_requirements;
 pub mod projection_pushdown;
 pub use datafusion_pruning as pruning;
+pub mod hash_join_buffering;
 pub mod pushdown_sort;
 pub mod sanity_checker;
 pub mod topk_aggregation;
