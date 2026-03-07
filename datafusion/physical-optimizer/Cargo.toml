@@ -56,5 +56,6 @@ recursive = { workspace = true, optional = true }
 [dev-dependencies]
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
+datafusion-functions-window = { workspace = true }
 insta = { workspace = true }
 tokio = { workspace = true }
