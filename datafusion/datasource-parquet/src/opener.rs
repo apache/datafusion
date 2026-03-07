@@ -753,7 +753,7 @@ impl FileOpener for ParquetOpener {
             // morselize() may now be prunable with the updated filter values.
             let has_dynamic_predicate = predicate
                 .as_ref()
-                .is_some_and(|p| is_dynamic_physical_expr(p));
+                .is_some_and(is_dynamic_physical_expr);
 
             // The page index is not stored inline in the parquet footer so the
             // code above may not have read the page index structures yet. If we
