@@ -2189,6 +2189,7 @@ regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
 The following regular expression functions are supported:
 
 - [regexp_count](#regexp_count)
+- [regexp_extract](#regexp_extract)
 - [regexp_instr](#regexp_instr)
 - [regexp_like](#regexp_like)
 - [regexp_match](#regexp_match)
@@ -2223,6 +2224,32 @@ regexp_count(str, regexp[, start, flags])
 +---------------------------------------------------------------+
 | 1                                                             |
 +---------------------------------------------------------------+
+```
+
+### `regexp_extract`
+
+Extract a specific group matched by the [regular expression](https://docs.rs/regex/latest/regex/#syntax), from the specified string column.
+If the regex did not match, or the specified group did not match, an empty string is returned.
+
+```sql
+regexp_extract(str, pattern[, groupIndex])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Column or column name.
+- **pattern**: Regular expression to operate on. Can be a constant.
+- **groupIndex**: Match group ID. If not specified, then it's assummed to be 1.
+
+#### Example
+
+```sql
+> select regexp_extract('str', '(\d+)-(\d+)');
++-------+-----------------------------------+
+|    str|regexp_extract(str, (\d+)-(\d+), 1)|
++-------+-----------------------------------+
+|100-200|                                100|
++-------+-----------------------------------+
 ```
 
 ### `regexp_instr`
