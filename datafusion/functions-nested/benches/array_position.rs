@@ -24,7 +24,7 @@ use criterion::{
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
-use datafusion_functions_nested::position::ArrayPosition;
+use datafusion_functions_nested::position::{ArrayPosition, ArrayPositions};
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -39,6 +39,7 @@ const SENTINEL_NEEDLE: i64 = -1;
 fn criterion_benchmark(c: &mut Criterion) {
     for size in [10, 100, 500] {
         bench_array_position(c, size);
+        bench_array_positions(c, size);
     }
 }
 
@@ -128,6 +129,112 @@ fn bench_array_position(c: &mut Criterion, array_size: usize) {
         &array_size,
         |b, _| {
             let udf = ArrayPosition::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_not_found.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: num_rows,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        },
+    );
+
+    group.finish();
+}
+
+fn bench_array_positions(c: &mut Criterion, array_size: usize) {
+    let mut group = c.benchmark_group("array_positions_i64");
+    let haystack_found_once = create_haystack_with_sentinel(
+        NUM_ROWS,
+        array_size,
+        NULL_DENSITY,
+        SENTINEL_NEEDLE,
+        0,
+    );
+    let haystack_found_many = create_haystack_with_sentinels(
+        NUM_ROWS,
+        array_size,
+        NULL_DENSITY,
+        SENTINEL_NEEDLE,
+    );
+    let haystack_not_found =
+        create_haystack_without_sentinel(NUM_ROWS, array_size, NULL_DENSITY);
+    let num_rows = haystack_not_found.len();
+    let arg_fields: Vec<Arc<Field>> = vec![
+        Field::new("haystack", haystack_not_found.data_type().clone(), false).into(),
+        Field::new("needle", DataType::Int64, false).into(),
+    ];
+    let return_field: Arc<Field> = Field::new(
+        "result",
+        DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, true))),
+        true,
+    )
+    .into();
+    let config_options = Arc::new(ConfigOptions::default());
+    let needle = ScalarValue::Int64(Some(SENTINEL_NEEDLE));
+
+    let args_found_once = vec![
+        ColumnarValue::Array(haystack_found_once.clone()),
+        ColumnarValue::Scalar(needle.clone()),
+    ];
+    group.bench_with_input(
+        BenchmarkId::new("found_once", array_size),
+        &array_size,
+        |b, _| {
+            let udf = ArrayPositions::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_found_once.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: num_rows,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        },
+    );
+
+    let args_found_many = vec![
+        ColumnarValue::Array(haystack_found_many.clone()),
+        ColumnarValue::Scalar(needle.clone()),
+    ];
+    group.bench_with_input(
+        BenchmarkId::new("found_many", array_size),
+        &array_size,
+        |b, _| {
+            let udf = ArrayPositions::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_found_many.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: num_rows,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        },
+    );
+
+    let args_not_found = vec![
+        ColumnarValue::Array(haystack_not_found.clone()),
+        ColumnarValue::Scalar(needle.clone()),
+    ];
+    group.bench_with_input(
+        BenchmarkId::new("not_found", array_size),
+        &array_size,
+        |b, _| {
+            let udf = ArrayPositions::new();
             b.iter(|| {
                 black_box(
                     udf.invoke_with_args(ScalarFunctionArgs {
