@@ -776,6 +776,24 @@ impl Stream for GroupedHashAggregateStream {
                                     self.exec_state = new_state;
                                     break 'reading_input;
                                 }
+
+                                // Emit early when the hash table exceeds 8MB
+                                // (each entry is ~16 bytes: hash u64 + offset u64)
+                                const MAP_SIZE_LIMIT: usize = 8 * 1024 * 1024;
+                                if self.group_values.len() * size_of::<(u64, u64)>()
+                                    >= MAP_SIZE_LIMIT
+                                {
+                                    let batch_size = self.batch_size;
+                                    if let Some(batch) =
+                                        self.emit(EmitTo::All, false)?
+                                    {
+                                        timer.done();
+                                        self.clear_shrink(batch_size);
+                                        self.exec_state =
+                                            ExecutionState::ProducingOutput(batch);
+                                        break 'reading_input;
+                                    }
+                                }
                             }
 
                             // If we reach this point, try to update the memory reservation
