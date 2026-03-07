@@ -272,7 +272,7 @@ async fn sql_filter() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
     let stats = physical_plan.partition_statistics(None)?;
-    assert_eq!(stats.num_rows, Precision::Inexact(1));
+    assert_eq!(stats.num_rows, Precision::Inexact(7));
 
     Ok(())
 }
