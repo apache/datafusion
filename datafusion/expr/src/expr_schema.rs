@@ -649,7 +649,7 @@ fn verify_function_arguments<F: UDFCoercionExt>(
             .cloned()
             .collect::<Vec<_>>();
         plan_datafusion_err!(
-            "{} {}",
+            "{}. {}",
             match err {
                 DataFusionError::Plan(msg) => msg,
                 err => err.to_string(),
