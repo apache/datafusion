@@ -23,6 +23,7 @@ pub mod elt;
 pub mod format_string;
 pub mod ilike;
 pub mod length;
+pub mod levenshtein;
 pub mod like;
 pub mod luhn_check;
 pub mod space;
@@ -39,6 +40,7 @@ make_udf_function!(concat::SparkConcat, concat);
 make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(length::SparkLengthFunc, length);
 make_udf_function!(elt::SparkElt, elt);
+make_udf_function!(levenshtein::SparkLevenshtein, levenshtein);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
@@ -85,6 +87,11 @@ pub mod expr_fn {
         arg1
     ));
     export_functions!((
+        levenshtein,
+        "Returns the Levenshtein distance between two strings, with an optional threshold.",
+        str1 str2
+    ));
+    export_functions!((
         like,
         "Returns true if str matches pattern (case sensitive).",
         str pattern
@@ -121,6 +128,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         elt(),
         ilike(),
         length(),
+        levenshtein(),
         like(),
         luhn_check(),
         format_string(),
