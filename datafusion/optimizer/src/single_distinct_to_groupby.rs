@@ -61,6 +61,32 @@ impl SingleDistinctToGroupBy {
     }
 }
 
+/// Check if all aggregate expressions are only COUNT(DISTINCT ...) with no
+/// GROUP BY. In this case, the single_distinct_to_groupby rewrite is
+/// counterproductive because the direct COUNT DISTINCT accumulator is more
+/// efficient than materializing all distinct values via GROUP BY just to
+/// count them.
+fn is_count_distinct_only_no_groupby(group_expr: &[Expr], aggr_expr: &[Expr]) -> bool {
+    if !group_expr.is_empty() || aggr_expr.is_empty() {
+        return false;
+    }
+
+    aggr_expr.iter().all(|expr| {
+        matches!(
+            expr,
+            Expr::AggregateFunction(AggregateFunction {
+                func,
+                params: AggregateFunctionParams {
+                    distinct: true,
+                    filter: None,
+                    order_by,
+                    ..
+                },
+            }) if func.name() == "count" && order_by.is_empty()
+        )
+    })
+}
+
 /// Check whether all aggregate exprs are distinct on a single field.
 fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
     let mut fields_set = HashSet::new();
@@ -130,7 +156,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 group_expr,
                 ..
             }) if is_single_distinct_agg(&aggr_expr)?
-                && !contains_grouping_set(&group_expr) =>
+                && !contains_grouping_set(&group_expr)
+                && !is_count_distinct_only_no_groupby(&group_expr, &aggr_expr) =>
             {
                 let group_size = group_expr.len();
                 // alias all original group_by exprs
@@ -350,14 +377,13 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
             .build()?;
 
-        // Should work
+        // Should not be rewritten: COUNT(DISTINCT) with no GROUP BY is more
+        // efficient using the direct distinct accumulator
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: count(alias1) AS count(DISTINCT test.b) [count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
-            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.b)]] [count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -437,13 +463,12 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![count_distinct(lit(2) * col("b"))])?
             .build()?;
 
+        // Should not be rewritten: COUNT(DISTINCT) with no GROUP BY
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: count(alias1) AS count(DISTINCT Int32(2) * test.b) [count(DISTINCT Int32(2) * test.b):Int64]
-          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
-            Aggregate: groupBy=[[Int32(2) * test.b AS alias1]], aggr=[[]] [alias1:Int64]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT Int32(2) * test.b)]] [count(DISTINCT Int32(2) * test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
