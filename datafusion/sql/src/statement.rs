@@ -25,8 +25,7 @@ use crate::parser::{
     LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
-    ContextProvider, IdentNormalizer, PlannerContext, SqlToRel,
-    object_name_to_qualifier,
+    ContextProvider, IdentNormalizer, PlannerContext, SqlToRel, object_name_to_qualifier,
 };
 use crate::utils::normalize_ident;
 
