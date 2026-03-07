@@ -33,6 +33,7 @@ pub mod binary_map {
 }
 pub mod async_scalar_function;
 pub mod equivalence;
+pub mod expression_analyzer;
 pub mod expressions;
 pub mod intervals;
 mod partitioning;
