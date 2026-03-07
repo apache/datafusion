@@ -36,6 +36,8 @@ use arrow::datatypes::*;
 pub(crate) fn is_primitive_scalar(value: &ScalarValue) -> bool {
     matches!(
         value,
+        ScalarValue::Int8(_)
+            | ScalarValue::Int16(_)
             | ScalarValue::Int32(_)
             | ScalarValue::Int64(_)
             | ScalarValue::UInt8(_)
