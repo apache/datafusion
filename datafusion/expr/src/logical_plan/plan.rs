@@ -4194,7 +4194,9 @@ impl Unnest {
                                 }
                                 DataType::List(_)
                                 | DataType::FixedSizeList(_, _)
-                                | DataType::LargeList(_) => {
+                                | DataType::LargeList(_)
+                                | DataType::ListView(_)
+                                | DataType::LargeListView(_) => {
                                     list_columns.push((
                                         index,
                                         ColumnUnnestList {
@@ -4269,7 +4271,11 @@ fn get_unnested_columns(
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+        DataType::List(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => {
             let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
             let new_field = Arc::new(Field::new(
                 col_name, data_type,
@@ -4306,7 +4312,9 @@ fn get_unnested_list_datatype_recursive(
     match data_type {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
             if depth == 1 {
                 return Ok(field.data_type().clone());
             }
