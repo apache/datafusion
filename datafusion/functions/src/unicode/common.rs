@@ -18,16 +18,18 @@
 //! Common utilities for implementing unicode functions
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, ByteView, GenericStringArray, Int64Array,
-    OffsetSizeTrait, StringViewArray, make_view,
+    Array, ArrayAccessor, ArrayBuilder, ArrayIter, ArrayRef, ByteView,
+    GenericStringArray, GenericStringBuilder, Int64Array, OffsetSizeTrait,
+    StringViewArray, StringViewBuilder, make_view,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
-use datafusion_common::exec_err;
+use datafusion_common::{Result, exec_err};
 use std::cmp::Ordering;
+use std::fmt::Write as FmtWrite;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -81,7 +83,7 @@ fn left_right_byte_length(string: &str, n: i64) -> usize {
 /// General implementation for `left` and `right` functions
 pub(crate) fn general_left_right<F: LeftRightSlicer>(
     args: &[ArrayRef],
-) -> datafusion_common::Result<ArrayRef> {
+) -> Result<ArrayRef> {
     let n_array = as_int64_array(&args[1])?;
 
     match args[0].data_type() {
@@ -110,7 +112,7 @@ fn general_left_right_array<
 >(
     string_array: V,
     n_array: &Int64Array,
-) -> datafusion_common::Result<ArrayRef> {
+) -> Result<ArrayRef> {
     let iter = ArrayIter::new(string_array);
     let result = iter
         .zip(n_array.iter())
@@ -131,7 +133,7 @@ fn general_left_right_array<
 fn general_left_right_view<F: LeftRightSlicer>(
     string_view_array: &StringViewArray,
     n_array: &Int64Array,
-) -> datafusion_common::Result<ArrayRef> {
+) -> Result<ArrayRef> {
     let len = n_array.len();
 
     let views = string_view_array.views();
@@ -180,4 +182,66 @@ fn general_left_right_view<F: LeftRightSlicer>(
         new_nulls,
     )?;
     Ok(Arc::new(result) as ArrayRef)
+}
+
+/// A uniform write interface over `GenericStringBuilder` and `StringViewBuilder`.
+pub(crate) trait StringArrayWriter {
+    fn write_str(&mut self, s: &str) -> Result<()>;
+    fn write_char(&mut self, c: char) -> Result<()>;
+    fn finalize(&mut self);
+    fn append_null(&mut self);
+    fn finish(self) -> ArrayRef;
+}
+
+impl<T: OffsetSizeTrait> StringArrayWriter for GenericStringBuilder<T> {
+    fn write_str(&mut self, s: &str) -> Result<()> {
+        Ok(FmtWrite::write_str(self, s)?)
+    }
+    fn write_char(&mut self, c: char) -> Result<()> {
+        Ok(FmtWrite::write_char(self, c)?)
+    }
+    fn finalize(&mut self) {
+        self.append_value("");
+    }
+    fn append_null(&mut self) {
+        self.append_null();
+    }
+    fn finish(mut self) -> ArrayRef {
+        ArrayBuilder::finish(&mut self)
+    }
+}
+
+pub(crate) struct StringViewWriter {
+    builder: StringViewBuilder,
+    value_buffer: String,
+}
+
+impl StringViewWriter {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            builder: StringViewBuilder::with_capacity(capacity),
+            value_buffer: String::new(),
+        }
+    }
+}
+
+impl StringArrayWriter for StringViewWriter {
+    fn write_str(&mut self, s: &str) -> Result<()> {
+        self.value_buffer.push_str(s);
+        Ok(())
+    }
+    fn write_char(&mut self, c: char) -> Result<()> {
+        self.value_buffer.push(c);
+        Ok(())
+    }
+    fn finalize(&mut self) {
+        self.builder.append_value(&self.value_buffer);
+        self.value_buffer.clear();
+    }
+    fn append_null(&mut self) {
+        self.builder.append_null();
+    }
+    fn finish(mut self) -> ArrayRef {
+        Arc::new(self.builder.finish()) as ArrayRef
+    }
 }

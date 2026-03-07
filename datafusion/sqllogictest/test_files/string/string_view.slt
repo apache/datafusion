@@ -733,6 +733,38 @@ logical_plan
 01)Projection: lpad(test.column1_utf8view, Int64(12), test.column2_utf8view) AS c1
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
+# lpad return type should match input type
+query T
+SELECT arrow_typeof(lpad('Dolly', 10, 'hello'))
+----
+Utf8
+
+query T
+SELECT arrow_typeof(lpad(arrow_cast('Dolly', 'LargeUtf8'), 10, arrow_cast('hello', 'LargeUtf8')))
+----
+LargeUtf8
+
+query T
+SELECT arrow_typeof(lpad(arrow_cast('Dolly', 'Utf8View'), 10, arrow_cast('hello', 'Utf8View')))
+----
+Utf8View
+
+# lpad with Utf8View input should produce correct output
+query T
+SELECT lpad(arrow_cast('hi', 'Utf8View'), 5, arrow_cast('xy', 'Utf8View'))
+----
+xyxhi
+
+query T
+SELECT lpad(arrow_cast('josé', 'Utf8View'), 10, arrow_cast('éñ', 'Utf8View'))
+----
+éñéñéñjosé
+
+query T
+SELECT lpad(arrow_cast('hi', 'Utf8View'), 5)
+----
+   hi
+
 ## Ensure no casts for OCTET_LENGTH
 query TT
 EXPLAIN SELECT
