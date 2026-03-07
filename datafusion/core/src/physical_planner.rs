@@ -84,6 +84,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
+use datafusion_expr::logical_plan::dml::UPDATE_FROM_OLD_COLUMN_PREFIX;
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
@@ -781,6 +782,12 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
+                    if has_update_from_old_row_projection(input)? {
+                        return not_impl_err!(
+                            "UPDATE ... FROM execution is not yet supported"
+                        );
+                    }
+
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
                     let filters = extract_dml_filters(input, table_name)?;
@@ -2210,6 +2217,24 @@ fn predicate_is_on_target_multi(
                 .any(|allowed| relation.resolved_eq(allowed))
         })
     }))
+}
+
+fn has_update_from_old_row_projection(input: &Arc<LogicalPlan>) -> Result<bool> {
+    let mut has_old_row_projection = false;
+    input.apply(|node| {
+        if let LogicalPlan::Projection(projection) = node
+            && projection.expr.iter().any(|expr| {
+                matches!(expr, Expr::Alias(alias) if alias.name.starts_with(UPDATE_FROM_OLD_COLUMN_PREFIX))
+            })
+        {
+            has_old_row_projection = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    Ok(has_old_row_projection)
 }
 
 /// Strip table qualifiers from column references in an expression.
