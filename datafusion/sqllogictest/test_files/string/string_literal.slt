@@ -390,6 +390,21 @@ SELECT reverse(arrow_cast('abcde', 'Utf8View'))
 edcba
 
 query T
+SELECT arrow_typeof(reverse('abcde'))
+----
+Utf8
+
+query T
+SELECT arrow_typeof(reverse(arrow_cast('abcde', 'LargeUtf8')))
+----
+LargeUtf8
+
+query T
+SELECT arrow_typeof(reverse(arrow_cast('abcde', 'Utf8View')))
+----
+Utf8View
+
+query T
 SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
 ----
 edcba
