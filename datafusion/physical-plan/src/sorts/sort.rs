@@ -355,6 +355,13 @@ impl ExternalSorter {
                 self.sort_and_spill_in_mem_batches().await?;
             }
 
+            // Transfer the pre-reserved merge memory to the streaming merge
+            // using `take()` instead of `new_empty()`. This ensures the merge
+            // stream starts with `sort_spill_reservation_bytes` already
+            // allocated, preventing starvation when concurrent sort partitions
+            // compete for pool memory. `take()` moves the bytes atomically
+            // without releasing them back to the pool, so other partitions
+            // cannot race to consume the freed memory.
             StreamingMergeBuilder::new()
                 .with_sorted_spill_files(std::mem::take(&mut self.finished_spill_files))
                 .with_spill_manager(self.spill_manager.clone())
@@ -363,7 +370,7 @@ impl ExternalSorter {
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
                 .with_fetch(None)
-                .with_reservation(self.merge_reservation.new_empty())
+                .with_reservation(self.merge_reservation.take())
                 .build()
         } else {
             self.in_mem_sort_stream(self.metrics.baseline.clone())
@@ -2716,6 +2723,143 @@ mod tests {
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
 
+        Ok(())
+    }
+
+    /// End-to-end test that verifies `ExternalSorter::sort()` atomically
+    /// transfers the pre-reserved merge bytes to the merge stream via `take()`.
+    ///
+    /// This test directly exercises the `ExternalSorter` code path:
+    /// 1. Create a sorter with a tight memory pool and insert enough data
+    ///    to force spilling
+    /// 2. Call `sort()` to get the merge stream
+    /// 3. Verify that dropping the sorter does NOT free the pre-reserved
+    ///    bytes back to the pool (they should have been transferred to
+    ///    the merge stream)
+    /// 4. Simulate contention: a task grabs all available pool memory
+    /// 5. Verify the merge stream still works (it has its own pre-reserved bytes)
+    ///
+    /// Before the fix, main (using `new_empty()`), step 3 fails: the sorter drop frees
+    /// `sort_spill_reservation_bytes` back to the pool, and the task can
+    /// steal them, causing the merge stream to starve.
+    ///
+    /// With the fix (using `take()`), the bytes are atomically transferred
+    /// to the merge stream. The sorter drop frees 0 bytes, so there's
+    /// nothing for the task to steal.
+    #[tokio::test]
+    async fn test_sort_merge_reservation_transferred_not_freed() -> Result<()> {
+        use datafusion_execution::memory_pool::{
+            GreedyMemoryPool, MemoryConsumer, MemoryPool,
+        };
+        use futures::TryStreamExt;
+
+        let sort_spill_reservation_bytes: usize = 10 * 1024; // 10 KB
+
+        // Pool: merge reservation (10KB) + enough room for sort to work.
+        // The room must accommodate batch data accumulation before spilling.
+        let sort_working_memory: usize = 40 * 1024; // 40 KB for sort operations
+        let pool_size = sort_spill_reservation_bytes + sort_working_memory;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .build_arc()?;
+
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+
+        let mut sorter = ExternalSorter::new(
+            0,
+            Arc::clone(&schema),
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into(),
+            128, // batch_size
+            sort_spill_reservation_bytes,
+            usize::MAX, // sort_in_place_threshold_bytes (high to avoid concat path)
+            SpillCompression::Uncompressed,
+            &metrics_set,
+            Arc::clone(&runtime),
+        )?;
+
+        // Insert enough data to force spilling. Each batch is ~400 bytes
+        // (100 rows × 4 bytes). With 40KB of working memory, we'll spill
+        // after accumulating ~100 batches worth. 200 batches guarantees
+        // multiple spill cycles.
+        let num_batches = 200;
+        for i in 0..num_batches {
+            let values: Vec<i32> = ((i * 100)..((i + 1) * 100)).rev().collect();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(values))],
+            )?;
+            sorter.insert_batch(batch).await?;
+        }
+
+        assert!(
+            sorter.spilled_before(),
+            "Test requires spilling to exercise the merge path"
+        );
+
+        // Call sort() to get the merge stream. After this:
+        // - With take() (the fix): merge_reservation = 0, merge stream has R bytes
+        // - With new_empty() (before fix): merge_reservation = R, merge stream has 0 bytes
+        let merge_stream = sorter.sort().await?;
+
+        // Record pool state before dropping the sorter
+        let reserved_before_drop = pool.reserved();
+
+        // Drop the sorter. This frees merge_reservation:
+        // - With take() (the fix): frees 0 bytes (already transferred to merge stream)
+        // - With new_empty() (before fix): frees R bytes back to pool
+        drop(sorter);
+
+        let reserved_after_drop = pool.reserved();
+
+        // THE KEY ASSERTION: dropping the sorter should NOT free the
+        // pre-reserved merge bytes. They must have been transferred to
+        // the merge stream via take().
+        assert_eq!(
+            reserved_after_drop,
+            reserved_before_drop,
+            "Dropping the sorter freed {} bytes back to the pool! \
+             The merge reservation bytes should have been transferred \
+             to the merge stream (via take()), not freed back to the pool \
+             (via new_empty()). Freed bytes can be stolen by concurrent \
+             partitions, causing merge starvation.",
+            reserved_before_drop - reserved_after_drop
+        );
+
+        // Simulate contention: a task (representing another partition)
+        // grabs all available pool memory
+        let task = MemoryConsumer::new("TaskPartition").register(&pool);
+        let available = pool_size.saturating_sub(pool.reserved());
+        if available > 0 {
+            task.try_grow(available).unwrap();
+        }
+
+        // The merge stream should still work because it holds the
+        // pre-reserved bytes (transferred via take())
+        let batches: Vec<RecordBatch> = merge_stream.try_collect().await?;
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows,
+            (num_batches * 100) as usize,
+            "Merge stream should produce all rows even under memory contention"
+        );
+
+        // Verify data is sorted
+        let merged = concat_batches(&schema, &batches)?;
+        let col = merged.column(0).as_primitive::<Int32Type>();
+        for i in 1..col.len() {
+            assert!(
+                col.value(i - 1) <= col.value(i),
+                "Output should be sorted, but found {} > {} at index {}",
+                col.value(i - 1),
+                col.value(i),
+                i
+            );
+        }
+
+        drop(task);
         Ok(())
     }
 }

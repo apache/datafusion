@@ -253,7 +253,12 @@ impl MultiLevelMergeBuilder {
 
             // Need to merge multiple streams
             (_, _) => {
-                let mut memory_reservation = self.reservation.new_empty();
+                // Transfer any pre-reserved bytes (from sort_spill_reservation_bytes)
+                // to the merge memory reservation. This prevents starvation when
+                // concurrent sort partitions compete for pool memory: the pre-reserved
+                // bytes cover spill file buffer reservations without additional pool
+                // allocation.
+                let mut memory_reservation = self.reservation.take();
 
                 // Don't account for existing streams memory
                 // as we are not holding the memory for them
@@ -337,8 +342,10 @@ impl MultiLevelMergeBuilder {
             builder = builder.with_bypass_mempool();
         } else {
             // If we are only merging in-memory streams, we need to use the memory reservation
-            // because we don't know the maximum size of the batches in the streams
-            builder = builder.with_reservation(self.reservation.new_empty());
+            // because we don't know the maximum size of the batches in the streams.
+            // Use take() to transfer any pre-reserved bytes so the merge can use them
+            // as its initial budget without additional pool allocation.
+            builder = builder.with_reservation(self.reservation.take());
         }
 
         builder.build()
@@ -356,45 +363,57 @@ impl MultiLevelMergeBuilder {
     ) -> Result<(Vec<SortedSpillFile>, usize)> {
         assert_ne!(buffer_len, 0, "Buffer length must be greater than 0");
         let mut number_of_spills_to_read_for_current_phase = 0;
+        // Track total memory needed for spill file buffers. When the
+        // reservation has pre-reserved bytes (from sort_spill_reservation_bytes),
+        // those bytes cover the first N spill files without additional pool
+        // allocation, preventing starvation under memory pressure.
+        let mut total_needed: usize = 0;
 
         for spill in &self.sorted_spill_files {
-            // For memory pools that are not shared this is good, for other this is not
-            // and there should be some upper limit to memory reservation so we won't starve the system
-            match reservation.try_grow(
-                get_reserved_bytes_for_record_batch_size(
-                    spill.max_record_batch_memory,
-                    // Size will be the same as the sliced size, bc it is a spilled batch.
-                    spill.max_record_batch_memory,
-                ) * buffer_len,
-            ) {
-                Ok(_) => {
-                    number_of_spills_to_read_for_current_phase += 1;
-                }
-                // If we can't grow the reservation, we need to stop
-                Err(err) => {
-                    // We must have at least 2 streams to merge, so if we don't have enough memory
-                    // fail
-                    if minimum_number_of_required_streams
-                        > number_of_spills_to_read_for_current_phase
-                    {
-                        // Free the memory we reserved for this merge as we either try again or fail
-                        reservation.free();
-                        if buffer_len > 1 {
-                            // Try again with smaller buffer size, it will be slower but at least we can merge
-                            return self.get_sorted_spill_files_to_merge(
-                                buffer_len - 1,
-                                minimum_number_of_required_streams,
-                                reservation,
-                            );
+            let per_spill = get_reserved_bytes_for_record_batch_size(
+                spill.max_record_batch_memory,
+                // Size will be the same as the sliced size, bc it is a spilled batch.
+                spill.max_record_batch_memory,
+            ) * buffer_len;
+            total_needed += per_spill;
+
+            // Only request additional memory from the pool when total needed
+            // exceeds what's already reserved (which may include pre-reserved
+            // bytes from sort_spill_reservation_bytes).
+            if total_needed > reservation.size() {
+                match reservation.try_grow(total_needed - reservation.size()) {
+                    Ok(_) => {
+                        number_of_spills_to_read_for_current_phase += 1;
+                    }
+                    // If we can't grow the reservation, we need to stop
+                    Err(err) => {
+                        // We must have at least 2 streams to merge, so if we don't have enough memory
+                        // fail
+                        if minimum_number_of_required_streams
+                            > number_of_spills_to_read_for_current_phase
+                        {
+                            // Free the memory we reserved for this merge as we either try again or fail
+                            reservation.free();
+                            if buffer_len > 1 {
+                                // Try again with smaller buffer size, it will be slower but at least we can merge
+                                return self.get_sorted_spill_files_to_merge(
+                                    buffer_len - 1,
+                                    minimum_number_of_required_streams,
+                                    reservation,
+                                );
+                            }
+
+                            return Err(err);
                         }
 
-                        return Err(err);
+                        // We reached the maximum amount of memory we can use
+                        // for this merge
+                        break;
                     }
-
-                    // We reached the maximum amount of memory we can use
-                    // for this merge
-                    break;
                 }
+            } else {
+                // Pre-reserved bytes cover this spill file's buffer
+                number_of_spills_to_read_for_current_phase += 1;
             }
         }
 
