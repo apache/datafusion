@@ -751,9 +751,8 @@ impl FileOpener for ParquetOpener {
             // filters (e.g. from hash joins or TopK) can tighten during
             // execution, so morsels that passed row-group pruning during
             // morselize() may now be prunable with the updated filter values.
-            let has_dynamic_predicate = predicate
-                .as_ref()
-                .is_some_and(is_dynamic_physical_expr);
+            let has_dynamic_predicate =
+                predicate.as_ref().is_some_and(is_dynamic_physical_expr);
 
             // The page index is not stored inline in the parquet footer so the
             // code above may not have read the page index structures yet. If we
