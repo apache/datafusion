@@ -20,8 +20,12 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
+use arrow::array::{Float64Array, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion::assert_batches_eq;
+use datafusion::datasource::MemTable;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
@@ -238,6 +242,21 @@ impl TableProvider for CaptureUpdateProvider {
 
         Ok(vec![self.filter_pushdown.clone(); filters.len()])
     }
+
+    async fn update_from(
+        &self,
+        _state: &dyn Session,
+        _input: Arc<dyn ExecutionPlan>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        *self.received_filters.lock().unwrap() = Some(filters);
+        // Multi-table update_from uses projected input rows and does not pass
+        // assignment expressions directly.
+        *self.received_assignments.lock().unwrap() = Some(vec![]);
+        Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
+            Field::new("count", DataType::UInt64, false),
+        ])))))
+    }
 }
 
 /// A TableProvider that captures whether truncate() was called.
@@ -306,6 +325,29 @@ fn test_schema() -> SchemaRef {
         Field::new("status", DataType::Utf8, true),
         Field::new("value", DataType::Int32, true),
     ]))
+}
+
+/// Construct a simple schema containing columns `a`, `b`, `c` and `d`.
+///
+/// Many of the DML tests use this four‑column layout.  Callers can
+/// provide additional fields that will be appended to the base set –
+/// for example the `src_only` column used in some `UPDATE ... FROM`
+/// queries.  Returns an `Arc<Schema>` for convenience in tests.
+fn abcd_schema(extra: &[Field]) -> SchemaRef {
+    let mut fields = vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, true),
+        Field::new("d", DataType::Int32, true),
+    ];
+    fields.extend_from_slice(extra);
+    Arc::new(Schema::new(fields))
+}
+
+/// Convenience wrapper for the common case where no extra columns are
+/// needed.
+fn abcd_schema_no_extra() -> SchemaRef {
+    abcd_schema(&[])
 }
 
 #[tokio::test]
@@ -725,39 +767,263 @@ async fn test_delete_target_table_scoping() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_from_drops_non_target_predicates() -> Result<()> {
-    // UPDATE ... FROM is currently not working
-    // TODO fix https://github.com/apache/datafusion/issues/19950
+    let target_schema = abcd_schema_no_extra();
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
-        test_schema(),
+        Arc::clone(&target_schema),
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
     ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
 
-    let source_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("status", DataType::Utf8, true),
-        // t2-only column to avoid false negatives after qualifier stripping
-        Field::new("src_only", DataType::Utf8, true),
-    ]));
+    let source_schema = abcd_schema(&[Field::new("src_only", DataType::Utf8, true)]);
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
-    let result = ctx
+    let df = ctx
         .sql(
-            "UPDATE t1 SET value = 1 FROM t2 \
-             WHERE t1.id = t2.id AND t2.src_only = 'active' AND t1.value > 10",
+            "UPDATE t1 SET d = 1 FROM t2 \
+             WHERE t1.a = t2.a AND t2.src_only = 'active' AND t1.d > 10",
         )
-        .await;
+        .await?;
 
-    // Verify UPDATE ... FROM is rejected with appropriate error
-    // TODO fix https://github.com/apache/datafusion/issues/19950
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(
-        err.to_string().contains("UPDATE ... FROM is not supported"),
-        "Expected 'UPDATE ... FROM is not supported' error, got: {err}"
+    df.collect().await?;
+
+    let filters = target_provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(
+        filters.len(),
+        1,
+        "only target-table predicates should be retained for provider update"
     );
+    assert!(
+        filters[0].to_string().contains("d"),
+        "Expected target predicate on d, got: {}",
+        filters[0]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_from_alias_variants_are_accepted() -> Result<()> {
+    let target_schema = abcd_schema_no_extra();
+    let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        Arc::clone(&target_schema),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
+
+    let source_schema = abcd_schema_no_extra();
+    let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
+    ctx.register_table("t2", Arc::new(source_table))?;
+
+    let alias_queries = [
+        "UPDATE t1 AS dst \
+         SET b = src.b, d = src.d \
+         FROM t2 AS src \
+         WHERE dst.a = src.a AND src.b = 'active'",
+        "UPDATE t1 \
+         FROM t2 AS src \
+         SET b = src.b, d = src.d \
+         WHERE t1.a = src.a",
+    ];
+
+    for sql in alias_queries {
+        let _ = ctx.sql(sql).await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_from_joined_assignments_plan_success() -> Result<()> {
+    let target_schema = abcd_schema_no_extra();
+    let target_provider =
+        Arc::new(CaptureUpdateProvider::new(Arc::clone(&target_schema)));
+    let ctx = SessionContext::new();
+    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
+
+    let source_schema = abcd_schema_no_extra();
+    let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
+    ctx.register_table("t2", Arc::new(source_table))?;
+
+    let _ = ctx
+        .sql(
+            "UPDATE t1 AS dst \
+             SET b = src.b, d = src.d \
+             FROM t2 AS src \
+             WHERE dst.a = src.a AND src.b = 'active'",
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_from_with_join_only_predicates_executes() -> Result<()> {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
+
+    let t1_schema = abcd_schema_no_extra();
+    let t1_batch = RecordBatch::try_new(
+        Arc::clone(&t1_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["zoo", "qux", "bar"])),
+            Arc::new(Float64Array::from(vec![2.0, 3.0, 4.0])),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+        ],
+    )?;
+    let t1 = MemTable::try_new(Arc::clone(&t1_schema), vec![vec![t1_batch]])?;
+    ctx.register_table("t1", Arc::new(t1))?;
+
+    let t2_schema = abcd_schema_no_extra();
+    let t2_batch = RecordBatch::try_new(
+        Arc::clone(&t2_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 4])),
+            Arc::new(StringArray::from(vec![
+                "updated_b",
+                "updated_b2",
+                "updated_b3",
+            ])),
+            Arc::new(Float64Array::from(vec![5.0, 2.5, 1.5])),
+            Arc::new(Int32Array::from(vec![40, 50, 60])),
+        ],
+    )?;
+    let t2 = MemTable::try_new(Arc::clone(&t2_schema), vec![vec![t2_batch]])?;
+    ctx.register_table("t2", Arc::new(t2))?;
+
+    ctx.sql(
+        "UPDATE t1 AS dst \
+         SET b = src.b, c = src.a, d = 1 \
+         FROM t2 AS src \
+         WHERE dst.a = src.a AND src.c > 1.0",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let actual = ctx
+        .sql("SELECT * FROM t1 ORDER BY a")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        [
+            "+---+------------+-----+----+",
+            "| a | b          | c   | d  |",
+            "+---+------------+-----+----+",
+            "| 1 | updated_b  | 1.0 | 1  |",
+            "| 2 | updated_b2 | 2.0 | 1  |",
+            "| 3 | bar        | 4.0 | 30 |",
+            "+---+------------+-----+----+",
+        ],
+        &actual
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_from_with_only_join_predicate_executes() -> Result<()> {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
+
+    let t1_schema = abcd_schema_no_extra();
+    let t1_batch = RecordBatch::try_new(
+        Arc::clone(&t1_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["zoo", "qux", "bar"])),
+            Arc::new(Float64Array::from(vec![2.0, 3.0, 4.0])),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+        ],
+    )?;
+    let t1 = MemTable::try_new(Arc::clone(&t1_schema), vec![vec![t1_batch]])?;
+    ctx.register_table("t1", Arc::new(t1))?;
+
+    let t2_schema = abcd_schema_no_extra();
+    let t2_batch = RecordBatch::try_new(
+        Arc::clone(&t2_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 4])),
+            Arc::new(StringArray::from(vec![
+                "updated_b",
+                "updated_b2",
+                "updated_b3",
+            ])),
+            Arc::new(Float64Array::from(vec![5.0, 2.5, 1.5])),
+            Arc::new(Int32Array::from(vec![40, 50, 60])),
+        ],
+    )?;
+    let t2 = MemTable::try_new(Arc::clone(&t2_schema), vec![vec![t2_batch]])?;
+    ctx.register_table("t2", Arc::new(t2))?;
+
+    // Regression case: UPDATE ... FROM with only join predicates in WHERE.
+    ctx.sql(
+        "UPDATE t1 AS dst \
+         SET b = src.b, c = src.a, d = src.d \
+         FROM t2 AS src \
+         WHERE dst.a = src.a",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let actual = ctx
+        .sql("SELECT * FROM t1 ORDER BY a")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        [
+            "+---+------------+-----+----+",
+            "| a | b          | c   | d  |",
+            "+---+------------+-----+----+",
+            "| 1 | updated_b  | 1.0 | 40 |",
+            "| 2 | updated_b2 | 2.0 | 50 |",
+            "| 3 | bar        | 4.0 | 30 |",
+            "+---+------------+-----+----+",
+        ],
+        &actual
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_from_self_join_drops_source_side_predicates() -> Result<()> {
+    let target_schema = abcd_schema_no_extra();
+    let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        Arc::clone(&target_schema),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx
+        .sql(
+            "UPDATE t1 AS dst \
+             SET b = src.b \
+             FROM t1 AS src \
+             WHERE dst.a = src.a AND dst.d > 10 AND src.b = 'active'",
+        )
+        .await?;
+
+    df.collect().await?;
+
+    let filters = target_provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(
+        filters.len(),
+        1,
+        "only target-side predicates should be forwarded in self-join updates"
+    );
+    assert_eq!(filters[0].to_string(), "d > Int32(10)");
+
     Ok(())
 }
 

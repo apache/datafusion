@@ -781,18 +781,14 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    // For UPDATE, the assignments are encoded in the projection of input
-                    // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input, table_name)?;
-                    // Extract assignments from the projection in input plan
-                    let assignments = extract_update_assignments(input)?;
-                    provider
-                        .table_provider
-                        .update(session_state, assignments, filters)
-                        .await
-                        .map_err(|e| {
-                            e.context(format!("UPDATE operation on table '{table_name}'"))
-                        })?
+                    self.plan_update_with_provider(
+                        provider,
+                        table_name,
+                        input,
+                        session_state,
+                        children,
+                    )
+                    .await?
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -1779,6 +1775,45 @@ impl DefaultPhysicalPlanner {
         Ok(exec_node)
     }
 
+    async fn plan_update_with_provider(
+        &self,
+        provider: &DefaultTableSource,
+        table_name: &TableReference,
+        input: &Arc<LogicalPlan>,
+        session_state: &SessionState,
+        children: ChildrenContainer,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let filters = extract_dml_filters(input, table_name)?;
+
+        if plan_contains_join(input)? {
+            let input_exec = children.one()?;
+            // `update_from` may execute the input plan eagerly as part of
+            // table mutation. Ensure join partitioning modes (e.g. Auto)
+            // are fully resolved before handing the plan to providers.
+            let input_exec =
+                self.optimize_physical_plan(input_exec, session_state, |_, _| {})?;
+            provider
+                .table_provider
+                .update_from(session_state, input_exec, filters)
+                .await
+                .map_err(|e| {
+                    e.context(format!("UPDATE operation on table '{table_name}'"))
+                })
+        } else {
+            // For single-table UPDATE, assignments are encoded in the
+            // projection of input and can be evaluated using only target
+            // columns.
+            let assignments = extract_update_assignments(input, table_name)?;
+            provider
+                .table_provider
+                .update(session_state, assignments, filters)
+                .await
+                .map_err(|e| {
+                    e.context(format!("UPDATE operation on table '{table_name}'"))
+                })
+        }
+    }
+
     fn create_grouping_physical_expr(
         &self,
         group_expr: &[Expr],
@@ -2068,12 +2103,18 @@ fn get_physical_expr_pair(
 
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
 ///
-/// Walks the logical plan tree and collects Filter predicates and any filters
-/// pushed down into TableScan nodes, splitting AND conjunctions into individual expressions.
+/// This function combines whole-plan predicate scanning with target-branch
+/// discovery to keep DELETE and UPDATE semantics aligned:
 ///
-/// For UPDATE...FROM queries involving multiple tables, this function only extracts predicates
-/// that reference the target table. Filters from source table scans are excluded to prevent
-/// incorrect filter semantics.
+/// 1. Discover the DML target branch (`find_dml_target_branch`).
+/// 2. Collect aliases for the target relation from that branch.
+/// 3. Scan the full input tree for `Filter` predicates, retaining only
+///    predicates that reference the target relation (or its aliases).
+/// 4. Collect pushed-down `TableScan.filters` only from scans on the target branch.
+///
+/// This avoids leaking source-side predicates for `UPDATE ... FROM` while still
+/// extracting target predicates regardless of where `Filter` nodes appear in the
+/// broader DML input plan.
 ///
 /// Column qualifiers are stripped so expressions can be evaluated against the TableProvider's
 /// schema. Deduplication is performed because filters may appear in both Filter nodes and
@@ -2093,9 +2134,10 @@ fn extract_dml_filters(
 ) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
     let mut allowed_refs = vec![target.clone()];
+    let target_branch = find_dml_target_branch(input)?;
 
-    // First pass: collect any alias references to the target table
-    input.apply(|node| {
+    // Pass 1: collect alias references for the target relation from the target branch.
+    target_branch.apply(|node| {
         if let LogicalPlan::SubqueryAlias(alias) = node
             // Check if this alias points to the target table
             && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
@@ -2106,6 +2148,8 @@ fn extract_dml_filters(
         Ok(TreeNodeRecursion::Continue)
     })?;
 
+    // Pass 2: scan the whole DML input for Filter predicates, but keep only
+    // predicates that reference the target relation (or its aliases).
     input.apply(|node| {
         match node {
             LogicalPlan::Filter(filter) => {
@@ -2113,20 +2157,6 @@ fn extract_dml_filters(
                 for predicate in split_conjunction(&filter.predicate) {
                     if predicate_is_on_target_multi(predicate, &allowed_refs)? {
                         filters.push(predicate.clone());
-                    }
-                }
-            }
-            LogicalPlan::TableScan(TableScan {
-                table_name,
-                filters: scan_filters,
-                ..
-            }) => {
-                // Only extract filters from the target table scan.
-                // This prevents incorrect filter extraction in UPDATE...FROM scenarios
-                // where multiple table scans may have filters.
-                if table_name.resolved_eq(target) {
-                    for filter in scan_filters {
-                        filters.extend(split_conjunction(filter).into_iter().cloned());
                     }
                 }
             }
@@ -2153,12 +2183,29 @@ fn extract_dml_filters(
             | LogicalPlan::Sort(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Join(_)
+            | LogicalPlan::TableScan(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Subquery(_) => {
                 // Filter information may appear in child nodes; continue traversal
                 // to extract filters from Filter/TableScan nodes deeper in the plan
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    // Pass 3: collect pushdown filters only from target-branch scans.
+    target_branch.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan {
+            table_name,
+            filters: scan_filters,
+            ..
+        }) = node
+            && table_name.resolved_eq(target)
+        {
+            for filter in scan_filters {
+                filters.extend(split_conjunction(filter).into_iter().cloned());
             }
         }
         Ok(TreeNodeRecursion::Continue)
@@ -2233,9 +2280,16 @@ fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
 /// Extract column assignments from an UPDATE input plan.
 /// For UPDATE statements, the SQL planner encodes assignments as a projection
 /// over the source table. This function extracts column name and expression pairs
-/// from the projection. Column qualifiers are stripped from the expressions.
+/// from the projection.
 ///
-fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, Expr)>> {
+/// For single-table UPDATE, qualifiers are stripped for compatibility with
+/// table providers that evaluate assignment expressions against unqualified
+/// target schemas. For multi-table UPDATE ... FROM, qualifiers are preserved.
+///
+fn extract_update_assignments(
+    input: &Arc<LogicalPlan>,
+    target_table: &TableReference,
+) -> Result<Vec<(String, Expr)>> {
     // The UPDATE input plan structure is:
     // Projection(updated columns as expressions with aliases)
     //   Filter(optional WHERE clause)
@@ -2244,36 +2298,27 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
     // Each projected expression has an alias matching the column name
     let mut assignments = Vec::new();
 
+    let is_multi_table_update = plan_contains_join(input)?;
+    let target_refs = collect_update_target_references(input, target_table)?;
+
     // Find the top-level projection
     if let LogicalPlan::Projection(projection) = input.as_ref() {
-        for expr in &projection.expr {
-            if let Expr::Alias(alias) = expr {
-                // The alias name is the column name being updated
-                // The inner expression is the new value
-                let column_name = alias.name.clone();
-                // Only include if it's not just a column reference to itself
-                // (those are columns that aren't being updated)
-                if !is_identity_assignment(&alias.expr, &column_name) {
-                    // Strip qualifiers from the assignment expression
-                    let stripped_expr = strip_column_qualifiers((*alias.expr).clone())?;
-                    assignments.push((column_name, stripped_expr));
-                }
-            }
-        }
+        append_update_assignments_from_projection(
+            &mut assignments,
+            projection,
+            is_multi_table_update,
+            &target_refs,
+        )?;
     } else {
         // Try to find projection deeper in the plan
         input.apply(|node| {
             if let LogicalPlan::Projection(projection) = node {
-                for expr in &projection.expr {
-                    if let Expr::Alias(alias) = expr {
-                        let column_name = alias.name.clone();
-                        if !is_identity_assignment(&alias.expr, &column_name) {
-                            let stripped_expr =
-                                strip_column_qualifiers((*alias.expr).clone())?;
-                            assignments.push((column_name, stripped_expr));
-                        }
-                    }
-                }
+                append_update_assignments_from_projection(
+                    &mut assignments,
+                    projection,
+                    is_multi_table_update,
+                    &target_refs,
+                )?;
                 return Ok(TreeNodeRecursion::Stop);
             }
             Ok(TreeNodeRecursion::Continue)
@@ -2283,12 +2328,153 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
     Ok(assignments)
 }
 
+fn projection_alias_assignments(projection: &Projection) -> Vec<(String, Expr)> {
+    projection
+        .expr
+        .iter()
+        .filter_map(|expr| {
+            if let Expr::Alias(alias) = expr {
+                Some((alias.name.clone(), alias.expr.as_ref().clone()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn append_update_assignments_from_projection(
+    assignments: &mut Vec<(String, Expr)>,
+    projection: &Projection,
+    is_multi_table_update: bool,
+    target_refs: &[TableReference],
+) -> Result<()> {
+    for (column_name, assignment_expr) in projection_alias_assignments(projection) {
+        // Only include assignments that modify the target column value.
+        if !is_identity_assignment(&assignment_expr, &column_name, target_refs) {
+            let assignment_expr = if is_multi_table_update {
+                assignment_expr
+            } else {
+                // Preserve existing single-table behavior for table providers
+                // that expect unqualified assignment columns.
+                strip_column_qualifiers(assignment_expr)?
+            };
+            assignments.push((column_name, assignment_expr));
+        }
+    }
+
+    Ok(())
+}
+
 /// Check if an assignment is an identity assignment (column = column)
 /// These are columns that are not being modified in the UPDATE
-fn is_identity_assignment(expr: &Expr, column_name: &str) -> bool {
+fn is_identity_assignment(
+    expr: &Expr,
+    column_name: &str,
+    target_refs: &[TableReference],
+) -> bool {
     match expr {
-        Expr::Column(col) => col.name == column_name,
+        Expr::Column(col) => {
+            col.name == column_name
+                && col.relation.as_ref().is_none_or(|relation| {
+                    target_refs
+                        .iter()
+                        .any(|target| relation.resolved_eq(target))
+                })
+        }
         _ => false,
+    }
+}
+
+fn plan_contains_join(input: &Arc<LogicalPlan>) -> Result<bool> {
+    let mut has_join = false;
+    input.apply(|node| {
+        if matches!(node, LogicalPlan::Join(_)) {
+            has_join = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(has_join)
+}
+
+fn collect_update_target_references(
+    input: &Arc<LogicalPlan>,
+    target_table: &TableReference,
+) -> Result<Vec<TableReference>> {
+    let mut refs = collect_update_target_branch_references(
+        find_dml_target_branch(input)?,
+        target_table,
+    )?;
+    if !refs.iter().any(|r| r.resolved_eq(target_table)) {
+        refs.insert(0, target_table.clone());
+    }
+    Ok(refs)
+}
+
+/// Locate the branch that contains the DML target relation.
+///
+/// This helper is intentionally narrow and only models wrappers that can appear
+/// above DELETE/UPDATE targets in DataFusion logical plans:
+/// - `Projection`
+/// - `Filter`
+/// - `Limit`
+/// - `Join` (follow `left` side for `UPDATE ... FROM`)
+/// - `SubqueryAlias`
+/// - `TableScan`
+///
+/// It is not a general logical-plan walker. Unexpected nodes are treated as
+/// planner-shape errors to avoid silently broadening DML target discovery.
+fn find_dml_target_branch(input: &Arc<LogicalPlan>) -> Result<&Arc<LogicalPlan>> {
+    match input.as_ref() {
+        LogicalPlan::Projection(projection) => find_dml_target_branch(&projection.input),
+        LogicalPlan::Filter(filter) => find_dml_target_branch(&filter.input),
+        LogicalPlan::Limit(limit) => find_dml_target_branch(&limit.input),
+        LogicalPlan::Join(join) => find_dml_target_branch(&join.left),
+        LogicalPlan::SubqueryAlias(_) | LogicalPlan::TableScan(_) => Ok(input),
+        other => internal_err!(
+            // Keep this helper DML-scoped rather than turning it into
+            // a generic plan traversal utility.
+            "Unexpected logical plan node in DML target branch: {}",
+            other.display()
+        ),
+    }
+}
+
+fn collect_update_target_branch_references(
+    input: &Arc<LogicalPlan>,
+    target_table: &TableReference,
+) -> Result<Vec<TableReference>> {
+    match input.as_ref() {
+        LogicalPlan::Projection(projection) => {
+            collect_update_target_branch_references(&projection.input, target_table)
+        }
+        LogicalPlan::Filter(filter) => {
+            collect_update_target_branch_references(&filter.input, target_table)
+        }
+        LogicalPlan::SubqueryAlias(alias) => {
+            let mut refs =
+                collect_update_target_branch_references(&alias.input, target_table)?;
+            if !refs.iter().any(|r| r.resolved_eq(&alias.alias)) {
+                refs.push(alias.alias.clone());
+            }
+            Ok(refs)
+        }
+        LogicalPlan::Join(join) => {
+            collect_update_target_branch_references(&join.left, target_table)
+        }
+        LogicalPlan::TableScan(TableScan { table_name, .. }) => {
+            if table_name.resolved_eq(target_table) {
+                Ok(vec![table_name.clone()])
+            } else {
+                internal_err!(
+                    "Expected UPDATE target branch to scan '{target_table}', found '{table_name}'"
+                )
+            }
+        }
+        other => internal_err!(
+            "Unexpected logical plan node in UPDATE target branch: {}",
+            other.display()
+        ),
     }
 }
 
@@ -3115,7 +3301,8 @@ mod tests {
 
     use crate::execution::session_state::SessionStateBuilder;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
-    use arrow::datatypes::{DataType, Field, Int32Type};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::record_batch::RecordBatch;
     use arrow_schema::SchemaRef;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
@@ -3125,12 +3312,78 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::builder::subquery_alias;
     use datafusion_expr::{
-        LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore, col, lit,
+        DmlStatement, LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore,
+        WriteOp, col, lit,
     };
     use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+
+    async fn make_update_from_plan(
+        sql: &str,
+    ) -> Result<(Arc<LogicalPlan>, TableReference)> {
+        let ctx = SessionContext::new();
+        let t1_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let t2_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let t1 = MemTable::try_new(
+            Arc::clone(&t1_schema),
+            vec![vec![RecordBatch::new_empty(Arc::clone(&t1_schema))]],
+        )?;
+        let t2 = MemTable::try_new(
+            Arc::clone(&t2_schema),
+            vec![vec![RecordBatch::new_empty(Arc::clone(&t2_schema))]],
+        )?;
+        ctx.register_table("t1", Arc::new(t1))?;
+        ctx.register_table("t2", Arc::new(t2))?;
+
+        let plan = ctx.sql(sql).await?.into_unoptimized_plan();
+        match plan {
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                op: WriteOp::Update,
+                input,
+                ..
+            }) => Ok((input, table_name)),
+            other => internal_err!("Expected UPDATE DML plan, got: {other}"),
+        }
+    }
+
+    async fn make_delete_plan(sql: &str) -> Result<(Arc<LogicalPlan>, TableReference)> {
+        let ctx = SessionContext::new();
+        let t1_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let t1 = MemTable::try_new(
+            Arc::clone(&t1_schema),
+            vec![vec![RecordBatch::new_empty(Arc::clone(&t1_schema))]],
+        )?;
+        ctx.register_table("t1", Arc::new(t1))?;
+
+        let plan = ctx.sql(sql).await?.into_unoptimized_plan();
+        match plan {
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                op: WriteOp::Delete,
+                input,
+                ..
+            }) => Ok((input, table_name)),
+            other => internal_err!("Expected DELETE DML plan, got: {other}"),
+        }
+    }
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -3414,6 +3667,149 @@ mod tests {
             },
         )
         "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_update_assignments_preserves_source_qualifiers_for_update_from()
+    -> Result<()> {
+        let (input, table_name) = make_update_from_plan(
+            "UPDATE t1 AS dst \
+             SET b = src.b, d = src.d \
+             FROM t2 AS src \
+             WHERE dst.a = src.a",
+        )
+        .await?;
+
+        let assignments = extract_update_assignments(&input, &table_name)?;
+        let b_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "b")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column b")
+            })?;
+        let d_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "d")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column d")
+            })?;
+
+        assert!(
+            b_expr.contains("src.b"),
+            "Unexpected b assignment: {b_expr}"
+        );
+        assert!(
+            d_expr.contains("src.d"),
+            "Unexpected d assignment: {d_expr}"
+        );
+        assert!(
+            assignments.iter().all(|(name, _)| name != "a"),
+            "Identity target columns should not be extracted as assignments"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_update_assignments_strips_target_qualifiers_single_table()
+    -> Result<()> {
+        let (input, table_name) =
+            make_update_from_plan("UPDATE t1 AS dst SET d = dst.d + 1 WHERE dst.a > 0")
+                .await?;
+
+        let assignments = extract_update_assignments(&input, &table_name)?;
+        let d_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "d")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column d")
+            })?;
+
+        assert!(
+            !d_expr.contains("dst."),
+            "Single-table assignment should not keep target qualifiers: {d_expr}"
+        );
+        assert!(
+            d_expr.contains("d"),
+            "Unexpected assignment expression: {d_expr}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_update_assignments_preserves_self_join_source_aliases()
+    -> Result<()> {
+        let (input, table_name) = make_update_from_plan(
+            "UPDATE t1 AS dst \
+             SET b = src.b, d = src.d \
+             FROM t1 AS src \
+             WHERE dst.a = src.a + 1",
+        )
+        .await?;
+
+        let assignments = extract_update_assignments(&input, &table_name)?;
+        let b_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "b")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column b")
+            })?;
+        let d_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "d")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column d")
+            })?;
+
+        assert!(
+            b_expr.contains("src.b"),
+            "Self-join source alias should be preserved: {b_expr}"
+        );
+        assert!(
+            d_expr.contains("src.d"),
+            "Self-join source alias should be preserved: {d_expr}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_dml_filters_delete_limit_without_where() -> Result<()> {
+        let (input, table_name) = make_delete_plan("DELETE FROM t1 LIMIT 10").await?;
+
+        let filters = extract_dml_filters(&input, &table_name)?;
+        assert!(
+            filters.is_empty(),
+            "DELETE ... LIMIT without WHERE should not synthesize filters: {filters:?}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_dml_filters_delete_where_limit() -> Result<()> {
+        let (input, table_name) =
+            make_delete_plan("DELETE FROM t1 WHERE a > 1 LIMIT 10").await?;
+
+        let filters = extract_dml_filters(&input, &table_name)?;
+        assert_eq!(
+            filters.len(),
+            1,
+            "Expected one target predicate from DELETE WHERE ... LIMIT"
+        );
+        let rendered = filters[0].to_string();
+        assert!(
+            rendered.starts_with("a > Int") && rendered.ends_with("(1)"),
+            "Unexpected rendered filter for DELETE WHERE ... LIMIT: {rendered}"
+        );
 
         Ok(())
     }

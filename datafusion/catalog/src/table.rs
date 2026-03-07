@@ -345,6 +345,9 @@ pub trait TableProvider: Debug + Sync + Send {
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     /// Empty `filters` updates all rows.
+    ///
+    /// Assignment expressions may include qualified column references for
+    /// multi-table UPDATE statements (for example, `UPDATE t1 SET c = t2.c FROM t2`).
     async fn update(
         &self,
         _state: &dyn Session,
@@ -352,6 +355,34 @@ pub trait TableProvider: Debug + Sync + Send {
         _filters: Vec<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("UPDATE not supported for {} table", self.table_type())
+    }
+
+    /// Update rows using precomputed row values from a physical input plan.
+    ///
+    /// This is used for multi-table `UPDATE ... FROM` statements where
+    /// assignment expressions may reference external tables.
+    ///
+    /// The `input` plan is expected to produce one row per matched target row with
+    /// a schema shaped as:
+    ///
+    /// 1. New target-row values, in target-table schema order
+    /// 2. Original target-row values, in target-table schema order
+    ///
+    /// Original-value columns must be named with
+    /// [`datafusion_expr::dml::update_from_old_column_name`] (prefix
+    /// [`datafusion_expr::dml::UPDATE_FROM_OLD_COLUMN_PREFIX`]).
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    async fn update_from(
+        &self,
+        _state: &dyn Session,
+        _input: Arc<dyn ExecutionPlan>,
+        _filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!(
+            "UPDATE ... FROM not supported for {} table",
+            self.table_type()
+        )
     }
 
     /// Remove all rows from the table.

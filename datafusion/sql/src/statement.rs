@@ -25,7 +25,7 @@ use crate::parser::{
     LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
-    ContextProvider, PlannerContext, SqlToRel, object_name_to_qualifier,
+    ContextProvider, IdentNormalizer, PlannerContext, SqlToRel, object_name_to_qualifier,
 };
 use crate::utils::normalize_ident;
 
@@ -38,7 +38,7 @@ use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
     unqualified_field_not_found,
 };
-use datafusion_expr::dml::{CopyTo, InsertOp};
+use datafusion_expr::dml::{CopyTo, InsertOp, update_from_old_column_name};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
@@ -1083,12 +1083,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     )?;
                 }
                 let update_from = from_clauses.and_then(|mut f| f.pop());
-
-                // UPDATE ... FROM is currently not working
-                // TODO fix https://github.com/apache/datafusion/issues/19950
-                if update_from.is_some() {
-                    return not_impl_err!("UPDATE ... FROM is not supported");
-                }
 
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
@@ -2191,6 +2185,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .collect::<Result<HashMap<String, SQLExpr>>>()?;
 
         // Build scan, join with from table if it exists.
+        let has_update_from = from.is_some();
         let mut input_tables = vec![table];
         input_tables.extend(from);
         let scan = self.plan_from_tables(input_tables, &mut planner_context)?;
@@ -2216,7 +2211,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         // Build updated values for each column, using the previous value if not modified
-        let exprs = table_schema
+        let mut exprs = table_schema
             .iter()
             .map(|(qualifier, field)| {
                 let expr = match assign_map.remove(field.name()) {
@@ -2236,21 +2231,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         // Cast to target column type, if necessary
                         expr.cast_to(field.data_type(), source.schema())?
                     }
-                    None => {
-                        // If the target table has an alias, use it to qualify the column name
-                        if let Some(alias) = &table_alias {
-                            Expr::Column(Column::new(
-                                Some(self.ident_normalizer.normalize(alias.name.clone())),
-                                field.name(),
-                            ))
-                        } else {
-                            Expr::Column(Column::from((qualifier, field)))
-                        }
-                    }
+                    None => update_target_column_expr(
+                        &self.ident_normalizer,
+                        &table_alias,
+                        qualifier,
+                        field,
+                    ),
                 };
                 Ok(expr.alias(field.name()))
             })
             .collect::<Result<Vec<_>>>()?;
+
+        if has_update_from {
+            exprs.extend(table_schema.iter().map(|(qualifier, field)| {
+                update_target_column_expr(
+                    &self.ident_normalizer,
+                    &table_alias,
+                    qualifier,
+                    field,
+                )
+                .alias(update_from_old_column_name(field.name()))
+            }));
+        }
 
         let source = project(source, exprs)?;
 
@@ -2570,5 +2572,21 @@ ON p.function_name = r.routine_name
                 not_impl_err!("Transaction kind not supported: {kind:?}")
             }
         }
+    }
+}
+
+fn update_target_column_expr(
+    ident_normalizer: &IdentNormalizer,
+    table_alias: &Option<ast::TableAlias>,
+    qualifier: Option<&TableReference>,
+    field: &FieldRef,
+) -> Expr {
+    if let Some(alias) = table_alias {
+        Expr::Column(Column::new(
+            Some(ident_normalizer.normalize(alias.name.clone())),
+            field.name(),
+        ))
+    } else {
+        Expr::Column(Column::from((qualifier, field)))
     }
 }
