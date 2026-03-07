@@ -362,6 +362,16 @@ pub trait TableProvider: Debug + Sync + Send {
     /// This is used for multi-table `UPDATE ... FROM` statements where
     /// assignment expressions may reference external tables.
     ///
+    /// The `input` plan is expected to produce one row per matched target row with
+    /// a schema shaped as:
+    ///
+    /// 1. New target-row values, in target-table schema order
+    /// 2. Original target-row values, in target-table schema order
+    ///
+    /// Original-value columns must be named with
+    /// [`datafusion_expr::dml::update_from_old_column_name`] (prefix
+    /// [`datafusion_expr::dml::UPDATE_FROM_OLD_COLUMN_PREFIX`]).
+    ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     async fn update_from(
         &self,

@@ -41,7 +41,7 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_expr::dml::InsertOp;
+use datafusion_expr::dml::{InsertOp, update_from_old_column_name};
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::{
     LexOrdering, create_physical_expr, create_physical_sort_exprs,
@@ -62,8 +62,6 @@ use tokio::sync::RwLock;
 
 // backward compatibility
 pub use datafusion_datasource::memory::PartitionData;
-
-const UPDATE_FROM_OLD_COLUMN_PREFIX: &str = "__df_update_old_";
 
 /// In-memory data source for presenting a `Vec<RecordBatch>` as a
 /// data source that can be queried by DataFusion. This allows data to
@@ -735,10 +733,6 @@ fn merge_with_replacement_indices(
     }
 
     Ok(make_array(mutable.freeze()))
-}
-
-fn update_from_old_column_name(column_name: &str) -> String {
-    format!("{UPDATE_FROM_OLD_COLUMN_PREFIX}{column_name}")
 }
 
 /// Evaluate filter expressions against a batch and return a combined boolean mask.

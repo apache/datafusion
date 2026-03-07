@@ -38,7 +38,7 @@ use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
     unqualified_field_not_found,
 };
-use datafusion_expr::dml::{CopyTo, InsertOp};
+use datafusion_expr::dml::{CopyTo, InsertOp, update_from_old_column_name};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
@@ -68,8 +68,6 @@ use sqlparser::ast::{
     TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
-
-const UPDATE_FROM_OLD_COLUMN_PREFIX: &str = "__df_update_old_";
 
 fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
@@ -2591,8 +2589,4 @@ fn update_target_column_expr(
     } else {
         Expr::Column(Column::from((qualifier, field)))
     }
-}
-
-fn update_from_old_column_name(column_name: &str) -> String {
-    format!("{UPDATE_FROM_OLD_COLUMN_PREFIX}{column_name}")
 }
