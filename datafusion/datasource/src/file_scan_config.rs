@@ -20,9 +20,13 @@
 
 use crate::file_groups::FileGroup;
 use crate::{
-    PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType, file_stream::FileStream,
-    source::DataSource, statistics::MinMaxStatistics,
+    PartitionedFile,
+    display::FileGroupsDisplay,
+    file::FileSource,
+    file_compression_type::FileCompressionType,
+    file_stream::{FileStream, WorkQueue},
+    source::DataSource,
+    statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -208,6 +212,9 @@ pub struct FileScanConfig {
     /// If the number of file partitions > target_partitions, the file partitions will be grouped
     /// in a round-robin fashion such that number of file partitions = target_partitions.
     pub partitioned_by_file_group: bool,
+    /// When true, use morsel-driven execution to avoid data skew.
+    /// This means all partitions share a single pool of work.
+    pub morsel_driven: bool,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -278,6 +285,7 @@ pub struct FileScanConfigBuilder {
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     partitioned_by_file_group: bool,
+    morsel_driven: bool,
 }
 
 impl FileScanConfigBuilder {
@@ -304,6 +312,7 @@ impl FileScanConfigBuilder {
             batch_size: None,
             expr_adapter_factory: None,
             partitioned_by_file_group: false,
+            morsel_driven: false,
         }
     }
 
@@ -504,6 +513,12 @@ impl FileScanConfigBuilder {
         self
     }
 
+    /// Set whether to use morsel-driven execution.
+    pub fn with_morsel_driven(mut self, morsel_driven: bool) -> Self {
+        self.morsel_driven = morsel_driven;
+        self
+    }
+
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -525,6 +540,7 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             partitioned_by_file_group,
+            morsel_driven,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -536,6 +552,24 @@ impl FileScanConfigBuilder {
 
         // If there is an output ordering, we should preserve it.
         let preserve_order = preserve_order || !output_ordering.is_empty();
+
+        // Morsel-driven execution pools all files from all file groups into a shared
+        // work queue that any partition may consume, allowing partitions to steal work
+        // from each other's file groups. This breaks two guarantees that downstream
+        // operators may rely on:
+        //
+        // 1. `partitioned_by_file_group`: the optimizer has declared Hash partitioning
+        //    assuming partition N reads only from file_group[N] (e.g. Hive-style
+        //    partitioning with `preserve_file_partitions`). Morsel-driven stealing
+        //    would violate this, breaking `HashJoinExec: mode=Partitioned` correctness.
+        //
+        // 2. `preserve_order`: the scan declares a sort order on its output. When a
+        //    partition interleaves morsels from multiple files (from different groups),
+        //    the per-partition output is no longer globally sorted. Downstream operators
+        //    such as `SortPreservingMergeExec` rely on each partition's stream being
+        //    pre-sorted.
+        let morsel_driven =
+            morsel_driven && !partitioned_by_file_group && !preserve_order;
 
         FileScanConfig {
             object_store_url,
@@ -550,6 +584,7 @@ impl FileScanConfigBuilder {
             expr_adapter_factory: expr_adapter,
             statistics,
             partitioned_by_file_group,
+            morsel_driven,
         }
     }
 }
@@ -569,7 +604,33 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
             partitioned_by_file_group: config.partitioned_by_file_group,
+            morsel_driven: config.morsel_driven,
         }
+    }
+}
+
+impl FileScanConfig {
+    /// Open a partition stream with an optional shared morsel queue.
+    pub(crate) fn open_with_queue(
+        &self,
+        partition: usize,
+        context: &Arc<TaskContext>,
+        queue: Option<Arc<WorkQueue>>,
+    ) -> Result<SendableRecordBatchStream> {
+        let object_store = context.runtime_env().object_store(&self.object_store_url)?;
+        let batch_size = self
+            .batch_size
+            .unwrap_or_else(|| context.session_config().batch_size());
+
+        let source = self.file_source.with_batch_size(batch_size);
+        let opener = source.create_file_opener(object_store, self, partition)?;
+
+        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        let stream = match queue {
+            Some(q) => stream.with_shared_queue(q),
+            None => stream,
+        };
+        Ok(Box::pin(cooperative(stream)))
     }
 }
 
@@ -579,17 +640,7 @@ impl DataSource for FileScanConfig {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let object_store = context.runtime_env().object_store(&self.object_store_url)?;
-        let batch_size = self
-            .batch_size
-            .unwrap_or_else(|| context.session_config().batch_size());
-
-        let source = self.file_source.with_batch_size(batch_size);
-
-        let opener = source.create_file_opener(object_store, self, partition)?;
-
-        let stream = FileStream::new(self, partition, opener, source.metrics())?;
-        Ok(Box::pin(cooperative(stream)))
+        self.open_with_queue(partition, &context, None)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -602,8 +653,21 @@ impl DataSource for FileScanConfig {
                 let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
                 let orderings = get_projected_output_ordering(self, &schema);
 
-                write!(f, "file_groups=")?;
-                FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+                if self.morsel_driven {
+                    let files: Vec<_> =
+                        self.file_groups.iter().flat_map(|g| g.iter()).collect();
+                    write!(f, "files=[")?;
+                    for (i, pf) in files.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", pf.object_meta.location.as_ref())?;
+                    }
+                    write!(f, "]")?;
+                } else {
+                    write!(f, "file_groups=")?;
+                    FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+                }
 
                 if !schema.fields().is_empty() {
                     if let Some(projection) = self.file_source.projection() {
@@ -669,6 +733,29 @@ impl DataSource for FileScanConfig {
         // file groups, breaking the Hash partitioning.
         if self.partitioned_by_file_group {
             return Ok(None);
+        }
+
+        // With morsel-driven execution, the shared WorkQueue handles load
+        // balancing at runtime so byte-range splitting is unnecessary.
+        // Just distribute whole files round-robin across target partitions.
+        if self.morsel_driven {
+            let all_files: Vec<_> = self
+                .file_groups
+                .iter()
+                .flat_map(|g| g.files().iter().cloned())
+                .collect();
+            if all_files.is_empty() {
+                return Ok(None);
+            }
+            let mut groups: Vec<Vec<PartitionedFile>> =
+                (0..target_partitions).map(|_| vec![]).collect();
+            for (i, file) in all_files.into_iter().enumerate() {
+                groups[i % target_partitions].push(file);
+            }
+            let file_groups = groups.into_iter().map(FileGroup::new).collect();
+            let mut source = self.clone();
+            source.file_groups = file_groups;
+            return Ok(Some(Arc::new(source)));
         }
 
         let source = self.file_source.repartitioned(
@@ -1310,8 +1397,20 @@ impl DisplayAs for FileScanConfig {
         let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
         let orderings = get_projected_output_ordering(self, &schema);
 
-        write!(f, "file_groups=")?;
-        FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+        if self.morsel_driven {
+            let files: Vec<_> = self.file_groups.iter().flat_map(|g| g.iter()).collect();
+            write!(f, "files=[")?;
+            for (i, pf) in files.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", pf.object_meta.location.as_ref())?;
+            }
+            write!(f, "]")?;
+        } else {
+            write!(f, "file_groups=")?;
+            FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+        }
 
         if !schema.fields().is_empty() {
             write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;

@@ -1630,6 +1630,8 @@ pub struct FileScanExecConf {
     pub batch_size: ::core::option::Option<u64>,
     #[prost(message, optional, tag = "13")]
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
+    #[prost(bool, tag = "14")]
+    pub morsel_driven: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {

@@ -382,7 +382,11 @@ async fn prune_disabled() {
     .await;
     println!("{}", output.description());
 
-    // This should not prune any
+    // Row group stats pruning is disabled, so 0 row groups are pruned by statistics.
+    // Bloom filter runs next and matches all 4 row groups (bloom filters don't help
+    // for range/inequality predicates like `nanos < threshold`). Page index pruning
+    // runs afterwards and can produce row-level selections, but those don't affect
+    // the bloom filter matched count. The query result is still correct.
     assert_eq!(output.predicate_evaluation_errors(), Some(0));
     assert_eq!(output.row_groups_matched(), Some(4));
     assert_eq!(output.row_groups_pruned(), Some(0));

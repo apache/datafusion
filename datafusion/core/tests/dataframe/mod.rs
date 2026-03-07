@@ -3271,7 +3271,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+              DataSourceExec: files=[{testdata}/alltypes_tiny_pages.parquet], projection=[id], file_type=parquet
     ");
     Ok(())
 }
@@ -3289,7 +3289,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-              DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
+              DataSourceExec: files=[{testdata}/alltypes_tiny_pages.parquet], projection=[id], file_type=parquet
     ");
 
     Ok(())

@@ -1055,39 +1055,43 @@ mod tests {
 
         // parquet use the int32 as the physical type to store decimal
         let exec = get_exec(&state, "int32_decimal.parquet", None, None).await?;
-        let batches = collect(exec, task_ctx.clone()).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         let column = batches[0].column(0);
         assert_eq!(&DataType::Decimal128(4, 2), column.data_type());
 
+        let task_ctx = state.task_ctx();
         // parquet use the int64 as the physical type to store decimal
         let exec = get_exec(&state, "int64_decimal.parquet", None, None).await?;
-        let batches = collect(exec, task_ctx.clone()).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         let column = batches[0].column(0);
         assert_eq!(&DataType::Decimal128(10, 2), column.data_type());
 
+        let task_ctx = state.task_ctx();
         // parquet use the fixed length binary as the physical type to store decimal
         let exec = get_exec(&state, "fixed_length_decimal.parquet", None, None).await?;
-        let batches = collect(exec, task_ctx.clone()).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         let column = batches[0].column(0);
         assert_eq!(&DataType::Decimal128(25, 2), column.data_type());
 
+        let task_ctx = state.task_ctx();
         let exec =
             get_exec(&state, "fixed_length_decimal_legacy.parquet", None, None).await?;
-        let batches = collect(exec, task_ctx.clone()).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         let column = batches[0].column(0);
         assert_eq!(&DataType::Decimal128(13, 2), column.data_type());
 
+        let task_ctx = state.task_ctx();
         // parquet use the byte array as the physical type to store decimal
         let exec = get_exec(&state, "byte_array_decimal.parquet", None, None).await?;
-        let batches = collect(exec, task_ctx.clone()).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         let column = batches[0].column(0);

@@ -49,8 +49,11 @@ mod tests {
     use datafusion_common::config::TableParquetOptions;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{Result, ScalarValue, assert_contains};
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::file_scan_config::{
+        FileScanConfig, FileScanConfigBuilder,
+    };
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::file::FileSource;
@@ -76,7 +79,7 @@ mod tests {
     use insta::assert_snapshot;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore};
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
@@ -1338,7 +1341,6 @@ mod tests {
         let filename = "int96_from_spark.parquet";
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
-        let task_ctx = state.task_ctx();
 
         let time_units_and_expected = vec![
             (
@@ -1390,7 +1392,8 @@ mod tests {
             .unwrap();
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-            let mut results = parquet_exec.execute(0, task_ctx.clone())?;
+            let task_ctx = state.task_ctx();
+            let mut results = parquet_exec.execute(0, task_ctx)?;
             let batch = results.next().await.unwrap()?;
 
             assert_eq!(6, batch.num_rows());
@@ -2458,5 +2461,155 @@ mod tests {
         let calls = size_hint_calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls, vec![Some(123), Some(456)]);
+    }
+
+    #[tokio::test]
+    async fn parquet_morsel_driven_execution() -> Result<()> {
+        let store =
+            Arc::new(object_store::memory::InMemory::new()) as Arc<dyn ObjectStore>;
+        let store_url = ObjectStoreUrl::parse("memory://test").unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_object_store(store_url.as_ref(), store.clone());
+
+        // Create a Parquet file with 100 row groups, each with 10 rows
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let mut out = Vec::new();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(10))
+            .build();
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut out, Arc::clone(&schema), Some(props))?;
+            // Write many batches to ensure they are not coalesced and we can verify work distribution
+            for i in 0..100 {
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int32Array::from(vec![i; 10]))],
+                )?;
+                writer.write(&batch)?;
+            }
+            writer.close()?;
+        }
+
+        let path = Path::from("skewed.parquet");
+        store.put(&path, out.into()).await?;
+        let meta = store.head(&path).await?;
+
+        // Set up DataSourceExec with 2 partitions, but the file is only in partition 0 (skewed)
+        let source = Arc::new(ParquetSource::new(schema));
+        let config = FileScanConfigBuilder::new(store_url, source)
+            .with_file_group(FileGroup::new(vec![PartitionedFile::new_from_meta(meta)]))
+            .with_file_group(FileGroup::new(vec![])) // Partition 1 is empty
+            .with_morsel_driven(true)
+            .build();
+
+        let exec = DataSourceExec::from_data_source(config);
+
+        // Execute both partitions concurrently
+        let task_ctx = ctx.task_ctx();
+        let stream0 = exec.execute(0, Arc::clone(&task_ctx))?;
+        let stream1 = exec.execute(1, Arc::clone(&task_ctx))?;
+
+        let handle0 = SpawnedTask::spawn(async move {
+            let mut count = 0;
+            let mut s = stream0;
+            while let Some(batch) = s.next().await {
+                count += batch.unwrap().num_rows();
+                tokio::task::yield_now().await;
+            }
+            count
+        });
+
+        let handle1 = SpawnedTask::spawn(async move {
+            let mut count = 0;
+            let mut s = stream1;
+            while let Some(batch) = s.next().await {
+                count += batch.unwrap().num_rows();
+                tokio::task::yield_now().await;
+            }
+            count
+        });
+
+        let count0 = handle0.await.unwrap();
+        let count1 = handle1.await.unwrap();
+
+        // Total rows should be 1000
+        assert_eq!(count0 + count1, 1000);
+
+        // Since it's morsel-driven, both partitions should have done some work
+        // because the work from partition 0 (the single file) was split into
+        // individual row groups and shared via the shared queue.
+        assert!(count0 > 0, "Partition 0 should have produced rows");
+        assert!(count1 > 0, "Partition 1 should have produced rows");
+
+        // Test re-executability: executing the same plan again should work
+        // (We have to create a new TaskContext, as it holds the state)
+        let task_ctx = ctx.task_ctx();
+        let stream0 = exec.execute(0, Arc::clone(&task_ctx))?;
+        let stream1 = exec.execute(1, Arc::clone(&task_ctx))?;
+
+        let mut count = 0;
+        let mut s0 = stream0;
+        while let Some(batch) = s0.next().await {
+            count += batch.unwrap().num_rows();
+        }
+        let mut s1 = stream1;
+        while let Some(batch) = s1.next().await {
+            count += batch.unwrap().num_rows();
+        }
+        assert_eq!(
+            count, 1000,
+            "Second execution should also produce 1000 rows"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_morsel_driven_enabled_by_default() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let path = tmp_dir.path().join("test.parquet");
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let file = File::create(&path)?;
+        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        let ctx = SessionContext::new();
+        ctx.register_parquet("t", path.to_str().unwrap(), ParquetReadOptions::default())
+            .await?;
+
+        let df = ctx.sql("SELECT * FROM t").await?;
+        let plan = df.create_physical_plan().await?;
+
+        // Plan should be a ProjectionExec over a DataSourceExec
+        let ds_exec = if let Some(ds) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            ds
+        } else {
+            plan.children()[0]
+                .as_any()
+                .downcast_ref::<DataSourceExec>()
+                .expect("Expected DataSourceExec")
+        };
+
+        let config = ds_exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+
+        assert!(
+            config.morsel_driven,
+            "morsel_driven should be enabled by default for Parquet"
+        );
+
+        Ok(())
     }
 }

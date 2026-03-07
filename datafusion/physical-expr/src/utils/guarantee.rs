@@ -389,6 +389,9 @@ impl<'a> ColOpLit<'a> {
     /// 2. `literal <op> col`
     /// 3. operator is `=` or `!=`
     ///
+    /// Also handles `CastColumnExpr(col) <op> literal` patterns where the
+    /// column is wrapped in a cast (e.g., from schema adaptation).
+    ///
     /// Returns None otherwise
     fn try_new(expr: &'a Arc<dyn PhysicalExpr>) -> Option<Self> {
         let binary_expr = expr
@@ -405,9 +408,9 @@ impl<'a> ColOpLit<'a> {
             Operator::NotEq => Guarantee::NotIn,
             _ => return None,
         };
-        // col <op> literal
+        // col <op> literal (also handles CastColumnExpr(col) <op> literal)
         if let (Some(col), Some(lit)) = (
-            left.downcast_ref::<crate::expressions::Column>(),
+            extract_column(binary_expr.left()),
             right.downcast_ref::<crate::expressions::Literal>(),
         ) {
             Some(Self {
@@ -416,10 +419,10 @@ impl<'a> ColOpLit<'a> {
                 lit,
             })
         }
-        // literal <op> col
+        // literal <op> col (also handles literal <op> CastColumnExpr(col))
         else if let (Some(lit), Some(col)) = (
             left.downcast_ref::<crate::expressions::Literal>(),
-            right.downcast_ref::<crate::expressions::Column>(),
+            extract_column(binary_expr.right()),
         ) {
             Some(Self {
                 col,
@@ -430,6 +433,25 @@ impl<'a> ColOpLit<'a> {
             None
         }
     }
+}
+
+/// Extracts a [`Column`](crate::expressions::Column) reference from a physical
+/// expression, looking through [`CastColumnExpr`](crate::expressions::CastColumnExpr)
+/// wrappers.
+fn extract_column(expr: &Arc<dyn PhysicalExpr>) -> Option<&crate::expressions::Column> {
+    if let Some(col) = expr.as_any().downcast_ref::<crate::expressions::Column>() {
+        return Some(col);
+    }
+    if let Some(cast) = expr
+        .as_any()
+        .downcast_ref::<crate::expressions::CastColumnExpr>()
+    {
+        return cast
+            .expr()
+            .as_any()
+            .downcast_ref::<crate::expressions::Column>();
+    }
+    None
 }
 
 /// Represents a single `col [not]in literal` expression

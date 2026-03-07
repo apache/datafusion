@@ -690,6 +690,7 @@ pub fn parse_protobuf_file_scan_config(
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
         .with_batch_size(proto.batch_size.map(|s| s as usize))
+        .with_morsel_driven(proto.morsel_driven)
         .build();
     Ok(config)
 }

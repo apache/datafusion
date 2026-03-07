@@ -560,23 +560,14 @@ physical_plan
 05)│     string_col != foo     │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│      RepartitionExec      │
+08)│       DataSourceExec      │
 09)│    --------------------   │
-10)│ partition_count(in->out): │
-11)│           1 -> 4          │
+10)│          files: 1         │
+11)│      format: parquet      │
 12)│                           │
-13)│    partitioning_scheme:   │
-14)│     RoundRobinBatch(4)    │
-15)└─────────────┬─────────────┘
-16)┌─────────────┴─────────────┐
-17)│       DataSourceExec      │
-18)│    --------------------   │
-19)│          files: 1         │
-20)│      format: parquet      │
-21)│                           │
-22)│         predicate:        │
-23)│     string_col != foo     │
-24)└───────────────────────────┘
+13)│         predicate:        │
+14)│     string_col != foo     │
+15)└───────────────────────────┘
 
 # Query with filter on memory
 query TT

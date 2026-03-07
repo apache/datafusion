@@ -227,8 +227,59 @@ impl RunQueryResult {
         format!("{}", pretty_format_batches(&self.result).unwrap())
     }
 
+    /// Extract ORDER BY column names from the query.
+    /// The query format is always:
+    ///   `SELECT * FROM test_table ORDER BY <col> <dir> <nulls>, ... LIMIT <n>`
+    fn sort_columns(&self) -> Vec<String> {
+        let order_by_start = self.query.find("ORDER BY").unwrap() + "ORDER BY".len();
+        let limit_start = self.query.rfind(" LIMIT").unwrap();
+        self.query[order_by_start..limit_start]
+            .trim()
+            .split(',')
+            .map(|part| part.split_whitespace().next().unwrap().to_string())
+            .collect()
+    }
+
+    /// Project `batches` to only include the named columns.
+    fn project_columns(batches: &[RecordBatch], cols: &[String]) -> Vec<RecordBatch> {
+        batches
+            .iter()
+            .map(|b| {
+                let indices: Vec<usize> = cols
+                    .iter()
+                    .filter_map(|c| b.schema().index_of(c).ok())
+                    .collect();
+                b.project(&indices).unwrap()
+            })
+            .collect()
+    }
+
     fn is_ok(&self) -> bool {
-        self.expected_formatted() == self.result_formatted()
+        if self.expected_formatted() == self.result_formatted() {
+            return true;
+        }
+        // If the full results differ, compare only the ORDER BY column values.
+        //
+        // For queries with ORDER BY <col> LIMIT k, multiple rows may tie on the
+        // sort key (e.g. two rows with id=27 for ORDER BY id DESC LIMIT 1).
+        // SQL permits returning any of the tied rows, so with vs without dynamic
+        // filter pushdown may legitimately return different tied rows.
+        //
+        // The dynamic filter must not change the *sort-key values* of the top-k
+        // result. We verify correctness by:
+        // 1. Checking the row counts match (wrong count is always a bug).
+        // 2. Projecting both results down to only the ORDER BY columns and
+        //    comparing those (tied rows may differ, but the sort-key values must not).
+        let expected_rows: usize = self.expected.iter().map(|b| b.num_rows()).sum();
+        let result_rows: usize = self.result.iter().map(|b| b.num_rows()).sum();
+        if expected_rows != result_rows {
+            return false;
+        }
+        let sort_cols = self.sort_columns();
+        let expected_keys = Self::project_columns(&self.expected, &sort_cols);
+        let result_keys = Self::project_columns(&self.result, &sort_cols);
+        format!("{}", pretty_format_batches(&expected_keys).unwrap())
+            == format!("{}", pretty_format_batches(&result_keys).unwrap())
     }
 }
 
