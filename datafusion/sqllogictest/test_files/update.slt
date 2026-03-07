@@ -192,3 +192,10 @@ select * from t1 order by a;
 1 new_val 2 100
 2 new_val2 4 200
 3 apple 3.5 15
+
+# regression: one target row matching multiple source rows should error
+statement ok
+insert into t2 values (1, 'duplicate_match', 9.9, 300);
+
+statement error DataFusion error: UPDATE operation on table 't1'
+update t1 as dst set b = src.b, c = src.a + dst.a, d = src.d from t2 as src where dst.a = src.a and dst.a = 1;
