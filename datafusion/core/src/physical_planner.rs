@@ -2128,7 +2128,7 @@ fn extract_dml_filters(
 ) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
     let mut allowed_refs = vec![target.clone()];
-    let target_branch = find_update_target_branch(input)?;
+    let target_branch = find_dml_target_branch(input)?;
 
     // First pass: collect any alias references to the target table
     target_branch.apply(|node| {
@@ -2393,7 +2393,7 @@ fn collect_update_target_references(
     target_table: &TableReference,
 ) -> Result<Vec<TableReference>> {
     let mut refs = collect_update_target_branch_references(
-        find_update_target_branch(input)?,
+        find_dml_target_branch(input)?,
         target_table,
     )?;
     if !refs.iter().any(|r| r.resolved_eq(target_table)) {
@@ -2402,16 +2402,15 @@ fn collect_update_target_references(
     Ok(refs)
 }
 
-fn find_update_target_branch(input: &Arc<LogicalPlan>) -> Result<&Arc<LogicalPlan>> {
+fn find_dml_target_branch(input: &Arc<LogicalPlan>) -> Result<&Arc<LogicalPlan>> {
     match input.as_ref() {
-        LogicalPlan::Projection(projection) => {
-            find_update_target_branch(&projection.input)
-        }
-        LogicalPlan::Filter(filter) => find_update_target_branch(&filter.input),
-        LogicalPlan::Join(join) => find_update_target_branch(&join.left),
+        LogicalPlan::Projection(projection) => find_dml_target_branch(&projection.input),
+        LogicalPlan::Filter(filter) => find_dml_target_branch(&filter.input),
+        LogicalPlan::Limit(limit) => find_dml_target_branch(&limit.input),
+        LogicalPlan::Join(join) => find_dml_target_branch(&join.left),
         LogicalPlan::SubqueryAlias(_) | LogicalPlan::TableScan(_) => Ok(input),
         other => internal_err!(
-            "Unexpected logical plan node in UPDATE target branch: {}",
+            "Unexpected logical plan node in DML target branch: {}",
             other.display()
         ),
     }
@@ -3336,6 +3335,32 @@ mod tests {
         }
     }
 
+    async fn make_delete_plan(sql: &str) -> Result<(Arc<LogicalPlan>, TableReference)> {
+        let ctx = SessionContext::new();
+        let t1_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let t1 = MemTable::try_new(
+            Arc::clone(&t1_schema),
+            vec![vec![RecordBatch::new_empty(Arc::clone(&t1_schema))]],
+        )?;
+        ctx.register_table("t1", Arc::new(t1))?;
+
+        let plan = ctx.sql(sql).await?.into_unoptimized_plan();
+        match plan {
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                op: WriteOp::Delete,
+                input,
+                ..
+            }) => Ok((input, table_name)),
+            other => internal_err!("Expected DELETE DML plan, got: {other}"),
+        }
+    }
+
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
         let config = SessionConfig::new().with_target_partitions(4);
@@ -3727,6 +3752,39 @@ mod tests {
         assert!(
             d_expr.contains("src.d"),
             "Self-join source alias should be preserved: {d_expr}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_dml_filters_delete_limit_without_where() -> Result<()> {
+        let (input, table_name) = make_delete_plan("DELETE FROM t1 LIMIT 10").await?;
+
+        let filters = extract_dml_filters(&input, &table_name)?;
+        assert!(
+            filters.is_empty(),
+            "DELETE ... LIMIT without WHERE should not synthesize filters: {filters:?}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_dml_filters_delete_where_limit() -> Result<()> {
+        let (input, table_name) =
+            make_delete_plan("DELETE FROM t1 WHERE a > 1 LIMIT 10").await?;
+
+        let filters = extract_dml_filters(&input, &table_name)?;
+        assert_eq!(
+            filters.len(),
+            1,
+            "Expected one target predicate from DELETE WHERE ... LIMIT"
+        );
+        let rendered = filters[0].to_string();
+        assert!(
+            rendered.starts_with("a > Int") && rendered.ends_with("(1)"),
+            "Unexpected rendered filter for DELETE WHERE ... LIMIT: {rendered}"
         );
 
         Ok(())
