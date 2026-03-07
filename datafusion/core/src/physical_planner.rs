@@ -2128,9 +2128,10 @@ fn extract_dml_filters(
 ) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
     let mut allowed_refs = vec![target.clone()];
+    let target_branch = find_update_target_branch(input)?;
 
     // First pass: collect any alias references to the target table
-    input.apply(|node| {
+    target_branch.apply(|node| {
         if let LogicalPlan::SubqueryAlias(alias) = node
             // Check if this alias points to the target table
             && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
@@ -2148,20 +2149,6 @@ fn extract_dml_filters(
                 for predicate in split_conjunction(&filter.predicate) {
                     if predicate_is_on_target_multi(predicate, &allowed_refs)? {
                         filters.push(predicate.clone());
-                    }
-                }
-            }
-            LogicalPlan::TableScan(TableScan {
-                table_name,
-                filters: scan_filters,
-                ..
-            }) => {
-                // Only extract filters from the target table scan.
-                // This prevents incorrect filter extraction in UPDATE...FROM scenarios
-                // where multiple table scans may have filters.
-                if table_name.resolved_eq(target) {
-                    for filter in scan_filters {
-                        filters.extend(split_conjunction(filter).into_iter().cloned());
                     }
                 }
             }
@@ -2188,12 +2175,28 @@ fn extract_dml_filters(
             | LogicalPlan::Sort(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Join(_)
+            | LogicalPlan::TableScan(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Subquery(_) => {
                 // Filter information may appear in child nodes; continue traversal
                 // to extract filters from Filter/TableScan nodes deeper in the plan
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    target_branch.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan {
+            table_name,
+            filters: scan_filters,
+            ..
+        }) = node
+            && table_name.resolved_eq(target)
+        {
+            for filter in scan_filters {
+                filters.extend(split_conjunction(filter).into_iter().cloned());
             }
         }
         Ok(TreeNodeRecursion::Continue)
@@ -2376,34 +2379,67 @@ fn collect_update_target_references(
     input: &Arc<LogicalPlan>,
     target_table: &TableReference,
 ) -> Result<Vec<TableReference>> {
-    let mut refs = vec![target_table.clone()];
-    input.apply(|node| {
-        if let LogicalPlan::SubqueryAlias(alias) = node
-            && plan_contains_table_scan(&alias.input, target_table)?
-            && !refs.iter().any(|r| r.resolved_eq(&alias.alias))
-        {
-            refs.push(alias.alias.clone());
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
+    let mut refs = collect_update_target_branch_references(
+        find_update_target_branch(input)?,
+        target_table,
+    )?;
+    if !refs.iter().any(|r| r.resolved_eq(target_table)) {
+        refs.insert(0, target_table.clone());
+    }
     Ok(refs)
 }
 
-fn plan_contains_table_scan(
+fn find_update_target_branch(input: &Arc<LogicalPlan>) -> Result<&Arc<LogicalPlan>> {
+    match input.as_ref() {
+        LogicalPlan::Projection(projection) => {
+            find_update_target_branch(&projection.input)
+        }
+        LogicalPlan::Filter(filter) => find_update_target_branch(&filter.input),
+        LogicalPlan::Join(join) => find_update_target_branch(&join.left),
+        LogicalPlan::SubqueryAlias(_) | LogicalPlan::TableScan(_) => Ok(input),
+        other => internal_err!(
+            "Unexpected logical plan node in UPDATE target branch: {}",
+            other.display()
+        ),
+    }
+}
+
+fn collect_update_target_branch_references(
     input: &Arc<LogicalPlan>,
     target_table: &TableReference,
-) -> Result<bool> {
-    let mut found = false;
-    input.apply(|node| {
-        if let LogicalPlan::TableScan(TableScan { table_name, .. }) = node
-            && table_name.resolved_eq(target_table)
-        {
-            found = true;
-            return Ok(TreeNodeRecursion::Stop);
+) -> Result<Vec<TableReference>> {
+    match input.as_ref() {
+        LogicalPlan::Projection(projection) => {
+            collect_update_target_branch_references(&projection.input, target_table)
         }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    Ok(found)
+        LogicalPlan::Filter(filter) => {
+            collect_update_target_branch_references(&filter.input, target_table)
+        }
+        LogicalPlan::SubqueryAlias(alias) => {
+            let mut refs =
+                collect_update_target_branch_references(&alias.input, target_table)?;
+            if !refs.iter().any(|r| r.resolved_eq(&alias.alias)) {
+                refs.push(alias.alias.clone());
+            }
+            Ok(refs)
+        }
+        LogicalPlan::Join(join) => {
+            collect_update_target_branch_references(&join.left, target_table)
+        }
+        LogicalPlan::TableScan(TableScan { table_name, .. }) => {
+            if table_name.resolved_eq(target_table) {
+                Ok(vec![table_name.clone()])
+            } else {
+                internal_err!(
+                    "Expected UPDATE target branch to scan '{target_table}', found '{table_name}'"
+                )
+            }
+        }
+        other => internal_err!(
+            "Unexpected logical plan node in UPDATE target branch: {}",
+            other.display()
+        ),
+    }
 }
 
 /// Check if window bounds are valid after schema information is available, and
@@ -3639,6 +3675,45 @@ mod tests {
         assert!(
             d_expr.contains("d"),
             "Unexpected assignment expression: {d_expr}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_update_assignments_preserves_self_join_source_aliases()
+    -> Result<()> {
+        let (input, table_name) = make_update_from_plan(
+            "UPDATE t1 AS dst \
+             SET b = src.b, d = src.d \
+             FROM t1 AS src \
+             WHERE dst.a = src.a + 1",
+        )
+        .await?;
+
+        let assignments = extract_update_assignments(&input, &table_name)?;
+        let b_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "b")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column b")
+            })?;
+        let d_expr = assignments
+            .iter()
+            .find(|(name, _)| name == "d")
+            .map(|(_, expr)| expr.to_string())
+            .ok_or_else(|| {
+                internal_datafusion_err!("Expected assignment for target column d")
+            })?;
+
+        assert!(
+            b_expr.contains("src.b"),
+            "Self-join source alias should be preserved: {b_expr}"
+        );
+        assert!(
+            d_expr.contains("src.d"),
+            "Self-join source alias should be preserved: {d_expr}"
         );
 
         Ok(())

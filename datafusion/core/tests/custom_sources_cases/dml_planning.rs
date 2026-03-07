@@ -927,6 +927,40 @@ async fn test_update_from_with_join_only_predicates_executes() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_update_from_self_join_drops_source_side_predicates() -> Result<()> {
+    let target_schema = abcd_schema_no_extra();
+    let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        Arc::clone(&target_schema),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx
+        .sql(
+            "UPDATE t1 AS dst \
+             SET b = src.b \
+             FROM t1 AS src \
+             WHERE dst.a = src.a AND dst.d > 10 AND src.b = 'active'",
+        )
+        .await?;
+
+    df.collect().await?;
+
+    let filters = target_provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(
+        filters.len(),
+        1,
+        "only target-side predicates should be forwarded in self-join updates"
+    );
+    assert_eq!(filters[0].to_string(), "d > Int32(10)");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
     // Test that filter qualifiers are properly stripped and validated
     // Unqualified predicates should work fine
