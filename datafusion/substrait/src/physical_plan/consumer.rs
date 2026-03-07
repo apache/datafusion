@@ -135,8 +135,16 @@ pub async fn from_substrait_rel(
                         file_groups[part_index].push(partitioned_file)
                     }
 
-                    base_config_builder =
-                        base_config_builder.with_file_groups(file_groups);
+                    let morsel_driven = _ctx
+                        .state()
+                        .config()
+                        .options()
+                        .execution
+                        .parquet
+                        .allow_morsel_driven;
+                    base_config_builder = base_config_builder
+                        .with_file_groups(file_groups)
+                        .with_morsel_driven(morsel_driven);
 
                     if let Some(MaskExpression { select, .. }) = &read.projection
                         && let Some(projection) = &select.as_ref()

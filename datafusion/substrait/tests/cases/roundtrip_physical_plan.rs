@@ -63,6 +63,7 @@ async fn parquet_exec() -> Result<()> {
         producer::to_substrait_rel(parquet_exec.as_ref(), &mut extension_info)?;
 
     let ctx = SessionContext::new();
+    ctx.state_ref().write().config_mut().options_mut().execution.parquet.allow_morsel_driven = false;
 
     let parquet_exec_roundtrip =
         consumer::from_substrait_rel(&ctx, substrait_rel.as_ref(), &HashMap::new())
