@@ -27,6 +27,16 @@ use datafusion_common::{DFSchemaRef, TableReference};
 
 use crate::{LogicalPlan, TableSource};
 
+/// Prefix used for hidden columns carrying the original target-row values in
+/// `UPDATE ... FROM` plans.
+pub const UPDATE_FROM_OLD_COLUMN_PREFIX: &str = "__df_update_old_";
+
+/// Returns the hidden `UPDATE ... FROM` column name used to carry the original
+/// value of `column_name` from the target table.
+pub fn update_from_old_column_name(column_name: &str) -> String {
+    format!("{UPDATE_FROM_OLD_COLUMN_PREFIX}{column_name}")
+}
+
 /// Operator that copies the contents of a database to file(s)
 #[derive(Clone)]
 pub struct CopyTo {

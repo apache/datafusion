@@ -739,6 +739,68 @@ fn plan_update() {
     );
 }
 
+#[test]
+fn plan_update_from() {
+    let sql = "update person \
+           set last_name = src.last_name, age = src.age \
+           from person as src \
+           where person.id = src.id";
+    let plan = logical_plan(sql).unwrap();
+    let expected = [
+    "Dml: op=[Update] table=[person]",
+    "  Projection: person.id AS id, person.first_name AS first_name, src.last_name AS last_name, src.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀, person.id AS __df_update_old_id, person.first_name AS __df_update_old_first_name, person.last_name AS __df_update_old_last_name, person.age AS __df_update_old_age, person.state AS __df_update_old_state, person.salary AS __df_update_old_salary, person.birth_date AS __df_update_old_birth_date, person.😀 AS __df_update_old_😀",
+    "    Filter: person.id = src.id",
+    "      Cross Join:",
+    "        TableScan: person",
+    "        SubqueryAlias: src",
+    "          TableScan: person",
+    ]
+    .join("\n");
+    assert_eq!(format!("{plan}"), expected);
+}
+
+#[test]
+fn plan_update_from_before_set() {
+    let sql = "update person \
+           from person as src \
+           set last_name = src.last_name, age = src.age \
+           where person.id = src.id";
+    let plan = logical_plan(sql).unwrap();
+    let expected = [
+    "Dml: op=[Update] table=[person]",
+    "  Projection: person.id AS id, person.first_name AS first_name, src.last_name AS last_name, src.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀, person.id AS __df_update_old_id, person.first_name AS __df_update_old_first_name, person.last_name AS __df_update_old_last_name, person.age AS __df_update_old_age, person.state AS __df_update_old_state, person.salary AS __df_update_old_salary, person.birth_date AS __df_update_old_birth_date, person.😀 AS __df_update_old_😀",
+    "    Filter: person.id = src.id",
+    "      Cross Join:",
+    "        TableScan: person",
+    "        SubqueryAlias: src",
+    "          TableScan: person",
+    ]
+    .join("\n");
+    assert_eq!(format!("{plan}"), expected);
+}
+
+#[test]
+fn plan_update_from_with_aliases_projects_original_target_row() {
+    let sql = "update person as dst \
+               set last_name = src.last_name, age = src.age \
+               from person as src \
+               where dst.id = src.id";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Update] table=[person]
+      Projection: dst.id AS id, dst.first_name AS first_name, src.last_name AS last_name, src.age AS age, dst.state AS state, dst.salary AS salary, dst.birth_date AS birth_date, dst.😀 AS 😀, dst.id AS __df_update_old_id, dst.first_name AS __df_update_old_first_name, dst.last_name AS __df_update_old_last_name, dst.age AS __df_update_old_age, dst.state AS __df_update_old_state, dst.salary AS __df_update_old_salary, dst.birth_date AS __df_update_old_birth_date, dst.😀 AS __df_update_old_😀
+        Filter: dst.id = src.id
+          Cross Join:
+            SubqueryAlias: dst
+              TableScan: person
+            SubqueryAlias: src
+              TableScan: person
+    "#
+    );
+}
+
 #[rstest]
 #[case::missing_assignment_target("UPDATE person SET doesnotexist = true")]
 #[case::missing_assignment_expression("UPDATE person SET age = doesnotexist + 42")]

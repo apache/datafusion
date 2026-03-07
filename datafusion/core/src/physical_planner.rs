@@ -84,6 +84,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
+use datafusion_expr::logical_plan::dml::UPDATE_FROM_OLD_COLUMN_PREFIX;
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
@@ -781,6 +782,12 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
+                    if has_update_from_old_row_projection(input)? {
+                        return not_impl_err!(
+                            "UPDATE ... FROM execution is not yet supported"
+                        );
+                    }
+
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
                     let filters = extract_dml_filters(input, table_name)?;
@@ -2212,6 +2219,24 @@ fn predicate_is_on_target_multi(
     }))
 }
 
+fn has_update_from_old_row_projection(input: &Arc<LogicalPlan>) -> Result<bool> {
+    let mut has_old_row_projection = false;
+    input.apply(|node| {
+        if let LogicalPlan::Projection(projection) = node
+            && projection.expr.iter().any(|expr| {
+                matches!(expr, Expr::Alias(alias) if alias.name.starts_with(UPDATE_FROM_OLD_COLUMN_PREFIX))
+            })
+        {
+            has_old_row_projection = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    Ok(has_old_row_projection)
+}
+
 /// Strip table qualifiers from column references in an expression.
 /// This is needed because DML filter expressions contain qualified column names
 /// (e.g., "table.column") but the TableProvider's schema only has simple names.
@@ -2248,6 +2273,11 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
     if let LogicalPlan::Projection(projection) = input.as_ref() {
         for expr in &projection.expr {
             if let Expr::Alias(alias) = expr {
+                // Hidden old-row aliases are planner metadata for UPDATE ... FROM,
+                // not provider-visible assignments.
+                if alias.name.starts_with(UPDATE_FROM_OLD_COLUMN_PREFIX) {
+                    continue;
+                }
                 // The alias name is the column name being updated
                 // The inner expression is the new value
                 let column_name = alias.name.clone();
@@ -2266,6 +2296,9 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
             if let LogicalPlan::Projection(projection) = node {
                 for expr in &projection.expr {
                     if let Expr::Alias(alias) = expr {
+                        if alias.name.starts_with(UPDATE_FROM_OLD_COLUMN_PREFIX) {
+                            continue;
+                        }
                         let column_name = alias.name.clone();
                         if !is_identity_assignment(&alias.expr, &column_name) {
                             let stripped_expr =
@@ -3114,8 +3147,8 @@ mod tests {
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
 
     use crate::execution::session_state::SessionStateBuilder;
-    use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
-    use arrow::datatypes::{DataType, Field, Int32Type};
+    use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow_schema::SchemaRef;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
@@ -3125,12 +3158,43 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::builder::subquery_alias;
     use datafusion_expr::{
-        LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore, col, lit,
+        DmlStatement, LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore,
+        WriteOp, col, lit,
     };
     use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+
+    async fn make_update_from_input(sql: &str) -> Result<Arc<LogicalPlan>> {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let t1 = MemTable::try_new(
+            Arc::clone(&schema),
+            vec![vec![RecordBatch::new_empty(Arc::clone(&schema))]],
+        )?;
+        let t2 = MemTable::try_new(
+            Arc::clone(&schema),
+            vec![vec![RecordBatch::new_empty(Arc::clone(&schema))]],
+        )?;
+        ctx.register_table("t1", Arc::new(t1))?;
+        ctx.register_table("t2", Arc::new(t2))?;
+
+        let plan = ctx.sql(sql).await?.into_unoptimized_plan();
+        match plan {
+            LogicalPlan::Dml(DmlStatement {
+                op: WriteOp::Update,
+                input,
+                ..
+            }) => Ok(input),
+            other => internal_err!("Expected UPDATE DML plan, got: {other}"),
+        }
+    }
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -3748,6 +3812,32 @@ mod tests {
             "total_salary",
             physical_plan.schema().field(1).name().as_str()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_extract_update_assignments_skips_old_row_aliases() -> Result<()> {
+        let input = make_update_from_input(
+            "UPDATE t1 AS dst \
+               SET c = src.a + dst.a, d = src.d \
+             FROM t2 AS src \
+             WHERE dst.a = src.a",
+        )
+        .await?;
+
+        let assignments = extract_update_assignments(&input)?;
+
+        assert!(
+            assignments
+                .iter()
+                .all(|(name, _)| !name.starts_with(UPDATE_FROM_OLD_COLUMN_PREFIX)),
+            "Hidden old-row aliases should not be emitted as assignments: {assignments:?}"
+        );
+        assert!(
+            assignments.iter().any(|(name, _)| name == "c"),
+            "Expected assignment for c"
+        );
+
         Ok(())
     }
 
