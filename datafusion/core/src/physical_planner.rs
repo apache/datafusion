@@ -2402,6 +2402,19 @@ fn collect_update_target_references(
     Ok(refs)
 }
 
+/// Locate the branch that contains the DML target relation.
+///
+/// This helper is intentionally narrow and only models wrappers that can appear
+/// above DELETE/UPDATE targets in DataFusion logical plans:
+/// - `Projection`
+/// - `Filter`
+/// - `Limit`
+/// - `Join` (follow `left` side for `UPDATE ... FROM`)
+/// - `SubqueryAlias`
+/// - `TableScan`
+///
+/// It is not a general logical-plan walker. Unexpected nodes are treated as
+/// planner-shape errors to avoid silently broadening DML target discovery.
 fn find_dml_target_branch(input: &Arc<LogicalPlan>) -> Result<&Arc<LogicalPlan>> {
     match input.as_ref() {
         LogicalPlan::Projection(projection) => find_dml_target_branch(&projection.input),
@@ -2410,6 +2423,8 @@ fn find_dml_target_branch(input: &Arc<LogicalPlan>) -> Result<&Arc<LogicalPlan>>
         LogicalPlan::Join(join) => find_dml_target_branch(&join.left),
         LogicalPlan::SubqueryAlias(_) | LogicalPlan::TableScan(_) => Ok(input),
         other => internal_err!(
+            // Keep this helper DML-scoped rather than turning it into
+            // a generic plan traversal utility.
             "Unexpected logical plan node in DML target branch: {}",
             other.display()
         ),
