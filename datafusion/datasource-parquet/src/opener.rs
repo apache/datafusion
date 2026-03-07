@@ -47,7 +47,7 @@ use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
@@ -191,6 +191,7 @@ impl FileOpener for ParquetOpener {
         let file_name = file_location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, self.partition_index);
 
         let metadata_size_hint = partitioned_file
             .metadata_size_hint
@@ -631,7 +632,8 @@ impl FileOpener for ParquetOpener {
             let projector = projection.make_projector(&stream_schema)?;
 
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
-                b.and_then(|mut b| {
+                let mut timer = baseline_metrics.elapsed_compute().timer();
+                let result = b.and_then(|mut b| {
                     copy_arrow_reader_metrics(
                         &arrow_reader_metrics,
                         &predicate_cache_inner_records,
@@ -659,7 +661,9 @@ impl FileOpener for ParquetOpener {
                     } else {
                         Ok(b)
                     }
-                })
+                });
+                timer.stop();
+                result
             });
 
             // ----------------------------------------------------------------------
