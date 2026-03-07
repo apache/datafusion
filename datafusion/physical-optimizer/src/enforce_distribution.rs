@@ -909,9 +909,23 @@ fn add_hash_on_top(
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
         let partitioning = dist.create_partitioning(n_target);
-        let repartition =
+        let mut repartition =
             RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
                 .with_preserve_order();
+
+        // Skip backpressure when the input is a partial aggregate.
+        // Partial aggregation already manages its own memory pressure via
+        // early emission, so the repartition gate would only block the
+        // partial aggregate from flushing its buffered groups.
+        if input
+            .plan
+            .as_any()
+            .downcast_ref::<AggregateExec>()
+            .is_some_and(|agg| agg.mode() == &AggregateMode::Partial)
+        {
+            repartition = repartition.with_skip_backpressure();
+        }
+
         let plan = Arc::new(repartition) as _;
 
         return Ok(DistributionContext::new(plan, true, vec![input]));

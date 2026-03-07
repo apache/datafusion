@@ -77,7 +77,9 @@ use parking_lot::Mutex;
 
 mod distributor_channels;
 use distributor_channels::{
-    DistributionReceiver, DistributionSender, channels, partition_aware_channels,
+    DistributionReceiver, DistributionSender, channels,
+    channels_without_backpressure, partition_aware_channels,
+    partition_aware_channels_without_backpressure,
 };
 
 /// A batch in the repartition queue - either in memory or spilled to disk.
@@ -269,6 +271,7 @@ impl RepartitionExecState {
         metrics: &ExecutionPlanMetricsSet,
         partitioning: &Partitioning,
         preserve_order: bool,
+        skip_backpressure: bool,
         name: &str,
         context: &Arc<TaskContext>,
         spill_manager: SpillManager,
@@ -302,15 +305,25 @@ impl RepartitionExecState {
         let (txs, rxs) = if preserve_order {
             // Create partition-aware channels with one channel per (input, output) pair
             // This provides backpressure while maintaining proper ordering
-            let (txs_all, rxs_all) =
-                partition_aware_channels(num_input_partitions, num_output_partitions);
+            let (txs_all, rxs_all) = if skip_backpressure {
+                partition_aware_channels_without_backpressure(
+                    num_input_partitions,
+                    num_output_partitions,
+                )
+            } else {
+                partition_aware_channels(num_input_partitions, num_output_partitions)
+            };
             // Take transpose of senders and receivers. `state.channels` keeps track of entries per output partition
             let txs = transpose(txs_all);
             let rxs = transpose(rxs_all);
             (txs, rxs)
         } else {
-            // Create one channel per *output* partition with backpressure
-            let (txs, rxs) = channels(num_output_partitions);
+            // Create one channel per *output* partition
+            let (txs, rxs) = if skip_backpressure {
+                channels_without_backpressure(num_output_partitions)
+            } else {
+                channels(num_output_partitions)
+            };
             // Clone sender for each input partitions
             let txs = txs
                 .into_iter()
@@ -766,6 +779,10 @@ pub struct RepartitionExec {
     /// Boolean flag to decide whether to preserve ordering. If true means
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
+    /// When true, the distribution channels will not apply backpressure.
+    /// This is useful when the input already manages its own memory pressure
+    /// (e.g. partial aggregation with early emission).
+    skip_backpressure: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
 }
@@ -942,6 +959,9 @@ impl ExecutionPlan for RepartitionExec {
         if self.preserve_order {
             repartition = repartition.with_preserve_order();
         }
+        if self.skip_backpressure {
+            repartition = repartition.with_skip_backpressure();
+        }
         Ok(Arc::new(repartition))
     }
 
@@ -970,6 +990,7 @@ impl ExecutionPlan for RepartitionExec {
         let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
         let preserve_order = self.sort_exprs().is_some();
+        let skip_backpressure = self.skip_backpressure;
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
@@ -1005,6 +1026,7 @@ impl ExecutionPlan for RepartitionExec {
                     &metrics,
                     &partitioning,
                     preserve_order,
+                    skip_backpressure,
                     &name,
                     &context,
                     spill_manager.clone(),
@@ -1222,6 +1244,9 @@ impl ExecutionPlan for RepartitionExec {
             if self.preserve_order {
                 new_repartition = new_repartition.with_preserve_order();
             }
+            if self.skip_backpressure {
+                new_repartition = new_repartition.with_skip_backpressure();
+            }
             Ok(Arc::new(new_repartition) as Arc<dyn ExecutionPlan>)
         })
     }
@@ -1243,6 +1268,7 @@ impl ExecutionPlan for RepartitionExec {
             state: Arc::clone(&self.state),
             metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
+            skip_backpressure: self.skip_backpressure,
             cache: new_properties.into(),
         })))
     }
@@ -1263,6 +1289,7 @@ impl RepartitionExec {
             state: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
+            skip_backpressure: false,
             cache: Arc::new(cache),
         })
     }
@@ -1325,6 +1352,17 @@ impl RepartitionExec {
                 self.input.output_partitioning().partition_count() > 1;
         let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
         Arc::make_mut(&mut self.cache).set_eq_properties(eq_properties);
+        self
+    }
+
+    /// Skip backpressure on the distribution channels.
+    ///
+    /// When the input already manages its own memory pressure (e.g. partial
+    /// aggregation that emits early under memory pressure), the repartition
+    /// gate-based backpressure is unnecessary and can actually hurt performance
+    /// by preventing the input from flushing its buffered groups.
+    pub fn with_skip_backpressure(mut self) -> Self {
+        self.skip_backpressure = true;
         self
     }
 

@@ -55,11 +55,32 @@ use parking_lot::Mutex;
 pub fn channels<T>(
     n: usize,
 ) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
+    channels_inner(n, false)
+}
+
+/// Create `n` empty channels without backpressure.
+///
+/// Unlike [`channels`], the gate will never close, so senders will never block.
+/// This is useful when the input already manages its own memory pressure
+/// (e.g. partial aggregation with early emission).
+pub fn channels_without_backpressure<T>(
+    n: usize,
+) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
+    channels_inner(n, true)
+}
+
+fn channels_inner<T>(
+    n: usize,
+    skip_backpressure: bool,
+) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
     let channels = (0..n)
         .map(|id| Arc::new(Channel::new_with_one_sender(id)))
         .collect::<Vec<_>>();
+    // When skipping backpressure, set empty_channels high enough that the gate
+    // never closes (it closes when empty_channels reaches 0).
+    let initial_empty = if skip_backpressure { usize::MAX } else { n };
     let gate = Arc::new(Gate {
-        empty_channels: AtomicUsize::new(n),
+        empty_channels: AtomicUsize::new(initial_empty),
         send_wakers: Mutex::new(None),
     });
     let senders = channels
@@ -90,6 +111,16 @@ pub fn partition_aware_channels<T>(
     n_out: usize,
 ) -> (PartitionAwareSenders<T>, PartitionAwareReceivers<T>) {
     (0..n_in).map(|_| channels(n_out)).unzip()
+}
+
+/// Like [`partition_aware_channels`] but without backpressure.
+pub fn partition_aware_channels_without_backpressure<T>(
+    n_in: usize,
+    n_out: usize,
+) -> (PartitionAwareSenders<T>, PartitionAwareReceivers<T>) {
+    (0..n_in)
+        .map(|_| channels_without_backpressure(n_out))
+        .unzip()
 }
 
 /// Erroring during [send](DistributionSender::send).
