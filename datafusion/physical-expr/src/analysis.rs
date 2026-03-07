@@ -167,6 +167,7 @@ pub fn analyze(
     schema: &Schema,
 ) -> Result<AnalysisContext> {
     let initial_boundaries = &context.boundaries;
+
     if initial_boundaries
         .iter()
         .all(|bound| bound.interval.is_none())
@@ -277,8 +278,21 @@ fn calculate_selectivity(
     let mut acc: f64 = 1.0;
     for (initial, target) in initial_boundaries.iter().zip(target_boundaries) {
         match (initial.interval.as_ref(), target.interval.as_ref()) {
-            (Some(initial), Some(target)) => {
-                acc *= cardinality_ratio(initial, target);
+            (Some(initial_interval), Some(target_interval)) => {
+                // If it is equality predicate, calculate selectivity as `1 / distinct_count`
+                if !target_interval.lower().is_null()
+                    && target_interval.lower() == target_interval.upper()
+                {
+                    if let Precision::Exact(distinct_count)
+                    | Precision::Inexact(distinct_count) = target.distinct_count
+                    {
+                        if distinct_count > 0 {
+                            acc *= 1.0 / distinct_count as f64;
+                            continue;
+                        }
+                    }
+                }
+                acc *= cardinality_ratio(initial_interval, target_interval);
             }
             (None, Some(_)) => {
                 return internal_err!(
