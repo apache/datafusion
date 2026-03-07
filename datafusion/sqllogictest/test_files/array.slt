@@ -4003,6 +4003,12 @@ select array_position(arrow_cast(['a', 'b', 'c', 'b'], 'FixedSizeList(4, Utf8)')
 
 ## array_positions (aliases: `list_positions`)
 
+# array_positions with empty array
+query ?
+select array_positions(arrow_cast(make_array(), 'List(Int64)'), 1);
+----
+[]
+
 query ?
 select array_positions([1, 2, 3, 4, 5], null);
 ----
