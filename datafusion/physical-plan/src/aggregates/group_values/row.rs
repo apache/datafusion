@@ -172,6 +172,55 @@ impl GroupValues for GroupValuesRows {
         Ok(())
     }
 
+    fn intern_with_indices(
+        &mut self,
+        cols: &[ArrayRef],
+        hashes: &[u64],
+        indices: &[u32],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
+        // Convert all group keys into the row format
+        let group_rows = &mut self.rows_buffer;
+        group_rows.clear();
+        self.row_converter.append(group_rows, cols)?;
+
+        let mut group_values = match self.group_values.take() {
+            Some(group_values) => group_values,
+            None => self.row_converter.empty_rows(0, 0),
+        };
+
+        groups.clear();
+
+        // Use precomputed hashes — no need to call create_hashes
+        for &idx in indices {
+            let row = idx as usize;
+            let target_hash = hashes[row];
+            let entry = self.map.find_mut(target_hash, |(exist_hash, group_idx)| {
+                target_hash == *exist_hash
+                    && group_rows.row(row) == group_values.row(*group_idx)
+            });
+
+            let group_idx = match entry {
+                Some((_hash, group_idx)) => *group_idx,
+                None => {
+                    let group_idx = group_values.num_rows();
+                    group_values.push(group_rows.row(row));
+                    self.map.insert_accounted(
+                        (target_hash, group_idx),
+                        |(hash, _group_index)| *hash,
+                        &mut self.map_size,
+                    );
+                    group_idx
+                }
+            };
+            groups.push(group_idx);
+        }
+
+        self.group_values = Some(group_values);
+
+        Ok(())
+    }
+
     fn size(&self) -> usize {
         let group_values_size = self.group_values.as_ref().map(|v| v.size()).unwrap_or(0);
         self.row_converter.size()

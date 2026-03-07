@@ -50,9 +50,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::sorts::IncrementalSortIterator;
-use arrow::compute::take_arrays;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::memory::get_record_batch_memory_size;
@@ -1036,6 +1034,7 @@ impl GroupedHashAggregateStream {
                     partition,
                     &input_values,
                     &filter_values,
+                    None,
                     is_raw_input,
                 )?;
 
@@ -1049,7 +1048,7 @@ impl GroupedHashAggregateStream {
                 self.hash_buffer.resize(num_rows, 0);
                 create_hashes(
                     group_values,
-                    REPARTITION_RANDOM_STATE.random_state(),
+                    &super::AGGREGATION_HASH_SEED,
                     &mut self.hash_buffer,
                 )?;
 
@@ -1069,46 +1068,21 @@ impl GroupedHashAggregateStream {
                     if self.partition_indices[p].is_empty() {
                         continue;
                     }
-                    let indices_array = UInt32Array::from_iter_values(
-                        self.partition_indices[p].iter().copied(),
-                    );
-
-                    // Take sub-batch for this partition
-                    let part_groups = take_arrays(group_values, &indices_array, None)?;
-                    let part_inputs: Vec<Vec<ArrayRef>> = input_values
-                        .iter()
-                        .map(|vals| {
-                            take_arrays(vals.as_slice(), &indices_array, None)
-                                .map_err(DataFusionError::from)
-                        })
-                        .collect::<Result<_>>()?;
-                    let part_filters: Vec<Option<ArrayRef>> = filter_values
-                        .iter()
-                        .map(|opt_f| {
-                            opt_f
-                                .as_ref()
-                                .map(|f| {
-                                    take_arrays(
-                                        std::slice::from_ref(f),
-                                        &indices_array,
-                                        None,
-                                    )
-                                    .map(|mut v| v.remove(0))
-                                    .map_err(DataFusionError::from)
-                                })
-                                .transpose()
-                        })
-                        .collect::<Result<_>>()?;
+                    let indices = &self.partition_indices[p];
 
                     let partition = &mut self.partitions[p];
-                    partition
-                        .group_values
-                        .intern(&part_groups, &mut partition.current_group_indices)?;
+                    partition.group_values.intern_with_indices(
+                        group_values,
+                        &self.hash_buffer,
+                        indices,
+                        &mut partition.current_group_indices,
+                    )?;
 
                     Self::accumulate_partition(
                         partition,
-                        &part_inputs,
-                        &part_filters,
+                        &input_values,
+                        &filter_values,
+                        Some(indices),
                         is_raw_input,
                     )?;
                 }
@@ -1122,11 +1096,13 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    /// Update accumulators for a single partition.
+    /// Update accumulators for a single partition. When `indices` is `Some`,
+    /// only the rows at those positions in the input arrays are processed.
     fn accumulate_partition(
         partition: &mut PartitionAggState,
         input_values: &[Vec<ArrayRef>],
         filter_values: &[Option<ArrayRef>],
+        indices: Option<&[u32]>,
         is_raw_input: bool,
     ) -> Result<()> {
         let group_indices = &partition.current_group_indices;
@@ -1142,13 +1118,38 @@ impl GroupedHashAggregateStream {
             let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
 
             if is_raw_input {
-                acc.update_batch(values, group_indices, opt_filter, total_num_groups)?;
+                if let Some(indices) = indices {
+                    acc.update_batch_with_indices(
+                        values,
+                        indices,
+                        group_indices,
+                        opt_filter,
+                        total_num_groups,
+                    )?;
+                } else {
+                    acc.update_batch(
+                        values,
+                        group_indices,
+                        opt_filter,
+                        total_num_groups,
+                    )?;
+                }
             } else {
                 assert_or_internal_err!(
                     opt_filter.is_none(),
                     "aggregate filter should be applied in partial stage, there should be no filter in final stage"
                 );
-                acc.merge_batch(values, group_indices, None, total_num_groups)?;
+                if let Some(indices) = indices {
+                    acc.merge_batch_with_indices(
+                        values,
+                        indices,
+                        group_indices,
+                        None,
+                        total_num_groups,
+                    )?;
+                } else {
+                    acc.merge_batch(values, group_indices, None, total_num_groups)?;
+                }
             }
         }
         Ok(())

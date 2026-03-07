@@ -18,7 +18,7 @@
 use crate::aggregates::group_values::GroupValues;
 
 use arrow::array::{
-    ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
+    Array, ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
 };
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
@@ -39,6 +39,16 @@ impl GroupValuesBoolean {
             null_group: None,
         }
     }
+
+    #[inline(always)]
+    fn intern_value(&mut self, value: Option<bool>) -> usize {
+        let next_id = self.len();
+        match value {
+            Some(false) => *self.false_group.get_or_insert(next_id),
+            Some(true) => *self.true_group.get_or_insert(next_id),
+            None => *self.null_group.get_or_insert(next_id),
+        }
+    }
 }
 
 impl GroupValues for GroupValuesBoolean {
@@ -47,37 +57,30 @@ impl GroupValues for GroupValuesBoolean {
         groups.clear();
 
         for value in array.iter() {
-            let index = match value {
-                Some(false) => {
-                    if let Some(index) = self.false_group {
-                        index
-                    } else {
-                        let index = self.len();
-                        self.false_group = Some(index);
-                        index
-                    }
-                }
-                Some(true) => {
-                    if let Some(index) = self.true_group {
-                        index
-                    } else {
-                        let index = self.len();
-                        self.true_group = Some(index);
-                        index
-                    }
-                }
-                None => {
-                    if let Some(index) = self.null_group {
-                        index
-                    } else {
-                        let index = self.len();
-                        self.null_group = Some(index);
-                        index
-                    }
-                }
-            };
+            groups.push(self.intern_value(value));
+        }
 
-            groups.push(index);
+        Ok(())
+    }
+
+    fn intern_with_indices(
+        &mut self,
+        cols: &[ArrayRef],
+        _hashes: &[u64],
+        indices: &[u32],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
+        let array = cols[0].as_boolean();
+        groups.clear();
+
+        for &idx in indices {
+            let idx = idx as usize;
+            let value = if array.is_null(idx) {
+                None
+            } else {
+                Some(array.value(idx))
+            };
+            groups.push(self.intern_value(value));
         }
 
         Ok(())
