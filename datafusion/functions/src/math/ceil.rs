@@ -89,6 +89,18 @@ impl ScalarUDFImpl for CeilFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
+            DataType::Decimal32(precision, _scale) => {
+                Ok(DataType::Decimal32(*precision, 0))
+            }
+            DataType::Decimal64(precision, _scale) => {
+                Ok(DataType::Decimal64(*precision, 0))
+            }
+            DataType::Decimal128(precision, _scale) => {
+                Ok(DataType::Decimal128(*precision, 0))
+            }
+            DataType::Decimal256(precision, _scale) => {
+                Ok(DataType::Decimal256(*precision, 0))
+            }
             DataType::Null => Ok(DataType::Float64),
             other => Ok(other.clone()),
         }
