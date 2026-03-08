@@ -2394,13 +2394,25 @@ fn collect_update_target_references(
     input: &Arc<LogicalPlan>,
     target_table: &TableReference,
 ) -> Result<Vec<TableReference>> {
-    let mut refs = collect_update_target_branch_references(
-        find_dml_target_branch(input)?,
-        target_table,
-    )?;
-    if !refs.iter().any(|r| r.resolved_eq(target_table)) {
-        refs.insert(0, target_table.clone());
-    }
+    let mut refs = vec![target_table.clone()];
+    find_dml_target_branch(input)?.apply(|node| {
+        match node {
+            LogicalPlan::SubqueryAlias(alias) => {
+                if !refs.iter().any(|r| r.resolved_eq(&alias.alias)) {
+                    refs.push(alias.alias.clone());
+                }
+            }
+            LogicalPlan::TableScan(TableScan { table_name, .. })
+                if !table_name.resolved_eq(target_table) =>
+            {
+                return internal_err!(
+                    "Expected UPDATE target branch to scan '{target_table}', found '{table_name}'"
+                )
+            }
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
     Ok(refs)
 }
 
@@ -2428,44 +2440,6 @@ fn find_dml_target_branch(input: &Arc<LogicalPlan>) -> Result<&Arc<LogicalPlan>>
             // Keep this helper DML-scoped rather than turning it into
             // a generic plan traversal utility.
             "Unexpected logical plan node in DML target branch: {}",
-            other.display()
-        ),
-    }
-}
-
-fn collect_update_target_branch_references(
-    input: &Arc<LogicalPlan>,
-    target_table: &TableReference,
-) -> Result<Vec<TableReference>> {
-    match input.as_ref() {
-        LogicalPlan::Projection(projection) => {
-            collect_update_target_branch_references(&projection.input, target_table)
-        }
-        LogicalPlan::Filter(filter) => {
-            collect_update_target_branch_references(&filter.input, target_table)
-        }
-        LogicalPlan::SubqueryAlias(alias) => {
-            let mut refs =
-                collect_update_target_branch_references(&alias.input, target_table)?;
-            if !refs.iter().any(|r| r.resolved_eq(&alias.alias)) {
-                refs.push(alias.alias.clone());
-            }
-            Ok(refs)
-        }
-        LogicalPlan::Join(join) => {
-            collect_update_target_branch_references(&join.left, target_table)
-        }
-        LogicalPlan::TableScan(TableScan { table_name, .. }) => {
-            if table_name.resolved_eq(target_table) {
-                Ok(vec![table_name.clone()])
-            } else {
-                internal_err!(
-                    "Expected UPDATE target branch to scan '{target_table}', found '{table_name}'"
-                )
-            }
-        }
-        other => internal_err!(
-            "Unexpected logical plan node in UPDATE target branch: {}",
             other.display()
         ),
     }

@@ -565,19 +565,17 @@ impl TableProvider for MemTable {
                     find_replacement_indices(batch, &mut original_row_matches)?;
                 let update_count = replacement_indices.iter().flatten().count();
 
-                if update_count == 0 {
-                    new_batches.push(batch.clone());
-                    continue;
-                }
-
                 matched_updates += update_count;
-                let updated_batch = build_updated_batch_from_replacement_indices(
-                    batch,
-                    &replacement_batch,
-                    &replacement_indices,
-                    &self.schema,
-                )?;
-                new_batches.push(updated_batch);
+                new_batches.push(if update_count == 0 {
+                    batch.clone()
+                } else {
+                    build_updated_batch_from_replacement_indices(
+                        batch,
+                        &replacement_batch,
+                        &replacement_indices,
+                        &self.schema,
+                    )?
+                });
             }
 
             *partition = new_batches;
@@ -609,9 +607,11 @@ fn validate_update_from_input_schema(
         );
     }
 
-    for (idx, (target_field, replacement_field)) in target_fields
+    let (replacement_fields, original_fields) = input_fields.split_at(target_field_count);
+    for (idx, ((target_field, replacement_field), original_field)) in target_fields
         .iter()
-        .zip(&input_fields[..target_field_count])
+        .zip(replacement_fields)
+        .zip(original_fields)
         .enumerate()
     {
         if replacement_field.name() != target_field.name()
@@ -624,15 +624,13 @@ fn validate_update_from_input_schema(
             );
         }
 
-        let original_idx = idx + target_field_count;
-        let original_field = &input_fields[original_idx];
         let expected_original_name = update_from_old_column_name(target_field.name());
         if original_field.name() != &expected_original_name
             || original_field.data_type() != target_field.data_type()
         {
             return plan_err!(
                 "Invalid UPDATE ... FROM original row column at index {}: expected '{}', got '{}'",
-                original_idx,
+                idx + target_field_count,
                 expected_original_name,
                 original_field.name()
             );
