@@ -2299,23 +2299,21 @@ fn extract_update_assignments(
     let mut assignments = Vec::new();
     let is_multi_table_update = plan_contains_join(input)?;
     let target_refs = collect_update_target_references(input, target_table)?;
-    if let Some(projection) = find_projection(input)? {
-        append_update_assignments_from_projection(
-            &mut assignments,
-            projection,
-            is_multi_table_update,
-            &target_refs,
-        )?;
-    }
+    find_projection(input)?
+        .map(|projection| {
+            append_update_assignments_from_projection(
+                &mut assignments,
+                projection,
+                is_multi_table_update,
+                &target_refs,
+            )
+        })
+        .transpose()?;
 
     Ok(assignments)
 }
 
 fn find_projection(input: &Arc<LogicalPlan>) -> Result<Option<&Projection>> {
-    if let LogicalPlan::Projection(projection) = input.as_ref() {
-        return Ok(Some(projection));
-    }
-
     let mut found = None;
     input.apply(|node| {
         if let LogicalPlan::Projection(projection) = node {
