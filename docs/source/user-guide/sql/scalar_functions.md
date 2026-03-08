@@ -2189,6 +2189,7 @@ regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
 The following regular expression functions are supported:
 
 - [regexp_count](#regexp_count)
+- [regexp_extract](#regexp_extract)
 - [regexp_instr](#regexp_instr)
 - [regexp_like](#regexp_like)
 - [regexp_match](#regexp_match)
@@ -2223,6 +2224,32 @@ regexp_count(str, regexp[, start, flags])
 +---------------------------------------------------------------+
 | 1                                                             |
 +---------------------------------------------------------------+
+```
+
+### `regexp_extract`
+
+Extract a specific group matched by the [regular expression](https://docs.rs/regex/latest/regex/#syntax) in a string.
+An empty string is returned if the specified group does not match.
+
+```sql
+regexp_extract(str, pattern[, groupIndex])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **index**: Optional group index. Defaults to 1.
+
+#### Example
+
+```sql
+> select regexp_extract('str', '(\d+)-(\d+)');
++-------+-----------------------------------+
+|    str|regexp_extract(str, (\d+)-(\d+), 1)|
++-------+-----------------------------------+
+|100-200|                                100|
++-------+-----------------------------------+
 ```
 
 ### `regexp_instr`
@@ -2452,7 +2479,6 @@ date_bin(interval, expression, origin-timestamp)
 - **interval**: Bin interval.
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 - **origin-timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
-
   - nanoseconds
   - microseconds
   - milliseconds
@@ -2517,7 +2543,6 @@ date_part(part, expression)
 #### Arguments
 
 - **part**: Part of the date to return. The following date parts are supported:
-
   - year
   - isoyear (ISO 8601 week-numbering year)
   - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
@@ -2560,7 +2585,6 @@ date_trunc(precision, expression)
 - **precision**: Time precision to truncate to. The following precisions are supported:
 
   For Timestamp types:
-
   - year / YEAR
   - quarter / QUARTER
   - month / MONTH
@@ -2573,7 +2597,6 @@ date_trunc(precision, expression)
   - microsecond / MICROSECOND
 
   For Time types (hour, minute, second, millisecond, microsecond only):
-
   - hour / HOUR
   - minute / MINUTE
   - second / SECOND
