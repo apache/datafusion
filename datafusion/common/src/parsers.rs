@@ -78,22 +78,17 @@ impl CompressionTypeVariant {
 ///
 /// Controls when fields are quoted when writing CSV files.
 /// Corresponds to [`arrow::csv::QuoteStyle`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CsvQuoteStyle {
     /// Quote all fields
     Always,
     /// Only quote fields when necessary (default)
+    #[default]
     Necessary,
     /// Quote all non-numeric fields
     NonNumeric,
     /// Never quote fields
     Never,
-}
-
-impl Default for CsvQuoteStyle {
-    fn default() -> Self {
-        Self::Necessary
-    }
 }
 
 impl FromStr for CsvQuoteStyle {

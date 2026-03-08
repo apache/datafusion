@@ -167,6 +167,7 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 Ok(CsvQuoteStyleProto::Always) => CsvQuoteStyle::Always,
                 Ok(CsvQuoteStyleProto::NonNumeric) => CsvQuoteStyle::NonNumeric,
                 Ok(CsvQuoteStyleProto::Never) => CsvQuoteStyle::Never,
+                Ok(CsvQuoteStyleProto::Necessary) => CsvQuoteStyle::Necessary,
                 _ => CsvQuoteStyle::Necessary,
             },
             ignore_leading_whitespace: if proto.ignore_leading_whitespace.is_empty() {
