@@ -41,14 +41,15 @@ where
 
     let factor = decimal_scale_factor::<T>(scale, fn_name)?;
     let decimal = array.as_primitive::<T>();
-    let data_type = array.data_type().clone();
+    let data_type = T::TYPE_CONSTRUCTOR(precision, 0);
 
     let result: PrimitiveArray<T> = decimal.try_unary(|value| {
         let new_value = op(value, factor);
-        T::validate_decimal_precision(new_value, precision, scale).map_err(|_| {
+        let rescaled = new_value.div_wrapping(factor);
+        T::validate_decimal_precision(rescaled, precision, 0).map_err(|_| {
             ArrowError::ComputeError(format!("Decimal overflow while applying {fn_name}"))
         })?;
-        Ok::<_, ArrowError>(new_value)
+        Ok::<_, ArrowError>(rescaled)
     })?;
 
     let result = result.with_data_type(data_type);
