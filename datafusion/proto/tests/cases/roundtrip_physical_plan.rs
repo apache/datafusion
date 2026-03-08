@@ -796,6 +796,19 @@ fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_filter_with_fetch() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let predicate = col("a", &schema)?;
+    let filter = FilterExecBuilder::new(predicate, Arc::new(EmptyExec::new(schema)))
+        .with_fetch(Some(10))
+        .build()?;
+    assert_eq!(filter.fetch(), Some(10));
+    roundtrip_test(Arc::new(filter))
+}
+
+#[test]
 fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);

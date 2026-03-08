@@ -725,6 +725,10 @@ impl ExecutionPlan for FilterExec {
         })
     }
 
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
     fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         Some(Arc::new(Self {
             predicate: Arc::clone(&self.predicate),
