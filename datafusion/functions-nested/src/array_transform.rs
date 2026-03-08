@@ -34,7 +34,7 @@ use datafusion_common::{
     HashMap, Result,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, LambdaFunctionArgs, LambdaUDF, Signature,
+    ColumnarValue, Documentation, LambdaFunctionArgs, LambdaSignature, LambdaUDF,
     ValueOrLambda, ValueOrLambdaField, ValueOrLambdaParameter, Volatility,
 };
 use datafusion_macros::user_doc;
@@ -70,7 +70,7 @@ use std::{any::Any, sync::Arc};
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayTransform {
-    signature: Signature,
+    signature: LambdaSignature,
     aliases: Vec<String>,
 }
 
@@ -83,7 +83,7 @@ impl Default for ArrayTransform {
 impl ArrayTransform {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: LambdaSignature::new(Volatility::Immutable),
             aliases: vec![String::from("list_transform")],
         }
     }
@@ -102,7 +102,7 @@ impl LambdaUDF for ArrayTransform {
         &self.aliases
     }
 
-    fn signature(&self) -> &Signature {
+    fn signature(&self) -> &LambdaSignature {
         &self.signature
     }
 

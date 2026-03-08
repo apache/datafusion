@@ -27,13 +27,35 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
-use datafusion_expr_common::signature::Signature;
+use datafusion_expr_common::signature::{Volatility};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+/// Provides information necessary for calling a lambda function.
+///
+/// - [`Volatility`] defines how the output of the function changes with the input.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct LambdaSignature {
+    /// The volatility of the function. See [Volatility] for more information.
+    pub volatility: Volatility,
+    /// Optional parameter names for the function arguments.
+    ///
+    /// If provided, enables named argument notation for function calls (e.g., `func(a => 1, b => 2)`).
+    ///
+    /// Defaults to `None`, meaning only positional arguments are supported.
+    pub parameter_names: Option<Vec<String>>,
+}
+
+impl LambdaSignature {
+    /// Creates a new Signature from a given volatility.
+    pub fn new(volatility: Volatility) -> LambdaSignature {
+        LambdaSignature { volatility, parameter_names: None }
+    }
+}
 
 impl PartialEq for dyn LambdaUDF {
     fn eq(&self, other: &Self) -> bool {
@@ -190,19 +212,19 @@ pub enum ValueOrLambdaField {
 /// # use std::sync::LazyLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Documentation, LambdaFunctionArgs, Signature, Volatility};
+/// # use datafusion_expr::{col, ColumnarValue, Documentation, LambdaFunctionArgs, LambdaSignature, Volatility};
 /// # use datafusion_expr::LambdaUDF;
 /// # use datafusion_expr::lambda_doc_sections::DOC_SECTION_MATH;
 /// /// This struct for a simple UDF that adds one to an int32
 /// #[derive(Debug, PartialEq, Eq, Hash)]
 /// struct AddOne {
-///   signature: Signature,
+///   signature: LambdaSignature,
 /// }
 ///
 /// impl AddOne {
 ///   fn new() -> Self {
 ///     Self {
-///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
+///       signature: LambdaSignature::new(Volatility::Immutable),
 ///      }
 ///   }
 /// }
@@ -221,7 +243,7 @@ pub enum ValueOrLambdaField {
 /// impl LambdaUDF for AddOne {
 ///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "add_one" }
-///    fn signature(&self) -> &Signature { &self.signature }
+///    fn signature(&self) -> &LambdaSignature { &self.signature }
 ///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
 ///      if !matches!(args.get(0), Some(&DataType::Int32)) {
 ///        return plan_err!("add_one only accepts Int32 arguments");
@@ -274,14 +296,14 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
         ))
     }
 
-    /// Returns a [`Signature`] describing the argument types for which this
+    /// Returns a [`LambdaSignature`] describing the argument types for which this
     /// function has an implementation, and the function's [`Volatility`].
     ///
-    /// See [`Signature`] for more details on argument type handling
+    /// See [`LambdaSignature`] for more details on argument type handling
     /// and [`Self::return_type`] for computing the return type.
     ///
     /// [`Volatility`]: datafusion_expr_common::signature::Volatility
-    fn signature(&self) -> &Signature;
+    fn signature(&self) -> &LambdaSignature;
 
     /// Create a new instance of this function with updated configuration.
     ///
@@ -534,8 +556,6 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
     ///
-    /// [`TypeSignature`]: crate::TypeSignature
-    ///
     /// For example, if your function requires a floating point arguments, but the user calls
     /// it like `my_func(1::int)` (i.e. with `1` as an integer), coerce_types can return `[DataType::Float64]`
     /// to ensure the argument is converted to `1::double`
@@ -578,7 +598,7 @@ mod tests {
     struct TestLambdaUDF {
         name: &'static str,
         field: &'static str,
-        signature: Signature,
+        signature: LambdaSignature,
     }
     impl LambdaUDF for TestLambdaUDF {
         fn as_any(&self) -> &dyn Any {
@@ -589,7 +609,7 @@ mod tests {
             self.name
         }
 
-        fn signature(&self) -> &Signature {
+        fn signature(&self) -> &LambdaSignature {
             &self.signature
         }
 
@@ -637,7 +657,7 @@ mod tests {
         Arc::new(TestLambdaUDF {
             name,
             field: parameter,
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: LambdaSignature::new(Volatility::Immutable),
         })
     }
 

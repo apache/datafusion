@@ -27,8 +27,8 @@ use crate::protobuf;
 use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
-    create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LambdaUDF, LogicalPlan,
-    Signature, Volatility, WindowUDF,
+    create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LambdaUDF, LambdaSignature, LogicalPlan,
+    Volatility, WindowUDF,
 };
 use prost::{
     bytes::{Bytes, BytesMut},
@@ -196,7 +196,7 @@ impl Serializeable for Expr {
                 #[derive(Debug, PartialEq, Eq, Hash)]
                 struct MockLambdaUDF {
                     name: String,
-                    signature: Signature,
+                    signature: LambdaSignature,
                 }
 
                 impl LambdaUDF for MockLambdaUDF {
@@ -208,7 +208,7 @@ impl Serializeable for Expr {
                         &self.name
                     }
 
-                    fn signature(&self) -> &Signature {
+                    fn signature(&self) -> &LambdaSignature {
                         &self.signature
                     }
 
@@ -229,7 +229,7 @@ impl Serializeable for Expr {
 
                 Ok(Arc::new(MockLambdaUDF {
                     name: name.to_string(),
-                    signature: Signature::variadic_any(Volatility::Immutable),
+                    signature: LambdaSignature::new(Volatility::Immutable),
                 }))
             }
         }

@@ -449,7 +449,7 @@ mod tests {
     use crate::LambdaFunctionExpr;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
-    use datafusion_expr::{LambdaFunctionArgs, LambdaUDF, Signature};
+    use datafusion_expr::{LambdaFunctionArgs, LambdaUDF, LambdaSignature};
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_physical_expr_common::physical_expr::is_volatile;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -457,7 +457,7 @@ mod tests {
     /// Test helper to create a mock UDF with a specific volatility
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct MockLambdaUDF {
-        signature: Signature,
+        signature: LambdaSignature,
     }
 
     impl LambdaUDF for MockLambdaUDF {
@@ -469,7 +469,7 @@ mod tests {
             "mock_function"
         }
 
-        fn signature(&self) -> &Signature {
+        fn signature(&self) -> &LambdaSignature {
             &self.signature
         }
 
@@ -489,16 +489,12 @@ mod tests {
     fn test_lambda_function_volatile_node() {
         // Create a volatile UDF
         let volatile_udf = Arc::new(MockLambdaUDF {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Float32],
-                Volatility::Volatile,
-            ),
+            signature: LambdaSignature::new(Volatility::Volatile),
         });
 
         // Create a non-volatile UDF
         let stable_udf = Arc::new(MockLambdaUDF {
-            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+            signature: LambdaSignature::new(Volatility::Stable),
         });
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
