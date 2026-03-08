@@ -94,15 +94,13 @@ impl TryFrom<&CsvOptions> for CsvWriterOptions {
         if let Some(v) = &value.double_quote {
             builder = builder.with_double_quote(*v)
         }
-        if let Some(v) = &value.quote_style {
-            let style = match v {
-                CsvQuoteStyle::Always => QuoteStyle::Always,
-                CsvQuoteStyle::NonNumeric => QuoteStyle::NonNumeric,
-                CsvQuoteStyle::Never => QuoteStyle::Never,
-                CsvQuoteStyle::Necessary => QuoteStyle::Necessary,
-            };
-            builder = builder.with_quote_style(style)
-        }
+        let style = match value.quote_style {
+            CsvQuoteStyle::Always => QuoteStyle::Always,
+            CsvQuoteStyle::NonNumeric => QuoteStyle::NonNumeric,
+            CsvQuoteStyle::Never => QuoteStyle::Never,
+            CsvQuoteStyle::Necessary => QuoteStyle::Necessary,
+        };
+        builder = builder.with_quote_style(style);
         if let Some(v) = &value.ignore_leading_whitespace {
             builder = builder.with_ignore_leading_whitespace(*v)
         }

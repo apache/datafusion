@@ -2940,7 +2940,7 @@ config_namespace! {
         pub double_quote: Option<bool>, default = None
         /// Quote style for CSV writing.
         /// One of: "Always", "Necessary", "NonNumeric", "Never"
-        pub quote_style: Option<CsvQuoteStyle>, default = None
+        pub quote_style: CsvQuoteStyle, default = CsvQuoteStyle::Necessary
         /// Whether to ignore leading whitespace in string values when writing CSV.
         pub ignore_leading_whitespace: Option<bool>, default = None
         /// Whether to ignore trailing whitespace in string values when writing CSV.
@@ -3055,7 +3055,7 @@ impl CsvOptions {
 
     /// Set the quote style for CSV writing.
     pub fn with_quote_style(mut self, quote_style: CsvQuoteStyle) -> Self {
-        self.quote_style = Some(quote_style);
+        self.quote_style = quote_style;
         self
     }
 

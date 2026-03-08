@@ -947,6 +947,17 @@ impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
     }
 }
 
+impl From<protobuf::CsvQuoteStyle> for datafusion_common::parsers::CsvQuoteStyle {
+    fn from(value: protobuf::CsvQuoteStyle) -> Self {
+        match value {
+            protobuf::CsvQuoteStyle::Necessary => Self::Necessary,
+            protobuf::CsvQuoteStyle::Always => Self::Always,
+            protobuf::CsvQuoteStyle::NonNumeric => Self::NonNumeric,
+            protobuf::CsvQuoteStyle::Never => Self::Never,
+        }
+    }
+}
+
 impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
     type Error = DataFusionError;
 
@@ -1003,18 +1014,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .then(|| proto_opts.null_regex.clone()),
             comment: proto_opts.comment.first().copied(),
             truncated_rows: proto_opts.truncated_rows.first().map(|h| *h != 0),
-            quote_style: match protobuf::CsvQuoteStyle::try_from(proto_opts.quote_style) {
-                Ok(protobuf::CsvQuoteStyle::Always) => {
-                    Some(datafusion_common::parsers::CsvQuoteStyle::Always)
-                }
-                Ok(protobuf::CsvQuoteStyle::NonNumeric) => {
-                    Some(datafusion_common::parsers::CsvQuoteStyle::NonNumeric)
-                }
-                Ok(protobuf::CsvQuoteStyle::Never) => {
-                    Some(datafusion_common::parsers::CsvQuoteStyle::Never)
-                }
-                _ => None,
-            },
+            quote_style: proto_opts.quote_style().into(),
             ignore_leading_whitespace: proto_opts
                 .ignore_leading_whitespace
                 .first()
@@ -1278,7 +1278,10 @@ pub(crate) fn csv_writer_options_from_proto(
         Ok(protobuf::CsvQuoteStyle::Always) => QuoteStyle::Always,
         Ok(protobuf::CsvQuoteStyle::NonNumeric) => QuoteStyle::NonNumeric,
         Ok(protobuf::CsvQuoteStyle::Never) => QuoteStyle::Never,
-        _ => QuoteStyle::Necessary,
+        Ok(protobuf::CsvQuoteStyle::Necessary) => QuoteStyle::Necessary,
+        _ => Err(proto_error(
+            "Unknown quote style, must be one of: 'Always', 'NonNumeric', 'Never', 'Necessary'",
+        ))?,
     };
     Ok(builder
         .with_header(writer_options.has_header)
