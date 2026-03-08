@@ -1003,13 +1003,9 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .then(|| proto_opts.null_regex.clone()),
             comment: proto_opts.comment.first().copied(),
             truncated_rows: proto_opts.truncated_rows.first().map(|h| *h != 0),
-            quote_style: match protobuf::CsvQuoteStyle::try_from(
-                proto_opts.quote_style,
-            ) {
+            quote_style: match protobuf::CsvQuoteStyle::try_from(proto_opts.quote_style) {
                 Ok(protobuf::CsvQuoteStyle::Always) => Some("Always".to_owned()),
-                Ok(protobuf::CsvQuoteStyle::NonNumeric) => {
-                    Some("NonNumeric".to_owned())
-                }
+                Ok(protobuf::CsvQuoteStyle::NonNumeric) => Some("NonNumeric".to_owned()),
                 Ok(protobuf::CsvQuoteStyle::Never) => Some("Never".to_owned()),
                 _ => None,
             },
@@ -1271,7 +1267,8 @@ pub(crate) fn csv_writer_options_from_proto(
             return Err(proto_error("Error parsing CSV Escape"));
         }
     }
-    let quote_style = match protobuf::CsvQuoteStyle::try_from(writer_options.quote_style) {
+    let quote_style = match protobuf::CsvQuoteStyle::try_from(writer_options.quote_style)
+    {
         Ok(protobuf::CsvQuoteStyle::Always) => QuoteStyle::Always,
         Ok(protobuf::CsvQuoteStyle::NonNumeric) => QuoteStyle::NonNumeric,
         Ok(protobuf::CsvQuoteStyle::Never) => QuoteStyle::Never,

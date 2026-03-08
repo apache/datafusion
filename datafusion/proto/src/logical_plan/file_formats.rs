@@ -171,9 +171,7 @@ impl From<&CsvOptionsProto> for CsvOptions {
             compression_level: proto.compression_level,
             quote_style: match CsvQuoteStyleProto::try_from(proto.quote_style) {
                 Ok(CsvQuoteStyleProto::Always) => Some("Always".to_owned()),
-                Ok(CsvQuoteStyleProto::NonNumeric) => {
-                    Some("NonNumeric".to_owned())
-                }
+                Ok(CsvQuoteStyleProto::NonNumeric) => Some("NonNumeric".to_owned()),
                 Ok(CsvQuoteStyleProto::Never) => Some("Never".to_owned()),
                 _ => None,
             },
