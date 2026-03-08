@@ -650,24 +650,21 @@ fn find_replacement_indices(
     batch: &ArrowRecordBatch,
     original_row_matches: &mut HashMap<Vec<ScalarValue>, VecDeque<usize>>,
 ) -> Result<Vec<Option<usize>>> {
-    let mut replacement_indices = Vec::with_capacity(batch.num_rows());
-
-    for row_idx in 0..batch.num_rows() {
-        let signature = row_signature(batch.columns(), row_idx)?;
-        let replacement_idx = match original_row_matches.get_mut(&signature) {
-            Some(indices) => {
-                let next = indices.pop_front();
-                if indices.is_empty() {
-                    original_row_matches.remove(&signature);
+    (0..batch.num_rows())
+        .map(|row_idx| {
+            let signature = row_signature(batch.columns(), row_idx)?;
+            Ok(match original_row_matches.get_mut(&signature) {
+                Some(indices) => {
+                    let next = indices.pop_front();
+                    if indices.is_empty() {
+                        original_row_matches.remove(&signature);
+                    }
+                    next
                 }
-                next
-            }
-            None => None,
-        };
-        replacement_indices.push(replacement_idx);
-    }
-
-    Ok(replacement_indices)
+                None => None,
+            })
+        })
+        .collect()
 }
 
 fn build_updated_batch_from_replacement_indices(

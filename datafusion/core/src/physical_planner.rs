@@ -2299,32 +2299,32 @@ fn extract_update_assignments(
     let mut assignments = Vec::new();
     let is_multi_table_update = plan_contains_join(input)?;
     let target_refs = collect_update_target_references(input, target_table)?;
-
-    // Find the top-level projection
-    if let LogicalPlan::Projection(projection) = input.as_ref() {
+    if let Some(projection) = find_projection(input)? {
         append_update_assignments_from_projection(
             &mut assignments,
             projection,
             is_multi_table_update,
             &target_refs,
         )?;
-    } else {
-        // Try to find projection deeper in the plan
-        input.apply(|node| {
-            if let LogicalPlan::Projection(projection) = node {
-                append_update_assignments_from_projection(
-                    &mut assignments,
-                    projection,
-                    is_multi_table_update,
-                    &target_refs,
-                )?;
-                return Ok(TreeNodeRecursion::Stop);
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
     }
 
     Ok(assignments)
+}
+
+fn find_projection(input: &Arc<LogicalPlan>) -> Result<Option<&Projection>> {
+    if let LogicalPlan::Projection(projection) = input.as_ref() {
+        return Ok(Some(projection));
+    }
+
+    let mut found = None;
+    input.apply(|node| {
+        if let LogicalPlan::Projection(projection) = node {
+            found = Some(projection);
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(found)
 }
 
 fn append_update_assignments_from_projection(
