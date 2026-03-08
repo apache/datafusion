@@ -24,7 +24,7 @@ use crate::protobuf::{
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     TableReference, exec_datafusion_err, exec_err, not_impl_err,
-    parsers::CompressionTypeVariant,
+    parsers::{CompressionTypeVariant, CsvQuoteStyle},
 };
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
@@ -66,10 +66,12 @@ impl CsvOptionsProto {
                     .map_or(vec![], |v| vec![v as u8]),
                 truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
                 compression_level: options.compression_level,
-                quote_style: match options.quote_style.as_deref() {
-                    Some("Always") => CsvQuoteStyleProto::Always.into(),
-                    Some("NonNumeric") => CsvQuoteStyleProto::NonNumeric.into(),
-                    Some("Never") => CsvQuoteStyleProto::Never.into(),
+                quote_style: match options.quote_style {
+                    Some(CsvQuoteStyle::Always) => CsvQuoteStyleProto::Always.into(),
+                    Some(CsvQuoteStyle::NonNumeric) => {
+                        CsvQuoteStyleProto::NonNumeric.into()
+                    }
+                    Some(CsvQuoteStyle::Never) => CsvQuoteStyleProto::Never.into(),
                     _ => CsvQuoteStyleProto::Necessary.into(),
                 },
                 ignore_leading_whitespace: options
@@ -170,9 +172,11 @@ impl From<&CsvOptionsProto> for CsvOptions {
             },
             compression_level: proto.compression_level,
             quote_style: match CsvQuoteStyleProto::try_from(proto.quote_style) {
-                Ok(CsvQuoteStyleProto::Always) => Some("Always".to_owned()),
-                Ok(CsvQuoteStyleProto::NonNumeric) => Some("NonNumeric".to_owned()),
-                Ok(CsvQuoteStyleProto::Never) => Some("Never".to_owned()),
+                Ok(CsvQuoteStyleProto::Always) => Some(CsvQuoteStyle::Always),
+                Ok(CsvQuoteStyleProto::NonNumeric) => {
+                    Some(CsvQuoteStyle::NonNumeric)
+                }
+                Ok(CsvQuoteStyleProto::Never) => Some(CsvQuoteStyle::Never),
                 _ => None,
             },
             ignore_leading_whitespace: if proto.ignore_leading_whitespace.is_empty() {

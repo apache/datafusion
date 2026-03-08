@@ -998,10 +998,16 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
             truncated_rows: opts.truncated_rows.map_or_else(Vec::new, |h| vec![h as u8]),
             compression_level: opts.compression_level,
-            quote_style: match opts.quote_style.as_deref() {
-                Some("Always") => protobuf::CsvQuoteStyle::Always.into(),
-                Some("NonNumeric") => protobuf::CsvQuoteStyle::NonNumeric.into(),
-                Some("Never") => protobuf::CsvQuoteStyle::Never.into(),
+            quote_style: match opts.quote_style {
+                Some(datafusion_common::parsers::CsvQuoteStyle::Always) => {
+                    protobuf::CsvQuoteStyle::Always.into()
+                }
+                Some(datafusion_common::parsers::CsvQuoteStyle::NonNumeric) => {
+                    protobuf::CsvQuoteStyle::NonNumeric.into()
+                }
+                Some(datafusion_common::parsers::CsvQuoteStyle::Never) => {
+                    protobuf::CsvQuoteStyle::Never.into()
+                }
                 _ => protobuf::CsvQuoteStyle::Necessary.into(),
             },
             ignore_leading_whitespace: opts

@@ -24,7 +24,7 @@ use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
 use crate::parquet_config::DFParquetWriterVersion;
-use crate::parsers::CompressionTypeVariant;
+use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
@@ -1855,6 +1855,17 @@ impl ConfigField for CompressionTypeVariant {
     }
 }
 
+impl ConfigField for CsvQuoteStyle {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = CsvQuoteStyle::from_str(value)?;
+        Ok(())
+    }
+}
+
 /// An implementation trait used to recursively walk configuration
 pub trait Visit {
     fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str);
@@ -2929,7 +2940,7 @@ config_namespace! {
         pub double_quote: Option<bool>, default = None
         /// Quote style for CSV writing.
         /// One of: "Always", "Necessary", "NonNumeric", "Never"
-        pub quote_style: Option<String>, default = None
+        pub quote_style: Option<CsvQuoteStyle>, default = None
         /// Whether to ignore leading whitespace in string values when writing CSV.
         pub ignore_leading_whitespace: Option<bool>, default = None
         /// Whether to ignore trailing whitespace in string values when writing CSV.
@@ -3043,9 +3054,8 @@ impl CsvOptions {
     }
 
     /// Set the quote style for CSV writing.
-    /// One of: "Always", "Necessary", "NonNumeric", "Never"
-    pub fn with_quote_style(mut self, quote_style: impl Into<String>) -> Self {
-        self.quote_style = Some(quote_style.into());
+    pub fn with_quote_style(mut self, quote_style: CsvQuoteStyle) -> Self {
+        self.quote_style = Some(quote_style);
         self
     }
 

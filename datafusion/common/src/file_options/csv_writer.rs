@@ -19,7 +19,7 @@
 
 use crate::config::CsvOptions;
 use crate::error::{DataFusionError, Result};
-use crate::parsers::CompressionTypeVariant;
+use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 
 use arrow::csv::{QuoteStyle, WriterBuilder};
 
@@ -95,11 +95,11 @@ impl TryFrom<&CsvOptions> for CsvWriterOptions {
             builder = builder.with_double_quote(*v)
         }
         if let Some(v) = &value.quote_style {
-            let style = match v.as_str() {
-                "Always" => QuoteStyle::Always,
-                "NonNumeric" => QuoteStyle::NonNumeric,
-                "Never" => QuoteStyle::Never,
-                _ => QuoteStyle::Necessary,
+            let style = match v {
+                CsvQuoteStyle::Always => QuoteStyle::Always,
+                CsvQuoteStyle::NonNumeric => QuoteStyle::NonNumeric,
+                CsvQuoteStyle::Never => QuoteStyle::Never,
+                CsvQuoteStyle::Necessary => QuoteStyle::Necessary,
             };
             builder = builder.with_quote_style(style)
         }

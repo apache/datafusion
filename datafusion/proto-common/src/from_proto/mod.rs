@@ -1004,9 +1004,15 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             comment: proto_opts.comment.first().copied(),
             truncated_rows: proto_opts.truncated_rows.first().map(|h| *h != 0),
             quote_style: match protobuf::CsvQuoteStyle::try_from(proto_opts.quote_style) {
-                Ok(protobuf::CsvQuoteStyle::Always) => Some("Always".to_owned()),
-                Ok(protobuf::CsvQuoteStyle::NonNumeric) => Some("NonNumeric".to_owned()),
-                Ok(protobuf::CsvQuoteStyle::Never) => Some("Never".to_owned()),
+                Ok(protobuf::CsvQuoteStyle::Always) => {
+                    Some(datafusion_common::parsers::CsvQuoteStyle::Always)
+                }
+                Ok(protobuf::CsvQuoteStyle::NonNumeric) => {
+                    Some(datafusion_common::parsers::CsvQuoteStyle::NonNumeric)
+                }
+                Ok(protobuf::CsvQuoteStyle::Never) => {
+                    Some(datafusion_common::parsers::CsvQuoteStyle::Never)
+                }
                 _ => None,
             },
             ignore_leading_whitespace: proto_opts
