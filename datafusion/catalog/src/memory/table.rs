@@ -517,34 +517,35 @@ impl TableProvider for MemTable {
         validate_update_from_input_schema(&self.schema, &input.schema())?;
 
         let input_batches = collect(input, state.task_ctx()).await?;
+        let target_column_count = self.schema.fields().len();
         let mut original_row_matches: HashMap<Vec<ScalarValue>, VecDeque<usize>> =
             HashMap::new();
         let mut replacement_batches = Vec::with_capacity(input_batches.len());
-        let mut replacement_row_count = 0usize;
+        let mut next_replacement_idx = 0usize;
 
         for batch in input_batches {
-            replacement_row_count += batch.num_rows();
+            let row_count = batch.num_rows();
+            let (replacement_columns, original_columns) =
+                batch.columns().split_at(target_column_count);
             let replacement_batch = ArrowRecordBatch::try_new(
                 Arc::clone(&self.schema),
-                replacement_columns(&batch, self.schema.fields().len()),
+                replacement_columns.to_vec(),
             )?;
 
-            for row_idx in 0..batch.num_rows() {
+            for row_idx in 0..row_count {
                 original_row_matches
-                    .entry(row_signature(
-                        original_columns(&batch, self.schema.fields().len()),
-                        row_idx,
-                    )?)
+                    .entry(row_signature(original_columns, row_idx)?)
                     .or_default()
-                    .push_back(replacement_row_count - batch.num_rows() + row_idx);
+                    .push_back(next_replacement_idx + row_idx);
             }
 
             replacement_batches.push(replacement_batch);
+            next_replacement_idx += row_count;
         }
 
         *self.sort_order.lock() = vec![];
 
-        let replacement_batch = if replacement_row_count == 0 {
+        let replacement_batch = if next_replacement_idx == 0 {
             ArrowRecordBatch::new_empty(Arc::clone(&self.schema))
         } else {
             concat_batches(&self.schema, &replacement_batches)?
@@ -582,9 +583,9 @@ impl TableProvider for MemTable {
             *partition = new_batches;
         }
 
-        if matched_updates != replacement_row_count {
+        if matched_updates != next_replacement_idx {
             return plan_err!(
-                "UPDATE ... FROM produced {replacement_row_count} replacement rows but matched {matched_updates} target rows"
+                "UPDATE ... FROM produced {next_replacement_idx} replacement rows but matched {matched_updates} target rows"
             );
         }
 
@@ -635,20 +636,6 @@ fn validate_update_from_input_schema(
 
     Ok(())
 }
-
-fn replacement_columns(
-    batch: &ArrowRecordBatch,
-    target_column_count: usize,
-) -> Vec<ArrayRef> {
-    (0..target_column_count)
-        .map(|idx| Arc::clone(batch.column(idx)))
-        .collect()
-}
-
-fn original_columns(batch: &ArrowRecordBatch, target_column_count: usize) -> &[ArrayRef] {
-    &batch.columns()[target_column_count..]
-}
-
 fn row_signature(columns: &[ArrayRef], row_idx: usize) -> Result<Vec<ScalarValue>> {
     columns
         .iter()
@@ -687,16 +674,15 @@ fn build_updated_batch_from_replacement_indices(
     replacement_indices: &[Option<usize>],
     schema: &SchemaRef,
 ) -> Result<ArrowRecordBatch> {
-    let mut new_columns = Vec::with_capacity(batch.num_columns());
-    for column_idx in 0..batch.num_columns() {
-        let original_column = batch.column(column_idx);
-        let merged = merge_with_replacement_indices(
-            original_column,
-            replacement_batch.column(column_idx).as_ref(),
-            replacement_indices,
-        )?;
-        new_columns.push(merged);
-    }
+    let new_columns = (0..batch.num_columns())
+        .map(|column_idx| {
+            merge_with_replacement_indices(
+                batch.column(column_idx),
+                replacement_batch.column(column_idx).as_ref(),
+                replacement_indices,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(ArrowRecordBatch::try_new(Arc::clone(schema), new_columns)?)
 }
@@ -713,17 +699,16 @@ fn merge_with_replacement_indices(
         false,
         replacement_indices.len(),
     );
-    let mut consumed_replacement_rows = 0usize;
 
     for (row_idx, replacement_idx) in replacement_indices.iter().enumerate() {
         if let Some(replacement_idx) = replacement_idx {
             mutable.extend(1, *replacement_idx, *replacement_idx + 1);
-            consumed_replacement_rows += 1;
         } else {
             mutable.extend(0, row_idx, row_idx + 1);
         }
     }
 
+    let consumed_replacement_rows = replacement_indices.iter().flatten().count();
     if consumed_replacement_rows > replacement_rows.len() {
         return plan_err!(
             "Invalid UPDATE ... FROM replacement rows: expected {}, consumed {}",

@@ -2297,7 +2297,6 @@ fn extract_update_assignments(
     //
     // Each projected expression has an alias matching the column name
     let mut assignments = Vec::new();
-
     let is_multi_table_update = plan_contains_join(input)?;
     let target_refs = collect_update_target_references(input, target_table)?;
 
@@ -2328,41 +2327,36 @@ fn extract_update_assignments(
     Ok(assignments)
 }
 
-fn projection_alias_assignments(projection: &Projection) -> Vec<(String, Expr)> {
-    projection
-        .expr
-        .iter()
-        .filter_map(|expr| {
-            if let Expr::Alias(alias) = expr {
-                Some((alias.name.clone(), alias.expr.as_ref().clone()))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
 fn append_update_assignments_from_projection(
     assignments: &mut Vec<(String, Expr)>,
     projection: &Projection,
     is_multi_table_update: bool,
     target_refs: &[TableReference],
 ) -> Result<()> {
-    for (column_name, assignment_expr) in projection_alias_assignments(projection) {
-        // Only include assignments that modify the target column value.
-        if !is_identity_assignment(&assignment_expr, &column_name, target_refs) {
-            let assignment_expr = if is_multi_table_update {
-                assignment_expr
-            } else {
-                // Preserve existing single-table behavior for table providers
-                // that expect unqualified assignment columns.
-                strip_column_qualifiers(assignment_expr)?
-            };
-            assignments.push((column_name, assignment_expr));
-        }
-    }
+    projection
+        .expr
+        .iter()
+        .filter_map(|expr| match expr {
+            Expr::Alias(alias) => Some((alias.name.clone(), alias.expr.as_ref().clone())),
+            _ => None,
+        })
+        .try_for_each(|(column_name, assignment_expr)| {
+            if is_identity_assignment(&assignment_expr, &column_name, target_refs) {
+                return Ok(());
+            }
 
-    Ok(())
+            assignments.push((
+                column_name,
+                if is_multi_table_update {
+                    assignment_expr
+                } else {
+                    // Preserve existing single-table behavior for table providers
+                    // that expect unqualified assignment columns.
+                    strip_column_qualifiers(assignment_expr)?
+                },
+            ));
+            Ok(())
+        })
 }
 
 /// Check if an assignment is an identity assignment (column = column)

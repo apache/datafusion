@@ -2581,12 +2581,13 @@ fn update_target_column_expr(
     qualifier: Option<&TableReference>,
     field: &FieldRef,
 ) -> Expr {
-    if let Some(alias) = table_alias {
-        Expr::Column(Column::new(
-            Some(ident_normalizer.normalize(alias.name.clone())),
-            field.name(),
-        ))
-    } else {
-        Expr::Column(Column::from((qualifier, field)))
-    }
+    table_alias.as_ref().map_or_else(
+        || Expr::Column(Column::from((qualifier, field))),
+        |alias| {
+            Expr::Column(Column::new(
+                Some(ident_normalizer.normalize(alias.name.clone())),
+                field.name(),
+            ))
+        },
+    )
 }
