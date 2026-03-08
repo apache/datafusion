@@ -20712,12 +20712,18 @@ impl serde::Serialize for RepartitionExecNode {
         if self.partitioning.is_some() {
             len += 1;
         }
+        if self.preserve_order {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.RepartitionExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
         if let Some(v) = self.partitioning.as_ref() {
             struct_ser.serialize_field("partitioning", v)?;
+        }
+        if self.preserve_order {
+            struct_ser.serialize_field("preserveOrder", &self.preserve_order)?;
         }
         struct_ser.end()
     }
@@ -20731,12 +20737,15 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
         const FIELDS: &[&str] = &[
             "input",
             "partitioning",
+            "preserve_order",
+            "preserveOrder",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             Partitioning,
+            PreserveOrder,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -20760,6 +20769,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "partitioning" => Ok(GeneratedField::Partitioning),
+                            "preserveOrder" | "preserve_order" => Ok(GeneratedField::PreserveOrder),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20781,6 +20791,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
             {
                 let mut input__ = None;
                 let mut partitioning__ = None;
+                let mut preserve_order__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -20795,11 +20806,18 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                             }
                             partitioning__ = map_.next_value()?;
                         }
+                        GeneratedField::PreserveOrder => {
+                            if preserve_order__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preserveOrder"));
+                            }
+                            preserve_order__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(RepartitionExecNode {
                     input: input__,
                     partitioning: partitioning__,
+                    preserve_order: preserve_order__.unwrap_or_default(),
                 })
             }
         }
