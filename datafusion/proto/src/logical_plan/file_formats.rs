@@ -173,9 +173,7 @@ impl From<&CsvOptionsProto> for CsvOptions {
             compression_level: proto.compression_level,
             quote_style: match CsvQuoteStyleProto::try_from(proto.quote_style) {
                 Ok(CsvQuoteStyleProto::Always) => Some(CsvQuoteStyle::Always),
-                Ok(CsvQuoteStyleProto::NonNumeric) => {
-                    Some(CsvQuoteStyle::NonNumeric)
-                }
+                Ok(CsvQuoteStyleProto::NonNumeric) => Some(CsvQuoteStyle::NonNumeric),
                 Ok(CsvQuoteStyleProto::Never) => Some(CsvQuoteStyle::Never),
                 _ => None,
             },
