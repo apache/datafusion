@@ -229,7 +229,7 @@ impl Serializeable for Expr {
 
                 Ok(Arc::new(MockLambdaUDF {
                     name: name.to_string(),
-                    signature: LambdaSignature::new(Volatility::Immutable),
+                    signature: LambdaSignature::variadic_any(Volatility::Immutable),
                 }))
             }
         }

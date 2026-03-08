@@ -83,7 +83,7 @@ impl Default for ArrayTransform {
 impl ArrayTransform {
     pub fn new() -> Self {
         Self {
-            signature: LambdaSignature::new(Volatility::Immutable),
+            signature: LambdaSignature::any(2, Volatility::Immutable),
             aliases: vec![String::from("list_transform")],
         }
     }
@@ -238,7 +238,7 @@ impl LambdaUDF for ArrayTransform {
 
     fn lambdas_parameters(
         &self,
-        args: &[ValueOrLambdaParameter],
+        args: &[ValueOrLambdaParameter<FieldRef>],
     ) -> Result<Vec<Option<Vec<Field>>>> {
         let [ValueOrLambdaParameter::Value(list), ValueOrLambdaParameter::Lambda] = args
         else {

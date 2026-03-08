@@ -489,12 +489,12 @@ mod tests {
     fn test_lambda_function_volatile_node() {
         // Create a volatile UDF
         let volatile_udf = Arc::new(MockLambdaUDF {
-            signature: LambdaSignature::new(Volatility::Volatile),
+            signature: LambdaSignature::variadic_any(Volatility::Volatile),
         });
 
         // Create a non-volatile UDF
         let stable_udf = Arc::new(MockLambdaUDF {
-            signature: LambdaSignature::new(Volatility::Stable),
+            signature: LambdaSignature::variadic_any(Volatility::Stable),
         });
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);

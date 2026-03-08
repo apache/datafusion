@@ -35,11 +35,44 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+/// The types of arguments for which a function has implementations.
+///
+/// [`LambdaTypeSignature`] **DOES NOT** define the types that a user query could call the
+/// function with. DataFusion will automatically coerce (cast) argument types to
+/// one of the supported function signatures, if possible.
+///
+/// # Overview
+/// Functions typically provide implementations for a small number of different
+/// argument [`DataType`]s, rather than all possible combinations. If a user
+/// calls a function with arguments that do not match any of the declared types,
+/// DataFusion will attempt to automatically coerce (add casts to) function
+/// arguments so they match the [`LambdaTypeSignature`]. See the [`type_coercion`] module
+/// for more details
+///
+/// [`type_coercion`]: crate::type_coercion
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum LambdaTypeSignature {
+    /// The acceptable signature and coercions rules are special for this
+    /// function.
+    ///
+    /// If this signature is specified,
+    /// DataFusion will call [`LambdaUDF::coerce_value_types`] to prepare argument types.
+    ///
+    /// [`LambdaUDF::coerce_value_types`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.LambdaUDF.html#method.coerce_value_types
+    UserDefined,
+    /// One or more lambdas or arguments with arbitrary types
+    VariadicAny,
+    /// The specified number of lambdas or arguments with arbitrary types.
+    Any(usize),
+}
+
 /// Provides information necessary for calling a lambda function.
 ///
 /// - [`Volatility`] defines how the output of the function changes with the input.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct LambdaSignature {
+    /// The data types that the function accepts. See [LambdaTypeSignature] for more information.
+    pub type_signature: LambdaTypeSignature,
     /// The volatility of the function. See [Volatility] for more information.
     pub volatility: Volatility,
     /// Optional parameter names for the function arguments.
@@ -51,9 +84,40 @@ pub struct LambdaSignature {
 }
 
 impl LambdaSignature {
-    /// Creates a new Signature from a given volatility.
-    pub fn new(volatility: Volatility) -> LambdaSignature {
-        LambdaSignature { volatility, parameter_names: None }
+    /// Creates a new LambdaSignature from a given type signature and volatility.
+    pub fn new(type_signature: LambdaTypeSignature, volatility: Volatility) -> Self {
+        LambdaSignature {
+            type_signature,
+            volatility,
+            parameter_names: None,
+        }
+    }
+
+    /// User-defined coercion rules for the function.
+    pub fn user_defined(volatility: Volatility) -> Self {
+        Self {
+            type_signature: LambdaTypeSignature::UserDefined,
+            volatility,
+            parameter_names: None,
+        }
+    }
+
+    /// An arbitrary number of lambdas or arguments of any type.
+    pub fn variadic_any(volatility: Volatility) -> Self {
+        Self {
+            type_signature: LambdaTypeSignature::VariadicAny,
+            volatility,
+            parameter_names: None,
+        }
+    }
+
+    /// A specified number of arguments of any type
+    pub fn any(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: LambdaTypeSignature::Any(arg_count),
+            volatility,
+            parameter_names: None,
+        }
     }
 }
 
@@ -99,10 +163,10 @@ impl Hash for dyn LambdaUDF {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum ValueOrLambdaParameter {
-    /// A columnar value with the given field
-    Value(FieldRef),
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ValueOrLambdaParameter<T> {
+    /// A value with the given associated data
+    Value(T),
     /// A lambda
     Lambda,
 }
@@ -566,7 +630,10 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// # Return value
     /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
     /// arguments to these specific types.
-    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+    fn coerce_value_types(
+        &self,
+        _arg_types: &[ValueOrLambdaParameter<DataType>],
+    ) -> Result<Vec<Option<DataType>>> {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
@@ -581,7 +648,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// Returns the parameters that any lambda supports
     fn lambdas_parameters(
         &self,
-        args: &[ValueOrLambdaParameter],
+        args: &[ValueOrLambdaParameter<FieldRef>],
     ) -> Result<Vec<Option<Vec<Field>>>> {
         Ok(vec![None; args.len()])
     }
@@ -657,7 +724,7 @@ mod tests {
         Arc::new(TestLambdaUDF {
             name,
             field: parameter,
-            signature: LambdaSignature::new(Volatility::Immutable),
+            signature: LambdaSignature::variadic_any(Volatility::Immutable),
         })
     }
 
