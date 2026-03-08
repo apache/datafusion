@@ -2927,6 +2927,13 @@ config_namespace! {
         pub terminator: Option<u8>, default = None
         pub escape: Option<u8>, default = None
         pub double_quote: Option<bool>, default = None
+        /// Quote style for CSV writing.
+        /// One of: "Always", "Necessary", "NonNumeric", "Never"
+        pub quote_style: Option<String>, default = None
+        /// Whether to ignore leading whitespace in string values when writing CSV.
+        pub ignore_leading_whitespace: Option<bool>, default = None
+        /// Whether to ignore trailing whitespace in string values when writing CSV.
+        pub ignore_trailing_whitespace: Option<bool>, default = None
         /// Specifies whether newlines in (quoted) values are supported.
         ///
         /// Parsing newlines in quoted values may be affected by execution behaviour such as
@@ -3032,6 +3039,31 @@ impl CsvOptions {
     /// - default to true
     pub fn with_double_quote(mut self, double_quote: bool) -> Self {
         self.double_quote = Some(double_quote);
+        self
+    }
+
+    /// Set the quote style for CSV writing.
+    /// One of: "Always", "Necessary", "NonNumeric", "Never"
+    pub fn with_quote_style(mut self, quote_style: impl Into<String>) -> Self {
+        self.quote_style = Some(quote_style.into());
+        self
+    }
+
+    /// Set whether to ignore leading whitespace in string values when writing CSV.
+    pub fn with_ignore_leading_whitespace(
+        mut self,
+        ignore_leading_whitespace: bool,
+    ) -> Self {
+        self.ignore_leading_whitespace = Some(ignore_leading_whitespace);
+        self
+    }
+
+    /// Set whether to ignore trailing whitespace in string values when writing CSV.
+    pub fn with_ignore_trailing_whitespace(
+        mut self,
+        ignore_trailing_whitespace: bool,
+    ) -> Self {
+        self.ignore_trailing_whitespace = Some(ignore_trailing_whitespace);
         self
     }
 

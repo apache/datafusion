@@ -21,7 +21,7 @@ use crate::config::CsvOptions;
 use crate::error::{DataFusionError, Result};
 use crate::parsers::CompressionTypeVariant;
 
-use arrow::csv::WriterBuilder;
+use arrow::csv::{QuoteStyle, WriterBuilder};
 
 /// Options for writing CSV files
 #[derive(Clone, Debug)]
@@ -93,6 +93,21 @@ impl TryFrom<&CsvOptions> for CsvWriterOptions {
         }
         if let Some(v) = &value.double_quote {
             builder = builder.with_double_quote(*v)
+        }
+        if let Some(v) = &value.quote_style {
+            let style = match v.as_str() {
+                "Always" => QuoteStyle::Always,
+                "NonNumeric" => QuoteStyle::NonNumeric,
+                "Never" => QuoteStyle::Never,
+                _ => QuoteStyle::Necessary,
+            };
+            builder = builder.with_quote_style(style)
+        }
+        if let Some(v) = &value.ignore_leading_whitespace {
+            builder = builder.with_ignore_leading_whitespace(*v)
+        }
+        if let Some(v) = &value.ignore_trailing_whitespace {
+            builder = builder.with_ignore_trailing_whitespace(*v)
         }
         Ok(CsvWriterOptions {
             writer_options: builder,

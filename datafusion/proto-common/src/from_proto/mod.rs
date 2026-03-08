@@ -23,7 +23,7 @@ use crate::common::proto_error;
 use crate::protobuf_common as protobuf;
 use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
-use arrow::csv::WriterBuilder;
+use arrow::csv::{QuoteStyle, WriterBuilder};
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     TimeUnit, UnionFields, UnionMode, i256,
@@ -1003,6 +1003,24 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .then(|| proto_opts.null_regex.clone()),
             comment: proto_opts.comment.first().copied(),
             truncated_rows: proto_opts.truncated_rows.first().map(|h| *h != 0),
+            quote_style: match protobuf::CsvQuoteStyle::try_from(
+                proto_opts.quote_style,
+            ) {
+                Ok(protobuf::CsvQuoteStyle::Always) => Some("Always".to_owned()),
+                Ok(protobuf::CsvQuoteStyle::NonNumeric) => {
+                    Some("NonNumeric".to_owned())
+                }
+                Ok(protobuf::CsvQuoteStyle::Never) => Some("Never".to_owned()),
+                _ => None,
+            },
+            ignore_leading_whitespace: proto_opts
+                .ignore_leading_whitespace
+                .first()
+                .map(|h| *h != 0),
+            ignore_trailing_whitespace: proto_opts
+                .ignore_trailing_whitespace
+                .first()
+                .map(|h| *h != 0),
         })
     }
 }
@@ -1253,6 +1271,12 @@ pub(crate) fn csv_writer_options_from_proto(
             return Err(proto_error("Error parsing CSV Escape"));
         }
     }
+    let quote_style = match protobuf::CsvQuoteStyle::try_from(writer_options.quote_style) {
+        Ok(protobuf::CsvQuoteStyle::Always) => QuoteStyle::Always,
+        Ok(protobuf::CsvQuoteStyle::NonNumeric) => QuoteStyle::NonNumeric,
+        Ok(protobuf::CsvQuoteStyle::Never) => QuoteStyle::Never,
+        _ => QuoteStyle::Necessary,
+    };
     Ok(builder
         .with_header(writer_options.has_header)
         .with_date_format(writer_options.date_format.clone())
@@ -1260,5 +1284,8 @@ pub(crate) fn csv_writer_options_from_proto(
         .with_timestamp_format(writer_options.timestamp_format.clone())
         .with_time_format(writer_options.time_format.clone())
         .with_null(writer_options.null_value.clone())
-        .with_double_quote(writer_options.double_quote))
+        .with_double_quote(writer_options.double_quote)
+        .with_quote_style(quote_style)
+        .with_ignore_leading_whitespace(writer_options.ignore_leading_whitespace)
+        .with_ignore_trailing_whitespace(writer_options.ignore_trailing_whitespace))
 }

@@ -23,7 +23,7 @@ use crate::protobuf_common::{
     EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::csv::WriterBuilder;
+use arrow::csv::{QuoteStyle, WriterBuilder};
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     SchemaRef, TimeUnit, UnionMode,
@@ -998,6 +998,18 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
             truncated_rows: opts.truncated_rows.map_or_else(Vec::new, |h| vec![h as u8]),
             compression_level: opts.compression_level,
+            quote_style: match opts.quote_style.as_deref() {
+                Some("Always") => protobuf::CsvQuoteStyle::Always.into(),
+                Some("NonNumeric") => protobuf::CsvQuoteStyle::NonNumeric.into(),
+                Some("Never") => protobuf::CsvQuoteStyle::Never.into(),
+                _ => protobuf::CsvQuoteStyle::Necessary.into(),
+            },
+            ignore_leading_whitespace: opts
+                .ignore_leading_whitespace
+                .map_or_else(Vec::new, |h| vec![h as u8]),
+            ignore_trailing_whitespace: opts
+                .ignore_trailing_whitespace
+                .map_or_else(Vec::new, |h| vec![h as u8]),
         })
     }
 }
@@ -1137,5 +1149,13 @@ pub(crate) fn csv_writer_options_to_proto(
         quote: (csv_options.quote() as char).to_string(),
         escape: (csv_options.escape() as char).to_string(),
         double_quote: csv_options.double_quote(),
+        quote_style: match csv_options.quote_style() {
+            QuoteStyle::Always => protobuf::CsvQuoteStyle::Always.into(),
+            QuoteStyle::NonNumeric => protobuf::CsvQuoteStyle::NonNumeric.into(),
+            QuoteStyle::Never => protobuf::CsvQuoteStyle::Never.into(),
+            _ => protobuf::CsvQuoteStyle::Necessary.into(),
+        },
+        ignore_leading_whitespace: csv_options.ignore_leading_whitespace(),
+        ignore_trailing_whitespace: csv_options.ignore_trailing_whitespace(),
     }
 }

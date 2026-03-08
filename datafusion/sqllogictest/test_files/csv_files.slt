@@ -380,3 +380,200 @@ SET datafusion.optimizer.repartition_file_min_size = 10485760;
 
 statement ok
 drop table stored_table_with_cr_terminator;
+
+# Test quote_style option
+
+statement ok
+CREATE TABLE quote_style_source (
+  int_col INT,
+  string_col TEXT,
+  float_col DOUBLE
+) AS VALUES
+(1, 'hello', 1.1),
+(2, 'world', 2.2),
+(3, 'comma,value', 3.3);
+
+# QuoteStyle::Always - all fields are quoted
+query I
+COPY quote_style_source TO 'test_files/scratch/csv_files/quote_style_always.csv'
+STORED AS csv
+OPTIONS ('format.has_header' 'true', 'format.quote_style' 'Always');
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE stored_quote_style_always (
+  int_col TEXT,
+  string_col TEXT,
+  float_col TEXT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/quote_style_always.csv'
+OPTIONS ('format.has_header' 'true', 'format.quote_style' 'Never');
+
+# All values should have been quoted, but reading them back strips the quotes
+query TTT
+select * from stored_quote_style_always;
+----
+1 hello 1.1
+2 world 2.2
+3 comma,value 3.3
+
+statement ok
+DROP TABLE stored_quote_style_always;
+
+# QuoteStyle::NonNumeric - only string fields are quoted
+query I
+COPY quote_style_source TO 'test_files/scratch/csv_files/quote_style_nonnumeric.csv'
+STORED AS csv
+OPTIONS ('format.has_header' 'true', 'format.quote_style' 'NonNumeric');
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE stored_quote_style_nonnumeric (
+  int_col TEXT,
+  string_col TEXT,
+  float_col TEXT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/quote_style_nonnumeric.csv'
+OPTIONS ('format.has_header' 'true', 'format.quote_style' 'Never');
+
+query TTT
+select * from stored_quote_style_nonnumeric;
+----
+1 hello 1.1
+2 world 2.2
+3 comma,value 3.3
+
+statement ok
+DROP TABLE stored_quote_style_nonnumeric;
+
+# QuoteStyle::Never - no fields are quoted (can produce invalid CSV)
+# Note: the comma in 'comma,value' will NOT be quoted, so reading back
+# will see an extra column
+query I
+COPY quote_style_source TO 'test_files/scratch/csv_files/quote_style_never.csv'
+STORED AS csv
+OPTIONS ('format.has_header' 'true', 'format.quote_style' 'Never');
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE stored_quote_style_never (
+  int_col TEXT,
+  string_col TEXT,
+  float_col TEXT,
+  extra TEXT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/quote_style_never.csv'
+OPTIONS ('format.has_header' 'false', 'format.truncated_rows' 'true');
+
+# Rows without commas in data parse normally (extra column is NULL),
+# while the row with 'comma,value' splits across columns
+query TTTT
+select * from stored_quote_style_never order by int_col;
+----
+1 hello 1.1 NULL
+2 world 2.2 NULL
+3 comma value 3.3
+int_col string_col float_col NULL
+
+statement ok
+DROP TABLE stored_quote_style_never;
+
+statement ok
+DROP TABLE quote_style_source;
+
+# Test ignore_leading_whitespace and ignore_trailing_whitespace options
+
+statement ok
+CREATE TABLE whitespace_source (
+  id INT,
+  value TEXT
+) AS VALUES
+(1, '  hello  '),
+(2, '  world  '),
+(3, 'no_space');
+
+# Write with ignore_leading_whitespace to trim leading spaces
+query I
+COPY whitespace_source TO 'test_files/scratch/csv_files/trim_leading.csv'
+STORED AS csv
+OPTIONS ('format.has_header' 'true', 'format.ignore_leading_whitespace' 'true');
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE stored_trim_leading (
+  id INT,
+  value TEXT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/trim_leading.csv'
+OPTIONS ('format.has_header' 'true');
+
+query IT
+select * from stored_trim_leading order by id;
+----
+1 hello
+2 world
+3 no_space
+
+statement ok
+DROP TABLE stored_trim_leading;
+
+# Write with ignore_trailing_whitespace to trim trailing spaces
+query I
+COPY whitespace_source TO 'test_files/scratch/csv_files/trim_trailing.csv'
+STORED AS csv
+OPTIONS ('format.has_header' 'true', 'format.ignore_trailing_whitespace' 'true');
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE stored_trim_trailing (
+  id INT,
+  value TEXT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/trim_trailing.csv'
+OPTIONS ('format.has_header' 'true');
+
+query IT
+select * from stored_trim_trailing order by id;
+----
+1   hello
+2   world
+3 no_space
+
+statement ok
+DROP TABLE stored_trim_trailing;
+
+# Write with both ignore_leading and ignore_trailing whitespace
+query I
+COPY whitespace_source TO 'test_files/scratch/csv_files/trim_both.csv'
+STORED AS csv
+OPTIONS ('format.has_header' 'true',
+         'format.ignore_leading_whitespace' 'true',
+         'format.ignore_trailing_whitespace' 'true');
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE stored_trim_both (
+  id INT,
+  value TEXT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/trim_both.csv'
+OPTIONS ('format.has_header' 'true');
+
+query IT
+select * from stored_trim_both order by id;
+----
+1 hello
+2 world
+3 no_space
+
+statement ok
+DROP TABLE stored_trim_both;
+
+statement ok
+DROP TABLE whitespace_source;

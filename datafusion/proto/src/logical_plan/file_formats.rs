@@ -17,7 +17,10 @@
 
 use std::sync::Arc;
 
-use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
+use crate::protobuf::{
+    CsvOptions as CsvOptionsProto, CsvQuoteStyle as CsvQuoteStyleProto,
+    JsonOptions as JsonOptionsProto,
+};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     TableReference, exec_datafusion_err, exec_err, not_impl_err,
@@ -63,6 +66,18 @@ impl CsvOptionsProto {
                     .map_or(vec![], |v| vec![v as u8]),
                 truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
                 compression_level: options.compression_level,
+                quote_style: match options.quote_style.as_deref() {
+                    Some("Always") => CsvQuoteStyleProto::Always.into(),
+                    Some("NonNumeric") => CsvQuoteStyleProto::NonNumeric.into(),
+                    Some("Never") => CsvQuoteStyleProto::Never.into(),
+                    _ => CsvQuoteStyleProto::Necessary.into(),
+                },
+                ignore_leading_whitespace: options
+                    .ignore_leading_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
+                ignore_trailing_whitespace: options
+                    .ignore_trailing_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
             }
         } else {
             CsvOptionsProto::default()
@@ -154,6 +169,24 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 Some(proto.truncated_rows[0] != 0)
             },
             compression_level: proto.compression_level,
+            quote_style: match CsvQuoteStyleProto::try_from(proto.quote_style) {
+                Ok(CsvQuoteStyleProto::Always) => Some("Always".to_owned()),
+                Ok(CsvQuoteStyleProto::NonNumeric) => {
+                    Some("NonNumeric".to_owned())
+                }
+                Ok(CsvQuoteStyleProto::Never) => Some("Never".to_owned()),
+                _ => None,
+            },
+            ignore_leading_whitespace: if proto.ignore_leading_whitespace.is_empty() {
+                None
+            } else {
+                Some(proto.ignore_leading_whitespace[0] != 0)
+            },
+            ignore_trailing_whitespace: if proto.ignore_trailing_whitespace.is_empty() {
+                None
+            } else {
+                Some(proto.ignore_trailing_whitespace[0] != 0)
+            },
         }
     }
 }
