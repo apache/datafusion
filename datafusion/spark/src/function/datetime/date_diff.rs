@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -72,10 +71,6 @@ impl SparkDateDiff {
 }
 
 impl ScalarUDFImpl for SparkDateDiff {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "date_diff"
     }

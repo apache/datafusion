@@ -3632,7 +3632,6 @@ mod test {
     use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};
-    use std::any::Any;
 
     #[test]
     fn infer_placeholder_in_clause() {
@@ -3877,9 +3876,6 @@ mod test {
             signature: Signature,
         }
         impl ScalarUDFImpl for TestScalarUDF {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
             fn name(&self) -> &str {
                 "TestScalarUDF"
             }
@@ -4112,10 +4108,6 @@ mod test {
         #[derive(Debug, PartialEq, Eq, Hash)]
         struct TestUDF {}
         impl ScalarUDFImpl for TestUDF {
-            fn as_any(&self) -> &dyn Any {
-                unimplemented!()
-            }
-
             fn name(&self) -> &str {
                 unimplemented!()
             }

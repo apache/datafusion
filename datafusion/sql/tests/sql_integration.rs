@@ -19,7 +19,6 @@
 // Issue: <https://github.com/apache/datafusion/issues/18503>
 #![expect(clippy::needless_pass_by_value)]
 
-use std::any::Any;
 use std::hash::Hash;
 #[cfg(test)]
 use std::sync::Arc;
@@ -3447,10 +3446,6 @@ impl DummyUDF {
 }
 
 impl ScalarUDFImpl for DummyUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.name
     }

@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::array::Array;
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -87,10 +86,6 @@ impl ConcatWsFunc {
 }
 
 impl ScalarUDFImpl for ConcatWsFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "concat_ws"
     }

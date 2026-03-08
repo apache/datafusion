@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::VecDeque;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -371,10 +370,6 @@ impl MapFunc {
 }
 
 impl ScalarUDFImpl for MapFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map"
     }
