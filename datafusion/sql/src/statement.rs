@@ -2210,6 +2210,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
 
+        let target_column = |qualifier, field| {
+            update_target_column_expr(
+                &self.ident_normalizer,
+                &table_alias,
+                qualifier,
+                field,
+            )
+        };
+
         // Build updated values for each column, using the previous value if not modified
         let mut exprs = table_schema
             .iter()
@@ -2231,12 +2240,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         // Cast to target column type, if necessary
                         expr.cast_to(field.data_type(), source.schema())?
                     }
-                    None => update_target_column_expr(
-                        &self.ident_normalizer,
-                        &table_alias,
-                        qualifier,
-                        field,
-                    ),
+                    None => target_column(qualifier, field),
                 };
                 Ok(expr.alias(field.name()))
             })
@@ -2244,13 +2248,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         if has_update_from {
             exprs.extend(table_schema.iter().map(|(qualifier, field)| {
-                update_target_column_expr(
-                    &self.ident_normalizer,
-                    &table_alias,
-                    qualifier,
-                    field,
-                )
-                .alias(update_from_old_column_name(field.name()))
+                target_column(qualifier, field)
+                    .alias(update_from_old_column_name(field.name()))
             }));
         }
 

@@ -2366,17 +2366,16 @@ fn is_identity_assignment(
     column_name: &str,
     target_refs: &[TableReference],
 ) -> bool {
-    match expr {
-        Expr::Column(col) => {
-            col.name == column_name
+    matches!(
+        expr,
+        Expr::Column(col)
+            if col.name == column_name
                 && col.relation.as_ref().is_none_or(|relation| {
                     target_refs
                         .iter()
                         .any(|target| relation.resolved_eq(target))
                 })
-        }
-        _ => false,
-    }
+    )
 }
 
 fn plan_contains_join(input: &Arc<LogicalPlan>) -> Result<bool> {

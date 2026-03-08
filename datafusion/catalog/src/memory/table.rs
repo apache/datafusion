@@ -599,7 +599,8 @@ fn validate_update_from_input_schema(
 ) -> Result<()> {
     let target_fields = target_schema.fields();
     let input_fields = input_schema.fields();
-    let expected_len = target_fields.len() * 2;
+    let target_field_count = target_fields.len();
+    let expected_len = target_field_count * 2;
 
     if input_fields.len() != expected_len {
         return plan_err!(
@@ -608,8 +609,11 @@ fn validate_update_from_input_schema(
         );
     }
 
-    for (idx, target_field) in target_fields.iter().enumerate() {
-        let replacement_field = &input_fields[idx];
+    for (idx, (target_field, replacement_field)) in target_fields
+        .iter()
+        .zip(&input_fields[..target_field_count])
+        .enumerate()
+    {
         if replacement_field.name() != target_field.name()
             || replacement_field.data_type() != target_field.data_type()
         {
@@ -620,14 +624,15 @@ fn validate_update_from_input_schema(
             );
         }
 
-        let original_field = &input_fields[idx + target_fields.len()];
+        let original_idx = idx + target_field_count;
+        let original_field = &input_fields[original_idx];
         let expected_original_name = update_from_old_column_name(target_field.name());
         if original_field.name() != &expected_original_name
             || original_field.data_type() != target_field.data_type()
         {
             return plan_err!(
                 "Invalid UPDATE ... FROM original row column at index {}: expected '{}', got '{}'",
-                idx + target_fields.len(),
+                original_idx,
                 expected_original_name,
                 original_field.name()
             );
@@ -651,17 +656,16 @@ fn find_replacement_indices(
 
     for row_idx in 0..batch.num_rows() {
         let signature = row_signature(batch.columns(), row_idx)?;
-        let replacement_idx =
-            if let Some(indices) = original_row_matches.get_mut(&signature) {
+        let replacement_idx = match original_row_matches.get_mut(&signature) {
+            Some(indices) => {
                 let next = indices.pop_front();
-                let should_remove = indices.is_empty();
-                if should_remove {
+                if indices.is_empty() {
                     original_row_matches.remove(&signature);
                 }
                 next
-            } else {
-                None
-            };
+            }
+            None => None,
+        };
         replacement_indices.push(replacement_idx);
     }
 
