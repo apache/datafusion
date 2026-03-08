@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io::Write;
 use std::sync::Arc;
 
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
@@ -62,8 +62,11 @@ pub struct AnalyzeExec {
     auto_explain: bool,
     /// Where to store the output of `auto_explain`, if enabled.
     /// Possible values:
-    ///   - stdout (default)
-    ///   - stderr
+    ///   - log::error
+    ///   - log::warn
+    ///   - log::info (default)
+    ///   - log::debug
+    ///   - log::trace
     ///   - *path to file* (creates if it does not exist; or appends to it if it does)
     auto_explain_output: String,
     /// In the `auto_explain` mode, only output if the execution is greater or equal to this value,
@@ -89,7 +92,7 @@ impl AnalyzeExec {
             schema,
             cache,
             auto_explain: false,
-            auto_explain_output: "stdout".to_owned(),
+            auto_explain_output: "log::info".to_owned(),
             auto_explain_min_duration_ms: 0,
         }
     }
@@ -340,14 +343,18 @@ fn create_output_batch(
 }
 
 fn export_auto_explain(batch: RecordBatch, output: &str) -> Result<()> {
-    let fd: &mut dyn Write = match output {
-        "stdout" => &mut io::stdout(),
-        "stderr" => &mut io::stderr(),
-        _ => &mut OpenOptions::new().create(true).append(true).open(output)?,
-    };
-
     let formatted = pretty_format_batches(&[batch])?;
-    writeln!(fd, "{formatted}")?;
+    match output {
+        "log::error" => log::error!("{formatted}"),
+        "log::warn" => log::warn!("{formatted}"),
+        "log::info" => log::info!("{formatted}"),
+        "log::debug" => log::debug!("{formatted}"),
+        "log::trace" => log::trace!("{formatted}"),
+        _ => {
+            let fd = &mut OpenOptions::new().create(true).append(true).open(output)?;
+            writeln!(fd, "{formatted}")?;
+        }
+    }
 
     Ok(())
 }
