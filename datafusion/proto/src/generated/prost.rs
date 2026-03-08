@@ -1563,6 +1563,8 @@ pub struct FilterExecNode {
     pub projection: ::prost::alloc::vec::Vec<u32>,
     #[prost(uint32, tag = "10")]
     pub batch_size: u32,
+    #[prost(uint32, optional, tag = "11")]
+    pub fetch: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileGroup {
