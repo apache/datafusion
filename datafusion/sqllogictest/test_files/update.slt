@@ -112,3 +112,110 @@ insert into t2 values (1, 'new_val', 2.0, 100), (2, 'new_val2', 1.5, 200);
 # TODO fix https://github.com/apache/datafusion/issues/19950
 statement error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
 update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
+
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# query TT
+# explain update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
+# ----
+# logical_plan
+# 01)Dml: op=[Update] table=[t1]
+# 02)--Projection: t1.a AS a, t2.b AS b, CAST(t2.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d, t1.a AS __df_update_old_a, t1.b AS __df_update_old_b, t1.c AS __df_update_old_c, t1.d AS __df_update_old_d
+# 03)----Filter: t1.a = t2.a AND t1.b > CAST(Utf8("foo") AS Utf8View) AND t2.c > Float64(1)
+# 04)------Cross Join:
+# 05)--------TableScan: t1
+# 06)--------TableScan: t2
+# physical_plan
+# 01)CooperativeExec
+# 02)--DmlResultExec: rows_affected=0
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# query TT
+# explain update t1 from t2 set b = t2.b, c = t1.a + t2.a where t1.a = t2.a;
+# ----
+# logical_plan
+# 01)Dml: op=[Update] table=[t1]
+# 02)--Projection: t1.a AS a, t2.b AS b, CAST(t1.a + t2.a AS Float64) AS c, t1.d AS d, t1.a AS __df_update_old_a, t1.b AS __df_update_old_b, t1.c AS __df_update_old_c, t1.d AS __df_update_old_d
+# 03)----Filter: t1.a = t2.a
+# 04)------Cross Join:
+# 05)--------TableScan: t1
+# 06)--------TableScan: t2
+# physical_plan
+# 01)CooperativeExec
+# 02)--DmlResultExec: rows_affected=0
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# query TT
+# explain update t1 as dst set b = src.b, c = src.a + dst.a, d = dst.d + src.d from t2 as src where dst.a = src.a and src.c > dst.c;
+# ----
+# logical_plan
+# 01)Dml: op=[Update] table=[t1]
+# 02)--Projection: dst.a AS a, src.b AS b, CAST(src.a + dst.a AS Float64) AS c, dst.d + src.d AS d, dst.a AS __df_update_old_a, dst.b AS __df_update_old_b, dst.c AS __df_update_old_c, dst.d AS __df_update_old_d
+# 03)----Filter: dst.a = src.a AND src.c > dst.c
+# 04)------Cross Join:
+# 05)--------SubqueryAlias: dst
+# 06)----------TableScan: t1
+# 07)--------SubqueryAlias: src
+# 08)----------TableScan: t2
+# physical_plan
+# 01)CooperativeExec
+# 02)--DmlResultExec: rows_affected=0
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# statement ok
+# update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# query ITRI
+# select * from t1 order by a;
+# ----
+# 1 updated_b 1 1
+# 2 updated_b2 2 1
+# 3 bar 4 30
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# query TT
+# explain update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
+# ----
+# logical_plan
+# 01)Dml: op=[Update] table=[t1]
+# 02)--Projection: t.a AS a, t2.b AS b, CAST(t.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d, t.a AS __df_update_old_a, t.b AS __df_update_old_b, t.c AS __df_update_old_c, t.d AS __df_update_old_d
+# 03)----Filter: t.a = t2.a AND t.b > CAST(Utf8("foo") AS Utf8View) AND t2.c > Float64(1)
+# 04)------Cross Join:
+# 05)--------SubqueryAlias: t
+# 06)----------TableScan: t1
+# 07)--------TableScan: t2
+# physical_plan
+# 01)CooperativeExec
+# 02)--DmlResultExec: rows_affected=2
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# statement ok
+# update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# query ITRI
+# select * from t1 order by a;
+# ----
+# 1 new_val 1 1
+# 2 new_val2 2 1
+# 3 apple 3.5 15
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# statement ok
+# update t1 as dst set b = src.b, c = src.a + dst.a, d = src.d from t2 as src where dst.a = src.a and src.c > 1.0;
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# query ITRI
+# select * from t1 order by a;
+# ----
+# 1 new_val 2 100
+# 2 new_val2 4 200
+# 3 apple 3.5 15
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# statement ok
+# insert into t2 values (1, 'duplicate_match', 9.9, 300);
+#
+# SKIPPED TODO(19950): enable once the implementation PR lands.
+# statement error DataFusion error: UPDATE operation on table 't1'
+# update t1 as dst set b = src.b, c = src.a + dst.a, d = src.d from t2 as src where dst.a = src.a and dst.a = 1;
