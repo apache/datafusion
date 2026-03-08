@@ -1019,8 +1019,8 @@ async fn test_update_from_with_only_join_predicate_executes_issue_19950() -> Res
 
 #[tokio::test]
 #[ignore = "TODO(19950): enable once the implementation PR lands"]
-async fn test_update_from_self_join_drops_source_side_predicates_issue_19950(
-) -> Result<()> {
+async fn test_update_from_self_join_drops_source_side_predicates_issue_19950()
+-> Result<()> {
     // TODO(19950): enable once the implementation PR lands.
     let target_schema = abcd_schema_no_extra();
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(

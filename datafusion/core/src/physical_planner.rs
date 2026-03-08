@@ -785,8 +785,7 @@ impl DefaultPhysicalPlanner {
                     // We pass the filters and let the provider handle the projection
                     let filters = extract_dml_filters(input, table_name)?;
                     // Extract assignments from the projection in input plan
-                    let assignments =
-                        extract_update_assignments(input, table_name)?;
+                    let assignments = extract_update_assignments(input, table_name)?;
                     provider
                         .table_provider
                         .update(session_state, assignments, filters)
