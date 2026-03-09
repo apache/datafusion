@@ -144,6 +144,27 @@ impl CastExpr {
     }
 }
 
+pub(crate) fn is_order_preserving_cast_family(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> bool {
+    (source_type.is_numeric() || *source_type == Boolean) && target_type.is_numeric()
+        || source_type.is_temporal() && target_type.is_temporal()
+        || source_type.eq(target_type)
+}
+
+pub(crate) fn cast_expr_properties(
+    child: &ExprProperties,
+    target_type: &DataType,
+) -> Result<ExprProperties> {
+    let unbounded = Interval::make_unbounded(target_type)?;
+    if is_order_preserving_cast_family(&child.range.data_type(), target_type) {
+        Ok(child.clone().with_range(unbounded))
+    } else {
+        Ok(ExprProperties::new_unknown().with_range(unbounded))
+    }
+}
+
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "CAST({} AS {})", self.expr, self.cast_type)
@@ -215,19 +236,7 @@ impl PhysicalExpr for CastExpr {
     /// A [`CastExpr`] preserves the ordering of its child if the cast is done
     /// under the same datatype family.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
-        let source_datatype = children[0].range.data_type();
-        let target_type = &self.cast_type;
-
-        let unbounded = Interval::make_unbounded(target_type)?;
-        if (source_datatype.is_numeric() || source_datatype == Boolean)
-            && target_type.is_numeric()
-            || source_datatype.is_temporal() && target_type.is_temporal()
-            || source_datatype.eq(target_type)
-        {
-            Ok(children[0].clone().with_range(unbounded))
-        } else {
-            Ok(ExprProperties::new_unknown().with_range(unbounded))
-        }
+        cast_expr_properties(&children[0], &self.cast_type)
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

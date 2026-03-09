@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use datafusion_common::{
     Result, ScalarValue, exec_err,
     metadata::FieldMetadata,
@@ -404,71 +404,74 @@ impl DefaultPhysicalExprAdapterRewriter {
             }
         };
 
-        // Check if the column exists in the physical schema
-        let physical_column_index = match self
-            .physical_file_schema
-            .index_of(column.name())
-        {
-            Ok(index) => index,
-            Err(_) => {
-                if !logical_field.is_nullable() {
-                    return exec_err!(
-                        "Non-nullable column '{}' is missing from the physical schema",
-                        column.name()
-                    );
-                }
-                // If the column is missing from the physical schema fill it in with nulls.
-                // For a different behavior, provide a custom `PhysicalExprAdapter` implementation.
-                let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
-                return Ok(Transformed::yes(Arc::new(
-                    expressions::Literal::new_with_metadata(
-                        null_value,
-                        Some(FieldMetadata::from(logical_field)),
-                    ),
-                )));
+        let Some((resolved_column, physical_field)) =
+            self.resolve_physical_column(column)?
+        else {
+            if !logical_field.is_nullable() {
+                return exec_err!(
+                    "Non-nullable column '{}' is missing from the physical schema",
+                    column.name()
+                );
             }
+            // If the column is missing from the physical schema fill it in with nulls.
+            // For a different behavior, provide a custom `PhysicalExprAdapter` implementation.
+            let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
+            return Ok(Transformed::yes(Arc::new(
+                expressions::Literal::new_with_metadata(
+                    null_value,
+                    Some(FieldMetadata::from(logical_field)),
+                ),
+            )));
         };
-        let physical_field = self.physical_file_schema.field(physical_column_index);
 
-        if column.index() == physical_column_index && logical_field == physical_field {
+        if resolved_column.index() == column.index()
+            && logical_field == physical_field.as_ref()
+        {
             return Ok(Transformed::no(expr));
         }
 
-        let column = self.resolve_column(column, physical_column_index)?;
-
-        if logical_field == physical_field {
+        if logical_field == physical_field.as_ref() {
             // If the fields match (including metadata/nullability), we can use the column as is
-            return Ok(Transformed::yes(Arc::new(column)));
+            return Ok(Transformed::yes(Arc::new(resolved_column)));
         }
 
         if logical_field.data_type() == physical_field.data_type() {
             // The data type matches, but the field metadata / nullability differs.
             // Emit a CastColumnExpr so downstream schema construction uses the logical field.
-            return self.create_cast_column_expr(column, logical_field);
+            return self.create_cast_column_expr(resolved_column, logical_field);
         }
 
         // We need to cast the column to the logical data type
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
         // since that's much cheaper to evalaute.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
-        self.create_cast_column_expr(column, logical_field)
+        self.create_cast_column_expr(resolved_column, logical_field)
     }
 
-    /// Resolves a column expression, handling index and type mismatches.
-    ///
-    /// Returns the appropriate Column expression when the column's index or data type
-    /// don't match the physical schema. Assumes that the early-exit case (both index
-    /// and type match) has already been checked by the caller.
-    fn resolve_column(
+    /// Resolves a logical column to the corresponding physical column and field.
+    fn resolve_physical_column(
         &self,
         column: &Column,
-        physical_column_index: usize,
-    ) -> Result<Column> {
-        if column.index() == physical_column_index {
-            Ok(column.clone())
+    ) -> Result<Option<(Column, FieldRef)>> {
+        let Ok(physical_column_index) = self.physical_file_schema.index_of(column.name())
+        else {
+            return Ok(None);
+        };
+
+        let column = if column.index() == physical_column_index {
+            column.clone()
         } else {
-            Column::new_with_schema(column.name(), self.physical_file_schema.as_ref())
-        }
+            Column::new_with_schema(column.name(), self.physical_file_schema.as_ref())?
+        };
+
+        Ok(Some((
+            column,
+            Arc::new(
+                self.physical_file_schema
+                    .field(physical_column_index)
+                    .clone(),
+            ),
+        )))
     }
 
     /// Validates type compatibility and creates a CastColumnExpr if needed.

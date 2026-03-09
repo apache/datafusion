@@ -39,7 +39,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -195,6 +195,26 @@ impl OrderingEquivalenceCache {
 }
 
 impl EquivalenceProperties {
+    fn substitute_cast_like_ordering(
+        r_expr: Arc<dyn PhysicalExpr>,
+        sort_expr: &PhysicalSortExpr,
+        expr_type: &DataType,
+    ) -> Option<PhysicalSortExpr> {
+        let (child_expr, cast_type) = if let Some(cast_expr) =
+            r_expr.as_any().downcast_ref::<CastExpr>()
+        {
+            (cast_expr.expr(), cast_expr.cast_type())
+        } else if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastColumnExpr>() {
+            (cast_expr.expr(), cast_expr.target_field().data_type())
+        } else {
+            return None;
+        };
+
+        (child_expr.eq(&sort_expr.expr)
+            && CastExpr::check_bigger_cast(cast_type, expr_type))
+        .then(|| PhysicalSortExpr::new(r_expr, sort_expr.options))
+    }
+
     /// Creates an empty `EquivalenceProperties` object.
     pub fn new(schema: SchemaRef) -> Self {
         Self {
@@ -844,32 +864,10 @@ impl EquivalenceProperties {
                     let expr_type = sort_expr.expr.data_type(schema).unwrap();
                     // TODO: Add one-to-one analysis for ScalarFunctions.
                     for r_expr in referring_exprs {
-                        // We check whether this expression is substitutable.
-                        if let Some(cast_expr) =
-                            r_expr.as_any().downcast_ref::<CastExpr>()
-                        {
-                            // For casts, we need to know whether the cast
-                            // expression matches:
-                            if cast_expr.expr.eq(&sort_expr.expr)
-                                && cast_expr.is_bigger_cast(&expr_type)
-                            {
-                                result.push(PhysicalSortExpr::new(
-                                    r_expr,
-                                    sort_expr.options,
-                                ));
-                            }
-                        } else if let Some(cast_expr) =
-                            r_expr.as_any().downcast_ref::<CastColumnExpr>()
-                        {
-                            let cast_type = cast_expr.target_field().data_type();
-                            if cast_expr.expr().eq(&sort_expr.expr)
-                                && CastExpr::check_bigger_cast(cast_type, &expr_type)
-                            {
-                                result.push(PhysicalSortExpr::new(
-                                    r_expr,
-                                    sort_expr.options,
-                                ));
-                            }
+                        if let Some(substituted) = Self::substitute_cast_like_ordering(
+                            r_expr, &sort_expr, &expr_type,
+                        ) {
+                            result.push(substituted);
                         }
                     }
                     result.push(sort_expr);
