@@ -77,7 +77,7 @@ fn apply_expressions(
 
 **Node whose only expressions are in `output_ordering()` (e.g. a synthetic test node with no owned expression fields):**
 
-```rust,ignore
+````rust,ignore
 fn apply_expressions(
     &self,
     f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
@@ -90,4 +90,35 @@ fn apply_expressions(
     }
     Ok(tnr)
 }
+
+### `ExecutionPlan::partition_statistics` now returns `Arc<Statistics>`
+
+`ExecutionPlan::partition_statistics` now returns `Result<Arc<Statistics>>` instead of `Result<Statistics>`. This avoids cloning `Statistics` when it is shared across multiple consumers.
+
+**Before:**
+
+```rust,ignore
+fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    Ok(Statistics::new_unknown(&self.schema()))
+}
+````
+
+**After:**
+
+```rust,ignore
+fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+    Ok(Arc::new(Statistics::new_unknown(&self.schema())))
+}
+```
+
+If you need an owned `Statistics` value (e.g. to mutate it), use `Arc::unwrap_or_clone`:
+
+```rust,ignore
+// If you previously consumed the Statistics directly:
+let stats = plan.partition_statistics(None)?;
+stats.column_statistics[0].min_value = ...;
+
+// Now unwrap the Arc first:
+let mut stats = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
+stats.column_statistics[0].min_value = ...;
 ```
