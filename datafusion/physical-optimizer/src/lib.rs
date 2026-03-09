@@ -39,6 +39,7 @@ pub mod projection_pushdown;
 pub mod pruning;
 pub mod sanity_checker;
 pub mod topk_aggregation;
+pub mod topk_repartition;
 pub mod update_aggr_exprs;
 pub mod utils;
 
