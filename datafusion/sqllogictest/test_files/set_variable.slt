@@ -450,3 +450,9 @@ datafusion.runtime.temp_directory
 
 statement error DataFusion error: Error during planning: Unsupported value Null
 SET datafusion.runtime.memory_limit = NULL
+
+statement error DataFusion error: Error during planning: Unsupported value Null
+SET datafusion.runtime.list_files_cache_ttl = NULL
+
+statement error DataFusion error: Error during planning: Duration should not be empty or blank for 'datafusion.runtime.list_files_cache_ttl'
+SET datafusion.runtime.list_files_cache_ttl = ' '

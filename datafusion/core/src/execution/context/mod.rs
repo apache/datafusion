@@ -1184,7 +1184,7 @@ impl SessionContext {
                 builder.with_object_list_cache_limit(limit)
             }
             "list_files_cache_ttl" => {
-                let duration = Self::parse_duration(value)?;
+                let duration = Self::parse_duration(variable, value)?;
                 builder.with_object_list_cache_ttl(Some(duration))
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
@@ -1323,21 +1323,27 @@ impl SessionContext {
         }
     }
 
-    fn parse_duration(duration: &str) -> Result<Duration> {
+    fn parse_duration(config_name: &str, duration: &str) -> Result<Duration> {
+        if duration.trim().is_empty() {
+            return Err(plan_datafusion_err!(
+                "Duration should not be empty or blank for '{config_name}'"
+            ));
+        }
+
         let mut minutes = None;
         let mut seconds = None;
 
         for duration in duration.split_inclusive(&['m', 's']) {
             let (number, unit) = duration.split_at(duration.len() - 1);
             let number: u64 = number.parse().map_err(|_| {
-                plan_datafusion_err!("Failed to parse number from duration '{duration}'")
+                plan_datafusion_err!("Failed to parse number from duration '{duration}' for '{config_name}'")
             })?;
 
             match unit {
                 "m" if minutes.is_none() && seconds.is_none() => minutes = Some(number),
                 "s" if seconds.is_none() => seconds = Some(number),
-                _ => plan_err!(
-                    "Invalid duration, unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order"
+                other => plan_err!(
+                    "Invalid duration unit: '{other}'. The unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order for '{config_name}'"
                 )?,
             }
         }
@@ -1347,7 +1353,9 @@ impl SessionContext {
         );
 
         if duration.is_zero() {
-            return plan_err!("Duration must be greater than 0 seconds");
+            return plan_err!(
+                "Duration must be greater than 0 seconds for '{config_name}'"
+            );
         }
 
         Ok(duration)
@@ -2803,6 +2811,8 @@ mod tests {
 
     #[test]
     fn test_parse_duration() {
+        const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
+
         // Valid durations
         for (duration, want) in [
             ("1s", Duration::from_secs(1)),
@@ -2810,14 +2820,24 @@ mod tests {
             ("1m0s", Duration::from_secs(60)),
             ("1m1s", Duration::from_secs(61)),
         ] {
-            let have = SessionContext::parse_duration(duration).unwrap();
+            let have =
+                SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
             assert_eq!(want, have);
         }
 
         // Invalid durations
-        for duration in ["0s", "0m", "1s0m", "1s1m"] {
-            let have = SessionContext::parse_duration(duration);
+        for duration in [
+            "0s", "0m", "1s0m", "1s1m", "XYZ", "1h", "XYZm2s", "", " ", "-1m", "1m 1s",
+            "1m1s ", " 1m1s",
+        ] {
+            let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
             assert!(have.is_err());
+            assert!(
+                have.unwrap_err()
+                    .message()
+                    .to_string()
+                    .contains(LIST_FILES_CACHE_TTL)
+            );
         }
     }
 
