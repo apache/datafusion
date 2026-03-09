@@ -230,6 +230,10 @@ name = "window_query_sql"
 
 [[bench]]
 harness = false
+name = "topk_repartition"
+
+[[bench]]
+harness = false
 name = "scalar"
 
 [[bench]]
