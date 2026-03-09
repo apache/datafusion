@@ -435,17 +435,8 @@ impl DefaultPhysicalExprAdapterRewriter {
             return Ok(Transformed::yes(Arc::new(resolved_column)));
         }
 
-        if logical_field.data_type() == physical_field.data_type() {
-            // The data type matches, but the field metadata / nullability differs.
-            // Emit a CastColumnExpr so downstream schema construction uses the logical field.
-            return self.create_cast_column_expr(
-                resolved_column,
-                physical_field,
-                logical_field,
-            );
-        }
-
-        // We need to cast the column to the logical data type
+        // We need a cast expression whenever the logical and physical fields differ,
+        // whether that difference is only metadata/nullability or also data type.
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
         // since that's much cheaper to evalaute.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928

@@ -88,10 +88,6 @@ impl Hash for CastExpr {
 }
 
 impl CastExpr {
-    fn legacy_target_field(cast_type: DataType) -> FieldRef {
-        cast_type.into_nullable_field_ref()
-    }
-
     /// Create a new CastExpr
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
@@ -100,7 +96,7 @@ impl CastExpr {
     ) -> Self {
         Self::new_with_target_field(
             expr,
-            Self::legacy_target_field(cast_type),
+            cast_type.into_nullable_field_ref(),
             cast_options,
         )
     }
@@ -138,14 +134,14 @@ impl CastExpr {
         &self.cast_options
     }
 
-    fn uses_legacy_target_field(&self) -> bool {
+    fn is_legacy_target_field(&self) -> bool {
         self.target_field.name().is_empty()
             && self.target_field.is_nullable()
             && self.target_field.metadata().is_empty()
     }
 
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        if self.uses_legacy_target_field() {
+        if self.is_legacy_target_field() {
             self.expr.return_field(input_schema).map(|field| {
                 Arc::new(
                     field
@@ -226,11 +222,7 @@ impl PhysicalExpr for CastExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        if self.uses_legacy_target_field() {
-            self.expr.nullable(input_schema)
-        } else {
-            Ok(self.target_field.is_nullable())
-        }
+        Ok(self.resolved_target_field(input_schema)?.is_nullable())
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
