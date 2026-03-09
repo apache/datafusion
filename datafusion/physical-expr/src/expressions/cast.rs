@@ -243,7 +243,14 @@ impl PhysicalExpr for CastExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        Ok(self.resolved_target_field(input_schema)?.is_nullable())
+        // A cast is nullable if **either** the child is nullable or the
+        // target field allows nulls.  This conservative rule prevents
+        // optimizers from assuming a non-null result when a null input could
+        // still propagate.  `return_field()` continues to expose the exact
+        // target metadata separately.
+        let child_nullable = self.expr.nullable(input_schema)?;
+        let target_nullable = self.resolved_target_field(input_schema)?.is_nullable();
+        Ok(child_nullable || target_nullable)
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -894,7 +901,10 @@ mod tests {
     }
 
     #[test]
-    fn field_aware_cast_nullable_uses_target_field() -> Result<()> {
+    fn field_aware_cast_nullable_prefers_child_nullability() -> Result<()> {
+        // When the child expression is nullable the cast must be treated as
+        // nullable even if the explicitly supplied target field is marked
+        // non-nullable.  return_field() still reflects the target metadata.
         let schema = Schema::new(vec![Field::new("a", Int32, true)]);
         let expr = CastExpr::new_with_target_field(
             col("a", &schema)?,
@@ -902,7 +912,7 @@ mod tests {
             None,
         );
 
-        assert!(!expr.nullable(&schema)?);
+        assert!(expr.nullable(&schema)?);
         assert!(!expr.return_field(&schema)?.is_nullable());
 
         Ok(())
@@ -919,6 +929,23 @@ mod tests {
         assert_eq!(field.data_type(), &Int64);
         assert!(!field.is_nullable());
         assert!(!expr.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn field_aware_cast_nullable_child_nonnullable_targets_nullable() -> Result<()> {
+        // child is non-nullable but the target field is marked nullable; the
+        // nullable() result should still be true because the field allows nulls.
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        let expr = CastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::new(Field::new("cast_target", Int64, true)),
+            None,
+        );
+
+        assert!(expr.nullable(&schema)?);
+        assert!(expr.return_field(&schema)?.is_nullable());
 
         Ok(())
     }
