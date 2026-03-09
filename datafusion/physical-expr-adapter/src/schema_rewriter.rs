@@ -448,6 +448,13 @@ impl DefaultPhysicalExprAdapterRewriter {
         &self,
         column: &Column,
     ) -> Result<Option<(Column, FieldRef)>> {
+        // The physical schema adaptation step intentionally resolves columns by **name first**
+        // rather than trusting the incoming index. This mirrors what the old refactoring
+        // did before `resolve_physical_column()` was extracted: the planner might hand us a
+        // `Column` whose `index` field is stale (e.g. after projection/rename rewrites), so
+        // resolving by name ensures we match the correct physical slot. Once we know the
+        // proper index we rebuild the `Column` with `new_with_schema` so callers can rely
+        // on `column.index()` later without having to re-query the schema.
         let Ok(physical_column_index) = self.physical_file_schema.index_of(column.name())
         else {
             return Ok(None);
