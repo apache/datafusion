@@ -88,6 +88,10 @@ impl Hash for CastExpr {
 }
 
 impl CastExpr {
+    fn legacy_target_field(cast_type: DataType) -> FieldRef {
+        cast_type.into_nullable_field_ref()
+    }
+
     /// Create a new CastExpr
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
@@ -96,7 +100,7 @@ impl CastExpr {
     ) -> Self {
         Self::new_with_target_field(
             expr,
-            cast_type.into_nullable_field_ref(),
+            Self::legacy_target_field(cast_type),
             cast_options,
         )
     }
@@ -132,6 +136,27 @@ impl CastExpr {
     /// The cast options
     pub fn cast_options(&self) -> &CastOptions<'static> {
         &self.cast_options
+    }
+
+    fn uses_legacy_target_field(&self) -> bool {
+        self.target_field.name().is_empty()
+            && self.target_field.is_nullable()
+            && self.target_field.metadata().is_empty()
+    }
+
+    fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        if self.uses_legacy_target_field() {
+            self.expr.return_field(input_schema).map(|field| {
+                Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(self.cast_type().clone()),
+                )
+            })
+        } else {
+            Ok(Arc::clone(&self.target_field))
+        }
     }
 
     /// Check if casting from the specified source type to the target type is a
@@ -201,7 +226,11 @@ impl PhysicalExpr for CastExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        self.expr.nullable(input_schema)
+        if self.uses_legacy_target_field() {
+            self.expr.nullable(input_schema)
+        } else {
+            Ok(self.target_field.is_nullable())
+        }
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -209,8 +238,8 @@ impl PhysicalExpr for CastExpr {
         value.cast_to(self.cast_type(), Some(&self.cast_options))
     }
 
-    fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
-        Ok(Arc::clone(&self.target_field))
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        self.resolved_target_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -860,8 +889,23 @@ mod tests {
             None,
         );
 
-        assert!(expr.nullable(&schema)?);
+        assert!(!expr.nullable(&schema)?);
         assert!(!expr.return_field(&schema)?.is_nullable());
+
+        Ok(())
+    }
+
+    #[test]
+    fn type_only_cast_preserves_legacy_field_name_and_nullability() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        let expr = CastExpr::new(col("a", &schema)?, Int64, None);
+
+        let field = expr.return_field(&schema)?;
+
+        assert_eq!(field.name(), "a");
+        assert_eq!(field.data_type(), &Int64);
+        assert!(!field.is_nullable());
+        assert!(!expr.nullable(&schema)?);
 
         Ok(())
     }
