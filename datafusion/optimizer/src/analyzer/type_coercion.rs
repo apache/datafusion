@@ -598,12 +598,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
 
                         let value_types = func.coerce_value_types(&args_types)?;
 
-                        if args_types.iter().eq_by(&value_types, |a, b| match (a, b) {
-                            (ValueOrLambdaParameter::Value(_type), None) => false,
-                            (ValueOrLambdaParameter::Value(from), Some(to)) => from == to,
-                            (ValueOrLambdaParameter::Lambda, None) => true,
-                            (ValueOrLambdaParameter::Lambda, Some(_ty)) => false,
-                        }) {
+                        if args_types
+                            .iter()
+                            .map(|a| match a {
+                                ValueOrLambdaParameter::Value(ty) => Some(ty),
+                                ValueOrLambdaParameter::Lambda => None,
+                            })
+                            .eq(value_types.iter().map(|v| v.as_ref()))
+                        {
                             return Ok(Transformed::no(Expr::LambdaFunction(
                                 LambdaFunction::new(func, args),
                             )));
