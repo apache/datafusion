@@ -88,7 +88,20 @@ impl Hash for CastExpr {
 }
 
 impl CastExpr {
-    /// Create a new CastExpr
+    /// Create a new `CastExpr` using only a `DataType`.
+    ///
+    /// This constructor is provided for compatibility with existing call sites
+    /// that only know the target type.  It synthesizes a ``Field`` with the
+    /// given type (**nullable by default**) and no name metadata.  Callers that
+    /// already have a `FieldRef` (for example, coming from schema inference or a
+    /// resolved column) should prefer [`CastExpr::new_with_target_field`], which
+    /// preserves the field's name, nullability, and other metadata.  In other
+    /// words:
+    ///
+    /// * use `new()` when only a `DataType` is available and you want the legacy
+    ///   semantics of a type-only cast
+    /// * use `new_with_target_field()` when you need explicit field
+    ///   metadata/name/nullability preserved
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         cast_type: DataType,
@@ -101,7 +114,15 @@ impl CastExpr {
         )
     }
 
-    /// Create a new CastExpr with an explicit target field.
+    /// Create a new `CastExpr` with an explicit target `FieldRef`.
+    ///
+    /// The provided `target_field` is used verbatim for the expression's
+    /// return schema, so the field's name, nullability, and other metadata are
+    /// preserved.  This is the preferred constructor when the caller already
+    /// has field information (for example, during logical-to-physical planning).
+    ///
+    /// See [`CastExpr::new`] for the compatibility constructor that only accepts
+    /// a `DataType`.
     pub fn new_with_target_field(
         expr: Arc<dyn PhysicalExpr>,
         target_field: FieldRef,
