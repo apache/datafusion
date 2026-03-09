@@ -1452,7 +1452,7 @@ mod test {
                 },
             ],
         };
-        assert_eq!(statistics[0], expected_p0_statistics);
+        assert_eq!(*statistics[0], expected_p0_statistics);
 
         // Test Partitioned mode
         let partitioned_join = Arc::new(HashJoinExec::try_new(
@@ -1526,7 +1526,7 @@ mod test {
                 },
             ],
         };
-        assert_eq!(statistics[0], expected_p0_statistics);
+        assert_eq!(*statistics[0], expected_p0_statistics);
 
         // Test Auto mode - should fall back to getting all partition statistics
         let auto_join = Arc::new(HashJoinExec::try_new(
@@ -1600,7 +1600,7 @@ mod test {
                 },
             ],
         };
-        assert_eq!(statistics[0], expected_p0_statistics);
+        assert_eq!(*statistics[0], expected_p0_statistics);
         Ok(())
     }
 }
