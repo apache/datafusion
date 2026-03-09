@@ -144,6 +144,35 @@ SELECT MOD(10.0::decimal(3,1), 3.0::decimal(2,1)) as mod_decimal_2;
 ----
 1
 
+# Division by zero returns NULL in legacy mode (ANSI off)
+query I
+SELECT MOD(10::int, 0::int) as mod_div_zero_1;
+----
+NULL
+
+query I
+SELECT MOD(-7::int, 0::int) as mod_div_zero_2;
+----
+NULL
+
+query R
+SELECT MOD(10.5::float8, 0.0::float8) as mod_div_zero_float;
+----
+NaN
+
+# Division by zero errors in ANSI mode
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT MOD(10::int, 0::int);
+
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT MOD(-7::int, 0::int);
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
+
 # Edge cases
 query I
 SELECT MOD(0::int, 5::int) as mod_zero_1;
