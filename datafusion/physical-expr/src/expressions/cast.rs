@@ -25,6 +25,7 @@ use crate::physical_expr::PhysicalExpr;
 use arrow::compute::{CastOptions, can_cast_types};
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::nested_struct::validate_struct_compatibility;
 use datafusion_common::{Result, not_impl_err};
@@ -63,8 +64,8 @@ fn can_cast_struct_types(source: &DataType, target: &DataType) -> bool {
 pub struct CastExpr {
     /// The expression to cast
     pub expr: Arc<dyn PhysicalExpr>,
-    /// The data type to cast to
-    cast_type: DataType,
+    /// Field metadata describing the desired output after casting
+    target_field: FieldRef,
     /// Cast options
     cast_options: CastOptions<'static>,
 }
@@ -73,7 +74,7 @@ pub struct CastExpr {
 impl PartialEq for CastExpr {
     fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
-            && self.cast_type.eq(&other.cast_type)
+            && self.target_field.eq(&other.target_field)
             && self.cast_options.eq(&other.cast_options)
     }
 }
@@ -81,7 +82,7 @@ impl PartialEq for CastExpr {
 impl Hash for CastExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
-        self.cast_type.hash(state);
+        self.target_field.hash(state);
         self.cast_options.hash(state);
     }
 }
@@ -93,9 +94,22 @@ impl CastExpr {
         cast_type: DataType,
         cast_options: Option<CastOptions<'static>>,
     ) -> Self {
+        Self::new_with_target_field(
+            expr,
+            cast_type.into_nullable_field_ref(),
+            cast_options,
+        )
+    }
+
+    /// Create a new CastExpr with an explicit target field.
+    pub fn new_with_target_field(
+        expr: Arc<dyn PhysicalExpr>,
+        target_field: FieldRef,
+        cast_options: Option<CastOptions<'static>>,
+    ) -> Self {
         Self {
             expr,
-            cast_type,
+            target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
         }
     }
@@ -107,7 +121,12 @@ impl CastExpr {
 
     /// The data type to cast to
     pub fn cast_type(&self) -> &DataType {
-        &self.cast_type
+        self.target_field.data_type()
+    }
+
+    /// Field metadata describing the output column after casting.
+    pub fn target_field(&self) -> &FieldRef {
+        &self.target_field
     }
 
     /// The cast options
@@ -140,7 +159,7 @@ impl CastExpr {
 
     /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
     pub fn is_bigger_cast(&self, src: &DataType) -> bool {
-        Self::check_bigger_cast(&self.cast_type, src)
+        Self::check_bigger_cast(self.cast_type(), src)
     }
 }
 
@@ -167,7 +186,7 @@ pub(crate) fn cast_expr_properties(
 
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CAST({} AS {})", self.expr, self.cast_type)
+        write!(f, "CAST({} AS {})", self.expr, self.cast_type())
     }
 }
 
@@ -178,7 +197,7 @@ impl PhysicalExpr for CastExpr {
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.cast_type.clone())
+        Ok(self.cast_type().clone())
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -187,17 +206,19 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        value.cast_to(&self.cast_type, Some(&self.cast_options))
+        value.cast_to(self.cast_type(), Some(&self.cast_options))
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        Ok(self
-            .expr
-            .return_field(input_schema)?
-            .as_ref()
-            .clone()
-            .with_data_type(self.cast_type.clone())
-            .into())
+        self.expr.return_field(input_schema).map(|field| {
+            Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(self.cast_type().clone())
+                    .with_metadata(self.target_field.metadata().clone()),
+            )
+        })
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -208,16 +229,16 @@ impl PhysicalExpr for CastExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(CastExpr::new(
+        Ok(Arc::new(CastExpr::new_with_target_field(
             Arc::clone(&children[0]),
-            self.cast_type.clone(),
+            Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
         )))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         // Cast current node's interval to the right type:
-        children[0].cast_to(&self.cast_type, &self.cast_options)
+        children[0].cast_to(self.cast_type(), &self.cast_options)
     }
 
     fn propagate_constraints(
@@ -236,13 +257,13 @@ impl PhysicalExpr for CastExpr {
     /// A [`CastExpr`] preserves the ordering of its child if the cast is done
     /// under the same datatype family.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
-        cast_expr_properties(&children[0], &self.cast_type)
+        cast_expr_properties(&children[0], self.cast_type())
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CAST(")?;
         self.expr.fmt_sql(f)?;
-        write!(f, " AS {:?}", self.cast_type)?;
+        write!(f, " AS {:?}", self.cast_type())?;
 
         write!(f, ")")
     }
@@ -261,13 +282,17 @@ pub fn cast_with_options(
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(Arc::clone(&expr))
+    } else if matches!((&expr_type, &cast_type), (Struct(_), Struct(_))) {
+        if can_cast_struct_types(&expr_type, &cast_type) {
+            // Allow struct-to-struct casts that pass name-based compatibility validation.
+            // This validation is applied at planning time (now) to fail fast, rather than
+            // deferring errors to execution time. The name-based casting logic will be
+            // executed at runtime via ColumnarValue::cast_to.
+            Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
+        } else {
+            not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
+        }
     } else if can_cast_types(&expr_type, &cast_type) {
-        Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
-    } else if can_cast_struct_types(&expr_type, &cast_type) {
-        // Allow struct-to-struct casts that pass name-based compatibility validation.
-        // This validation is applied at planning time (now) to fail fast, rather than
-        // deferring errors to execution time. The name-based casting logic will be
-        // executed at runtime via ColumnarValue::cast_to.
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
         not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
@@ -302,6 +327,7 @@ mod tests {
     };
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use insta::assert_snapshot;
+    use std::collections::HashMap;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -806,6 +832,71 @@ mod tests {
                 )
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn field_aware_cast_return_field_preserves_target_metadata() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        let expr = CastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::new(Field::new("cast_target", Int64, true).with_metadata(
+                HashMap::from([("target_meta".to_string(), "1".to_string())]),
+            )),
+            None,
+        );
+
+        let field = expr.return_field(&schema)?;
+
+        assert_eq!(field.name(), "a");
+        assert_eq!(field.data_type(), &Int64);
+        assert!(!field.is_nullable());
+        assert_eq!(
+            field.metadata().get("target_meta").map(String::as_str),
+            Some("1")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn field_aware_cast_nullable_follows_input_nullability() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
+        let expr = CastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::new(Field::new("cast_target", Int64, false)),
+            None,
+        );
+
+        assert!(expr.nullable(&schema)?);
+        assert!(expr.return_field(&schema)?.is_nullable());
+
+        Ok(())
+    }
+
+    #[test]
+    fn struct_cast_validation_uses_nested_target_fields() -> Result<()> {
+        let source_type = Struct(Fields::from(vec![
+            Arc::new(Field::new("x", Int32, true)),
+            Arc::new(Field::new("y", Utf8, true)),
+        ]));
+        let schema = Schema::new(vec![Field::new("a", source_type.clone(), true)]);
+
+        let valid_target = Struct(Fields::from(vec![
+            Arc::new(Field::new("y", Utf8, true)),
+            Arc::new(Field::new("x", Int64, true)),
+        ]));
+        cast_with_options(col("a", &schema)?, &schema, valid_target, None)?;
+
+        let invalid_target = Struct(Fields::from(vec![
+            Arc::new(Field::new("y", Utf8, true)),
+            Arc::new(Field::new("missing", Int64, false)),
+        ]));
+        let err = cast_with_options(col("a", &schema)?, &schema, invalid_target, None)
+            .expect_err("missing required struct field should fail");
+
+        assert!(err.to_string().contains("Unsupported CAST"));
+
         Ok(())
     }
 
