@@ -309,7 +309,7 @@ impl FilterExec {
     }
 
     /// Calculates `Statistics` for `FilterExec`, by applying selectivity (either default, or estimated) to input statistics.
-    fn statistics_helper(
+    pub(crate) fn statistics_helper(
         schema: &SchemaRef,
         input_stats: Statistics,
         predicate: &Arc<dyn PhysicalExpr>,
