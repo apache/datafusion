@@ -580,7 +580,7 @@ when you need to support SQL types that aren’t natively recognized.</p>
 <span class="k">struct</span><span class="w"> </span><span class="nc">MyTypePlanner</span><span class="p">;</span>
 
 <span class="k">impl</span><span class="w"> </span><span class="n">TypePlanner</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyTypePlanner</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">plan_type</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">sql_type</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ast</span><span class="p">::</span><span class="n">DataType</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">plan_type_field</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">sql_type</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ast</span><span class="p">::</span><span class="n">DataType</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">FieldRef</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">sql_type</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="c1">// Map DATETIME(precision) to Arrow Timestamp</span>
 <span class="w">            </span><span class="n">ast</span><span class="p">::</span><span class="n">DataType</span><span class="p">::</span><span class="n">Datetime</span><span class="p">(</span><span class="n">precision</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
@@ -591,7 +591,9 @@ when you need to support SQL types that aren’t natively recognized.</p>
 <span class="w">                    </span><span class="nb">None</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="mi">9</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">TimeUnit</span><span class="p">::</span><span class="n">Nanosecond</span><span class="p">,</span>
 <span class="w">                    </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">None</span><span class="p">),</span><span class="w"> </span><span class="c1">// Let default handling take over</span>
 <span class="w">                </span><span class="p">};</span>
-<span class="w">                </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">time_unit</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">)))</span>
+<span class="w">                </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span>
+<span class="w">                    </span><span class="n">DataType</span><span class="p">::</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">time_unit</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">).</span><span class="n">into_nullable_field_ref</span><span class="p">()</span>
+<span class="w">                </span><span class="p">))</span>
 <span class="w">            </span><span class="p">}</span>
 <span class="w">            </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">None</span><span class="p">),</span><span class="w"> </span><span class="c1">// Return None for types we don&#39;t handle</span>
 <span class="w">        </span><span class="p">}</span>
@@ -609,6 +611,43 @@ when you need to support SQL types that aren’t natively recognized.</p>
 
 <span class="w">    </span><span class="c1">// Now DATETIME type is recognized</span>
 <span class="w">    </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;CREATE TABLE events (ts DATETIME(3))&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="example-supporting-the-uuid-type">
+<h4>Example: Supporting the UUID Type<a class="headerlink" href="#example-supporting-the-uuid-type" title="Link to this heading">#</a></h4>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_expr</span><span class="p">::</span><span class="n">planner</span><span class="p">::</span><span class="n">TypePlanner</span><span class="p">;</span>
+
+<span class="cp">#[derive(Debug)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyTypePlanner</span><span class="p">;</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">TypePlanner</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyTypePlanner</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">plan_type_field</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">sql_type</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ast</span><span class="p">::</span><span class="n">DataType</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">FieldRef</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">sql_type</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">sqlparser</span><span class="p">::</span><span class="n">ast</span><span class="p">::</span><span class="n">DataType</span><span class="p">::</span><span class="n">Uuid</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
+<span class="w">                </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">FixedSizeBinary</span><span class="p">(</span><span class="mi">16</span><span class="p">),</span><span class="w"> </span><span class="kc">true</span><span class="p">).</span><span class="n">with_metadata</span><span class="p">(</span>
+<span class="w">                    </span><span class="p">[(</span><span class="s">&quot;ARROW:extension:name&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="s">&quot;arrow.uuid&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">())]</span>
+<span class="w">                        </span><span class="p">.</span><span class="n">into</span><span class="p">(),</span>
+<span class="w">                </span><span class="p">),</span>
+<span class="w">            </span><span class="p">))),</span>
+<span class="w">            </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">None</span><span class="p">),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionStateBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_default_features</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_type_planner</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyTypePlanner</span><span class="p">))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new_with_state</span><span class="p">(</span><span class="n">state</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Now UUID type is recognized</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;CREATE TABLE idx (uuid UUID)&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 <span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
 <span class="p">}</span>
 </pre></div>
@@ -810,6 +849,7 @@ for queries such as:</p>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#typeplanner-custom-data-types">TypePlanner: Custom Data Types</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#example-custom-datetime-type">Example: Custom DATETIME Type</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#example-supporting-the-uuid-type">Example: Supporting the UUID Type</a></li>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#relationplanner-custom-from-clause-elements">RelationPlanner: Custom FROM Clause Elements</a><ul class="nav section-nav flex-column">
