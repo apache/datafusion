@@ -438,14 +438,18 @@ impl DefaultPhysicalExprAdapterRewriter {
         if logical_field.data_type() == physical_field.data_type() {
             // The data type matches, but the field metadata / nullability differs.
             // Emit a CastColumnExpr so downstream schema construction uses the logical field.
-            return self.create_cast_column_expr(resolved_column, logical_field);
+            return self.create_cast_column_expr(
+                resolved_column,
+                physical_field,
+                logical_field,
+            );
         }
 
         // We need to cast the column to the logical data type
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
         // since that's much cheaper to evalaute.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
-        self.create_cast_column_expr(resolved_column, logical_field)
+        self.create_cast_column_expr(resolved_column, physical_field, logical_field)
     }
 
     /// Resolves a logical column to the corresponding physical column and field.
@@ -482,19 +486,15 @@ impl DefaultPhysicalExprAdapterRewriter {
     fn create_cast_column_expr(
         &self,
         column: Column,
+        physical_field: FieldRef,
         logical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        // Look up the column index in the physical schema by name to ensure correctness.
-        let physical_column_index = self.physical_file_schema.index_of(column.name())?;
-        let actual_physical_field =
-            self.physical_file_schema.field(physical_column_index);
-
         // For struct types, use validate_struct_compatibility which handles:
         // - Missing fields in source (filled with nulls)
         // - Extra fields in source (ignored)
         // - Recursive validation of nested structs
         // For non-struct types, use Arrow's can_cast_types
-        match (actual_physical_field.data_type(), logical_field.data_type()) {
+        match (physical_field.data_type(), logical_field.data_type()) {
             (DataType::Struct(physical_fields), DataType::Struct(logical_fields)) => {
                 validate_struct_compatibility(
                     physical_fields.as_ref(),
@@ -502,15 +502,13 @@ impl DefaultPhysicalExprAdapterRewriter {
                 )?;
             }
             _ => {
-                let is_compatible = can_cast_types(
-                    actual_physical_field.data_type(),
-                    logical_field.data_type(),
-                );
+                let is_compatible =
+                    can_cast_types(physical_field.data_type(), logical_field.data_type());
                 if !is_compatible {
                     return exec_err!(
                         "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type)",
                         column.name(),
-                        actual_physical_field.data_type(),
+                        physical_field.data_type(),
                         logical_field.data_type()
                     );
                 }
@@ -519,7 +517,7 @@ impl DefaultPhysicalExprAdapterRewriter {
 
         let cast_expr = Arc::new(CastColumnExpr::new(
             Arc::new(column),
-            Arc::new(actual_physical_field.clone()),
+            physical_field,
             Arc::new(logical_field.clone()),
             None,
         ));
@@ -1607,6 +1605,7 @@ mod tests {
         let transformed = rewriter
             .create_cast_column_expr(
                 Column::new("a", 0),
+                Arc::new(physical_schema.field_with_name("a").unwrap().clone()),
                 logical_schema.field_with_name("a").unwrap(),
             )
             .unwrap();

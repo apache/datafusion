@@ -209,16 +209,8 @@ impl PhysicalExpr for CastExpr {
         value.cast_to(self.cast_type(), Some(&self.cast_options))
     }
 
-    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        self.expr.return_field(input_schema).map(|field| {
-            Arc::new(
-                field
-                    .as_ref()
-                    .clone()
-                    .with_data_type(self.cast_type().clone())
-                    .with_metadata(self.target_field.metadata().clone()),
-            )
-        })
+    fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::clone(&self.target_field))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -848,9 +840,9 @@ mod tests {
 
         let field = expr.return_field(&schema)?;
 
-        assert_eq!(field.name(), "a");
+        assert_eq!(field.name(), "cast_target");
         assert_eq!(field.data_type(), &Int64);
-        assert!(!field.is_nullable());
+        assert!(field.is_nullable());
         assert_eq!(
             field.metadata().get("target_meta").map(String::as_str),
             Some("1")
@@ -860,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn field_aware_cast_nullable_follows_input_nullability() -> Result<()> {
+    fn field_aware_cast_nullable_uses_target_field() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", Int32, true)]);
         let expr = CastExpr::new_with_target_field(
             col("a", &schema)?,
@@ -869,7 +861,7 @@ mod tests {
         );
 
         assert!(expr.nullable(&schema)?);
-        assert!(expr.return_field(&schema)?.is_nullable());
+        assert!(!expr.return_field(&schema)?.is_nullable());
 
         Ok(())
     }
