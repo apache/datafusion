@@ -6112,6 +6112,204 @@ impl<'de> serde::Deserialize<'de> for ExplainNode {
         deserializer.deserialize_struct("datafusion.ExplainNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for FileFormatKind {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "FILE_FORMAT_KIND_UNSPECIFIED",
+            Self::Csv => "FILE_FORMAT_KIND_CSV",
+            Self::Json => "FILE_FORMAT_KIND_JSON",
+            Self::Parquet => "FILE_FORMAT_KIND_PARQUET",
+            Self::Arrow => "FILE_FORMAT_KIND_ARROW",
+            Self::Avro => "FILE_FORMAT_KIND_AVRO",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for FileFormatKind {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "FILE_FORMAT_KIND_UNSPECIFIED",
+            "FILE_FORMAT_KIND_CSV",
+            "FILE_FORMAT_KIND_JSON",
+            "FILE_FORMAT_KIND_PARQUET",
+            "FILE_FORMAT_KIND_ARROW",
+            "FILE_FORMAT_KIND_AVRO",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = FileFormatKind;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "FILE_FORMAT_KIND_UNSPECIFIED" => Ok(FileFormatKind::Unspecified),
+                    "FILE_FORMAT_KIND_CSV" => Ok(FileFormatKind::Csv),
+                    "FILE_FORMAT_KIND_JSON" => Ok(FileFormatKind::Json),
+                    "FILE_FORMAT_KIND_PARQUET" => Ok(FileFormatKind::Parquet),
+                    "FILE_FORMAT_KIND_ARROW" => Ok(FileFormatKind::Arrow),
+                    "FILE_FORMAT_KIND_AVRO" => Ok(FileFormatKind::Avro),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for FileFormatProto {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.kind != 0 {
+            len += 1;
+        }
+        if !self.encoded_file_format.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.FileFormatProto", len)?;
+        if self.kind != 0 {
+            let v = FileFormatKind::try_from(self.kind)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.kind)))?;
+            struct_ser.serialize_field("kind", &v)?;
+        }
+        if !self.encoded_file_format.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("encodedFileFormat", pbjson::private::base64::encode(&self.encoded_file_format).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for FileFormatProto {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "kind",
+            "encoded_file_format",
+            "encodedFileFormat",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Kind,
+            EncodedFileFormat,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "kind" => Ok(GeneratedField::Kind),
+                            "encodedFileFormat" | "encoded_file_format" => Ok(GeneratedField::EncodedFileFormat),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = FileFormatProto;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.FileFormatProto")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<FileFormatProto, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut kind__ = None;
+                let mut encoded_file_format__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Kind => {
+                            if kind__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("kind"));
+                            }
+                            kind__ = Some(map_.next_value::<FileFormatKind>()? as i32);
+                        }
+                        GeneratedField::EncodedFileFormat => {
+                            if encoded_file_format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("encodedFileFormat"));
+                            }
+                            encoded_file_format__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(FileFormatProto {
+                    kind: kind__.unwrap_or_default(),
+                    encoded_file_format: encoded_file_format__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.FileFormatProto", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for FileGroup {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
