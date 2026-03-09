@@ -195,6 +195,19 @@ impl OrderingEquivalenceCache {
 }
 
 impl EquivalenceProperties {
+    /// Helper used by the ordering equivalence rule when considering whether a
+    /// cast-bearing expression can replace an existing sort key without invalidating
+    /// the ordering.
+    ///
+    /// This function handles *both* `CastExpr` (generic cast) and
+    /// `CastColumnExpr` (field-aware cast) because the planner may introduce either
+    /// form during rewrite steps; the core logic is the same in both cases.  The
+    /// substitution is only allowed when the cast wraps **the very same child
+    /// expression** that the original sort used (an exact-child-match invariant),
+    /// and the casted type must be a widening/order-preserving conversion
+    /// `CastExpr::check_bigger_cast(...)` ensures.  Without those restrictions the
+    /// existing sort order could be violated (e.g. a narrowing cast could collapse
+    /// distinct values together).
     fn substitute_cast_like_ordering(
         r_expr: Arc<dyn PhysicalExpr>,
         sort_expr: &PhysicalSortExpr,
