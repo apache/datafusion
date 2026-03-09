@@ -173,7 +173,7 @@ impl ScalarFunctionExpr {
     {
         match expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
             Some(scalar_expr)
-                if (scalar_expr.fun().inner() as &dyn Any)
+                if (scalar_expr.fun().inner().as_ref() as &dyn Any)
                     .downcast_ref::<T>()
                     .is_some() =>
             {

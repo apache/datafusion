@@ -493,7 +493,7 @@ pub(crate) mod tests {
             buf.push(Self::MAGIC_NUMBER);
 
             let udf = node.inner();
-            if !(udf as &dyn Any).is::<AbsFunc>() {
+            if !(udf.as_ref() as &dyn Any).is::<AbsFunc>() {
                 return exec_err!("TestExtensionCodec only expects Abs UDF");
             };
 
@@ -609,7 +609,7 @@ pub(crate) mod tests {
 
         let returned_udf = foreign_codec.try_decode_udf(udf.name(), &bytes)?;
 
-        assert!((returned_udf.inner() as &dyn Any).is::<AbsFunc>());
+        assert!((returned_udf.inner().as_ref() as &dyn Any).is::<AbsFunc>());
 
         Ok(())
     }

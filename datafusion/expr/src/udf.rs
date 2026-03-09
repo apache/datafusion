@@ -67,7 +67,7 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(&*other.inner as &dyn Any)
+        self.inner.as_ref().dyn_eq(other.inner.as_ref() as &dyn Any)
     }
 }
 
@@ -360,7 +360,7 @@ impl ScalarUDF {
 
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
-        (self.inner() as &dyn Any).downcast_ref::<AsyncScalarUDF>()
+        (self.inner().as_ref() as &dyn Any).downcast_ref::<AsyncScalarUDF>()
     }
 
     /// Returns placement information for this function.

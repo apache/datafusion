@@ -458,7 +458,7 @@ mod tests {
         // Verify local libraries can be downcast to their original
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
         assert!(
-            (&*foreign_udf as &dyn Any)
+            (foreign_udf.as_ref() as &dyn Any)
                 .downcast_ref::<AbsFunc>()
                 .is_some()
         );
@@ -467,7 +467,7 @@ mod tests {
         ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
         assert!(
-            (&*foreign_udf as &dyn Any)
+            (foreign_udf.as_ref() as &dyn Any)
                 .downcast_ref::<ForeignScalarUDF>()
                 .is_some()
         );

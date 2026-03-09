@@ -399,7 +399,7 @@ impl ScalarUDFImpl for LogFunc {
 
 /// Returns true if the function is `PowerFunc`
 fn is_pow(func: &ScalarUDF) -> bool {
-    (func.inner() as &dyn Any)
+    (func.inner().as_ref() as &dyn Any)
         .downcast_ref::<PowerFunc>()
         .is_some()
 }

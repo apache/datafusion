@@ -659,7 +659,7 @@ mod tests {
 
         let returned_udf = foreign_codec.try_decode_udf(udf.name(), &bytes)?;
 
-        assert!((returned_udf.inner() as &dyn Any).is::<AbsFunc>());
+        assert!((returned_udf.inner().as_ref() as &dyn Any).is::<AbsFunc>());
 
         Ok(())
     }

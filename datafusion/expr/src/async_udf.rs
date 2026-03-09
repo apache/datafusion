@@ -63,7 +63,7 @@ impl PartialEq for AsyncScalarUDF {
     fn eq(&self, other: &Self) -> bool {
         // Deconstruct to catch any new fields added in future
         let Self { inner } = self;
-        inner.dyn_eq(&*other.inner as &dyn Any)
+        inner.as_ref().dyn_eq(other.inner.as_ref() as &dyn Any)
     }
 }
 impl Eq for AsyncScalarUDF {}

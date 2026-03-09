@@ -601,7 +601,7 @@ impl ScalarUDFImpl for PowerFunc {
 
 /// Return true if this function call is a call to `Log`
 fn is_log(func: &ScalarUDF) -> bool {
-    (func.inner() as &dyn Any)
+    (func.inner().as_ref() as &dyn Any)
         .downcast_ref::<LogFunc>()
         .is_some()
 }

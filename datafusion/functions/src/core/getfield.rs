@@ -440,7 +440,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 func,
                 args: inner_args,
             }) = current_expr
-                && (func.inner() as &dyn Any)
+                && (func.inner().as_ref() as &dyn Any)
                     .downcast_ref::<GetFieldFunc>()
                     .is_some()
             {
