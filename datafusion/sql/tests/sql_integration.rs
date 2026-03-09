@@ -2619,6 +2619,22 @@ fn union_all() {
 }
 
 #[test]
+fn union_all_right_side_duplicate_literal_names() {
+    let sql = "SELECT 1 c1, 0 c2, 0 c3 UNION ALL SELECT 2, 0, 0";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Union
+      Projection: Int64(1) AS c1, Int64(0) AS c2, Int64(0) AS c3
+        EmptyRelation
+      Projection: Int64(2) AS __set_col_1, Int64(0) AS __set_col_2, Int64(0) AS __set_col_3
+        EmptyRelation
+    "
+    );
+}
+
+#[test]
 fn union_all_by_name_different_columns() {
     let sql =
         "SELECT order_id from orders UNION ALL BY NAME SELECT order_id, 1 FROM orders";

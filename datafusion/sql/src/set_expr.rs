@@ -20,7 +20,9 @@ use datafusion_common::{
     DataFusionError, Diagnostic, Result, Span, not_impl_err, plan_err,
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier, Spanned};
+use sqlparser::ast::{
+    Ident, SetExpr, SetOperator, SetQuantifier, Select, SelectItem, Spanned,
+};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
@@ -42,7 +44,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let left_span = Span::try_from_sqlparser_span(left.span());
                 let right_span = Span::try_from_sqlparser_span(right.span());
                 let left_plan = self.set_expr_to_plan(*left, planner_context);
-                let right_plan = self.set_expr_to_plan(*right, planner_context);
+
+                let right_expr = *right;
+                let right_plan = self.set_expr_to_plan(right_expr.clone(), planner_context);
+                let right_plan = match (right_plan, set_quantifier) {
+                    (Err(err), SetQuantifier::ByName | SetQuantifier::AllByName) => Err(err),
+                    (Err(err), _) if is_projection_unique_name_err(&err) => {
+                        self.set_expr_to_plan(alias_set_operand_projection(right_expr), planner_context)
+                    }
+                    (result, _) => result,
+                };
+
                 let (left_plan, right_plan) = match (left_plan, right_plan) {
                     (Ok(left_plan), Ok(right_plan)) => (left_plan, right_plan),
                     (Err(left_err), Err(right_err)) => {
@@ -159,4 +171,43 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
     }
+}
+
+fn is_projection_unique_name_err(err: &DataFusionError) -> bool {
+    err.to_string()
+        .contains("Projections require unique expression names")
+}
+
+fn alias_set_operand_projection(set_expr: SetExpr) -> SetExpr {
+    match set_expr {
+        SetExpr::Select(select) => SetExpr::Select(Box::new(alias_select_projection(*select))),
+        SetExpr::SetOperation {
+            op,
+            left,
+            right,
+            set_quantifier,
+        } => SetExpr::SetOperation {
+            op,
+            left,
+            right: Box::new(alias_set_operand_projection(*right)),
+            set_quantifier,
+        },
+        other => other,
+    }
+}
+
+fn alias_select_projection(mut select: Select) -> Select {
+    select.projection = select
+        .projection
+        .into_iter()
+        .enumerate()
+        .map(|(idx, item)| match item {
+            SelectItem::UnnamedExpr(expr) => SelectItem::ExprWithAlias {
+                expr,
+                alias: Ident::new(format!("__set_col_{}", idx + 1)),
+            },
+            other => other,
+        })
+        .collect();
+    select
 }
