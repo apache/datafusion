@@ -155,14 +155,14 @@ impl CastExpr {
         &self.cast_options
     }
 
-    fn is_legacy_target_field(&self) -> bool {
+    fn is_default_target_field(&self) -> bool {
         self.target_field.name().is_empty()
             && self.target_field.is_nullable()
             && self.target_field.metadata().is_empty()
     }
 
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        if self.is_legacy_target_field() {
+        if self.is_default_target_field() {
             self.expr.return_field(input_schema).map(|field| {
                 Arc::new(
                     field
