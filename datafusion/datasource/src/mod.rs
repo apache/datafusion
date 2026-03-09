@@ -38,6 +38,7 @@ pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
+pub mod morsel;
 pub mod projection;
 pub mod schema_adapter;
 pub mod sink;
@@ -126,7 +127,8 @@ pub struct PartitionedFile {
     /// [`wrap_partition_value_in_dict`]: crate::file_scan_config::wrap_partition_value_in_dict
     /// [`table_partition_cols`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/file_format/options.rs#L87
     pub partition_values: Vec<ScalarValue>,
-    /// An optional file range for a more fine-grained parallel execution
+    /// An optional file range for this file. This is used to statically
+    /// schedule non-overlapping sections of a file to be read in parallel.
     pub range: Option<FileRange>,
     /// Optional statistics that describe the data in this file if known.
     ///

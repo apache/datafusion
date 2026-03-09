@@ -72,6 +72,7 @@ zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+insta = { workspace = true }
 tempfile = { workspace = true }
 
 # Note: add additional linter rules in lib.rs.

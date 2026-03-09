@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
+use crate::morsel::{FileOpenerMorselizer, Morselizer};
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
@@ -63,13 +64,34 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
 ///
 /// [`DataSource`]: crate::source::DataSource
 pub trait FileSource: Send + Sync {
-    /// Creates a `dyn FileOpener` based on given parameters
+    /// Creates a `dyn FileOpener` based on given parameters.
+    ///
+    /// `FileSource`s that implement the Morsel API should return a "Not
+    /// Implemented" or "Internal" error for this API.
+    ///
+    /// TODO: deprecate
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
     ) -> Result<Arc<dyn FileOpener>>;
+
+    /// Creates a `dyn Morselizer` based on given parameters.
+    ///
+    /// The default implementation preserves existing behavior by adapting the
+    /// legacy [`FileOpener`] API into a [`Morselizer`]. File formats with a
+    /// native morsel-driven implementation should override this method to
+    /// return a [`Morselizer`] and not implement the [`FileOpener`] API.
+    fn create_morselizer(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Result<Box<dyn Morselizer>> {
+        let opener = self.create_file_opener(object_store, base_config, partition)?;
+        Ok(Box::new(FileOpenerMorselizer::new(opener)))
+    }
     /// Any
     fn as_any(&self) -> &dyn Any;
 

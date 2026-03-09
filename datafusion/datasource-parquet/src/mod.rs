@@ -37,6 +37,7 @@ mod writer;
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
+pub use opener::ParquetMorselizer;
 pub use page_filter::PagePruningAccessPlanFilter;
 pub use reader::*; // Expose so downstream crates can use it
 pub use row_filter::build_row_filter;

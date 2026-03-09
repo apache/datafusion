@@ -586,9 +586,14 @@ impl DataSource for FileScanConfig {
 
         let source = self.file_source.with_batch_size(batch_size);
 
-        let opener = source.create_file_opener(object_store, self, partition)?;
+        let morselizer = source.create_morselizer(object_store, self, partition)?;
 
-        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        let stream = FileStream::new_with_morselizer(
+            self,
+            partition,
+            morselizer,
+            source.metrics(),
+        )?;
         Ok(Box::pin(cooperative(stream)))
     }
 
