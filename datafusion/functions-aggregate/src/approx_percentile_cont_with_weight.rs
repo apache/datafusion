@@ -160,6 +160,10 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
         "approx_percentile_cont_with_weight"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

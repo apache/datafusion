@@ -450,6 +450,14 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this function's name
     fn name(&self) -> &str;
 
+    /// Returns whether this function is built into DataFusion or else it's
+    /// assumed to be user defined.
+    ///
+    /// This is mostly useful to know within certain optimization rules to be
+    /// sure that the given function has a specific semantics and hasn't been
+    /// overwritten by a user defined function which could have a different semantics.
+    fn is_builtin(&self) -> bool;
+
     /// Returns any aliases (alternate names) for this function.
     ///
     /// Note: `aliases` should only include names other than [`Self::name`].
@@ -1239,6 +1247,10 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.name()
     }
 
+    fn is_builtin(&self) -> bool {
+        self.inner.is_builtin()
+    }
+
     fn signature(&self) -> &Signature {
         self.inner.signature()
     }
@@ -1443,6 +1455,9 @@ mod test {
         fn name(&self) -> &str {
             "a"
         }
+        fn is_builtin(&self) -> bool {
+            unimplemented!()
+        }
         fn signature(&self) -> &Signature {
             &self.signature
         }
@@ -1482,6 +1497,9 @@ mod test {
         }
         fn name(&self) -> &str {
             "b"
+        }
+        fn is_builtin(&self) -> bool {
+            unimplemented!()
         }
         fn signature(&self) -> &Signature {
             &self.signature

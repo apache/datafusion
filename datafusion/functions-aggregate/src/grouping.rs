@@ -88,6 +88,10 @@ impl AggregateUDFImpl for Grouping {
         "grouping"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

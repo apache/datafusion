@@ -461,6 +461,10 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         self.udaf.name.as_str()
     }
 
+    fn is_builtin(&self) -> bool {
+        false // Not 100% sure about this, but my guess is that foreign UDF cannot be builtin (unless we want to load built-in functions at runtime in the future)
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -665,6 +669,10 @@ mod tests {
 
         fn name(&self) -> &str {
             self.inner.name()
+        }
+
+        fn is_builtin(&self) -> bool {
+            unimplemented!()
         }
 
         fn signature(&self) -> &Signature {

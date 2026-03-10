@@ -74,6 +74,10 @@ impl AggregateUDFImpl for GeoMeanUdaf {
         "geo_mean"
     }
 
+    fn is_builtin(&self) -> bool {
+        false
+    }
+
     /// Return the "signature" of this function -- namely that types of arguments it will take
     fn signature(&self) -> &Signature {
         &self.signature
@@ -393,6 +397,10 @@ impl AggregateUDFImpl for SimplifiedGeoMeanUdaf {
 
     fn name(&self) -> &str {
         "simplified_geo_mean"
+    }
+
+    fn is_builtin(&self) -> bool {
+        false
     }
 
     fn signature(&self) -> &Signature {

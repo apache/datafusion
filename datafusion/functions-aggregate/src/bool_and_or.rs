@@ -134,6 +134,10 @@ impl AggregateUDFImpl for BoolAnd {
         "bool_and"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -265,6 +269,10 @@ impl AggregateUDFImpl for BoolOr {
 
     fn name(&self) -> &str {
         "bool_or"
+    }
+
+    fn is_builtin(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {

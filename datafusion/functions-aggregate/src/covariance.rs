@@ -96,6 +96,10 @@ impl AggregateUDFImpl for CovarianceSample {
         "covar_samp"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -178,6 +182,10 @@ impl AggregateUDFImpl for CovariancePopulation {
 
     fn name(&self) -> &str {
         "covar_pop"
+    }
+
+    fn is_builtin(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {

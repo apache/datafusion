@@ -62,6 +62,10 @@ impl AggregateUDFImpl for SparkCollectList {
         "collect_list"
     }
 
+    fn is_builtin(&self) -> bool {
+        false
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -122,6 +126,10 @@ impl AggregateUDFImpl for SparkCollectSet {
 
     fn name(&self) -> &str {
         "collect_set"
+    }
+
+    fn is_builtin(&self) -> bool {
+        false
     }
 
     fn signature(&self) -> &Signature {

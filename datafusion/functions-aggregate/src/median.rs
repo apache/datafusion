@@ -113,6 +113,10 @@ impl AggregateUDFImpl for Median {
         "median"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

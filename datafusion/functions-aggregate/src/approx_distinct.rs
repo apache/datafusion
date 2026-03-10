@@ -318,6 +318,10 @@ impl AggregateUDFImpl for ApproxDistinct {
         "approx_distinct"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

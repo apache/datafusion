@@ -135,6 +135,10 @@ impl AggregateUDFImpl for Avg {
         "avg"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

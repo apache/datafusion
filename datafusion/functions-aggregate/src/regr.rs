@@ -450,6 +450,10 @@ impl AggregateUDFImpl for Regr {
         self.func_name
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

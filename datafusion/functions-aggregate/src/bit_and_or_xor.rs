@@ -248,6 +248,10 @@ impl AggregateUDFImpl for BitwiseOperation {
         self.func_name
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

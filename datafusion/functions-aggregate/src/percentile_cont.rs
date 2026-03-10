@@ -171,6 +171,10 @@ impl AggregateUDFImpl for PercentileCont {
         "percentile_cont"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }

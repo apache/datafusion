@@ -4957,6 +4957,10 @@ mod tests {
             "mock_simplify"
         }
 
+        fn is_builtin(&self) -> bool {
+            false
+        }
+
         fn signature(&self) -> &Signature {
             unimplemented!()
         }

@@ -120,6 +120,10 @@ impl AggregateUDFImpl for FirstValue {
         "first_value"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -1058,6 +1062,10 @@ impl AggregateUDFImpl for LastValue {
 
     fn name(&self) -> &str {
         "last_value"
+    }
+
+    fn is_builtin(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {

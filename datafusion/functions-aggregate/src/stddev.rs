@@ -94,6 +94,10 @@ impl AggregateUDFImpl for Stddev {
         "stddev"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -199,6 +203,10 @@ impl AggregateUDFImpl for StddevPop {
 
     fn name(&self) -> &str {
         "stddev_pop"
+    }
+
+    fn is_builtin(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {

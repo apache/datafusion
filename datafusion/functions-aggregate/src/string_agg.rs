@@ -136,6 +136,10 @@ impl AggregateUDFImpl for StringAgg {
         "string_agg"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

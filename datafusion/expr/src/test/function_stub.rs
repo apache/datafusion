@@ -123,6 +123,10 @@ impl AggregateUDFImpl for Sum {
         "sum"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -252,7 +256,11 @@ impl AggregateUDFImpl for Count {
     }
 
     fn name(&self) -> &str {
-        "COUNT"
+        "COUNT" // TODO: change to lowercase
+    }
+
+    fn is_builtin(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {
@@ -342,6 +350,10 @@ impl AggregateUDFImpl for Min {
         "min"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -424,6 +436,10 @@ impl AggregateUDFImpl for Max {
         "max"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -484,6 +500,10 @@ impl AggregateUDFImpl for Avg {
 
     fn name(&self) -> &str {
         "avg"
+    }
+
+    fn is_builtin(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {

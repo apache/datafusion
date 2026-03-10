@@ -92,6 +92,10 @@ impl AggregateUDFImpl for VarianceSample {
         "var"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -190,6 +194,10 @@ impl AggregateUDFImpl for VariancePopulation {
 
     fn name(&self) -> &str {
         "var_pop"
+    }
+
+    fn is_builtin(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {

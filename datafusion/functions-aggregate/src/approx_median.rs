@@ -133,6 +133,10 @@ impl AggregateUDFImpl for ApproxMedian {
         &self.signature
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
     }

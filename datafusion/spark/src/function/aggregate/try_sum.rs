@@ -256,6 +256,10 @@ impl AggregateUDFImpl for SparkTrySum {
         "try_sum"
     }
 
+    fn is_builtin(&self) -> bool {
+        false
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

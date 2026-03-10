@@ -287,6 +287,10 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         "approx_percentile_cont"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

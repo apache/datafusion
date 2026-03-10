@@ -211,6 +211,10 @@ impl AggregateUDFImpl for Max {
         "max"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -496,6 +500,10 @@ impl AggregateUDFImpl for Min {
 
     fn name(&self) -> &str {
         "min"
+    }
+
+    fn is_builtin(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {

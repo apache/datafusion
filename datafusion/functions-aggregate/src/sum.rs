@@ -209,6 +209,10 @@ impl AggregateUDFImpl for Sum {
         "sum"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

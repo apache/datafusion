@@ -600,6 +600,10 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         &self.name
     }
 
+    fn is_builtin(&self) -> bool {
+        false // Not 100% sure about this but it looks like that all built-in functions aren't build with SimpleAggregateUDF.
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

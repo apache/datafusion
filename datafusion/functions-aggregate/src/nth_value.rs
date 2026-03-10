@@ -120,6 +120,10 @@ impl AggregateUDFImpl for NthValueAgg {
         "nth_value"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

@@ -72,6 +72,10 @@ impl AggregateUDFImpl for SparkAvg {
         self
     }
 
+    fn is_builtin(&self) -> bool {
+        false // Maybe we should have an enum instead of a bool to be able to distinguish more precisely? Something like `enum UDFOrigin { DataFusion, Spark, User }`
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
