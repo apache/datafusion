@@ -69,6 +69,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -837,9 +838,8 @@ impl HashJoinExec {
     }
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
-        if self.join_type != JoinType::Inner
-            || !config.optimizer.enable_join_dynamic_filter_pushdown
-        {
+        let (_, probe_preserved) = self.join_type.on_lr_is_preserved();
+        if !probe_preserved || !config.optimizer.enable_join_dynamic_filter_pushdown {
             return false;
         }
 
@@ -1232,6 +1232,30 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join key expressions from both sides
+        let mut tnr = TreeNodeRecursion::Continue;
+        for (left, right) in &self.on {
+            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
+            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
+        }
+
+        // Apply to join filter expression if present
+        if let Some(filter) = &self.filter {
+            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
+        }
+
+        // Apply to dynamic filter expression if present
+        if let Some(df) = &self.dynamic_filter {
+            tnr = tnr.visit_sibling(|| f(df.filter.as_ref()))?;
+        }
+
+        Ok(tnr)
+    }
+
     /// Creates a new HashJoinExec with different children while preserving configuration.
     ///
     /// This method is called during query optimization when the optimizer creates new
@@ -1417,24 +1441,60 @@ impl ExecutionPlan for HashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
-        // TODO stats: it is not possible in general to know the output size of joins
-        // There are some special cases though, for example:
-        // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let stats = estimate_join_statistics(
-            self.left.partition_statistics(None)?,
-            self.right.partition_statistics(None)?,
-            &self.on,
-            &self.join_type,
-            &self.join_schema,
-        )?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = match (partition, self.mode) {
+            // For CollectLeft mode, the left side is collected into a single partition,
+            // so all left partitions are available to each output partition.
+            // For the right side, we need the specific partition statistics.
+            (Some(partition), PartitionMode::CollectLeft) => {
+                let left_stats = self.left.partition_statistics(None)?;
+                let right_stats = self.right.partition_statistics(Some(partition))?;
+
+                estimate_join_statistics(
+                    (*left_stats).clone(),
+                    (*right_stats).clone(),
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+
+            // For Partitioned mode, both sides are partitioned, so each output partition
+            // only has access to the corresponding partition from both sides.
+            (Some(partition), PartitionMode::Partitioned) => {
+                let left_stats = self.left.partition_statistics(Some(partition))?;
+                let right_stats = self.right.partition_statistics(Some(partition))?;
+
+                estimate_join_statistics(
+                    (*left_stats).clone(),
+                    (*right_stats).clone(),
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+
+            // For Auto mode or when no specific partition is requested, fall back to
+            // the current behavior of getting all partition statistics.
+            (None, _) | (Some(_), PartitionMode::Auto) => {
+                // TODO stats: it is not possible in general to know the output size of joins
+                // There are some special cases though, for example:
+                // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
+                let left_stats = self.left.partition_statistics(None)?;
+                let right_stats = self.right.partition_statistics(None)?;
+                estimate_join_statistics(
+                    (*left_stats).clone(),
+                    (*right_stats).clone(),
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+        };
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
         // Apply fetch limit to statistics
-        stats.with_fetch(self.fetch, 0, 1)
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the

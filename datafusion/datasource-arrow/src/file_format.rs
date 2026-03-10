@@ -63,7 +63,8 @@ use datafusion_session::Session;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use object_store::{
-    GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore, path::Path,
+    GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt,
+    path::Path,
 };
 use tokio::io::AsyncWriteExt;
 

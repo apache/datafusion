@@ -67,39 +67,48 @@ logical_plan
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 
 # set from other table
-query TT
+# UPDATE ... FROM is currently unsupported
+# TODO fix https://github.com/apache/datafusion/issues/19950
+query error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
 explain update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
-----
-logical_plan
-01)Dml: op=[Update] table=[t1]
-02)--Projection: t1.a AS a, t2.b AS b, CAST(t2.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d
-03)----Filter: t1.a = t2.a AND t1.b > CAST(Utf8("foo") AS Utf8View) AND t2.c > Float64(1)
-04)------Cross Join:
-05)--------TableScan: t1
-06)--------TableScan: t2
-physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+
+# test update from other table with actual data
+statement ok
+insert into t1 values (1, 'zoo', 2.0, 10), (2, 'qux', 3.0, 20), (3, 'bar', 4.0, 30);
 
 statement ok
-create table t3(a int, b varchar, c double, d int);
+insert into t2 values (1, 'updated_b', 5.0, 40), (2, 'updated_b2', 2.5, 50), (4, 'updated_b3', 1.5, 60);
+
+# UPDATE ... FROM is currently unsupported - qualifier stripping breaks source column references
+# causing assignments like 'b = t2.b' to resolve to target table's 'b' instead of source table's 'b'
+# TODO fix https://github.com/apache/datafusion/issues/19950
+statement error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
+update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
 
 # set from multiple tables, DataFusion only supports from one table
-query error DataFusion error: Error during planning: Multiple tables in UPDATE SET FROM not yet supported
+statement error DataFusion error: This feature is not implemented: Multiple tables in UPDATE SET FROM not yet supported
 explain update t1 set b = t2.b, c = t3.a, d = 1 from t2, t3 where t1.a = t2.a and t1.a = t3.a;
 
 # test table alias
-query TT
+# UPDATE ... FROM is currently unsupported
+# TODO fix https://github.com/apache/datafusion/issues/19950
+statement error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
 explain update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
-----
-logical_plan
-01)Dml: op=[Update] table=[t1]
-02)--Projection: t.a AS a, t2.b AS b, CAST(t.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d
-03)----Filter: t.a = t2.a AND t.b > CAST(Utf8("foo") AS Utf8View) AND t2.c > Float64(1)
-04)------Cross Join:
-05)--------SubqueryAlias: t
-06)----------TableScan: t1
-07)--------TableScan: t2
-physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+
+# test update with table alias with actual data
+statement ok
+delete from t1;
+
+statement ok
+delete from t2;
+
+statement ok
+insert into t1 values (1, 'zebra', 1.5, 5), (2, 'wolf', 2.0, 10), (3, 'apple', 3.5, 15);
+
+statement ok
+insert into t2 values (1, 'new_val', 2.0, 100), (2, 'new_val2', 1.5, 200);
+
+# UPDATE ... FROM is currently unsupported
+# TODO fix https://github.com/apache/datafusion/issues/19950
+statement error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
+update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;

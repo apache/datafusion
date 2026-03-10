@@ -61,7 +61,7 @@ use datafusion_session::Session;
 
 use crate::utils::JsonArrayToNdjsonReader;
 use async_trait::async_trait;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 #[derive(Default)]
 /// Factory struct used to create [JsonFormat]

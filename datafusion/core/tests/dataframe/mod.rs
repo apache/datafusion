@@ -6534,7 +6534,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
 async fn test_insert_into_casting_support() -> Result<()> {
     // Testing case1:
     // Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Utf8.
-    // And the cast is not supported from Utf8 to Float16.
+    // And the cast is not supported from Binary to Float16.
 
     // Create a new schema with one field called "a" of type Float16, and setting nullable to false
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float16, false)]));
@@ -6545,7 +6545,10 @@ async fn test_insert_into_casting_support() -> Result<()> {
     let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
     session_ctx.register_table("t", initial_table.clone())?;
 
-    let mut write_df = session_ctx.sql("values ('a123'), ('b456')").await.unwrap();
+    let mut write_df = session_ctx
+        .sql("values (x'a123'), (x'b456')")
+        .await
+        .unwrap();
 
     write_df = write_df
         .clone()
@@ -6559,7 +6562,7 @@ async fn test_insert_into_casting_support() -> Result<()> {
 
     assert_contains!(
         e.to_string(),
-        "Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Utf8."
+        "Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Binary."
     );
 
     // Testing case2:

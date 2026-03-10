@@ -352,8 +352,6 @@ fn array_has_dispatch_for_scalar(
     haystack: ArrayWrapper<'_>,
     needle: &dyn Datum,
 ) -> Result<ArrayRef> {
-    let values = haystack.values();
-    let is_nested = values.data_type().is_nested();
     // If first argument is empty list (second argument is non-null), return false
     // i.e. array_has([], non-null element) -> false
     if haystack.len() == 0 {
@@ -362,7 +360,17 @@ fn array_has_dispatch_for_scalar(
             None,
         )));
     }
-    let eq_array = compare_with_eq(values, needle, is_nested)?;
+
+    // For sliced ListArrays, values() returns the full underlying array but
+    // only elements between the first and last offset are visible.
+    let offsets: Vec<usize> = haystack.offsets().collect();
+    let first_offset = offsets[0];
+    let visible_values = haystack
+        .values()
+        .slice(first_offset, offsets[offsets.len() - 1] - first_offset);
+
+    let is_nested = visible_values.data_type().is_nested();
+    let eq_array = compare_with_eq(&visible_values, needle, is_nested)?;
 
     // When a haystack element is null, `eq()` returns null (not false).
     // In Arrow, a null BooleanArray entry has validity=0 but an
@@ -382,10 +390,14 @@ fn array_has_dispatch_for_scalar(
         ArrayWrapper::LargeList(arr) => arr.nulls(),
     };
     let mut matches = eq_bits.set_indices().peekable();
-    let mut values = BooleanBufferBuilder::new(haystack.len());
-    values.append_n(haystack.len(), false);
+    let mut result = BooleanBufferBuilder::new(haystack.len());
+    result.append_n(haystack.len(), false);
 
-    for (i, (_start, end)) in haystack.offsets().tuple_windows().enumerate() {
+    // Match positions are relative to visible_values (0-based), so
+    // subtract first_offset from each offset when comparing.
+    for (i, window) in offsets.windows(2).enumerate() {
+        let end = window[1] - first_offset;
+
         let has_match = matches.peek().is_some_and(|&p| p < end);
 
         // Advance past all match positions in this row's range.
@@ -394,14 +406,14 @@ fn array_has_dispatch_for_scalar(
         }
 
         if has_match && validity.is_none_or(|v| v.is_valid(i)) {
-            values.set_bit(i, true);
+            result.set_bit(i, true);
         }
     }
 
     // A null haystack row always produces a null output, so we can
     // reuse the haystack's null buffer directly.
     Ok(Arc::new(BooleanArray::new(
-        values.finish(),
+        result.finish(),
         validity.cloned(),
     )))
 }
@@ -1062,6 +1074,52 @@ mod tests {
         let output = output.as_boolean();
         assert_eq!(output.len(), 1);
         assert!(output.is_null(0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_has_sliced_list() -> Result<(), DataFusionError> {
+        // [[10, 20], [30, 40], [50, 60], [70, 80]]  →  slice(1,2)  →  [[30, 40], [50, 60]]
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(10), Some(20)]),
+            Some(vec![Some(30), Some(40)]),
+            Some(vec![Some(50), Some(60)]),
+            Some(vec![Some(70), Some(80)]),
+        ]);
+        let sliced = list.slice(1, 2);
+        let haystack_field =
+            Arc::new(Field::new("haystack", sliced.data_type().clone(), true));
+        let needle_field = Arc::new(Field::new("needle", DataType::Int32, true));
+        let return_field = Arc::new(Field::new("return", DataType::Boolean, true));
+
+        // Search for elements that exist only in sliced-away rows:
+        // 10 is in the prefix row, 70 is in the suffix row.
+        let invoke = |needle: i32| -> Result<ArrayRef, DataFusionError> {
+            ArrayHas::new()
+                .invoke_with_args(ScalarFunctionArgs {
+                    args: vec![
+                        ColumnarValue::Array(Arc::new(sliced.clone())),
+                        ColumnarValue::Scalar(ScalarValue::Int32(Some(needle))),
+                    ],
+                    arg_fields: vec![
+                        Arc::clone(&haystack_field),
+                        Arc::clone(&needle_field),
+                    ],
+                    number_rows: 2,
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::new(ConfigOptions::default()),
+                })?
+                .into_array(2)
+        };
+
+        let output = invoke(10)?.as_boolean().clone();
+        assert!(!output.value(0));
+        assert!(!output.value(1));
+
+        let output = invoke(70)?.as_boolean().clone();
+        assert!(!output.value(0));
+        assert!(!output.value(1));
 
         Ok(())
     }
