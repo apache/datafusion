@@ -3089,3 +3089,55 @@ async fn roundtrip_mixed_case_table_reference() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_empty_table_scan() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
+        &schema,
+    )));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", restored.display_indent_schema()),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
+        &schema,
+    )));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let plan = ctx
+        .table("empty")
+        .await?
+        .select_columns(&["name"])?
+        .into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", restored.display_indent_schema()),
+    );
+    Ok(())
+}
