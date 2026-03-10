@@ -189,11 +189,11 @@ strum = "0.28.0"
 strum_macros = "0.28.0"
 tempfile = "3"
 testcontainers-modules = { version = "0.15" }
-tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.50", features = ["macros", "rt", "sync"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
 url = "2.5.7"
-uuid = "1.21"
+uuid = "1.22"
 zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.clippy]
