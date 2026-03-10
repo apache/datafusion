@@ -139,17 +139,17 @@ pub fn to_substrait_rex(
         }
         Expr::WindowFunction(expr) => producer.handle_window_function(expr, schema),
         Expr::InList(expr) => producer.handle_in_list(expr, schema),
-        Expr::Exists(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::Exists(expr) => producer.handle_exists(expr, schema),
         Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
         Expr::SetComparison(expr) => producer.handle_set_comparison(expr, schema),
-        Expr::ScalarSubquery(expr) => {
-            not_impl_err!("Cannot convert {expr:?} to Substrait")
-        }
+        Expr::ScalarSubquery(expr) => producer.handle_scalar_subquery(expr, schema),
         #[expect(deprecated)]
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::OuterReferenceColumn(_, _) => {
+            // OuterReferenceColumn requires tracking outer query schema context for correlated
+            // subqueries. This is a complex feature that is not yet implemented.
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
