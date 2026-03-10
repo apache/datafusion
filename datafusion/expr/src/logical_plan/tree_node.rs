@@ -52,6 +52,7 @@ use datafusion_common::tree_node::{
     TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{Result, internal_err};
+use std::sync::Arc;
 
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
@@ -393,6 +394,113 @@ macro_rules! handle_transform_recursion {
 }
 
 impl LogicalPlan {
+    /// Applies `f` to each child (input) of this plan node in place,
+    /// using [`Arc::make_mut`] for copy-on-write semantics.
+    ///
+    /// When the `Arc` refcount is 1 (the common case in the optimizer),
+    /// `Arc::make_mut` returns a `&mut` reference without cloning.
+    /// When the refcount is >1, it clones the inner value first.
+    ///
+    /// Returns `Ok(true)` if any child was modified by `f`.
+    pub fn map_children_mut<F: FnMut(&mut Self) -> Result<bool>>(
+        &mut self,
+        mut f: F,
+    ) -> Result<bool> {
+        Ok(match self {
+            LogicalPlan::Projection(Projection { input, .. })
+            | LogicalPlan::Filter(Filter { input, .. })
+            | LogicalPlan::Repartition(Repartition { input, .. })
+            | LogicalPlan::Window(Window { input, .. })
+            | LogicalPlan::Aggregate(Aggregate { input, .. })
+            | LogicalPlan::Sort(Sort { input, .. })
+            | LogicalPlan::Limit(Limit { input, .. })
+            | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. })
+            | LogicalPlan::Analyze(Analyze { input, .. })
+            | LogicalPlan::Dml(DmlStatement { input, .. })
+            | LogicalPlan::Copy(CopyTo { input, .. })
+            | LogicalPlan::Unnest(Unnest { input, .. }) => f(Arc::make_mut(input))?,
+            LogicalPlan::Subquery(Subquery { subquery, .. }) => {
+                f(Arc::make_mut(subquery))?
+            }
+            LogicalPlan::Join(Join { left, right, .. }) => {
+                let l = f(Arc::make_mut(left))?;
+                let r = f(Arc::make_mut(right))?;
+                l || r
+            }
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                let mut changed = false;
+                for input in inputs {
+                    changed |= f(Arc::make_mut(input))?;
+                }
+                changed
+            }
+            LogicalPlan::Distinct(Distinct::All(input)) => f(Arc::make_mut(input))?,
+            LogicalPlan::Distinct(Distinct::On(DistinctOn { input, .. })) => {
+                f(Arc::make_mut(input))?
+            }
+            LogicalPlan::Explain(Explain { plan, .. }) => f(Arc::make_mut(plan))?,
+            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+                input,
+                ..
+            }))
+            | LogicalPlan::Ddl(DdlStatement::CreateView(CreateView { input, .. })) => {
+                f(Arc::make_mut(input))?
+            }
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                static_term,
+                recursive_term,
+                ..
+            }) => {
+                let s = f(Arc::make_mut(static_term))?;
+                let r = f(Arc::make_mut(recursive_term))?;
+                s || r
+            }
+            LogicalPlan::Statement(Statement::Prepare(p)) => {
+                f(Arc::make_mut(&mut p.input))?
+            }
+            LogicalPlan::Extension(Extension { node }) => {
+                let inputs = node.inputs();
+                if inputs.is_empty() {
+                    false
+                } else {
+                    // Extension nodes don't expose mutable children,
+                    // fall back to the ownership-based API
+                    let mut changed = false;
+                    let exprs = node.expressions();
+                    let new_inputs: Vec<LogicalPlan> = inputs
+                        .into_iter()
+                        .map(|input| {
+                            let mut plan = input.clone();
+                            if f(&mut plan)? {
+                                changed = true;
+                            }
+                            Ok(plan)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    if changed {
+                        *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
+                    }
+                    changed
+                }
+            }
+            // plans without inputs
+            LogicalPlan::TableScan { .. }
+            | LogicalPlan::EmptyRelation { .. }
+            | LogicalPlan::Values { .. }
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
+            | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
+            | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
+            | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
+            | LogicalPlan::Ddl(DdlStatement::DropTable(_))
+            | LogicalPlan::Ddl(DdlStatement::DropView(_))
+            | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
+            | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
+            | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
+            | LogicalPlan::Statement(_) => false,
+        })
+    }
+
     /// Calls `f` on all expressions in the current `LogicalPlan` node.
     ///
     /// # Notes
@@ -841,6 +949,32 @@ impl LogicalPlan {
         })
     }
 
+    /// Returns true if any expression in this node contains a subquery
+    /// (Exists, InSubquery, SetComparison, or ScalarSubquery).
+    fn has_subquery_expressions(&self) -> bool {
+        let mut found = false;
+        let _ = self.apply_expressions(|expr| {
+            if found {
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            expr.apply(|e| {
+                if matches!(
+                    e,
+                    Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::ScalarSubquery(_)
+                ) {
+                    found = true;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            })
+        });
+        found
+    }
+
     /// Similarly to [`Self::map_children`], rewrites all subqueries that may
     /// appear in expressions such as `IN (SELECT ...)` using `f`.
     ///
@@ -849,6 +983,14 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        // Fast path: skip the expensive ownership-based expression traversal
+        // when this node has no subquery expressions. This avoids
+        // map_expressions → transform_down walking every expression node
+        // via consume+recreate just to find no subqueries.
+        if !self.has_subquery_expressions() {
+            return Ok(Transformed::no(self));
+        }
+
         self.map_expressions(|expr| {
             expr.transform_down(|expr| match expr {
                 Expr::Exists(Exists { subquery, negated }) => {

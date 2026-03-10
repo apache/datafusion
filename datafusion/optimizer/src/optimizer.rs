@@ -28,8 +28,11 @@ use log::{debug, warn};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err};
+use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -357,6 +360,95 @@ impl TreeNodeRewriter for Rewriter<'_> {
     }
 }
 
+/// Rewrites a plan tree in place using `Arc::make_mut` for
+/// copy-on-write semantics on `Arc<LogicalPlan>` children.
+///
+/// This avoids the `Arc::unwrap_or_clone` + `Arc::new` cycle that the
+/// ownership-based `TreeNode::rewrite` performs at every child node.
+/// When the `Arc` refcount is 1 (always true in the optimizer),
+/// `Arc::make_mut` is essentially free.
+///
+/// The `rule.rewrite()` API takes ownership, so we bridge the `&mut` to an
+/// owned value with [`std::mem::take`]. `LogicalPlan::default()` is a cheap
+/// empty placeholder (shared empty schema, no allocation) and is overwritten
+/// with the rule's output on the very next line.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+fn rewrite_plan_in_place(
+    plan: &mut LogicalPlan,
+    apply_order: ApplyOrder,
+    rule: &dyn OptimizerRule,
+    config: &dyn OptimizerConfig,
+) -> Result<bool> {
+    // f_down phase
+    let mut changed = false;
+    if apply_order == ApplyOrder::TopDown {
+        let owned = std::mem::take(plan);
+        let result = rule.rewrite(owned, config)?;
+        *plan = result.data;
+        changed |= result.transformed;
+        // Respect TreeNodeRecursion::Stop/Jump from the rule
+        if result.tnr == TreeNodeRecursion::Stop {
+            return Ok(changed);
+        }
+    }
+
+    // Recurse into children using Arc::make_mut (zero-cost when refcount == 1)
+    changed |= plan.map_children_mut(|child| {
+        rewrite_plan_in_place(child, apply_order, rule, config)
+    })?;
+
+    // f_up phase
+    if apply_order == ApplyOrder::BottomUp {
+        let owned = std::mem::take(plan);
+        let result = rule.rewrite(owned, config)?;
+        *plan = result.data;
+        changed |= result.transformed;
+    }
+
+    Ok(changed)
+}
+
+/// Returns true if the plan contains any subquery expressions
+/// (EXISTS, IN subquery, scalar subquery, set comparison).
+///
+/// Used to determine whether the more expensive `rewrite_with_subqueries`
+/// traversal is needed. When the plan has no subqueries, the cheaper
+/// `rewrite` traversal is sufficient since all plan nodes are reachable
+/// via direct children.
+fn plan_has_subqueries(plan: &LogicalPlan) -> bool {
+    let mut found = false;
+    let _ = plan.apply(|node| {
+        if found {
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        node.apply_expressions(|expr| {
+            if found {
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            expr.apply(|e| {
+                if matches!(
+                    e,
+                    Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::ScalarSubquery(_)
+                ) {
+                    found = true;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            })
+        })?;
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    });
+    found
+}
+
 impl Optimizer {
     /// Optimizes the logical plan by applying optimizer rules, and
     /// invoking observer function after each call
@@ -386,6 +478,14 @@ impl Optimizer {
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
+            // Check once per pass whether the plan contains subquery
+            // expressions. When there are no subqueries, we use the
+            // cheaper `rewrite` traversal instead of
+            // `rewrite_with_subqueries`, avoiding the per-node
+            // map_subqueries call that walks all expression trees
+            // via ownership-based transform_down.
+            let has_subqueries = plan_has_subqueries(&new_plan);
+
             for rule in &self.rules {
                 // If skipping failed rules, copy plan before attempting to rewrite
                 // as rewriting is destructive
@@ -398,9 +498,36 @@ impl Optimizer {
 
                 let result = match rule.apply_order() {
                     // optimizer handles recursion
-                    Some(apply_order) => new_plan.rewrite_with_subqueries(
-                        &mut Rewriter::new(apply_order, rule.as_ref(), config),
-                    ),
+                    Some(apply_order) => {
+                        if has_subqueries {
+                            // Plans with subqueries need the full
+                            // rewrite_with_subqueries traversal to
+                            // recurse into subquery plans.
+                            new_plan.rewrite_with_subqueries(
+                                &mut Rewriter::new(
+                                    apply_order,
+                                    rule.as_ref(),
+                                    config,
+                                ),
+                            )
+                        } else {
+                            // No subqueries: use in-place rewriting
+                            // with Arc::make_mut for zero-cost CoW on
+                            // children, avoiding Arc unwrap/rewrap.
+                            rewrite_plan_in_place(
+                                &mut new_plan,
+                                apply_order,
+                                rule.as_ref(),
+                                config,
+                            )
+                            .map(|transformed| {
+                                Transformed::new_transformed(
+                                    std::mem::take(&mut new_plan),
+                                    transformed,
+                                )
+                            })
+                        }
+                    }
                     // rule handles recursion itself
                     None => {
                         rule.rewrite(new_plan, config)
