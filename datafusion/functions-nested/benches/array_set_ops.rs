@@ -23,6 +23,7 @@ use criterion::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_functions_nested::except::ArrayExcept;
 use datafusion_functions_nested::set_ops::{ArrayDistinct, ArrayIntersect, ArrayUnion};
 use rand::SeedableRng;
 use rand::prelude::SliceRandom;
@@ -38,6 +39,7 @@ const SEED: u64 = 42;
 fn criterion_benchmark(c: &mut Criterion) {
     bench_array_union(c);
     bench_array_intersect(c);
+    bench_array_except(c);
     bench_array_distinct(c);
 }
 
@@ -82,6 +84,25 @@ fn bench_array_union(c: &mut Criterion) {
 fn bench_array_intersect(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_intersect");
     let udf = ArrayIntersect::new();
+
+    for (overlap_label, overlap_ratio) in &[("high_overlap", 0.8), ("low_overlap", 0.2)] {
+        for &array_size in ARRAY_SIZES {
+            let (array1, array2) =
+                create_arrays_with_overlap(NUM_ROWS, array_size, *overlap_ratio);
+            group.bench_with_input(
+                BenchmarkId::new(*overlap_label, array_size),
+                &array_size,
+                |b, _| b.iter(|| invoke_udf(&udf, &array1, &array2)),
+            );
+        }
+    }
+
+    group.finish();
+}
+
+fn bench_array_except(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_except");
+    let udf = ArrayExcept::new();
 
     for (overlap_label, overlap_ratio) in &[("high_overlap", 0.8), ("low_overlap", 0.2)] {
         for &array_size in ARRAY_SIZES {
