@@ -264,11 +264,12 @@ mod tests {
     async fn test_eager_evaluation_resets_cooperative_context() {
         // Test that cooperative context is reset when encountering an eager evaluation boundary.
         use arrow::datatypes::Schema;
+        use datafusion_common::tree_node::TreeNodeRecursion;
         use datafusion_common::{Result, internal_err};
         use datafusion_execution::TaskContext;
         use datafusion_physical_expr::EquivalenceProperties;
         use datafusion_physical_plan::{
-            DisplayAs, DisplayFormatType, Partitioning, PlanProperties,
+            DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr, PlanProperties,
             SendableRecordBatchStream,
             execution_plan::{Boundedness, EmissionType},
         };
@@ -350,6 +351,13 @@ mod tests {
                 _: Arc<TaskContext>,
             ) -> Result<SendableRecordBatchStream> {
                 internal_err!("DummyExec does not support execution")
+            }
+
+            fn apply_expressions(
+                &self,
+                _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            ) -> Result<TreeNodeRecursion> {
+                Ok(TreeNodeRecursion::Continue)
             }
         }
 

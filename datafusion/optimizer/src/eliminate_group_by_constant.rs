@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`EliminateGroupByConstant`] removes constant expressions from `GROUP BY` clause
+//! [`EliminateGroupByConstant`] removes constant and functionally redundant
+//! expressions from `GROUP BY` clause
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+
+use std::collections::HashSet;
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
@@ -47,25 +50,30 @@ impl OptimizerRule for EliminateGroupByConstant {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Aggregate(aggregate) => {
-                let (const_group_expr, nonconst_group_expr): (Vec<_>, Vec<_>) = aggregate
+                // Collect bare column references in GROUP BY
+                let group_by_columns: HashSet<&datafusion_common::Column> = aggregate
                     .group_expr
                     .iter()
-                    .partition(|expr| is_constant_expression(expr));
+                    .filter_map(|expr| match expr {
+                        Expr::Column(c) => Some(c),
+                        _ => None,
+                    })
+                    .collect();
 
-                // If no constant expressions found (nothing to optimize) or
-                // constant expression is the only expression in aggregate,
-                // optimization is skipped
-                if const_group_expr.is_empty()
-                    || (!const_group_expr.is_empty()
-                        && nonconst_group_expr.is_empty()
-                        && aggregate.aggr_expr.is_empty())
+                let (redundant, required): (Vec<_>, Vec<_>) = aggregate
+                    .group_expr
+                    .iter()
+                    .partition(|expr| is_redundant_group_expr(expr, &group_by_columns));
+
+                if redundant.is_empty()
+                    || (required.is_empty() && aggregate.aggr_expr.is_empty())
                 {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
                 let simplified_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
                     aggregate.input,
-                    nonconst_group_expr.into_iter().cloned().collect(),
+                    required.into_iter().cloned().collect(),
                     aggregate.aggr_expr.clone(),
                 )?);
 
@@ -91,23 +99,47 @@ impl OptimizerRule for EliminateGroupByConstant {
     }
 }
 
-/// Checks if expression is constant, and can be eliminated from group by.
-///
-/// Intended to be used only within this rule, helper function, which heavily
-/// relies on `SimplifyExpressions` result.
-fn is_constant_expression(expr: &Expr) -> bool {
+/// Checks if a GROUP BY expression is redundant (can be removed without
+/// changing grouping semantics). An expression is redundant if it is a
+/// deterministic function of constants and columns already present as bare
+/// column references in the GROUP BY.
+fn is_redundant_group_expr(
+    expr: &Expr,
+    group_by_columns: &HashSet<&datafusion_common::Column>,
+) -> bool {
+    // Bare column references are never redundant - they define the grouping
+    if matches!(expr, Expr::Column(_)) {
+        return false;
+    }
+    is_deterministic_of(expr, group_by_columns)
+}
+
+/// Returns true if `expr` is a deterministic expression whose only column
+/// references are contained in `known_columns`.
+fn is_deterministic_of(
+    expr: &Expr,
+    known_columns: &HashSet<&datafusion_common::Column>,
+) -> bool {
     match expr {
-        Expr::Alias(e) => is_constant_expression(&e.expr),
-        Expr::BinaryExpr(e) => {
-            is_constant_expression(&e.left) && is_constant_expression(&e.right)
-        }
+        Expr::Alias(e) => is_deterministic_of(&e.expr, known_columns),
+        Expr::Column(c) => known_columns.contains(c),
         Expr::Literal(_, _) => true,
+        Expr::BinaryExpr(e) => {
+            is_deterministic_of(&e.left, known_columns)
+                && is_deterministic_of(&e.right, known_columns)
+        }
         Expr::ScalarFunction(e) => {
             matches!(
                 e.func.signature().volatility,
                 Volatility::Immutable | Volatility::Stable
-            ) && e.args.iter().all(is_constant_expression)
+            ) && e
+                .args
+                .iter()
+                .all(|arg| is_deterministic_of(arg, known_columns))
         }
+        Expr::Cast(e) => is_deterministic_of(&e.expr, known_columns),
+        Expr::TryCast(e) => is_deterministic_of(&e.expr, known_columns),
+        Expr::Negative(e) => is_deterministic_of(e, known_columns),
         _ => false,
     }
 }
@@ -265,6 +297,43 @@ mod tests {
         Projection: scalar_fn_mock(UInt32(123)), test.a, count(test.c)
           Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
             TableScan: test
+        ")
+    }
+
+    #[test]
+    fn test_eliminate_deterministic_expr_of_group_by_column() -> Result<()> {
+        let scan = test_table_scan()?;
+        // GROUP BY a, a - 1, a - 2, a - 3  ->  GROUP BY a
+        let plan = LogicalPlanBuilder::from(scan)
+            .aggregate(
+                vec![
+                    col("a"),
+                    col("a") - lit(1u32),
+                    col("a") - lit(2u32),
+                    col("a") - lit(3u32),
+                ],
+                vec![count(col("c"))],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test.a, test.a - UInt32(1), test.a - UInt32(2), test.a - UInt32(3), count(test.c)
+          Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
+            TableScan: test
+        ")
+    }
+
+    #[test]
+    fn test_no_eliminate_independent_columns() -> Result<()> {
+        // GROUP BY a, b - 1 should NOT eliminate b - 1 (b is not a group by column)
+        let scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(scan)
+            .aggregate(vec![col("a"), col("b") - lit(1u32)], vec![count(col("c"))])?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a, test.b - UInt32(1)]], aggr=[[count(test.c)]]
+          TableScan: test
         ")
     }
 

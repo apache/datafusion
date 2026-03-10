@@ -27,6 +27,8 @@ pub use datafusion_functions_aggregate_common::accumulator::{
     AccumulatorArgs, AccumulatorFactoryFunction, StateFieldsArgs,
 };
 
+use crate::expr::{AggregateFunction, WindowFunction};
+use crate::simplify::SimplifyContext;
 pub use datafusion_functions_window_common::expr::ExpressionArgs;
 pub use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 pub use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -64,28 +66,22 @@ pub type PartitionEvaluatorFactory =
 pub type StateTypeFunction =
     Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
 
-/// [crate::udaf::AggregateUDFImpl::simplify] simplifier closure
-/// A closure with two arguments:
-/// * 'aggregate_function': [crate::expr::AggregateFunction] for which simplified has been invoked
-/// * 'info': [crate::simplify::SimplifyContext]
+/// Type alias for [crate::udaf::AggregateUDFImpl::simplify].
 ///
-/// Closure returns simplified [Expr] or an error.
-pub type AggregateFunctionSimplification = Box<
-    dyn Fn(
-        crate::expr::AggregateFunction,
-        &crate::simplify::SimplifyContext,
-    ) -> Result<Expr>,
->;
+/// This closure is invoked with:
+/// * `aggregate_function`: [AggregateFunction] with already simplified arguments
+/// * `info`: [SimplifyContext]
+///
+/// It returns a simplified [Expr] or an error.
+pub type AggregateFunctionSimplification =
+    Box<dyn Fn(AggregateFunction, &SimplifyContext) -> Result<Expr>>;
 
-/// [crate::udwf::WindowUDFImpl::simplify] simplifier closure
-/// A closure with two arguments:
-/// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
-/// * 'info': [crate::simplify::SimplifyContext]
+/// Type alias for [crate::udwf::WindowUDFImpl::simplify].
 ///
-/// Closure returns simplified [Expr] or an error.
-pub type WindowFunctionSimplification = Box<
-    dyn Fn(
-        crate::expr::WindowFunction,
-        &crate::simplify::SimplifyContext,
-    ) -> Result<Expr>,
->;
+/// This closure is invoked with:
+/// * `window_function`: [WindowFunction] with already simplified arguments
+/// * `info`: [SimplifyContext]
+///
+/// It returns a simplified [Expr] or an error.
+pub type WindowFunctionSimplification =
+    Box<dyn Fn(WindowFunction, &SimplifyContext) -> Result<Expr>>;

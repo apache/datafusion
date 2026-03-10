@@ -41,11 +41,13 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -285,6 +287,14 @@ impl ExecutionPlan for CrossJoinExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // CrossJoin has no join conditions or expressions
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -374,12 +384,13 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // Get the all partitions statistics of the left
-        let left_stats = self.left.partition_statistics(None)?;
-        let right_stats = self.right.partition_statistics(partition)?;
+        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
+        let right_stats =
+            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
 
-        Ok(stats_cartesian_product(left_stats, right_stats))
+        Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
