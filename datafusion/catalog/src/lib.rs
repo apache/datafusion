@@ -34,6 +34,7 @@
 
 pub mod cte_worktable;
 pub mod default_table_source;
+pub mod empty;
 pub mod information_schema;
 pub mod listing_schema;
 pub mod memory;

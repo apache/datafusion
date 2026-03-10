@@ -20,7 +20,6 @@
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 
 pub mod dynamic_file;
-pub mod empty;
 pub mod file_format;
 pub mod listing;
 pub mod listing_table_factory;
@@ -39,6 +38,7 @@ pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
 pub use datafusion_catalog::cte_worktable;
 pub use datafusion_catalog::default_table_source;
+pub use datafusion_catalog::empty;
 pub use datafusion_catalog::memory;
 pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
