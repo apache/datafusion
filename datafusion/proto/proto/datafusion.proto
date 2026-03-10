@@ -62,6 +62,7 @@ message LogicalPlanNode {
     RecursiveQueryNode recursive_query = 31;
     CteWorkTableScanNode cte_work_table_scan = 32;
     DmlNode dml = 33;
+    EmptyTableScanNode empty_table_scan = 34;
   }
 }
 
@@ -1405,6 +1406,13 @@ message RecursiveQueryNode {
 message CteWorkTableScanNode {
     string name = 1;
     datafusion_common.Schema schema = 2;
+}
+
+message EmptyTableScanNode {
+    TableReference table_name = 1;
+    datafusion_common.Schema schema = 2;
+    ProjectionColumns projection = 3;
+    repeated LogicalExprNode filters = 4;
 }
 
 enum GenerateSeriesName {

@@ -5878,6 +5878,149 @@ impl<'de> serde::Deserialize<'de> for EmptyRelationNode {
         deserializer.deserialize_struct("datafusion.EmptyRelationNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for EmptyTableScanNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.table_name.is_some() {
+            len += 1;
+        }
+        if self.schema.is_some() {
+            len += 1;
+        }
+        if self.projection.is_some() {
+            len += 1;
+        }
+        if !self.filters.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.EmptyTableScanNode", len)?;
+        if let Some(v) = self.table_name.as_ref() {
+            struct_ser.serialize_field("tableName", v)?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        if let Some(v) = self.projection.as_ref() {
+            struct_ser.serialize_field("projection", v)?;
+        }
+        if !self.filters.is_empty() {
+            struct_ser.serialize_field("filters", &self.filters)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for EmptyTableScanNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "table_name",
+            "tableName",
+            "schema",
+            "projection",
+            "filters",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TableName,
+            Schema,
+            Projection,
+            Filters,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "tableName" | "table_name" => Ok(GeneratedField::TableName),
+                            "schema" => Ok(GeneratedField::Schema),
+                            "projection" => Ok(GeneratedField::Projection),
+                            "filters" => Ok(GeneratedField::Filters),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = EmptyTableScanNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.EmptyTableScanNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<EmptyTableScanNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut table_name__ = None;
+                let mut schema__ = None;
+                let mut projection__ = None;
+                let mut filters__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::TableName => {
+                            if table_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tableName"));
+                            }
+                            table_name__ = map_.next_value()?;
+                        }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
+                        GeneratedField::Projection => {
+                            if projection__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projection"));
+                            }
+                            projection__ = map_.next_value()?;
+                        }
+                        GeneratedField::Filters => {
+                            if filters__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("filters"));
+                            }
+                            filters__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(EmptyTableScanNode {
+                    table_name: table_name__,
+                    schema: schema__,
+                    projection: projection__,
+                    filters: filters__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.EmptyTableScanNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ExplainExecNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -12868,6 +13011,9 @@ impl serde::Serialize for LogicalPlanNode {
                 logical_plan_node::LogicalPlanType::Dml(v) => {
                     struct_ser.serialize_field("dml", v)?;
                 }
+                logical_plan_node::LogicalPlanType::EmptyTableScan(v) => {
+                    struct_ser.serialize_field("emptyTableScan", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -12927,6 +13073,8 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             "cte_work_table_scan",
             "cteWorkTableScan",
             "dml",
+            "empty_table_scan",
+            "emptyTableScan",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -12963,6 +13111,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             RecursiveQuery,
             CteWorkTableScan,
             Dml,
+            EmptyTableScan,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -13016,6 +13165,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             "recursiveQuery" | "recursive_query" => Ok(GeneratedField::RecursiveQuery),
                             "cteWorkTableScan" | "cte_work_table_scan" => Ok(GeneratedField::CteWorkTableScan),
                             "dml" => Ok(GeneratedField::Dml),
+                            "emptyTableScan" | "empty_table_scan" => Ok(GeneratedField::EmptyTableScan),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -13260,6 +13410,13 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("dml"));
                             }
                             logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Dml)
+;
+                        }
+                        GeneratedField::EmptyTableScan => {
+                            if logical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("emptyTableScan"));
+                            }
+                            logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::EmptyTableScan)
 ;
                         }
                     }
