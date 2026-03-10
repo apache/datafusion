@@ -22,12 +22,18 @@ use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 use arrow::compute::take;
 use arrow::datatypes::*;
-#[cfg(not(feature = "force_hash_collisions"))]
+#[cfg(not(all(
+    feature = "force_hash_collisions",
+    not(feature = "force_hash_partial_collisions")
+)))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use itertools::Itertools;
 use std::collections::HashMap;
 
-#[cfg(not(feature = "force_hash_collisions"))]
+#[cfg(not(all(
+    feature = "force_hash_collisions",
+    not(feature = "force_hash_partial_collisions")
+)))]
 use crate::cast::{
     as_binary_view_array, as_boolean_array, as_fixed_size_list_array,
     as_generic_binary_array, as_large_list_array, as_large_list_view_array,
@@ -935,8 +941,11 @@ fn hash_run_array<R: RunEndIndexType>(
 
 /// Internal helper function that hashes a single array and either initializes or combines
 /// the hash values in the buffer.
-#[cfg(not(feature = "force_hash_collisions"))]
-fn hash_single_array(
+#[cfg(not(all(
+    feature = "force_hash_collisions",
+    not(feature = "force_hash_partial_collisions")
+)))]
+fn hash_single_array_impl(
     array: &dyn Array,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
@@ -1007,17 +1016,47 @@ fn hash_single_array(
     Ok(())
 }
 
-/// Test version of `hash_single_array` that forces all hashes to collide to zero.
-#[cfg(feature = "force_hash_collisions")]
+/// Dispatches to the appropriate `hash_single_array` implementation based on
+/// the enabled feature flags.
+#[cfg(not(any(
+    feature = "force_hash_collisions",
+    feature = "force_hash_partial_collisions"
+)))]
+fn hash_single_array(
+    array: &dyn Array,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) -> Result<()> {
+    hash_single_array_impl(array, random_state, hashes_buffer, rehash)
+}
+
+/// Test version: forces full hash collisions by setting all hashes to 0.
+#[cfg(all(
+    feature = "force_hash_collisions",
+    not(feature = "force_hash_partial_collisions")
+))]
 fn hash_single_array(
     _array: &dyn Array,
     _random_state: &RandomState,
     hashes_buffer: &mut [u64],
     _rehash: bool,
 ) -> Result<()> {
-    for hash in hashes_buffer.iter_mut() {
-        *hash = 0
-    }
+    hashes_buffer.iter_mut().for_each(|x| *x = 0);
+    Ok(())
+}
+
+/// Test version: truncates real hashes to 5 bits (32 distinct values) to create
+/// partial collisions that expose non-monotonic group index bugs (#20724).
+#[cfg(feature = "force_hash_partial_collisions")]
+fn hash_single_array(
+    array: &dyn Array,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) -> Result<()> {
+    hash_single_array_impl(array, random_state, hashes_buffer, rehash)?;
+    hashes_buffer.iter_mut().for_each(|h| *h &= 0x1F);
     Ok(())
 }
 

@@ -210,6 +210,8 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion --features=encoding_expressions
       - name: Check datafusion (force_hash_collisions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=force_hash_collisions
+      - name: Check datafusion (force_hash_partial_collisions)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=force_hash_partial_collisions
       - name: Check datafusion (math_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=math_expressions
       - name: Check datafusion (parquet)

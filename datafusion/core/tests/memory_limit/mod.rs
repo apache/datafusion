@@ -24,7 +24,9 @@ use std::sync::{Arc, LazyLock};
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
 mod repartition_mem_limit;
-use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
+use arrow::array::{
+    ArrayRef, DictionaryArray, Int32Array, Int64Array, RecordBatch, StringViewArray,
+};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
@@ -56,6 +58,7 @@ use datafusion_physical_plan::collect as collect_batches;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use rand::Rng;
+use std::collections::HashSet;
 use test_utils::AccessLogGenerator;
 
 use async_trait::async_trait;
@@ -1171,4 +1174,124 @@ impl TableProvider for SortedTableProvider {
 
         Ok(DataSourceExec::from_data_source(mem_conf))
     }
+}
+
+// ============================================================================
+// Regression tests for https://github.com/apache/datafusion/issues/20724
+//
+// When hash aggregation spills and switches to streaming merge,
+// `group_values` must be recreated with the streaming variant.
+// Otherwise `vectorized_intern` can produce non-monotonic group indices
+// under hash collisions, causing `GroupOrderingFull` to prematurely
+// emit groups → duplicate keys in output.
+// ============================================================================
+
+/// Helper: set up a session that forces spilling during aggregation.
+async fn setup_spill_agg_context(
+    memory_limit: usize,
+    batch_size: usize,
+) -> Result<SessionContext> {
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit)))
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()
+        .unwrap();
+
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(64 * 1024)
+        .with_sort_in_place_threshold_bytes(0)
+        .with_spill_compression(SpillCompression::Uncompressed)
+        .with_batch_size(batch_size)
+        .with_target_partitions(1);
+
+    Ok(SessionContext::new_with_config_rt(config, runtime))
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/20724
+///
+/// When hash aggregation spills and switches to streaming merge,
+/// `group_values` (GroupValuesColumn<false>) is not recreated with the
+/// streaming variant (<true>). This means `vectorized_intern` is used
+/// post-spill, which can produce non-monotonic group indices under hash
+/// collisions, causing `GroupOrderingFull` to prematurely emit groups
+/// and create duplicate keys in the output.
+///
+/// Requirements to trigger:
+/// - Two-column GROUP BY → forces `GroupValuesColumn` (not `GroupValuesPrimitive`)
+/// - `force_hash_partial_collisions` feature → truncated hashes create the mix
+///   of colliding/non-colliding keys needed for non-monotonic indices
+/// - `batch_size=50` → not a multiple of rows-per-group in the merged stream,
+///   so groups span batch boundaries and premature emission causes duplicates
+#[tokio::test]
+async fn test_no_duplicate_groups_after_spill() -> Result<()> {
+    let num_keys: i64 = 5000;
+    let rows_per_key: i64 = 4;
+    let total_rows = (num_keys * rows_per_key) as usize;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("key_a", DataType::Int64, false),
+        Field::new("key_b", DataType::Int64, false),
+        Field::new("value", DataType::Int64, false),
+    ]));
+
+    let mut keys_a = Vec::with_capacity(total_rows);
+    let mut keys_b = Vec::with_capacity(total_rows);
+    let mut vals = Vec::with_capacity(total_rows);
+    for r in 0..rows_per_key {
+        for k in 0..num_keys {
+            keys_a.push(k / 100);
+            keys_b.push(k % 100);
+            vals.push(r * num_keys + k);
+        }
+    }
+
+    let mut batches = Vec::new();
+    for start in (0..total_rows).step_by(500) {
+        let end = (start + 500).min(total_rows);
+        batches.push(RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(keys_a[start..end].to_vec())),
+                Arc::new(Int64Array::from(keys_b[start..end].to_vec())),
+                Arc::new(Int64Array::from(vals[start..end].to_vec())),
+            ],
+        )?);
+    }
+
+    let ctx = setup_spill_agg_context(128 * 1024, 50).await?;
+    let table = MemTable::try_new(schema, vec![batches])?;
+    ctx.register_table("t", Arc::new(table))?;
+
+    let df = ctx
+        .sql("SELECT key_a, key_b, COUNT(*) as cnt FROM t GROUP BY key_a, key_b")
+        .await?;
+    let results =
+        collect_batches(df.create_physical_plan().await?, ctx.task_ctx()).await?;
+
+    let mut seen = HashSet::new();
+    for batch in &results {
+        let ka = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let kb = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        for i in 0..batch.num_rows() {
+            assert!(
+                seen.insert((ka.value(i), kb.value(i))),
+                "DUPLICATE group key ({}, {}). \
+                 Bug #20724: group_values not recreated for streaming merge.",
+                ka.value(i),
+                kb.value(i),
+            );
+        }
+    }
+    assert_eq!(seen.len(), num_keys as usize);
+    Ok(())
 }
