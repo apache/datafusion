@@ -111,6 +111,9 @@ impl AggregateUDFImpl for MyAggregateUDF {
     fn name(&self) -> &str {
         "aggregate_udf"
     }
+    fn is_builtin(&self) -> bool {
+        false
+    }
     fn signature(&self) -> &Signature {
         &self.signature
     }

@@ -492,7 +492,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .transform_up(|expr| {
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
-                        if func.name() == "count" {
+                        if func.name() == "count" && func.is_builtin() {
                             Transformed::yes(Expr::Literal(
                                 ScalarValue::Int64(Some(0)),
                                 None,

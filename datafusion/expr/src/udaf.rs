@@ -140,6 +140,12 @@ impl AggregateUDF {
         &self.inner
     }
 
+    /// Returns whether this function is built into DataFusion or else it's
+    /// assumed to be user defined.
+    pub fn is_builtin(&self) -> bool {
+        self.inner.is_builtin()
+    }
+
     /// Adds additional names that can be used to invoke this function, in
     /// addition to `name`
     ///

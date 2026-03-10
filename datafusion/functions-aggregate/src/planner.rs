@@ -85,6 +85,7 @@ impl ExprPlanner for AggregateFunctionPlanner {
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         if raw_expr.func.name() == "count"
+            && raw_expr.func.is_builtin()
             && (raw_expr.args.len() == 1
                 && matches!(raw_expr.args[0], Expr::Wildcard { .. })
                 || raw_expr.args.is_empty())

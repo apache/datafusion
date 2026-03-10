@@ -59,7 +59,7 @@ pub async fn from_substrait_agg_func(
     // Datafusion does not support aggregate functions with no arguments, so
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
-    let args = if udaf.name() == "count" && args.is_empty() {
+    let args = if udaf.name() == "count" && udaf.is_builtin() && args.is_empty() {
         vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {
         args

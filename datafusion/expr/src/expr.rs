@@ -2398,6 +2398,7 @@ impl NormalizeEq for Expr {
                 }),
             ) => {
                 self_func.name() == other_func.name()
+                    && self_func.is_builtin() == other_func.is_builtin()
                     && self_distinct == other_distinct
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()

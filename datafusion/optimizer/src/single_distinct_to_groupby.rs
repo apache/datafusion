@@ -86,9 +86,10 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
                 for e in args {
                     fields_set.insert(e);
                 }
-            } else if func.name() != "sum"
-                && func.name().to_lowercase() != "min"
-                && func.name().to_lowercase() != "max"
+            } else if !func.is_builtin()
+                || (func.name() != "sum"
+                    && func.name().to_lowercase() != "min"
+                    && func.name().to_lowercase() != "max")
             {
                 return Ok(false);
             }

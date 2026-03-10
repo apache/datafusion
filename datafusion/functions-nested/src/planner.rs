@@ -192,5 +192,5 @@ impl ExprPlanner for FieldAccessPlanner {
 }
 
 fn is_array_agg(func: &Arc<AggregateUDF>) -> bool {
-    func.name() == "array_agg"
+    func.name() == "array_agg" && func.is_builtin()
 }
