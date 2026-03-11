@@ -5058,6 +5058,7 @@ WHERE k1 < 0
 
 # Also check that the reported number of output rows/batches are correct in the "empty build side"
 # optimization.
+# Issue: https://github.com/apache/datafusion/issues/20809
 query TT
 EXPLAIN ANALYZE
 WITH t1 (k) AS (
