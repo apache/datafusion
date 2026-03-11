@@ -365,12 +365,15 @@ impl ExecutionPlan for ProjectionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stats = self.input.partition_statistics(partition)?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let input_stats =
+            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let output_schema = self.schema();
-        self.projector
-            .projection()
-            .project_statistics(input_stats, &output_schema)
+        Ok(Arc::new(
+            self.projector
+                .projection()
+                .project_statistics(input_stats, &output_schema)?,
+        ))
     }
 
     fn supports_limit_pushdown(&self) -> bool {

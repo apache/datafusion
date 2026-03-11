@@ -331,7 +331,7 @@ impl ExecutionPlan for UnionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition_idx) = partition {
             // For a specific partition, find which input it belongs to
             let mut remaining_idx = partition_idx;
@@ -344,19 +344,25 @@ impl ExecutionPlan for UnionExec {
                 remaining_idx -= input_partition_count;
             }
             // If we get here, the partition index is out of bounds
-            Ok(Statistics::new_unknown(&self.schema()))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         } else {
             // Collect statistics from all inputs
             let stats = self
                 .inputs
                 .iter()
-                .map(|input_exec| input_exec.partition_statistics(None))
+                .map(|input_exec| {
+                    input_exec
+                        .partition_statistics(None)
+                        .map(Arc::unwrap_or_clone)
+                })
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(stats
-                .into_iter()
-                .reduce(stats_union)
-                .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+            Ok(Arc::new(
+                stats
+                    .into_iter()
+                    .reduce(stats_union)
+                    .unwrap_or_else(|| Statistics::new_unknown(&self.schema())),
+            ))
         }
     }
 
@@ -670,17 +676,22 @@ impl ExecutionPlan for InterleaveExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let stats = self
             .inputs
             .iter()
-            .map(|stat| stat.partition_statistics(partition))
+            .map(|stat| {
+                stat.partition_statistics(partition)
+                    .map(Arc::unwrap_or_clone)
+            })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(stats
-            .into_iter()
-            .reduce(stats_union)
-            .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+        Ok(Arc::new(
+            stats
+                .into_iter()
+                .reduce(stats_union)
+                .unwrap_or_else(|| Statistics::new_unknown(&self.schema())),
+        ))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
