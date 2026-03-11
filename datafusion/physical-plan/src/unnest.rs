@@ -281,6 +281,17 @@ impl ExecutionPlan for UnnestExec {
             list_type_columns: self.list_column_indices.clone(),
             struct_column_indices: self.struct_column_indices.iter().copied().collect(),
             pending: None,
+            disable_chunking_for_stacked_unnest: self.list_column_indices.iter().any(
+                |unnest| {
+                    unnest.depth == 1
+                        && self
+                            .input
+                            .schema()
+                            .field(unnest.index_in_input_schema)
+                            .name()
+                            .contains("__unnest_placeholder(")
+                },
+            ),
             output_batch_size,
             options: self.options.clone(),
             metrics,
@@ -333,14 +344,19 @@ impl PendingBatch {
         list_type_columns: &[ListUnnest],
         options: &UnnestOptions,
         output_batch_size: usize,
+        disable_chunking_for_stacked_unnest: bool,
     ) -> Result<(RecordBatch, bool)> {
-        let row_count = next_input_slice_row_count(
-            &self.batch,
-            self.next_row,
-            list_type_columns,
-            options,
-            output_batch_size,
-        )?;
+        let row_count = if disable_chunking_for_stacked_unnest {
+            self.batch.num_rows().saturating_sub(self.next_row)
+        } else {
+            next_input_slice_row_count(
+                &self.batch,
+                self.next_row,
+                list_type_columns,
+                options,
+                output_batch_size,
+            )?
+        };
         let slice = self.batch.slice(self.next_row, row_count);
         self.next_row += row_count;
         Ok((slice, self.next_row >= self.batch.num_rows()))
@@ -359,6 +375,7 @@ struct UnnestStream {
     list_type_columns: Vec<ListUnnest>,
     struct_column_indices: HashSet<usize>,
     pending: Option<PendingBatch>,
+    disable_chunking_for_stacked_unnest: bool,
     /// Target maximum number of output rows per emitted batch.
     output_batch_size: usize,
     /// Options
@@ -440,6 +457,7 @@ impl UnnestStream {
                 &self.list_type_columns,
                 &self.options,
                 self.output_batch_size,
+                self.disable_chunking_for_stacked_unnest,
             )?;
             if exhausted {
                 self.pending = None;

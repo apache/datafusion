@@ -4907,6 +4907,71 @@ async fn unnest_chunks_recursive_single_row_fallback() -> Result<()> {
 }
 
 #[tokio::test]
+async fn unnest_chunks_stacked_unnest_preserves_order() -> Result<()> {
+    let ctx = batch_slicing_ctx(2);
+
+    let mut list_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+    // row 0: [[1, 2], [3]]
+    list_builder.values().values().append_value(1);
+    list_builder.values().values().append_value(2);
+    list_builder.values().append(true);
+    list_builder.values().values().append_value(3);
+    list_builder.values().append(true);
+    list_builder.append(true);
+    // row 1: [[4], [5, 6]]
+    list_builder.values().values().append_value(4);
+    list_builder.values().append(true);
+    list_builder.values().values().append_value(5);
+    list_builder.values().values().append_value(6);
+    list_builder.values().append(true);
+    list_builder.append(true);
+
+    let batch = RecordBatch::try_from_iter(vec![(
+        "nested",
+        Arc::new(list_builder.finish()) as ArrayRef,
+    )])?;
+    ctx.register_batch("t", batch)?;
+
+    let explain = ctx
+        .sql(
+            "EXPLAIN SELECT unnest(nested1) AS val, original \
+             FROM (SELECT unnest(nested) AS nested1, nested AS original FROM t)",
+        )
+        .await?
+        .collect()
+        .await?;
+    let explain_text = batches_to_string(&explain);
+    assert_eq!(explain_text.matches("Unnest:").count(), 2);
+
+    let results = ctx
+        .sql(
+            "SELECT unnest(nested1) AS val, original \
+             FROM (SELECT unnest(nested) AS nested1, nested AS original FROM t)",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r"
+    +-----+---------------+
+    | val | original      |
+    +-----+---------------+
+    | 1   | [[1, 2], [3]] |
+    | 2   | [[1, 2], [3]] |
+    | 3   | [[1, 2], [3]] |
+    | 4   | [[4], [5, 6]] |
+    | 5   | [[4], [5, 6]] |
+    | 6   | [[4], [5, 6]] |
+    +-----+---------------+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn unnest_array_agg() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tag_id_builder = UInt32Builder::new();
