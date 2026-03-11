@@ -1278,8 +1278,22 @@ pub async fn collect(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
+    let verify = context
+        .session_config()
+        .options()
+        .execution
+        .verify_cardinality_effect;
+    let plan_clone = if verify {
+        Some(Arc::clone(&plan))
+    } else {
+        None
+    };
     let stream = execute_stream(plan, context)?;
-    crate::common::collect(stream).await
+    let result = crate::common::collect(stream).await?;
+    if let Some(plan) = plan_clone {
+        crate::cardinality_check::validate_cardinality_effect(plan.as_ref())?;
+    }
+    Ok(result)
 }
 
 /// Execute the [ExecutionPlan] and return a single stream of `RecordBatch`es.
@@ -1316,6 +1330,16 @@ pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
+    let verify = context
+        .session_config()
+        .options()
+        .execution
+        .verify_cardinality_effect;
+    let plan_clone = if verify {
+        Some(Arc::clone(&plan))
+    } else {
+        None
+    };
     let streams = execute_stream_partitioned(plan, context)?;
 
     let mut join_set = JoinSet::new();
@@ -1347,6 +1371,10 @@ pub async fn collect_partitioned(
 
     batches.sort_by_key(|(idx, _)| *idx);
     let batches = batches.into_iter().map(|(_, batch)| batch).collect();
+
+    if let Some(plan) = plan_clone {
+        crate::cardinality_check::validate_cardinality_effect(plan.as_ref())?;
+    }
 
     Ok(batches)
 }
@@ -1543,6 +1571,7 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 
 /// Indicates the effect an execution plan operator will have on the cardinality
 /// of its input stream
+#[derive(Debug, Clone, Copy)]
 pub enum CardinalityEffect {
     /// Unknown effect. This is the default
     Unknown,

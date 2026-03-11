@@ -684,6 +684,14 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// When set to true, after executing a plan via `collect()` or
+        /// `collect_partitioned()`, DataFusion verifies that operators
+        /// declaring `CardinalityEffect::Equal` produced exactly the same
+        /// number of output rows as their input. This is a post-execution
+        /// sanity check useful for debugging correctness issues.
+        /// Disabled by default as it adds a small amount of overhead.
+        pub verify_cardinality_effect: bool, default = false
     }
 }
 

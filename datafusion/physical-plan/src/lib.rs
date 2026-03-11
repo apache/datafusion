@@ -64,6 +64,7 @@ pub mod aggregates;
 pub mod analyze;
 pub mod async_func;
 pub mod buffer;
+pub mod cardinality_check;
 pub mod coalesce;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
