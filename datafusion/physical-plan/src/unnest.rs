@@ -280,8 +280,7 @@ impl ExecutionPlan for UnnestExec {
             schema: Arc::clone(&self.schema),
             list_type_columns: self.list_column_indices.clone(),
             struct_column_indices: self.struct_column_indices.iter().copied().collect(),
-            pending_input_batch: None,
-            pending_input_row: 0,
+            pending: None,
             output_batch_size,
             options: self.options.clone(),
             metrics,
@@ -318,6 +317,51 @@ impl UnnestMetrics {
     }
 }
 
+/// Encapsulates the state for draining one input [`RecordBatch`] row-by-row
+/// into size-bounded unnest output chunks.
+///
+/// Keeping this state separate from [`UnnestStream`] localises the batching
+/// policy so that `poll_next_impl` stays shallow and the logic is easy to
+/// extend as recursive / multi-level unnest evolves.
+struct PendingBatch {
+    /// The input batch currently being drained.
+    batch: RecordBatch,
+    /// Index of the next input row not yet emitted.
+    next_row: usize,
+}
+
+impl PendingBatch {
+    fn new(batch: RecordBatch) -> Self {
+        Self { batch, next_row: 0 }
+    }
+
+    /// Returns `true` if all input rows have been consumed.
+    fn is_exhausted(&self) -> bool {
+        self.next_row >= self.batch.num_rows()
+    }
+
+    /// Slice the next chunk from the pending batch, advance the cursor, and
+    /// return `(slice, exhausted)` where `exhausted` is `true` when the last
+    /// row has been consumed.
+    fn take_next_slice(
+        &mut self,
+        list_type_columns: &[ListUnnest],
+        options: &UnnestOptions,
+        output_batch_size: usize,
+    ) -> Result<(RecordBatch, bool)> {
+        let row_count = next_input_slice_row_count(
+            &self.batch,
+            self.next_row,
+            list_type_columns,
+            options,
+            output_batch_size,
+        )?;
+        let slice = self.batch.slice(self.next_row, row_count);
+        self.next_row += row_count;
+        Ok((slice, self.is_exhausted()))
+    }
+}
+
 /// A stream that issues [RecordBatch]es with unnested column data.
 struct UnnestStream {
     /// Input stream
@@ -329,10 +373,8 @@ struct UnnestStream {
     /// then list_type_columns = [ListUnnest{1,1},ListUnnest{1,2}]
     list_type_columns: Vec<ListUnnest>,
     struct_column_indices: HashSet<usize>,
-    /// Current input batch being drained into smaller unnest chunks.
-    pending_input_batch: Option<RecordBatch>,
-    /// Next input row to process from the pending batch.
-    pending_input_row: usize,
+    /// Pending input batch being drained into size-bounded unnest chunks.
+    pending: Option<PendingBatch>,
     /// Target maximum number of output rows per emitted batch.
     output_batch_size: usize,
     /// Options
@@ -380,8 +422,7 @@ impl UnnestStream {
                 Some(Ok(batch)) => {
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
-                    self.pending_input_batch = Some(batch);
-                    self.pending_input_row = 0;
+                    self.pending = Some(PendingBatch::new(batch));
                     continue;
                 }
                 other => {
@@ -400,30 +441,25 @@ impl UnnestStream {
         }
     }
 
+    /// Drain the next output batch from the pending input batch, if any.
     fn build_next_pending_batch(&mut self) -> Result<Option<RecordBatch>> {
         loop {
-            let Some(batch) = self.pending_input_batch.as_ref() else {
+            let Some(pending) = self.pending.as_mut() else {
                 return Ok(None);
             };
 
-            if self.pending_input_row >= batch.num_rows() {
-                self.pending_input_batch = None;
-                self.pending_input_row = 0;
+            if pending.is_exhausted() {
+                self.pending = None;
                 return Ok(None);
             }
 
-            let row_count = next_input_slice_row_count(
-                batch,
-                self.pending_input_row,
+            let (batch_slice, exhausted) = pending.take_next_slice(
                 &self.list_type_columns,
                 &self.options,
                 self.output_batch_size,
             )?;
-            let batch_slice = batch.slice(self.pending_input_row, row_count);
-            self.pending_input_row += row_count;
-            if self.pending_input_row >= batch.num_rows() {
-                self.pending_input_batch = None;
-                self.pending_input_row = 0;
+            if exhausted {
+                self.pending = None;
             }
 
             let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
