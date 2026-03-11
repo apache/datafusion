@@ -317,16 +317,9 @@ impl UnnestMetrics {
     }
 }
 
-/// Encapsulates the state for draining one input [`RecordBatch`] row-by-row
-/// into size-bounded unnest output chunks.
-///
-/// Keeping this state separate from [`UnnestStream`] localises the batching
-/// policy so that `poll_next_impl` stays shallow and the logic is easy to
-/// extend as recursive / multi-level unnest evolves.
+/// State for draining one input batch into size-bounded unnest chunks.
 struct PendingBatch {
-    /// The input batch currently being drained.
     batch: RecordBatch,
-    /// Index of the next input row not yet emitted.
     next_row: usize,
 }
 
@@ -335,14 +328,6 @@ impl PendingBatch {
         Self { batch, next_row: 0 }
     }
 
-    /// Returns `true` if all input rows have been consumed.
-    fn is_exhausted(&self) -> bool {
-        self.next_row >= self.batch.num_rows()
-    }
-
-    /// Slice the next chunk from the pending batch, advance the cursor, and
-    /// return `(slice, exhausted)` where `exhausted` is `true` when the last
-    /// row has been consumed.
     fn take_next_slice(
         &mut self,
         list_type_columns: &[ListUnnest],
@@ -358,7 +343,7 @@ impl PendingBatch {
         )?;
         let slice = self.batch.slice(self.next_row, row_count);
         self.next_row += row_count;
-        Ok((slice, self.is_exhausted()))
+        Ok((slice, self.next_row >= self.batch.num_rows()))
     }
 }
 
@@ -373,7 +358,6 @@ struct UnnestStream {
     /// then list_type_columns = [ListUnnest{1,1},ListUnnest{1,2}]
     list_type_columns: Vec<ListUnnest>,
     struct_column_indices: HashSet<usize>,
-    /// Pending input batch being drained into size-bounded unnest chunks.
     pending: Option<PendingBatch>,
     /// Target maximum number of output rows per emitted batch.
     output_batch_size: usize,
@@ -441,14 +425,13 @@ impl UnnestStream {
         }
     }
 
-    /// Drain the next output batch from the pending input batch, if any.
     fn build_next_pending_batch(&mut self) -> Result<Option<RecordBatch>> {
         loop {
             let Some(pending) = self.pending.as_mut() else {
                 return Ok(None);
             };
 
-            if pending.is_exhausted() {
+            if pending.next_row >= pending.batch.num_rows() {
                 self.pending = None;
                 return Ok(None);
             }

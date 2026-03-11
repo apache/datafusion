@@ -4639,12 +4639,33 @@ async fn unnest_no_empty_batches() -> Result<()> {
     Ok(())
 }
 
+fn batch_slicing_ctx(batch_size: usize) -> SessionContext {
+    SessionContext::new_with_config(
+        SessionConfig::new()
+            .with_batch_size(batch_size)
+            .with_target_partitions(1),
+    )
+}
+
+fn assert_total_and_max_batch_rows(
+    results: &[RecordBatch],
+    total_rows: usize,
+    max_batch_rows: usize,
+) {
+    assert_eq!(
+        results.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        total_rows
+    );
+    assert!(
+        results
+            .iter()
+            .all(|batch| batch.num_rows() <= max_batch_rows)
+    );
+}
+
 #[tokio::test]
 async fn unnest_chunks_high_fanout_batches() -> Result<()> {
-    let config = SessionConfig::new()
-        .with_batch_size(4)
-        .with_target_partitions(1);
-    let ctx = SessionContext::new_with_config(config);
+    let ctx = batch_slicing_ctx(4);
 
     let shape_ids = Arc::new(UInt32Array::from(vec![1, 2, 3])) as ArrayRef;
     let tag_ids = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
@@ -4668,11 +4689,11 @@ async fn unnest_chunks_high_fanout_batches() -> Result<()> {
     assert_eq!(
         results
             .iter()
-            .map(|batch| batch.num_rows())
+            .map(RecordBatch::num_rows)
             .collect::<Vec<_>>(),
         vec![3, 3, 3]
     );
-    assert!(results.iter().all(|batch| batch.num_rows() <= 4));
+    assert_total_and_max_batch_rows(&results, 9, 4);
 
     assert_snapshot!(
         batches_to_sort_string(&results),
@@ -4705,10 +4726,7 @@ async fn unnest_chunks_high_fanout_batches() -> Result<()> {
 /// whose sizes never exceed 4.
 #[tokio::test]
 async fn unnest_chunks_multi_col_different_lengths() -> Result<()> {
-    let config = SessionConfig::new()
-        .with_batch_size(4)
-        .with_target_partitions(1);
-    let ctx = SessionContext::new_with_config(config);
+    let ctx = batch_slicing_ctx(4);
 
     // id: 1, 2, 3
     // list_a: [1], [2, 3], [4, 5, 6]          (lengths 1, 2, 3)
@@ -4740,10 +4758,7 @@ async fn unnest_chunks_multi_col_different_lengths() -> Result<()> {
         .collect()
         .await?;
 
-    let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows, 8);
-    // No output batch should exceed batch_size=4
-    assert!(results.iter().all(|b| b.num_rows() <= 4));
+    assert_total_and_max_batch_rows(&results, 8, 4);
 
     assert_snapshot!(
         batches_to_sort_string(&results),
@@ -4774,10 +4789,7 @@ async fn unnest_chunks_multi_col_different_lengths() -> Result<()> {
 /// without contributing output rows.
 #[tokio::test]
 async fn unnest_chunks_preserve_nulls_false() -> Result<()> {
-    let config = SessionConfig::new()
-        .with_batch_size(2)
-        .with_target_partitions(1);
-    let ctx = SessionContext::new_with_config(config);
+    let ctx = batch_slicing_ctx(2);
 
     // list: [1, 2], null, [3], null
     // id:   A,      B,    C,   D
@@ -4803,9 +4815,7 @@ async fn unnest_chunks_preserve_nulls_false() -> Result<()> {
         .collect()
         .await?;
 
-    let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows, 3);
-    assert!(results.iter().all(|b| b.num_rows() <= 2));
+    assert_total_and_max_batch_rows(&results, 3, 2);
 
     assert_snapshot!(
         batches_to_sort_string(&results),
@@ -4832,10 +4842,7 @@ async fn unnest_chunks_preserve_nulls_false() -> Result<()> {
 /// `batch_size`.
 #[tokio::test]
 async fn unnest_chunks_recursive_single_row_fallback() -> Result<()> {
-    let config = SessionConfig::new()
-        .with_batch_size(4)
-        .with_target_partitions(1);
-    let ctx = SessionContext::new_with_config(config);
+    let ctx = batch_slicing_ctx(4);
 
     // Build a List<List<Int32>> column:
     //   row 0: [[1, 2], [3]]      → recursive unnest → 1, 2, 3
@@ -4875,11 +4882,7 @@ async fn unnest_chunks_recursive_single_row_fallback() -> Result<()> {
         .collect()
         .await?;
 
-    // Verify total row count: 3 + 2 + 4 = 9
-    let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows, 9);
-    // Single-row fallback still respects batch_size per generated batch
-    assert!(results.iter().all(|b| b.num_rows() <= 4));
+    assert_total_and_max_batch_rows(&results, 9, 4);
 
     assert_snapshot!(
         batches_to_sort_string(&results),
