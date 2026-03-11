@@ -346,27 +346,10 @@ impl PendingBatch {
         Self { batch, next_row: 0 }
     }
 
-    fn take_next_slice(
-        &mut self,
-        list_type_columns: &[ListUnnest],
-        options: &UnnestOptions,
-        output_batch_size: usize,
-        disable_chunking_for_stacked_unnest: bool,
-    ) -> Result<(RecordBatch, bool)> {
-        let row_count = if disable_chunking_for_stacked_unnest {
-            self.batch.num_rows().saturating_sub(self.next_row)
-        } else {
-            next_input_slice_row_count(
-                &self.batch,
-                self.next_row,
-                list_type_columns,
-                options,
-                output_batch_size,
-            )?
-        };
+    fn take_next_slice(&mut self, row_count: usize) -> (RecordBatch, bool) {
         let slice = self.batch.slice(self.next_row, row_count);
         self.next_row += row_count;
-        Ok((slice, self.next_row >= self.batch.num_rows()))
+        (slice, self.next_row >= self.batch.num_rows())
     }
 }
 
@@ -460,12 +443,14 @@ impl UnnestStream {
                 return Ok(None);
             }
 
-            let (batch_slice, exhausted) = pending.take_next_slice(
+            let row_count = next_pending_slice_row_count(
+                pending,
                 &self.list_type_columns,
                 &self.options,
                 self.output_batch_size,
                 self.disable_chunking_for_stacked_unnest,
             )?;
+            let (batch_slice, exhausted) = pending.take_next_slice(row_count);
             if exhausted {
                 self.pending = None;
             }
@@ -487,6 +472,26 @@ impl UnnestStream {
 
             return Ok(Some(result_batch));
         }
+    }
+}
+
+fn next_pending_slice_row_count(
+    pending: &PendingBatch,
+    list_type_columns: &[ListUnnest],
+    options: &UnnestOptions,
+    output_batch_size: usize,
+    disable_chunking_for_stacked_unnest: bool,
+) -> Result<usize> {
+    if disable_chunking_for_stacked_unnest {
+        Ok(pending.batch.num_rows().saturating_sub(pending.next_row))
+    } else {
+        next_input_slice_row_count(
+            &pending.batch,
+            pending.next_row,
+            list_type_columns,
+            options,
+            output_batch_size,
+        )
     }
 }
 
