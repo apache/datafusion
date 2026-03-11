@@ -144,7 +144,10 @@ use substrait::proto::{
 ///         // extract type_reference from the new TypeAnchorType oneof
 ///         let type_ref = match literal.type_anchor_type {
 ///             Some(proto::expression::literal::user_defined::TypeAnchorType::TypeReference(r)) => r,
-///             _ => 0,
+///             Some(proto::expression::literal::user_defined::TypeAnchorType::TypeAliasReference(_)) => {
+///                 return not_impl_err!("Type alias references are not yet supported")
+///             }
+///             None => 0,
 ///         };
 ///         let type_string = self.extensions.types.get(&type_ref).unwrap();
 ///         match type_string.as_str() {
@@ -455,7 +458,14 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
                     ref_val,
                 ),
             ) => ref_val,
-            _ => 0,
+            Some(
+                proto::expression::literal::user_defined::TypeAnchorType::TypeAliasReference(_),
+            ) => {
+                return not_impl_err!(
+                    "Type alias references in user-defined literals are not yet supported"
+                )
+            }
+            None => 0,
         };
         substrait_err!("Missing handler for user-defined literals {}", type_ref)
     }

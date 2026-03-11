@@ -476,7 +476,12 @@ pub(crate) fn from_substrait_literal(
 
             let type_ref = match user_defined.type_anchor_type {
                 Some(TypeAnchorType::TypeReference(ref_val)) => ref_val,
-                _ => 0,
+                Some(TypeAnchorType::TypeAliasReference(_)) => {
+                    return not_impl_err!(
+                        "Type alias references in user-defined literals are not yet supported"
+                    );
+                }
+                None => 0,
             };
 
             if let Some(name) = consumer.get_extensions().types.get(&type_ref) {
