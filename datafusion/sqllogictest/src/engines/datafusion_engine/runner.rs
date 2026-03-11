@@ -49,8 +49,8 @@ impl DataFusion {
             .config()
             .options()
             .entries()
-            .iter()
-            .map(|e| (e.key.clone(), e.value.clone()))
+            .into_iter()
+            .map(|e| (e.key, e.value))
             .collect();
 
         Self {
