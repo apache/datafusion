@@ -15,28 +15,144 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+#############
+## Scalars ##
+#############
 
-## Original Query: SELECT floor(-0.1);
-## PySpark 3.5.5 Result: {'FLOOR(-0.1)': Decimal('-1'), 'typeof(FLOOR(-0.1))': 'decimal(1,0)', 'typeof(-0.1)': 'decimal(1,1)'}
-#query
-#SELECT floor(-0.1::decimal(1,1));
+# Float64 tests - returns Int64
+query IT
+SELECT floor(1.1), arrow_typeof(floor(1.1));
+----
+1 Int64
 
-## Original Query: SELECT floor(3.1411, -3);
-## PySpark 3.5.5 Result: {'floor(3.1411, -3)': Decimal('0'), 'typeof(floor(3.1411, -3))': 'decimal(4,0)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(-3)': 'int'}
-#query
-#SELECT floor(3.1411::decimal(5,4), -3::int);
+query IT
+SELECT floor(-1.1), arrow_typeof(floor(-1.1));
+----
+-2 Int64
 
-## Original Query: SELECT floor(3.1411, 3);
-## PySpark 3.5.5 Result: {'floor(3.1411, 3)': Decimal('3.141'), 'typeof(floor(3.1411, 3))': 'decimal(5,3)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(3)': 'int'}
-#query
-#SELECT floor(3.1411::decimal(5,4), 3::int);
+query IT
+SELECT floor(0.0), arrow_typeof(floor(0.0));
+----
+0 Int64
 
-## Original Query: SELECT floor(5);
-## PySpark 3.5.5 Result: {'FLOOR(5)': 5, 'typeof(FLOOR(5))': 'bigint', 'typeof(5)': 'int'}
-#query
-#SELECT floor(5::int);
+# Float32 tests - returns Int64
+query IT
+SELECT floor(arrow_cast(1.5, 'Float32')), arrow_typeof(floor(arrow_cast(1.5, 'Float32')));
+----
+1 Int64
+
+query IT
+SELECT floor(arrow_cast(-1.5, 'Float32')), arrow_typeof(floor(arrow_cast(-1.5, 'Float32')));
+----
+-2 Int64
+
+# Integer tests - returns Int64
+query IT
+SELECT floor(arrow_cast(5, 'Int8')), arrow_typeof(floor(arrow_cast(5, 'Int8')));
+----
+5 Int64
+
+query IT
+SELECT floor(arrow_cast(-5, 'Int16')), arrow_typeof(floor(arrow_cast(-5, 'Int16')));
+----
+-5 Int64
+
+query IT
+SELECT floor(arrow_cast(1000, 'Int32')), arrow_typeof(floor(arrow_cast(1000, 'Int32')));
+----
+1000 Int64
+
+query IT
+SELECT floor(arrow_cast(-1000, 'Int64')), arrow_typeof(floor(arrow_cast(-1000, 'Int64')));
+----
+-1000 Int64
+
+# Decimal128 tests - returns Decimal128(p-s+1, 0)
+# Decimal(5,2) -> Decimal(4,0)
+query RT
+SELECT floor(arrow_cast(123.45, 'Decimal128(5,2)')), arrow_typeof(floor(arrow_cast(123.45, 'Decimal128(5,2)')));
+----
+123 Decimal128(4, 0)
+
+query RT
+SELECT floor(arrow_cast(-123.45, 'Decimal128(5,2)')), arrow_typeof(floor(arrow_cast(-123.45, 'Decimal128(5,2)')));
+----
+-124 Decimal128(4, 0)
+
+# Decimal with scale 0 - unchanged precision
+query RT
+SELECT floor(arrow_cast(123, 'Decimal128(10,0)')), arrow_typeof(floor(arrow_cast(123, 'Decimal128(10,0)')));
+----
+123 Decimal128(10, 0)
+
+# NULL handling
+query IT
+SELECT floor(NULL::double), arrow_typeof(floor(NULL::double));
+----
+NULL Int64
+
+############
+## Arrays ##
+############
+
+statement ok
+CREATE TABLE floor_test (
+    f64_col DOUBLE,
+    f32_col FLOAT,
+    i32_col INT,
+    dec_col DECIMAL(5,2)
+) AS VALUES
+    (1.1, 1.5, 5, 123.45),
+    (-1.1, -1.5, -5, -123.45),
+    (0.0, 0.0, 0, 125.00),
+    (NULL, NULL, NULL, NULL);
+
+# Float64 array
+query I
+SELECT floor(f64_col) FROM floor_test;
+----
+1
+-2
+0
+NULL
+
+# Float32 array
+query I
+SELECT floor(f32_col) FROM floor_test;
+----
+1
+-2
+0
+NULL
+
+# Int32 array
+query I
+SELECT floor(i32_col) FROM floor_test;
+----
+5
+-5
+0
+NULL
+
+# Decimal array
+query R
+SELECT floor(dec_col) FROM floor_test;
+----
+123
+-124
+125
+NULL
+
+# Verify array result types
+query TTTT
+SELECT
+    arrow_typeof(floor(f64_col)),
+    arrow_typeof(floor(f32_col)),
+    arrow_typeof(floor(i32_col)),
+    arrow_typeof(floor(dec_col))
+FROM floor_test LIMIT 1;
+----
+Int64 Int64 Int64 Decimal128(4, 0)
+
+statement ok
+DROP TABLE floor_test;
