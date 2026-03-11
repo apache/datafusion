@@ -4640,6 +4640,63 @@ async fn unnest_no_empty_batches() -> Result<()> {
 }
 
 #[tokio::test]
+async fn unnest_chunks_high_fanout_batches() -> Result<()> {
+    let config = SessionConfig::new()
+        .with_batch_size(4)
+        .with_target_partitions(1);
+    let ctx = SessionContext::new_with_config(config);
+
+    let shape_ids = Arc::new(UInt32Array::from(vec![1, 2, 3])) as ArrayRef;
+    let tag_ids = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(11), Some(12), Some(13)]),
+        Some(vec![Some(21), Some(22), Some(23)]),
+        Some(vec![Some(31), Some(32), Some(33)]),
+    ])) as ArrayRef;
+
+    let batch =
+        RecordBatch::try_from_iter(vec![("shape_id", shape_ids), ("tag_id", tag_ids)])?;
+
+    ctx.register_batch("shapes", batch)?;
+
+    let results = ctx
+        .table("shapes")
+        .await?
+        .unnest_columns(&["tag_id"])?
+        .collect()
+        .await?;
+
+    assert_eq!(
+        results
+            .iter()
+            .map(|batch| batch.num_rows())
+            .collect::<Vec<_>>(),
+        vec![3, 3, 3]
+    );
+    assert!(results.iter().all(|batch| batch.num_rows() <= 4));
+
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +----------+--------+
+    | shape_id | tag_id |
+    +----------+--------+
+    | 1        | 11     |
+    | 1        | 12     |
+    | 1        | 13     |
+    | 2        | 21     |
+    | 2        | 22     |
+    | 2        | 23     |
+    | 3        | 31     |
+    | 3        | 32     |
+    | 3        | 33     |
+    +----------+--------+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn unnest_array_agg() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tag_id_builder = UInt32Builder::new();

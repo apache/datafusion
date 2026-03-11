@@ -271,6 +271,7 @@ impl ExecutionPlan for UnnestExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let output_batch_size = context.session_config().batch_size().max(1);
         let input = self.input.execute(partition, context)?;
         let metrics = UnnestMetrics::new(partition, &self.metrics);
 
@@ -279,6 +280,9 @@ impl ExecutionPlan for UnnestExec {
             schema: Arc::clone(&self.schema),
             list_type_columns: self.list_column_indices.clone(),
             struct_column_indices: self.struct_column_indices.iter().copied().collect(),
+            pending_input_batch: None,
+            pending_input_row: 0,
+            output_batch_size,
             options: self.options.clone(),
             metrics,
         }))
@@ -325,6 +329,12 @@ struct UnnestStream {
     /// then list_type_columns = [ListUnnest{1,1},ListUnnest{1,2}]
     list_type_columns: Vec<ListUnnest>,
     struct_column_indices: HashSet<usize>,
+    /// Current input batch being drained into smaller unnest chunks.
+    pending_input_batch: Option<RecordBatch>,
+    /// Next input row to process from the pending batch.
+    pending_input_row: usize,
+    /// Target maximum number of output rows per emitted batch.
+    output_batch_size: usize,
     /// Options
     options: UnnestOptions,
     /// Metrics
@@ -357,30 +367,22 @@ impl UnnestStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
+            if let Some(result_batch) = self.build_next_pending_batch()? {
+                (&result_batch).record_output(&self.metrics.baseline_metrics);
+
+                // Empty record batches should not be emitted.
+                // They need to be treated as [`Option<RecordBatch>`]es and handled separately.
+                debug_assert!(result_batch.num_rows() > 0);
+                return Poll::Ready(Some(Ok(result_batch)));
+            }
+
             return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    let elapsed_compute =
-                        self.metrics.baseline_metrics.elapsed_compute().clone();
-                    let timer = elapsed_compute.timer();
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
-                    let result = build_batch(
-                        &batch,
-                        &self.schema,
-                        &self.list_type_columns,
-                        &self.struct_column_indices,
-                        &self.options,
-                    )?;
-                    timer.done();
-                    let Some(result_batch) = result else {
-                        continue;
-                    };
-                    (&result_batch).record_output(&self.metrics.baseline_metrics);
-
-                    // Empty record batches should not be emitted.
-                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
-                    debug_assert!(result_batch.num_rows() > 0);
-                    Some(Ok(result_batch))
+                    self.pending_input_batch = Some(batch);
+                    self.pending_input_row = 0;
+                    continue;
                 }
                 other => {
                     trace!(
@@ -396,6 +398,148 @@ impl UnnestStream {
                 }
             });
         }
+    }
+
+    fn build_next_pending_batch(&mut self) -> Result<Option<RecordBatch>> {
+        loop {
+            let Some(batch) = self.pending_input_batch.as_ref() else {
+                return Ok(None);
+            };
+
+            if self.pending_input_row >= batch.num_rows() {
+                self.pending_input_batch = None;
+                self.pending_input_row = 0;
+                return Ok(None);
+            }
+
+            let row_count = next_input_slice_row_count(
+                batch,
+                self.pending_input_row,
+                &self.list_type_columns,
+                &self.options,
+                self.output_batch_size,
+            )?;
+            let batch_slice = batch.slice(self.pending_input_row, row_count);
+            self.pending_input_row += row_count;
+            if self.pending_input_row >= batch.num_rows() {
+                self.pending_input_batch = None;
+                self.pending_input_row = 0;
+            }
+
+            let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
+            let timer = elapsed_compute.timer();
+            let result = build_batch(
+                &batch_slice,
+                &self.schema,
+                &self.list_type_columns,
+                &self.struct_column_indices,
+                &self.options,
+            )?;
+            timer.done();
+
+            let Some(result_batch) = result else {
+                continue;
+            };
+
+            return Ok(Some(result_batch));
+        }
+    }
+}
+
+fn next_input_slice_row_count(
+    batch: &RecordBatch,
+    start_row: usize,
+    list_type_columns: &[ListUnnest],
+    options: &UnnestOptions,
+    output_batch_size: usize,
+) -> Result<usize> {
+    let remaining_rows = batch.num_rows().saturating_sub(start_row);
+    if remaining_rows == 0 {
+        return Ok(0);
+    }
+
+    if list_type_columns.is_empty() {
+        return Ok(remaining_rows);
+    }
+
+    // Recursive unnest can amplify a row beyond what top-level list lengths reveal.
+    // Fall back to single-row slices until recursive unnest becomes chunk-aware.
+    if list_type_columns.iter().any(|unnest| unnest.depth > 1) {
+        return Ok(1);
+    }
+
+    let mut rows = 0;
+    let mut estimated_output_rows = 0usize;
+    while start_row + rows < batch.num_rows() {
+        let row_output_rows = estimate_row_output_rows(
+            batch,
+            start_row + rows,
+            list_type_columns,
+            options,
+        )?;
+        if rows > 0 && estimated_output_rows + row_output_rows > output_batch_size {
+            break;
+        }
+        estimated_output_rows += row_output_rows;
+        rows += 1;
+        if estimated_output_rows >= output_batch_size {
+            break;
+        }
+    }
+
+    Ok(rows.max(1))
+}
+
+fn estimate_row_output_rows(
+    batch: &RecordBatch,
+    row: usize,
+    list_type_columns: &[ListUnnest],
+    options: &UnnestOptions,
+) -> Result<usize> {
+    list_type_columns
+        .iter()
+        .map(|unnest| {
+            list_output_length(
+                batch.column(unnest.index_in_input_schema).as_ref(),
+                row,
+                options,
+            )
+        })
+        .try_fold(0usize, |max_len, len| len.map(|len| max_len.max(len)))
+}
+
+fn list_output_length(
+    array: &dyn Array,
+    row: usize,
+    options: &UnnestOptions,
+) -> Result<usize> {
+    let null_length = usize::from(options.preserve_nulls);
+    match array.data_type() {
+        DataType::List(_) => {
+            let array = array.as_any().downcast_ref::<ListArray>().unwrap();
+            Ok(if array.is_null(row) {
+                null_length
+            } else {
+                array.value_length(row) as usize
+            })
+        }
+        DataType::LargeList(_) => {
+            let array = array.as_any().downcast_ref::<LargeListArray>().unwrap();
+            Ok(if array.is_null(row) {
+                null_length
+            } else {
+                (array.value_offsets()[row + 1] - array.value_offsets()[row]) as usize
+            })
+        }
+        DataType::FixedSizeList(_, _) => {
+            let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+            Ok(if array.is_null(row) {
+                null_length
+            } else {
+                array.value_length() as usize
+            })
+        }
+        other => exec_err!("Invalid unnest datatype {other}"),
     }
 }
 
