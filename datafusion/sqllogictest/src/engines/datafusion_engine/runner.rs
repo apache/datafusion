@@ -159,7 +159,7 @@ impl Drop for DataFusion {
                     ));
                 }
 
-                let old = self
+                let default = self
                     .default_config
                     .get(&e.key)
                     .and_then(|v| v.as_deref())
