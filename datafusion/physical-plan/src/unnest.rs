@@ -209,18 +209,14 @@ impl UnnestExec {
     fn disable_chunking_for_stacked_unnest(&self) -> bool {
         self.list_column_indices.iter().any(|unnest| {
             unnest.depth == 1
-                && is_internal_unnest_placeholder(
-                    self.input
-                        .schema()
-                        .field(unnest.index_in_input_schema)
-                        .name(),
-                )
+                && self
+                    .input
+                    .schema()
+                    .field(unnest.index_in_input_schema)
+                    .name()
+                    .contains("__unnest_placeholder(")
         })
     }
-}
-
-fn is_internal_unnest_placeholder(field_name: &str) -> bool {
-    field_name.contains("__unnest_placeholder(")
 }
 
 impl DisplayAs for UnnestExec {
@@ -345,12 +341,6 @@ impl PendingBatch {
     fn new(batch: RecordBatch) -> Self {
         Self { batch, next_row: 0 }
     }
-
-    fn take_next_slice(&mut self, row_count: usize) -> (RecordBatch, bool) {
-        let slice = self.batch.slice(self.next_row, row_count);
-        self.next_row += row_count;
-        (slice, self.next_row >= self.batch.num_rows())
-    }
 }
 
 /// A stream that issues [RecordBatch]es with unnested column data.
@@ -443,14 +433,20 @@ impl UnnestStream {
                 return Ok(None);
             }
 
-            let row_count = next_pending_slice_row_count(
-                pending,
-                &self.list_type_columns,
-                &self.options,
-                self.output_batch_size,
-                self.disable_chunking_for_stacked_unnest,
-            )?;
-            let (batch_slice, exhausted) = pending.take_next_slice(row_count);
+            let row_count = if self.disable_chunking_for_stacked_unnest {
+                pending.batch.num_rows().saturating_sub(pending.next_row)
+            } else {
+                next_input_slice_row_count(
+                    &pending.batch,
+                    pending.next_row,
+                    &self.list_type_columns,
+                    &self.options,
+                    self.output_batch_size,
+                )?
+            };
+            let batch_slice = pending.batch.slice(pending.next_row, row_count);
+            pending.next_row += row_count;
+            let exhausted = pending.next_row >= pending.batch.num_rows();
             if exhausted {
                 self.pending = None;
             }
@@ -472,26 +468,6 @@ impl UnnestStream {
 
             return Ok(Some(result_batch));
         }
-    }
-}
-
-fn next_pending_slice_row_count(
-    pending: &PendingBatch,
-    list_type_columns: &[ListUnnest],
-    options: &UnnestOptions,
-    output_batch_size: usize,
-    disable_chunking_for_stacked_unnest: bool,
-) -> Result<usize> {
-    if disable_chunking_for_stacked_unnest {
-        Ok(pending.batch.num_rows().saturating_sub(pending.next_row))
-    } else {
-        next_input_slice_row_count(
-            &pending.batch,
-            pending.next_row,
-            list_type_columns,
-            options,
-            output_batch_size,
-        )
     }
 }
 

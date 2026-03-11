@@ -58,6 +58,25 @@ fn assert_total_and_max_batch_rows(
     );
 }
 
+fn nested_int32_batch(rows: &[&[&[i32]]]) -> Result<RecordBatch> {
+    let mut list_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+
+    for row in rows {
+        for values in *row {
+            for &value in *values {
+                list_builder.values().values().append_value(value);
+            }
+            list_builder.values().append(true);
+        }
+        list_builder.append(true);
+    }
+
+    Ok(RecordBatch::try_from_iter(vec![(
+        "nested",
+        Arc::new(list_builder.finish()) as ArrayRef,
+    )])?)
+}
+
 #[tokio::test]
 async fn unnest_chunks_high_fanout_batches() -> Result<()> {
     let ctx = batch_slicing_ctx(4);
@@ -239,36 +258,7 @@ async fn unnest_chunks_preserve_nulls_false() -> Result<()> {
 async fn unnest_chunks_recursive_single_row_fallback() -> Result<()> {
     let ctx = batch_slicing_ctx(4);
 
-    // Build a List<List<Int32>> column:
-    //   row 0: [[1, 2], [3]]      -> recursive unnest -> 1, 2, 3
-    //   row 1: [[4, 5]]           -> recursive unnest -> 4, 5
-    //   row 2: [[6], [7, 8, 9]]   -> recursive unnest -> 6, 7, 8, 9
-    let mut list_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
-    // row 0
-    list_builder.values().values().append_value(1);
-    list_builder.values().values().append_value(2);
-    list_builder.values().append(true);
-    list_builder.values().values().append_value(3);
-    list_builder.values().append(true);
-    list_builder.append(true);
-    // row 1
-    list_builder.values().values().append_value(4);
-    list_builder.values().values().append_value(5);
-    list_builder.values().append(true);
-    list_builder.append(true);
-    // row 2
-    list_builder.values().values().append_value(6);
-    list_builder.values().append(true);
-    list_builder.values().values().append_value(7);
-    list_builder.values().values().append_value(8);
-    list_builder.values().values().append_value(9);
-    list_builder.values().append(true);
-    list_builder.append(true);
-
-    let batch = RecordBatch::try_from_iter(vec![(
-        "nested",
-        Arc::new(list_builder.finish()) as ArrayRef,
-    )])?;
+    let batch = nested_int32_batch(&[&[&[1, 2], &[3]], &[&[4, 5]], &[&[6], &[7, 8, 9]]])?;
     ctx.register_batch("t", batch)?;
 
     let results = ctx
@@ -305,26 +295,7 @@ async fn unnest_chunks_recursive_single_row_fallback() -> Result<()> {
 async fn unnest_chunks_stacked_unnest_preserves_order() -> Result<()> {
     let ctx = batch_slicing_ctx(2);
 
-    let mut list_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
-    // row 0: [[1, 2], [3]]
-    list_builder.values().values().append_value(1);
-    list_builder.values().values().append_value(2);
-    list_builder.values().append(true);
-    list_builder.values().values().append_value(3);
-    list_builder.values().append(true);
-    list_builder.append(true);
-    // row 1: [[4], [5, 6]]
-    list_builder.values().values().append_value(4);
-    list_builder.values().append(true);
-    list_builder.values().values().append_value(5);
-    list_builder.values().values().append_value(6);
-    list_builder.values().append(true);
-    list_builder.append(true);
-
-    let batch = RecordBatch::try_from_iter(vec![(
-        "nested",
-        Arc::new(list_builder.finish()) as ArrayRef,
-    )])?;
+    let batch = nested_int32_batch(&[&[&[1, 2], &[3]], &[&[4], &[5, 6]]])?;
     ctx.register_batch("t", batch)?;
 
     let dataframe = ctx
