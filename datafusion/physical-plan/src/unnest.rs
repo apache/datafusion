@@ -205,6 +205,22 @@ impl UnnestExec {
             ..Self::clone(self)
         }
     }
+
+    fn disable_chunking_for_stacked_unnest(&self) -> bool {
+        self.list_column_indices.iter().any(|unnest| {
+            unnest.depth == 1
+                && is_internal_unnest_placeholder(
+                    self.input
+                        .schema()
+                        .field(unnest.index_in_input_schema)
+                        .name(),
+                )
+        })
+    }
+}
+
+fn is_internal_unnest_placeholder(field_name: &str) -> bool {
+    field_name.contains("__unnest_placeholder(")
 }
 
 impl DisplayAs for UnnestExec {
@@ -281,17 +297,8 @@ impl ExecutionPlan for UnnestExec {
             list_type_columns: self.list_column_indices.clone(),
             struct_column_indices: self.struct_column_indices.iter().copied().collect(),
             pending: None,
-            disable_chunking_for_stacked_unnest: self.list_column_indices.iter().any(
-                |unnest| {
-                    unnest.depth == 1
-                        && self
-                            .input
-                            .schema()
-                            .field(unnest.index_in_input_schema)
-                            .name()
-                            .contains("__unnest_placeholder(")
-                },
-            ),
+            disable_chunking_for_stacked_unnest: self
+                .disable_chunking_for_stacked_unnest(),
             output_batch_size,
             options: self.options.clone(),
             metrics,
