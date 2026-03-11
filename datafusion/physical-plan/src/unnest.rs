@@ -514,33 +514,13 @@ fn list_output_length(
     options: &UnnestOptions,
 ) -> Result<usize> {
     let null_length = usize::from(options.preserve_nulls);
-    match array.data_type() {
-        DataType::List(_) => {
-            let array = array.as_any().downcast_ref::<ListArray>().unwrap();
-            Ok(if array.is_null(row) {
-                null_length
-            } else {
-                array.value_length(row) as usize
-            })
-        }
-        DataType::LargeList(_) => {
-            let array = array.as_any().downcast_ref::<LargeListArray>().unwrap();
-            Ok(if array.is_null(row) {
-                null_length
-            } else {
-                (array.value_offsets()[row + 1] - array.value_offsets()[row]) as usize
-            })
-        }
-        DataType::FixedSizeList(_, _) => {
-            let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
-            Ok(if array.is_null(row) {
-                null_length
-            } else {
-                array.value_length() as usize
-            })
-        }
-        other => exec_err!("Invalid unnest datatype {other}"),
-    }
+    let typed = as_list_array_type(array)?;
+    Ok(if typed.is_null(row) {
+        null_length
+    } else {
+        let (start, end) = typed.value_offsets(row);
+        (end - start) as usize
+    })
 }
 
 /// Given a set of struct column indices to flatten
@@ -989,6 +969,23 @@ impl ListArrayType for FixedSizeListArray {
     }
 }
 
+/// Cast a generic array reference to `&dyn ListArrayType`.
+///
+/// This is the single authoritative place for the List / LargeList /
+/// FixedSizeList -> `ListArrayType` dispatch.  Centralising it here
+/// means that adding a new list variant (or changing null-handling)
+/// only requires editing one function.
+fn as_list_array_type(array: &dyn Array) -> Result<&dyn ListArrayType> {
+    match array.data_type() {
+        DataType::List(_) => Ok(array.as_list::<i32>() as &dyn ListArrayType),
+        DataType::LargeList(_) => Ok(array.as_list::<i64>() as &dyn ListArrayType),
+        DataType::FixedSizeList(_, _) => {
+            Ok(array.as_fixed_size_list() as &dyn ListArrayType)
+        }
+        other => exec_err!("Invalid unnest datatype {other}"),
+    }
+}
+
 /// Unnest multiple list arrays according to the length array.
 fn unnest_list_arrays(
     list_arrays: &[ArrayRef],
@@ -997,16 +994,7 @@ fn unnest_list_arrays(
 ) -> Result<Vec<ArrayRef>> {
     let typed_arrays = list_arrays
         .iter()
-        .map(|list_array| match list_array.data_type() {
-            DataType::List(_) => Ok(list_array.as_list::<i32>() as &dyn ListArrayType),
-            DataType::LargeList(_) => {
-                Ok(list_array.as_list::<i64>() as &dyn ListArrayType)
-            }
-            DataType::FixedSizeList(_, _) => {
-                Ok(list_array.as_fixed_size_list() as &dyn ListArrayType)
-            }
-            other => exec_err!("Invalid unnest datatype {other }"),
-        })
+        .map(|list_array| as_list_array_type(list_array.as_ref()))
         .collect::<Result<Vec<_>>>()?;
 
     typed_arrays
