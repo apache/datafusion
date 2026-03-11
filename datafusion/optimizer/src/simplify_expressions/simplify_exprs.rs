@@ -871,7 +871,7 @@ mod tests {
         ]);
         let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
 
-        // Test `= ".*"` transforms to true (except for empty strings)
+        // Test `~ ".*"` transforms to true for any non-NULL string
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexMatch, lit(".*")))?
             .build()?;
@@ -884,7 +884,7 @@ mod tests {
         "
         )?;
 
-        // Test `!~ ".*"` transforms to CASE WHEN col IS NOT NULL THEN FALSE ELSE NULL END
+        // Test `!~ ".*"` preserves NULL semantics while remaining false for non-NULL strings
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotMatch, lit(".*")))?
             .build()?;
@@ -892,14 +892,14 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: test.a IS NOT NULL AND Boolean(NULL)
+        Filter: test.a IS NULL AND Boolean(NULL)
           TableScan: test
         "
         )?;
 
         // Test case-insensitive versions
 
-        // Test `=~ ".*"` (case-insensitive) transforms to true (except for empty strings)
+        // Test `~* ".*"` transforms to true for any non-NULL string
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("b"), Operator::RegexIMatch, lit(".*")))?
             .build()?;
@@ -929,7 +929,7 @@ mod tests {
         "
         )?;
 
-        // Test `!~* ".*"` (case-insensitive) transforms to false
+        // Test `!~* ".*"` preserves NULL semantics while remaining false for non-NULL strings
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotIMatch, lit(".*")))?
             .build()?;
@@ -937,7 +937,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: test.a IS NOT NULL AND Boolean(NULL)
+        Filter: test.a IS NULL AND Boolean(NULL)
           TableScan: test
         "
         )?;
