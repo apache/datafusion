@@ -256,6 +256,10 @@ impl WindowUDFImpl for NthValue {
         self.kind.name()
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

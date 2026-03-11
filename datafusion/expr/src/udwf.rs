@@ -145,6 +145,14 @@ impl WindowUDF {
         self.inner.name()
     }
 
+    /// Returns whether this function is built into DataFusion or else it's
+    /// assumed to be user defined.
+    ///
+    /// See [`WindowUDFImpl::is_builtin`] for more details.
+    pub fn is_builtin(&self) -> bool {
+        self.inner.is_builtin()
+    }
+
     /// Returns the aliases for this function.
     pub fn aliases(&self) -> &[String] {
         self.inner.aliases()
@@ -320,6 +328,14 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns whether this function is built into DataFusion or else it's
+    /// assumed to be user defined.
+    ///
+    /// This is mostly useful to know within certain optimization rules to be
+    /// sure that the given function has a specific semantics and hasn't been
+    /// overwritten by a user defined function which could have a different semantics.
+    fn is_builtin(&self) -> bool;
 
     /// Returns any aliases (alternate names) for this function.
     ///
@@ -510,6 +526,10 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.name()
     }
 
+    fn is_builtin(&self) -> bool {
+        self.inner.is_builtin()
+    }
+
     fn signature(&self) -> &Signature {
         self.inner.signature()
     }
@@ -600,6 +620,9 @@ mod test {
         fn name(&self) -> &str {
             "a"
         }
+        fn is_builtin(&self) -> bool {
+            unimplemented!()
+        }
         fn signature(&self) -> &Signature {
             &self.signature
         }
@@ -642,6 +665,9 @@ mod test {
         }
         fn name(&self) -> &str {
             "b"
+        }
+        fn is_builtin(&self) -> bool {
+            unimplemented!()
         }
         fn signature(&self) -> &Signature {
             &self.signature

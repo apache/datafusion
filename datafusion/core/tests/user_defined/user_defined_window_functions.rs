@@ -554,6 +554,10 @@ impl OddCounter {
                 "odd_counter"
             }
 
+            fn is_builtin(&self) -> bool {
+                unimplemented!()
+            }
+
             fn signature(&self) -> &Signature {
                 &self.signature
             }
@@ -681,6 +685,10 @@ impl WindowUDFImpl for VariadicWindowUDF {
 
     fn name(&self) -> &str {
         "variadic_window_udf"
+    }
+
+    fn is_builtin(&self) -> bool {
+        unimplemented!()
     }
 
     fn signature(&self) -> &Signature {
@@ -825,6 +833,10 @@ impl WindowUDFImpl for MetadataBasedWindowUdf {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn is_builtin(&self) -> bool {
+        unimplemented!()
     }
 
     fn signature(&self) -> &Signature {

@@ -78,6 +78,10 @@ impl WindowUDFImpl for SmoothItUdf {
         "smooth_it"
     }
 
+    fn is_builtin(&self) -> bool {
+        false
+    }
+
     /// Return the "signature" of this function -- namely that types of arguments it will take
     fn signature(&self) -> &Signature {
         &self.signature
@@ -182,6 +186,10 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
 
     fn name(&self) -> &str {
         "simplify_smooth_it"
+    }
+
+    fn is_builtin(&self) -> bool {
+        false
     }
 
     fn signature(&self) -> &Signature {

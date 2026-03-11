@@ -93,6 +93,10 @@ impl WindowUDFImpl for CumeDist {
         "cume_dist"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

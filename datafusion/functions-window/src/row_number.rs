@@ -98,6 +98,10 @@ impl WindowUDFImpl for RowNumber {
         "row_number"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

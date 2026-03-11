@@ -2580,7 +2580,10 @@ impl Window {
                 };
                 // When there is no PARTITION BY, row number will be unique
                 // across the entire table.
-                if udwf.name() == "row_number" && partition_by.is_empty() {
+                if udwf.name() == "row_number"
+                    && udwf.is_builtin()
+                    && partition_by.is_empty()
+                {
                     Some(idx + input_len)
                 } else {
                     None

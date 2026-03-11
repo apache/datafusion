@@ -243,6 +243,10 @@ impl WindowUDFImpl for WindowShift {
         self.kind.name()
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

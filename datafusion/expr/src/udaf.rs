@@ -142,6 +142,8 @@ impl AggregateUDF {
 
     /// Returns whether this function is built into DataFusion or else it's
     /// assumed to be user defined.
+    ///
+    /// See [`AggregateUDFImpl::is_builtin`] for more details.
     pub fn is_builtin(&self) -> bool {
         self.inner.is_builtin()
     }

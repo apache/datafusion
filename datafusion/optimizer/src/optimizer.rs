@@ -105,23 +105,16 @@ pub trait OptimizerRule: Debug {
     /// ## Matching on functions
     ///
     /// The rule should avoid function-specific transformations, and instead use
-    /// methods on [`ScalarUDFImpl`] and [`AggregateUDFImpl`]. Specifically, the
-    /// rule should not check function names as functions can be overridden, and
-    /// may not have the same semantics as the functions provided with
-    /// DataFusion.
+    /// methods on [`ScalarUDFImpl`], [`AggregateUDFImpl`] and [`WindowUDFImpl`].
+    /// Specifically, the rule should not check function names as functions can
+    /// be overridden, and may not have the same semantics as the functions built
+    /// into DataFusion. If you absolutely need to check against function names,
+    /// then you should call `func.is_builtin()` to verify the function is built-in
+    /// and therefore have a well defined semantics.
     ///
-    /// For example, if a rule rewrites a function based on the check
-    /// `func.name() == "sum"`, it may rewrite the plan incorrectly if the
-    /// registered `sum` function has different semantics (for example, the
-    /// `sum` function from the `datafusion-spark` crate).
-    ///
-    /// There are still several cases that rely on function name checking in
-    /// the rules included with DataFusion. Please see [#18643] for more details
-    /// and to help remove these cases.
-    ///
+    /// [`WindowUDFImpl`]: datafusion_expr::WindowUDFImpl
     /// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
-    /// [`AggregateUDFImpl`]: datafusion_expr::ScalarUDFImpl
-    /// [#18643]: https://github.com/apache/datafusion/issues/18643
+    /// [`AggregateUDFImpl`]: datafusion_expr::AggregateUDFImpl
     fn rewrite(
         &self,
         _plan: LogicalPlan,

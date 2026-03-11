@@ -1019,6 +1019,17 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::WindowUDF(udwf) => udwf.simplify(),
         }
     }
+
+    /// Returns whether this function is built into DataFusion or else it's
+    /// assumed to be user defined.
+    ///
+    /// See [`crate::udaf::AggregateUDFImpl::is_builtin`] and [`crate::udwf::WindowUDFImpl::is_builtin`] for more details.
+    pub fn is_builtin(&self) -> bool {
+        match self {
+            WindowFunctionDefinition::AggregateUDF(fun) => fun.is_builtin(),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.is_builtin(),
+        }
+    }
 }
 
 impl Display for WindowFunctionDefinition {
@@ -2398,7 +2409,7 @@ impl NormalizeEq for Expr {
                 }),
             ) => {
                 self_func.name() == other_func.name()
-                    && self_func.is_builtin() == other_func.is_builtin()
+                    && self_func.is_builtin() == other_func.is_builtin() // Not sure if this is needed because there is at most one function with a given name in the registry
                     && self_distinct == other_distinct
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
@@ -2452,6 +2463,7 @@ impl NormalizeEq for Expr {
                 } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
+                    && self_fun.is_builtin() == other_fun.is_builtin() // Is this really required?
                     && self_window_frame == other_window_frame
                     && match (self_filter, other_filter) {
                         (Some(a), Some(b)) => a.normalize_eq(b),

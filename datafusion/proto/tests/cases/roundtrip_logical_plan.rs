@@ -2785,6 +2785,10 @@ fn roundtrip_window() {
             "dummy_udwf"
         }
 
+        fn is_builtin(&self) -> bool {
+            unimplemented!()
+        }
+
         fn signature(&self) -> &Signature {
             &self.signature
         }

@@ -116,6 +116,10 @@ impl WindowUDFImpl for Ntile {
         "ntile"
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

@@ -310,6 +310,10 @@ impl WindowUDFImpl for ForeignWindowUDF {
         &self.name
     }
 
+    fn is_builtin(&self) -> bool {
+        false
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

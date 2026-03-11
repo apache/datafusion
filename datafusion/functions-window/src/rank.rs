@@ -202,6 +202,10 @@ impl WindowUDFImpl for Rank {
         &self.name
     }
 
+    fn is_builtin(&self) -> bool {
+        true
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }

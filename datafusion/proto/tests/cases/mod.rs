@@ -161,6 +161,10 @@ impl WindowUDFImpl for CustomUDWF {
         "custom_udwf"
     }
 
+    fn is_builtin(&self) -> bool {
+        false
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
