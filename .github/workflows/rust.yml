@@ -279,8 +279,9 @@ jobs:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -325,8 +326,9 @@ jobs:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
       - name: Rust Dependency Cache
@@ -357,8 +359,9 @@ jobs:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -388,8 +391,9 @@ jobs:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -451,8 +455,9 @@ jobs:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -499,8 +504,9 @@ jobs:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -524,8 +530,9 @@ jobs:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -567,8 +574,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run datafusion-ffi tests
@@ -660,8 +668,9 @@ jobs:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -685,8 +694,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -707,8 +717,9 @@ jobs:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -742,8 +753,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
 
       - name: Mark repository as safe for git
         # Required for git commands inside container (avoids "dubious ownership" error)
