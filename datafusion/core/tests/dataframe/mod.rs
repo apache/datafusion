@@ -107,6 +107,23 @@ async fn physical_plan_to_string(df: &DataFrame) -> String {
     formatted.to_string()
 }
 
+fn count_physical_plan_nodes_by_name(
+    plan: &Arc<dyn ExecutionPlan>,
+    node_name: &str,
+) -> usize {
+    let mut count = 0;
+    let mut stack = vec![Arc::clone(plan)];
+
+    while let Some(node) = stack.pop() {
+        if node.name() == node_name {
+            count += 1;
+        }
+        stack.extend(node.children().into_iter().cloned());
+    }
+
+    count
+}
+
 pub fn table_with_constraints() -> Arc<dyn TableProvider> {
     let dual_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
@@ -4932,25 +4949,19 @@ async fn unnest_chunks_stacked_unnest_preserves_order() -> Result<()> {
     )])?;
     ctx.register_batch("t", batch)?;
 
-    let explain = ctx
-        .sql(
-            "EXPLAIN SELECT unnest(nested1) AS val, original \
-             FROM (SELECT unnest(nested) AS nested1, nested AS original FROM t)",
-        )
-        .await?
-        .collect()
-        .await?;
-    let explain_text = batches_to_string(&explain);
-    assert_eq!(explain_text.matches("Unnest:").count(), 2);
-
-    let results = ctx
+    let dataframe = ctx
         .sql(
             "SELECT unnest(nested1) AS val, original \
              FROM (SELECT unnest(nested) AS nested1, nested AS original FROM t)",
         )
-        .await?
-        .collect()
         .await?;
+    let physical_plan = dataframe.clone().create_physical_plan().await?;
+    assert_eq!(
+        count_physical_plan_nodes_by_name(&physical_plan, "UnnestExec"),
+        2
+    );
+
+    let results = dataframe.collect().await?;
 
     assert_snapshot!(
         batches_to_string(&results),
