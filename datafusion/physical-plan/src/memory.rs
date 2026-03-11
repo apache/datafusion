@@ -177,6 +177,13 @@ pub trait LazyPartition: fmt::Debug + fmt::Display + Send + Sync {
 
     /// Creates a fresh stream for this partition.
     fn execute(&self) -> Result<SendableRecordBatchStream>;
+
+    /// Compatibility hook for the deprecated [`LazyMemoryExec::generators`] API.
+    #[doc(hidden)]
+    #[expect(deprecated)]
+    fn legacy_generator(&self) -> Option<Arc<RwLock<dyn LazyBatchGenerator>>> {
+        None
+    }
 }
 
 /// Compatibility adapter for legacy [`LazyBatchGenerator`].
@@ -231,6 +238,10 @@ impl LazyPartition for LazyBatchGeneratorPartition {
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
+
+    fn legacy_generator(&self) -> Option<Arc<RwLock<dyn LazyBatchGenerator>>> {
+        Some(Arc::clone(&self.generator))
+    }
 }
 
 fn aggregate_boundedness(boundedness: impl Iterator<Item = Boundedness>) -> Boundedness {
@@ -261,12 +272,7 @@ fn collect_legacy_generators(
 ) -> Vec<Arc<RwLock<dyn LazyBatchGenerator>>> {
     partitions
         .iter()
-        .filter_map(|partition| {
-            partition
-                .as_any()
-                .downcast_ref::<LazyBatchGeneratorPartition>()
-                .map(|adapter| Arc::clone(adapter.generator()))
-        })
+        .filter_map(|partition| partition.legacy_generator())
         .collect()
 }
 

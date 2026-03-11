@@ -2169,11 +2169,11 @@ impl protobuf::PhysicalPlanNode {
             None => return internal_err!("Missing args in GenerateSeriesNode"),
         };
 
-        let partition = Arc::new(GenerateSeriesPartition::new(
+        let partition = Arc::new(GenerateSeriesPartition::try_new(
             Arc::clone(&schema),
             args,
             generate_series.target_batch_size as usize,
-        ));
+        )?);
 
         Ok(Arc::new(LazyMemoryExec::try_new_with_partitions(
             schema,

@@ -244,11 +244,11 @@ impl GenerateSeriesTable {
     }
 
     pub fn as_partition(&self, batch_size: usize) -> Result<Arc<dyn LazyPartition>> {
-        Ok(Arc::new(GenerateSeriesPartition::new(
+        Ok(Arc::new(GenerateSeriesPartition::try_new(
             self.schema(),
             self.args.clone(),
             batch_size,
-        )))
+        )?))
     }
 
     #[deprecated(
@@ -259,20 +259,7 @@ impl GenerateSeriesTable {
         &self,
         batch_size: usize,
     ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
-        let generator: Arc<RwLock<dyn LazyBatchGenerator>> =
-            match build_generate_series_state(
-                Arc::clone(&self.schema),
-                &self.args,
-                batch_size,
-            )? {
-                GenerateSeriesState::Empty { name } => {
-                    Arc::new(RwLock::new(Empty { name }))
-                }
-                GenerateSeriesState::Int64(state) => Arc::new(RwLock::new(state)),
-                GenerateSeriesState::Timestamp(state) => Arc::new(RwLock::new(state)),
-            };
-
-        Ok(generator)
+        build_generate_series_generator(Arc::clone(&self.schema), &self.args, batch_size)
     }
 }
 
@@ -284,12 +271,20 @@ pub struct GenerateSeriesPartition {
 }
 
 impl GenerateSeriesPartition {
-    pub fn new(schema: SchemaRef, args: GenSeriesArgs, batch_size: usize) -> Self {
-        Self {
+    pub fn try_new(
+        schema: SchemaRef,
+        args: GenSeriesArgs,
+        batch_size: usize,
+    ) -> Result<Self> {
+        if batch_size == 0 {
+            return plan_err!("Batch size cannot be zero");
+        }
+
+        Ok(Self {
             schema,
             args,
             batch_size,
-        }
+        })
     }
 
     pub fn args(&self) -> &GenSeriesArgs {
@@ -427,6 +422,21 @@ fn build_generate_series_state(
     }
 }
 
+#[expect(deprecated)]
+fn build_generate_series_generator(
+    schema: SchemaRef,
+    args: &GenSeriesArgs,
+    batch_size: usize,
+) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
+    let generator: Arc<RwLock<dyn LazyBatchGenerator>> =
+        match build_generate_series_state(schema, args, batch_size)? {
+            GenerateSeriesState::Empty { name } => Arc::new(RwLock::new(Empty { name })),
+            GenerateSeriesState::Int64(state) => Arc::new(RwLock::new(state)),
+            GenerateSeriesState::Timestamp(state) => Arc::new(RwLock::new(state)),
+        };
+
+    Ok(generator)
+}
 impl LazyPartition for GenerateSeriesPartition {
     fn as_any(&self) -> &dyn Any {
         self
@@ -450,6 +460,16 @@ impl LazyPartition for GenerateSeriesPartition {
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+
+    #[expect(deprecated)]
+    fn legacy_generator(&self) -> Option<Arc<RwLock<dyn LazyBatchGenerator>>> {
+        build_generate_series_generator(
+            Arc::clone(&self.schema),
+            &self.args,
+            self.batch_size,
+        )
+        .ok()
     }
 }
 
@@ -904,11 +924,11 @@ mod generate_series_tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
     #[expect(deprecated)]
-    use datafusion_physical_plan::memory::LazyBatchGenerator;
+    use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
     use futures::TryStreamExt;
 
     use crate::generate_series::{
-        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState,
+        GenSeriesArgs, GenerateSeriesPartition, GenerateSeriesTable, GenericSeriesState,
     };
 
     #[test]
@@ -981,5 +1001,69 @@ mod generate_series_tests {
             vec![1, 2, 3, 4, 5]
         );
         Ok(())
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_generate_series_native_partition_preserves_legacy_generators_accessor()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let table = GenerateSeriesTable::new(
+            Arc::clone(&schema),
+            GenSeriesArgs::Int64Args {
+                start: 1,
+                end: 3,
+                step: 1,
+                include_end: true,
+                name: "generate_series",
+            },
+        );
+        let partition = table.as_partition(2)?;
+        let exec = LazyMemoryExec::try_new_with_partitions(schema, vec![partition])?;
+
+        let generators = exec.generators();
+        assert_eq!(generators.len(), 1);
+
+        let batch = generators[0]
+            .write()
+            .generate_next_batch()?
+            .expect("missing compatibility batch");
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("expected int64 batch");
+        assert_eq!(values.values(), &[1, 2]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_series_partition_rejects_zero_batch_size_during_direct_construction()
+    {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+
+        let err = GenerateSeriesPartition::try_new(
+            schema,
+            GenSeriesArgs::Int64Args {
+                start: 0,
+                end: 10,
+                step: 1,
+                include_end: true,
+                name: "generate_series",
+            },
+            0,
+        )
+        .expect_err("zero batch size should fail during direct construction");
+
+        assert!(err.to_string().contains("Batch size cannot be zero"));
     }
 }

@@ -1947,6 +1947,41 @@ async fn roundtrip_generate_series() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn generate_series_zero_batch_size_fails_during_plan_construction() -> Result<()> {
+    let schema = Arc::new(Schema::new(Fields::from([Arc::new(Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    ))])));
+    let node = PhysicalPlanNode {
+        physical_plan_type: Some(
+            protobuf::physical_plan_node::PhysicalPlanType::GenerateSeries(
+                protobuf::GenerateSeriesNode {
+                    schema: Some(schema.as_ref().try_into()?),
+                    target_batch_size: 0,
+                    args: Some(protobuf::generate_series_node::Args::Int64Args(
+                        protobuf::GenerateSeriesArgsInt64 {
+                            start: 0,
+                            end: 10,
+                            step: 1,
+                            include_end: true,
+                            name: protobuf::GenerateSeriesName::GsGenerateSeries as i32,
+                        },
+                    )),
+                },
+            ),
+        ),
+    };
+
+    let ctx = SessionContext::new();
+    let err = node
+        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})
+        .expect_err("zero batch size should fail during plan construction");
+    assert!(err.to_string().contains("Batch size cannot be zero"));
+
+    Ok(())
+}
 #[tokio::test]
 #[expect(deprecated)]
 async fn roundtrip_generate_series_legacy_generator_adapter() -> Result<()> {
