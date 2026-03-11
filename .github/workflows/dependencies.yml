@@ -24,7 +24,7 @@ concurrency:
 on:
   push:
     branches-ignore:
-      - 'gh-readonly-queue/**'
+      - "gh-readonly-queue/**"
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
@@ -44,10 +44,11 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -62,7 +63,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
       - name: Install cargo-machete
         run: cargo install cargo-machete --version ^0.9 --locked
       - name: Detect unused dependencies
