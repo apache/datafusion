@@ -167,7 +167,7 @@ impl Drop for DataFusion {
 
                 let current = e.value.as_deref().unwrap_or("NULL");
 
-                self.pb.println(format!("  {}: {} -> {}", e.key, old, new));
+                self.pb.println(format!("  {}: {} -> {}", e.key, default, current));
             }
         }
     }
