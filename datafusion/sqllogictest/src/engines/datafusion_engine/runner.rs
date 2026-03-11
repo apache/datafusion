@@ -150,7 +150,11 @@ impl Drop for DataFusion {
         let mut changed = false;
 
         for e in self.ctx.state().config().options().entries() {
-            if self.default_config.get(&e.key) != Some(&e.value) {
+            let default_entry = self.default_config.remove(&e.key);
+
+            if let Some(default_entry) = default_entry
+                && default_entry.as_ref() != e.value.as_ref()
+            {
                 if !changed {
                     changed = true;
                     self.pb.println(format!(
@@ -159,16 +163,27 @@ impl Drop for DataFusion {
                     ));
                 }
 
-                let default = self
-                    .default_config
-                    .get(&e.key)
-                    .and_then(|v| v.as_deref())
-                    .unwrap_or("NULL");
-
+                let default = default_entry.as_deref().unwrap_or("NULL");
                 let current = e.value.as_deref().unwrap_or("NULL");
 
-                self.pb.println(format!("  {}: {} -> {}", e.key, default, current));
+                self.pb
+                    .println(format!("  {}: {} -> {}", e.key, default, current));
             }
+        }
+
+        // Any remaining entries were present initially but removed during execution
+        for (key, value) in &self.default_config {
+            if !changed {
+                changed = true;
+                self.pb.println(format!(
+                    "SLT file {} left modified configuration",
+                    self.relative_path.display()
+                ));
+            }
+
+            let default = value.as_deref().unwrap_or("NULL");
+
+            self.pb.println(format!("  {key}: {default} -> NULL"));
         }
     }
 }
