@@ -17,6 +17,17 @@
 
 use super::*;
 
+const CREATE_RECURSIVE_UNNEST_TABLE: &str = "CREATE TABLE recursive_unnest_table AS VALUES \
+     (struct([1], 'a'), [[[1],[2]],[[1,1]]], [struct([1],[[1,2]])]), \
+     (struct([2], 'b'), [[[3,4],[5]],[[null,6],null,[7,8]]], [struct([2],[[3],[4]])])";
+
+const RECURSIVE_REPEATED_REFS_QUERY: &str = "SELECT \
+       unnest(column2), \
+       unnest(unnest(column2)), \
+       unnest(unnest(unnest(column2))), \
+       unnest(unnest(unnest(column2))) + 1 \
+     FROM recursive_unnest_table";
+
 fn count_physical_plan_nodes_by_name(
     plan: &Arc<dyn ExecutionPlan>,
     node_name: &str,
@@ -49,15 +60,16 @@ fn batch_slicing_ctx_with_partitions(
     )
 }
 
+fn total_rows(results: &[RecordBatch]) -> usize {
+    results.iter().map(RecordBatch::num_rows).sum()
+}
+
 fn assert_total_and_max_batch_rows(
     results: &[RecordBatch],
     total_rows: usize,
     max_batch_rows: usize,
 ) {
-    assert_eq!(
-        results.iter().map(RecordBatch::num_rows).sum::<usize>(),
-        total_rows
-    );
+    assert_eq!(self::total_rows(results), total_rows);
     assert!(
         results
             .iter()
@@ -82,6 +94,11 @@ fn nested_int32_batch(rows: &[&[&[i32]]]) -> Result<RecordBatch> {
         "nested",
         Arc::new(list_builder.finish()) as ArrayRef,
     )])?)
+}
+
+async fn create_recursive_unnest_table(ctx: &SessionContext) -> Result<()> {
+    ctx.sql(CREATE_RECURSIVE_UNNEST_TABLE).await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -274,7 +291,7 @@ async fn unnest_chunks_recursive_single_row_fallback() -> Result<()> {
         .collect()
         .await?;
 
-    assert_eq!(results.iter().map(RecordBatch::num_rows).sum::<usize>(), 9);
+    assert_eq!(total_rows(&results), 9);
 
     assert_snapshot!(
         batches_to_sort_string(&results),
@@ -342,23 +359,9 @@ async fn unnest_chunks_stacked_unnest_preserves_order() -> Result<()> {
 async fn unnest_chunks_recursive_repeated_refs_preserve_order() -> Result<()> {
     let ctx = batch_slicing_ctx_with_partitions(2, 4);
 
-    ctx.sql(
-        "CREATE TABLE recursive_unnest_table AS VALUES \
-         (struct([1], 'a'), [[[1],[2]],[[1,1]]], [struct([1],[[1,2]])]), \
-         (struct([2], 'b'), [[[3,4],[5]],[[null,6],null,[7,8]]], [struct([2],[[3],[4]])])",
-    )
-    .await?;
+    create_recursive_unnest_table(&ctx).await?;
 
-    let dataframe = ctx
-        .sql(
-            "SELECT \
-               unnest(column2), \
-               unnest(unnest(column2)), \
-               unnest(unnest(unnest(column2))), \
-               unnest(unnest(unnest(column2))) + 1 \
-             FROM recursive_unnest_table",
-        )
-        .await?;
+    let dataframe = ctx.sql(RECURSIVE_REPEATED_REFS_QUERY).await?;
 
     let physical_plan = dataframe.clone().create_physical_plan().await?;
     let plan_text = displayable(physical_plan.as_ref())
