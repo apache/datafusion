@@ -579,6 +579,59 @@ pub(crate) fn build_parquet_read_plan(
     )))
 }
 
+/// Builds a unified [`ParquetReadPlan`] for a set of projection expressions
+///
+/// Unlike [`build_parquet_read_plan`] (which is used for filter pushdown and
+/// returns `None` when an expression references unsupported nested types or
+/// missing columns), this function always succeeds. It collects every column
+/// that *can* be resolved in the file and produces a leaf-level projection
+/// mask. Columns missing from the file are silently skipped since the projection
+/// layer handles those by inserting nulls.
+pub(crate) fn build_projection_read_plan(
+    exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    file_schema: &Schema,
+    schema_descr: &SchemaDescriptor,
+) -> ParquetReadPlan {
+    let mut all_root_indices = Vec::new();
+    let mut all_struct_accesses = Vec::new();
+
+    for expr in exprs {
+        let mut checker = PushdownChecker::new(file_schema, true);
+        let _ = expr.visit(&mut checker);
+        let columns = checker.into_sorted_columns();
+
+        all_root_indices.extend_from_slice(&columns.required_columns);
+        all_struct_accesses.extend(columns.struct_field_accesses);
+    }
+
+    all_root_indices.sort_unstable();
+    all_root_indices.dedup();
+
+    let leaf_indices = {
+        let mut out =
+            leaf_indices_for_roots(all_root_indices.iter().copied(), schema_descr);
+        let struct_leaf_indices =
+            resolve_struct_field_leaves(&all_struct_accesses, file_schema, schema_descr);
+
+        out.extend_from_slice(&struct_leaf_indices);
+        out.sort_unstable();
+        out.dedup();
+
+        out
+    };
+
+    let projection_mask =
+        ProjectionMask::leaves(schema_descr, leaf_indices.iter().copied());
+
+    let projected_schema =
+        build_filter_schema(file_schema, &all_root_indices, &all_struct_accesses);
+
+    ParquetReadPlan {
+        projection_mask,
+        projected_schema,
+    }
+}
+
 fn leaf_indices_for_roots<I>(
     root_indices: I,
     schema_descr: &SchemaDescriptor,
