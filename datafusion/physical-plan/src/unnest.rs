@@ -45,7 +45,7 @@ use async_trait::async_trait;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
-    internal_err,
+    internal_err, is_unnest_placeholder_field,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -209,12 +209,12 @@ impl UnnestExec {
     fn disable_chunking_for_stacked_unnest(&self) -> bool {
         self.list_column_indices.iter().any(|unnest| {
             unnest.depth == 1
-                && self
-                    .input
-                    .schema()
-                    .field(unnest.index_in_input_schema)
-                    .name()
-                    .contains("__unnest_placeholder(")
+                && is_unnest_placeholder_field(
+                    self.input
+                        .schema()
+                        .field(unnest.index_in_input_schema)
+                        .as_ref(),
+                )
         })
     }
 }
@@ -1186,7 +1186,10 @@ mod tests {
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{Field, Int32Type};
     use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::unnest_placeholder_field_metadata;
     use insta::assert_snapshot;
+
+    use crate::empty::EmptyExec;
 
     // Create a GenericListArray with the following list values:
     //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
@@ -1234,6 +1237,36 @@ mod tests {
             Arc::new(StringArray::from(values)),
             valid.finish(),
         )
+    }
+
+    #[test]
+    fn stacked_unnest_detection_uses_field_metadata() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "stacked_input",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            )
+            .with_metadata(unnest_placeholder_field_metadata().to_hashmap()),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![Field::new(
+            "unnested",
+            DataType::Int32,
+            true,
+        )]));
+        let exec = UnnestExec::new(
+            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+            vec![ListUnnest {
+                index_in_input_schema: 0,
+                depth: 1,
+            }],
+            vec![],
+            output_schema,
+            UnnestOptions::default(),
+        )?;
+
+        assert!(exec.disable_chunking_for_stacked_unnest());
+        Ok(())
     }
 
     // Create a FixedSizeListArray with the following list values:

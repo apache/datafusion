@@ -17,7 +17,33 @@
 
 //! [`UnnestOptions`] for unnesting structured types
 
+use std::collections::BTreeMap;
+
+use arrow::datatypes::Field;
+
 use crate::Column;
+use crate::metadata::FieldMetadata;
+
+/// Field metadata key used to mark planner-internal unnest placeholder columns.
+pub const UNNEST_PLACEHOLDER_METADATA_KEY: &str = "datafusion:unnest_placeholder";
+
+const UNNEST_PLACEHOLDER_METADATA_VALUE: &str = "true";
+
+/// Returns metadata that marks a field as a planner-internal unnest placeholder.
+pub fn unnest_placeholder_field_metadata() -> FieldMetadata {
+    FieldMetadata::from(BTreeMap::from([(
+        UNNEST_PLACEHOLDER_METADATA_KEY.to_string(),
+        UNNEST_PLACEHOLDER_METADATA_VALUE.to_string(),
+    )]))
+}
+
+/// Returns true if the field is a planner-internal unnest placeholder.
+pub fn is_unnest_placeholder_field(field: &Field) -> bool {
+    field
+        .metadata()
+        .get(UNNEST_PLACEHOLDER_METADATA_KEY)
+        .is_some_and(|value| value == UNNEST_PLACEHOLDER_METADATA_VALUE)
+}
 
 /// Options for unnesting a column that contains a list type,
 /// replicating values in the other, non nested rows.

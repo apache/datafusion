@@ -28,6 +28,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue,
     assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
+    unnest_placeholder_field_metadata,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
@@ -455,7 +456,10 @@ impl RecursiveUnnestRewriter<'_> {
                 );
                 push_projection_dedupl(
                     self.inner_projection_exprs,
-                    expr_in_unnest.clone().alias(placeholder_name.clone()),
+                    expr_in_unnest.clone().alias_with_metadata(
+                        placeholder_name.clone(),
+                        Some(unnest_placeholder_field_metadata()),
+                    ),
                 );
                 self.columns_unnestings
                     .insert(Column::from_name(placeholder_name.clone()), None);
@@ -469,7 +473,10 @@ impl RecursiveUnnestRewriter<'_> {
             | DataType::LargeList(_) => {
                 push_projection_dedupl(
                     self.inner_projection_exprs,
-                    expr_in_unnest.clone().alias(placeholder_name.clone()),
+                    expr_in_unnest.clone().alias_with_metadata(
+                        placeholder_name.clone(),
+                        Some(unnest_placeholder_field_metadata()),
+                    ),
                 );
 
                 let post_unnest_expr = col(post_unnest_name.clone()).alias(alias_name);
