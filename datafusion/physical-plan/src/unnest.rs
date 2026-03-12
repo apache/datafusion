@@ -209,10 +209,7 @@ impl UnnestExec {
         self.list_column_indices.iter().any(|unnest| {
             unnest.depth == 1
                 && is_unnest_placeholder_field(
-                    self.input
-                        .schema()
-                        .field(unnest.index_in_input_schema)
-                        .as_ref(),
+                    self.input.schema().field(unnest.index_in_input_schema),
                 )
         })
     }
