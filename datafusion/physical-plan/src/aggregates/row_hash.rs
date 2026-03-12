@@ -1267,10 +1267,10 @@ impl GroupedHashAggregateStream {
             // on the grouping columns.
             self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
 
-            // Recreate group_values to use streaming mode (GroupValuesColumn<true>
-            // with scalarized_intern) which preserves input row order, as required
-            // by GroupOrderingFull. This is only needed for multi-column group by,
-            // since single-column uses GroupValuesPrimitive which is always safe.
+            // Recreate `group_values` for streaming merge so group ids are assigned
+            // in first-seen order, as required by `GroupOrderingFull`.
+            // The pre-spill multi-column collector may use `vectorized_intern`, which
+            // can assign new group ids out of input order under hash collisions.
             let group_schema = self
                 .spill_state
                 .merging_group_by
