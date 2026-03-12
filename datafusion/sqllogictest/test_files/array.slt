@@ -3453,8 +3453,24 @@ select
 ----
 [1, 2, 3] List(Utf8View)
 
+# array_concat with NULL elements inside arrays
+query ?
+select array_concat([1, NULL, 3], [NULL, 5]);
+----
+[1, NULL, 3, NULL, 5]
+
+query ?
+select array_concat([NULL, NULL], [1, 2], [NULL]);
+----
+[NULL, NULL, 1, 2, NULL]
+
+query ?
+select array_concat([NULL, NULL], [NULL, NULL]);
+----
+[NULL, NULL, NULL, NULL]
+
 # array_concat error
-query error DataFusion error: Error during planning: Execution error: Function 'array_concat' user-defined coercion failed with "Error during planning: array_concat does not support type Int64"
+query error DataFusion error: Error during planning: Execution error: Function 'array_concat' user-defined coercion failed with: Error during planning: array_concat does not support type Int64
 select array_concat(1, 2);
 
 # array_concat scalar function #1

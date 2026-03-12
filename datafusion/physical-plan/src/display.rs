@@ -734,13 +734,14 @@ impl TreeRenderVisitor<'_, '_> {
                 if let Some(node) = root.get_node(x, y) {
                     write!(self.f, "{}", Self::VERTICAL)?;
 
-                    // Rigure out what to render.
-                    let mut render_text = String::new();
-                    if render_y == 0 {
-                        render_text = node.name.clone();
+                    // Figure out what to render.
+                    let mut render_text = if render_y == 0 {
+                        node.name.clone()
                     } else if render_y <= extra_info[x].len() {
-                        render_text = extra_info[x][render_y - 1].clone();
-                    }
+                        extra_info[x][render_y - 1].clone()
+                    } else {
+                        String::new()
+                    };
 
                     render_text = Self::adjust_text_for_rendering(
                         &render_text,
@@ -1186,14 +1187,17 @@ mod tests {
             todo!()
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             if partition.is_some() {
-                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+                return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             match self {
                 Self::Panic => panic!("expected panic"),
                 Self::Error => Err(internal_datafusion_err!("expected error")),
-                Self::Ok => Ok(Statistics::new_unknown(self.schema().as_ref())),
+                Self::Ok => Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref()))),
             }
         }
     }

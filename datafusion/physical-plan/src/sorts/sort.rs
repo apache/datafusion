@@ -731,37 +731,27 @@ impl ExternalSorter {
             // Sort the batch immediately and get all output batches
             let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
 
-            // Free the old reservation and grow it to match the actual sorted output size
-            reservation.free();
+            // Resize the reservation to match the actual sorted output size.
+            // Using try_resize avoids a release-then-reacquire cycle, which
+            // matters for MemoryPool implementations where grow/shrink have
+            // non-trivial cost (e.g. JNI calls in Comet).
+            let total_sorted_size: usize = sorted_batches
+                .iter()
+                .map(get_record_batch_memory_size)
+                .sum();
+            reservation
+                .try_resize(total_sorted_size)
+                .map_err(Self::err_with_oom_context)?;
 
-            Result::<_, DataFusionError>::Ok((schema, sorted_batches, reservation))
-        })
-        .then({
-            move |batches| async move {
-                match batches {
-                    Ok((schema, sorted_batches, reservation)) => {
-                        // Calculate the total size of sorted batches
-                        let total_sorted_size: usize = sorted_batches
-                            .iter()
-                            .map(get_record_batch_memory_size)
-                            .sum();
-                        reservation
-                            .try_grow(total_sorted_size)
-                            .map_err(Self::err_with_oom_context)?;
-
-                        // Wrap in ReservationStream to hold the reservation
-                        Ok(Box::pin(ReservationStream::new(
-                            Arc::clone(&schema),
-                            Box::pin(RecordBatchStreamAdapter::new(
-                                schema,
-                                futures::stream::iter(sorted_batches.into_iter().map(Ok)),
-                            )),
-                            reservation,
-                        )) as SendableRecordBatchStream)
-                    }
-                    Err(e) => Err(e),
-                }
-            }
+            // Wrap in ReservationStream to hold the reservation
+            Result::<_, DataFusionError>::Ok(Box::pin(ReservationStream::new(
+                Arc::clone(&schema),
+                Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&schema),
+                    futures::stream::iter(sorted_batches.into_iter().map(Ok)),
+                )),
+                reservation,
+            )) as SendableRecordBatchStream)
         })
         .try_flatten()
         .map(move |batch| match batch {
@@ -1345,16 +1335,14 @@ impl ExecutionPlan for SortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if !self.preserve_partitioning() {
-            return self
-                .input
-                .partition_statistics(None)?
-                .with_fetch(self.fetch, 0, 1);
-        }
-        self.input
-            .partition_statistics(partition)?
-            .with_fetch(self.fetch, 0, 1)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let p = if !self.preserve_partitioning() {
+            None
+        } else {
+            partition
+        };
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(p)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
