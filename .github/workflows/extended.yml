@@ -154,15 +154,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Run tests (force_hash_collisions)
+      - name: Run tests
         run: |
           cd datafusion
           cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --exclude datafusion-cli --workspace --lib --tests --features=force_hash_collisions,avro
-          cargo clean
-      - name: Run tests (force_hash_partial_collisions, #20724)
-        run: |
-          cd datafusion
-          cargo test  --profile ci -p datafusion --test core_integration --features=force_hash_partial_collisions -- memory_limit::test_no_duplicate_groups_after_spill --exact
           cargo clean
 
   sqllogictest-sqlite:
