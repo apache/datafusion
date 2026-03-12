@@ -330,3 +330,60 @@ async fn unnest_chunks_stacked_unnest_preserves_order() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn unnest_chunks_recursive_repeated_refs_preserve_order() -> Result<()> {
+    let ctx = batch_slicing_ctx(2);
+
+    ctx.sql(
+        "CREATE TABLE recursive_unnest_table AS VALUES \
+         (struct([1], 'a'), [[[1],[2]],[[1,1]]], [struct([1],[[1,2]])]), \
+         (struct([2], 'b'), [[[3,4],[5]],[[null,6],null,[7,8]]], [struct([2],[[3],[4]])])",
+    )
+    .await?;
+
+    let dataframe = ctx
+        .sql(
+            "SELECT \
+               unnest(column2), \
+               unnest(unnest(column2)), \
+               unnest(unnest(unnest(column2))), \
+               unnest(unnest(unnest(column2))) + 1 \
+             FROM recursive_unnest_table",
+        )
+        .await?;
+
+    let results = dataframe.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r"
+    +----------------------------------------+------------------------------------------------+--------------------------------------------------------+-------------------------------------------------------------------+
+    | UNNEST(recursive_unnest_table.column2) | UNNEST(UNNEST(recursive_unnest_table.column2)) | UNNEST(UNNEST(UNNEST(recursive_unnest_table.column2))) | UNNEST(UNNEST(UNNEST(recursive_unnest_table.column2))) + Int64(1) |
+    +----------------------------------------+------------------------------------------------+--------------------------------------------------------+-------------------------------------------------------------------+
+    | [[1], [2]]                             | [1]                                            | 1                                                      | 2                                                                 |
+    | [[1, 1]]                               | [2]                                            |                                                        |                                                                   |
+    | [[1], [2]]                             | [1, 1]                                         | 2                                                      | 3                                                                 |
+    | [[1, 1]]                               |                                                |                                                        |                                                                   |
+    | [[1], [2]]                             | [1]                                            | 1                                                      | 2                                                                 |
+    | [[1, 1]]                               | [2]                                            | 1                                                      | 2                                                                 |
+    | [[1], [2]]                             | [1, 1]                                         |                                                        |                                                                   |
+    | [[1, 1]]                               |                                                |                                                        |                                                                   |
+    | [[3, 4], [5]]                          | [3, 4]                                         | 3                                                      | 4                                                                 |
+    | [[, 6], , [7, 8]]                      | [5]                                            | 4                                                      | 5                                                                 |
+    | [[3, 4], [5]]                          | [, 6]                                          | 5                                                      | 6                                                                 |
+    | [[, 6], , [7, 8]]                      |                                                |                                                        |                                                                   |
+    |                                        | [7, 8]                                         |                                                        |                                                                   |
+    | [[3, 4], [5]]                          | [3, 4]                                         |                                                        |                                                                   |
+    | [[, 6], , [7, 8]]                      | [5]                                            | 6                                                      | 7                                                                 |
+    | [[3, 4], [5]]                          | [, 6]                                          |                                                        |                                                                   |
+    | [[, 6], , [7, 8]]                      |                                                |                                                        |                                                                   |
+    |                                        | [7, 8]                                         |                                                        |                                                                   |
+    | [[3, 4], [5]]                          |                                                | 7                                                      | 8                                                                 |
+    | [[, 6], , [7, 8]]                      |                                                | 8                                                      | 9                                                                 |
+    +----------------------------------------+------------------------------------------------+--------------------------------------------------------+-------------------------------------------------------------------+
+    "
+    );
+
+    Ok(())
+}
