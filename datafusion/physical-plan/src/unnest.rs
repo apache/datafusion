@@ -127,7 +127,6 @@ impl UnnestExec {
             .collect();
 
         // Manually build projection mapping from non-unnested input columns to their positions in the output
-        let input_schema = input.schema();
         let projection_mapping: ProjectionMapping = non_unnested_indices
             .iter()
             .map(|&input_idx| {
@@ -210,10 +209,11 @@ impl UnnestExec {
         // UnnestExec can preserve parent-row boundaries across downstream
         // repartitioning while remaining memory-bounded. Stacked UNNEST still
         // needs a parent-row-aware chunking strategy to avoid order regressions.
+        let input_schema = self.input.schema();
         self.list_column_indices.iter().any(|unnest| {
             unnest.depth > 1
                 || is_unnest_placeholder_field(
-                    self.input.schema().field(unnest.index_in_input_schema),
+                    input_schema.field(unnest.index_in_input_schema),
                 )
         })
     }
@@ -341,6 +341,16 @@ impl PendingBatch {
     fn new(batch: RecordBatch) -> Self {
         Self { batch, next_row: 0 }
     }
+
+    fn remaining_rows(&self) -> usize {
+        self.batch.num_rows().saturating_sub(self.next_row)
+    }
+
+    fn slice(&mut self, row_count: usize) -> RecordBatch {
+        let batch = self.batch.slice(self.next_row, row_count);
+        self.next_row += row_count;
+        batch
+    }
 }
 
 /// A stream that issues [RecordBatch]es with unnested column data.
@@ -428,13 +438,13 @@ impl UnnestStream {
                 return Ok(None);
             };
 
-            if pending.next_row >= pending.batch.num_rows() {
+            if pending.remaining_rows() == 0 {
                 self.pending = None;
                 return Ok(None);
             }
 
             let row_count = if self.disable_chunking_for_recursive_or_staged_unnest {
-                pending.batch.num_rows().saturating_sub(pending.next_row)
+                pending.remaining_rows()
             } else {
                 next_input_slice_row_count(
                     &pending.batch,
@@ -444,30 +454,31 @@ impl UnnestStream {
                     self.output_batch_size,
                 )?
             };
-            let batch_slice = pending.batch.slice(pending.next_row, row_count);
-            pending.next_row += row_count;
-            let exhausted = pending.next_row >= pending.batch.num_rows();
-            if exhausted {
+            let batch_slice = pending.slice(row_count);
+            if pending.remaining_rows() == 0 {
                 self.pending = None;
             }
 
-            let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
-            let timer = elapsed_compute.timer();
-            let result = build_batch(
-                &batch_slice,
-                &self.schema,
-                &self.list_type_columns,
-                &self.struct_column_indices,
-                &self.options,
-            )?;
-            timer.done();
-
-            let Some(result_batch) = result else {
+            let Some(result_batch) = self.build_batch(&batch_slice)? else {
                 continue;
             };
 
             return Ok(Some(result_batch));
         }
+    }
+
+    fn build_batch(&self, batch: &RecordBatch) -> Result<Option<RecordBatch>> {
+        let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
+        let timer = elapsed_compute.timer();
+        let result = build_batch(
+            batch,
+            &self.schema,
+            &self.list_type_columns,
+            &self.struct_column_indices,
+            &self.options,
+        );
+        timer.done();
+        result
     }
 }
 
@@ -693,17 +704,13 @@ fn list_unnest_at_level(
         .iter()
         .enumerate()
         .map(|(i, _)| {
-            let mut involved_in_unnesting = false;
-            for unnesting in list_type_unnests {
-                if unnesting.index_in_input_schema != i {
-                    continue;
-                }
-                involved_in_unnesting = true;
-                if unnesting.depth < level_to_unnest {
-                    return true;
-                }
-            }
-            !involved_in_unnesting
+            let mut unnests = list_type_unnests
+                .iter()
+                .filter(|unnest| unnest.index_in_input_schema == i);
+            unnests.any(|unnest| unnest.depth < level_to_unnest)
+                || !list_type_unnests
+                    .iter()
+                    .any(|unnest| unnest.index_in_input_schema == i)
         })
         .collect();
 
@@ -776,55 +783,56 @@ fn build_batch(
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
 ) -> Result<Option<RecordBatch>> {
-    let transformed = if list_type_columns.is_empty() {
-        flatten_struct_cols(batch.columns(), schema, struct_column_indices)
-    } else {
-        let mut temp_unnested_result = HashMap::new();
-        let max_recursion = list_type_columns
-            .iter()
-            .map(|ListUnnest { depth, .. }| *depth)
-            .max()
-            .unwrap_or_default();
-        let mut flatten_arrs = vec![];
+    if list_type_columns.is_empty() {
+        return flatten_struct_cols(batch.columns(), schema, struct_column_indices)
+            .map(Some);
+    }
 
-        for depth in (1..=max_recursion).rev() {
-            let input = if depth == max_recursion {
-                batch.columns()
-            } else {
-                &flatten_arrs
-            };
-            let Some(temp_result) = list_unnest_at_level(
-                input,
-                list_type_columns,
-                &mut temp_unnested_result,
-                depth,
-                options,
-            )?
-            else {
-                return Ok(None);
-            };
-            flatten_arrs = temp_result;
-        }
+    let mut temp_unnested_result = HashMap::new();
+    let max_recursion = list_type_columns
+        .iter()
+        .map(|ListUnnest { depth, .. }| *depth)
+        .max()
+        .unwrap_or_default();
+    let mut flatten_arrs = vec![];
 
-        let output_order: HashMap<ListUnnest, usize> = list_type_columns
-            .iter()
-            .enumerate()
-            .map(|(order, unnest_def)| (*unnest_def, order))
-            .collect();
-        let mut multi_unnested_per_original_index: HashMap<usize, Vec<ArrayRef>> =
-            HashMap::new();
-        let mut unnested_columns = temp_unnested_result.into_iter().collect::<Vec<_>>();
-        unnested_columns.sort_by_key(|(unnest, _)| {
-            output_order.get(unnest).copied().unwrap_or_default()
-        });
-        for (unnest, arr) in unnested_columns {
-            multi_unnested_per_original_index
-                .entry(unnest.index_in_input_schema)
-                .or_default()
-                .push(arr);
-        }
+    for depth in (1..=max_recursion).rev() {
+        let input = if depth == max_recursion {
+            batch.columns()
+        } else {
+            &flatten_arrs
+        };
+        let Some(temp_result) = list_unnest_at_level(
+            input,
+            list_type_columns,
+            &mut temp_unnested_result,
+            depth,
+            options,
+        )?
+        else {
+            return Ok(None);
+        };
+        flatten_arrs = temp_result;
+    }
 
-        let ret = flatten_arrs
+    let output_order: HashMap<ListUnnest, usize> = list_type_columns
+        .iter()
+        .enumerate()
+        .map(|(order, unnest_def)| (*unnest_def, order))
+        .collect();
+    let mut multi_unnested_per_original_index = HashMap::<usize, Vec<_>>::new();
+    let mut unnested_columns = temp_unnested_result.into_iter().collect::<Vec<_>>();
+    unnested_columns
+        .sort_by_key(|(unnest, _)| output_order.get(unnest).copied().unwrap_or_default());
+    for (unnest, arr) in unnested_columns {
+        multi_unnested_per_original_index
+            .entry(unnest.index_in_input_schema)
+            .or_default()
+            .push(arr);
+    }
+
+    flatten_struct_cols(
+        &flatten_arrs
             .into_iter()
             .enumerate()
             .flat_map(|(col_idx, arr)| {
@@ -832,11 +840,11 @@ fn build_batch(
                     .remove(&col_idx)
                     .unwrap_or_else(|| vec![arr])
             })
-            .collect::<Vec<_>>();
-
-        flatten_struct_cols(&ret, schema, struct_column_indices)
-    }?;
-    Ok(Some(transformed))
+            .collect::<Vec<_>>(),
+        schema,
+        struct_column_indices,
+    )
+    .map(Some)
 }
 
 /// Find the longest list length among the given list arrays for each row.
