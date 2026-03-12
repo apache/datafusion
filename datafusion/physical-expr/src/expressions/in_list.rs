@@ -922,6 +922,138 @@ mod tests {
         ])
     }
 
+    #[test]
+    fn test_in_list_fixed_size_binary_canonical_path() -> Result<()> {
+        let width = 16;
+        let matching = vec![0x10; width as usize];
+        let also_in_list = vec![0x20; width as usize];
+        let not_in_list = vec![0x30; width as usize];
+
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeBinary(width),
+            true,
+        )]);
+        let col_a = col("a", &schema)?;
+        let list_array = Arc::new(FixedSizeBinaryArray::try_from(vec![
+            matching.as_slice(),
+            also_in_list.as_slice(),
+        ])?) as ArrayRef;
+        let expr = Arc::new(InListExpr::try_new_from_array(
+            Arc::clone(&col_a),
+            list_array,
+            false,
+            &schema,
+        )?) as Arc<dyn PhysicalExpr>;
+
+        let batch_array = Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            vec![
+                Some(matching.as_slice()),
+                Some(not_in_list.as_slice()),
+                None,
+            ]
+            .into_iter(),
+            width,
+        )?) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![batch_array])?;
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![Some(true), Some(false), None])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_fixed_size_binary_offset_path() -> Result<()> {
+        let width = 16;
+        let before_slice = vec![0x01; width as usize];
+        let in_slice = vec![0x02; width as usize];
+        let not_in_slice = vec![0x03; width as usize];
+
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeBinary(width),
+            false,
+        )]);
+        let col_a = col("a", &schema)?;
+        let parent = Arc::new(FixedSizeBinaryArray::try_from(vec![
+            before_slice.as_slice(),
+            in_slice.as_slice(),
+            not_in_slice.as_slice(),
+        ])?) as ArrayRef;
+        let sliced_list = parent.slice(1, 1);
+        let expr = Arc::new(InListExpr::try_new_from_array(
+            Arc::clone(&col_a),
+            sliced_list,
+            false,
+            &schema,
+        )?) as Arc<dyn PhysicalExpr>;
+
+        let batch_array = Arc::new(FixedSizeBinaryArray::try_from(vec![
+            in_slice.as_slice(),
+            before_slice.as_slice(),
+        ])?) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![batch_array])?;
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(result, &BooleanArray::from(vec![Some(true), Some(false)]));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_fixed_size_binary_offset_path_with_nulls() -> Result<()> {
+        let width = 16;
+        let before_slice = vec![0xAA; width as usize];
+        let in_slice = vec![0xBB; width as usize];
+        let not_in_slice = vec![0xCC; width as usize];
+
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeBinary(width),
+            true,
+        )]);
+        let col_a = col("a", &schema)?;
+        let parent = Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            vec![
+                Some(before_slice.as_slice()),
+                None,
+                Some(in_slice.as_slice()),
+            ]
+            .into_iter(),
+            width,
+        )?) as ArrayRef;
+        let sliced_list = parent.slice(1, 2);
+        let expr = Arc::new(InListExpr::try_new_from_array(
+            Arc::clone(&col_a),
+            sliced_list,
+            false,
+            &schema,
+        )?) as Arc<dyn PhysicalExpr>;
+
+        let batch_array = Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            vec![
+                Some(in_slice.as_slice()),
+                Some(not_in_slice.as_slice()),
+                None,
+            ]
+            .into_iter(),
+            width,
+        )?) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![batch_array])?;
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_boolean_array(&result);
+        assert_eq!(result, &BooleanArray::from(vec![Some(true), None, None]));
+
+        Ok(())
+    }
+
     /// Test IN LIST for date types (Date32, Date64).
     ///
     /// Test data: 0 (in list), 2 (not in list), [1, 3] (other list values)

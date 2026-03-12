@@ -26,15 +26,16 @@
 //! multiple types (Int64, Float64, Timestamp, Duration) that share the same
 //! byte width, reducing code duplication.
 
+use std::hash::BuildHasher;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{ArrowPrimitiveType, ByteViewType, Decimal128Type};
+use arrow::datatypes::{ArrowPrimitiveType, ByteViewType, DataType, Decimal128Type};
 use arrow::util::bit_iterator::BitIndexIterator;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::with_hashes;
 use datafusion_common::{Result, exec_datafusion_err};
 use hashbrown::HashTable;
@@ -88,11 +89,17 @@ where
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        fn matches_reinterpreted_width(dt: &DataType, width: usize) -> bool {
+            dt.primitive_width() == Some(width)
+                || matches!(dt, DataType::FixedSizeBinary(byte_width) if *byte_width as usize == width)
+        }
+
         arrow::array::downcast_dictionary_array! {
             v => {
-                if v.values().data_type().primitive_width()
-                    != Some(size_of::<T::Native>())
-                {
+                if !matches_reinterpreted_width(
+                    v.values().data_type(),
+                    size_of::<T::Native>(),
+                ) {
                     return Err(exec_datafusion_err!(
                         "Failed to downcast array to primitive type"
                     ));
@@ -105,7 +112,7 @@ where
             _ => {}
         }
 
-        if v.data_type().primitive_width() != Some(size_of::<T::Native>()) {
+        if !matches_reinterpreted_width(v.data_type(), size_of::<T::Native>()) {
             return Err(exec_datafusion_err!(
                 "Failed to downcast array to primitive type"
             ));
@@ -151,8 +158,9 @@ impl StaticFilter for Utf8ViewHashFilter {
 pub(crate) fn reinterpret_any_primitive_to<T: ArrowPrimitiveType>(
     array: &dyn Array,
 ) -> ArrayRef {
-    let values = array.to_data().buffers()[0].clone();
-    let buffer: ScalarBuffer<T::Native> = values.into();
+    let data = array.to_data();
+    let values = data.buffers()[0].clone();
+    let buffer = ScalarBuffer::<T::Native>::new(values, data.offset(), data.len());
     Arc::new(PrimitiveArray::<T>::new(buffer, array.nulls().cloned()))
 }
 
@@ -417,7 +425,7 @@ where
         let views: &[i128] = bv.views().inner().typed_data();
 
         let mut masked_views = Vec::new();
-        let state = RandomState::new();
+        let state = RandomState::default();
         let mut long_value_table = HashTable::new();
 
         // Build hash table for long strings using batch hashing
@@ -617,7 +625,7 @@ impl<O: arrow::array::OffsetSizeTrait + 'static> Utf8TwoStageFilter<O> {
 
         let len = arr.len();
         let mut encoded_values = Vec::with_capacity(len);
-        let state = RandomState::new();
+        let state = RandomState::default();
         let mut long_string_table = HashTable::new();
         let mut all_short = true;
 

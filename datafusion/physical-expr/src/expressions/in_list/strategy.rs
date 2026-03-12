@@ -25,6 +25,7 @@
 //! - 8-byte types (Int64/Float64): branchless (≤16) or hash (>16)
 //! - 16-byte types (Decimal128): branchless (≤4) or hash (>4)
 //! - Utf8View (short strings): branchless (≤4) or hash (>4)
+//! - FixedSizeBinary(N) for N ∈ {1,2,4,8,16}: reinterpreted as N-byte primitive
 //! - Byte arrays (Utf8, Binary, etc.): ByteArrayFilter / ByteViewFilter
 //! - Other types: ArrayStaticFilter (fallback for List, Struct, Map, etc.)
 
@@ -154,6 +155,11 @@ pub(super) fn instantiate_static_filter(
         };
     }
 
+    // FixedSizeBinary with power-of-2 width: reinterpret as primitive
+    if let &DataType::FixedSizeBinary(byte_width) = dt {
+        return instantiate_fixed_size_binary_filter(in_array, byte_width);
+    }
+
     let strategy = select_strategy(dt, len);
 
     match (dt, strategy) {
@@ -200,6 +206,49 @@ pub(super) fn instantiate_static_filter(
 
         // Fallback for nested/complex types (List, Struct, Map, Union, etc.)
         (_, Generic) => Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?)),
+    }
+}
+
+// =============================================================================
+// FIXED-SIZE BINARY DISPATCH
+// =============================================================================
+
+/// Creates the optimal filter for FixedSizeBinary(N) arrays.
+///
+/// For power-of-2 widths (1, 2, 4, 8, 16), FixedSizeBinary has the same
+/// contiguous buffer layout as primitive arrays, so we zero-copy reinterpret
+/// and use the optimized primitive filters (bitmap, branchless, hash).
+/// Non-power-of-2 widths fall back to ArrayStaticFilter.
+fn instantiate_fixed_size_binary_filter(
+    in_array: ArrayRef,
+    byte_width: i32,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
+    let len = in_array.len() - in_array.null_count();
+    match byte_width {
+        1 => make_bitmap_filter::<U8Config>(&in_array),
+        2 => make_bitmap_filter::<U16Config>(&in_array),
+        4 => {
+            if len <= BRANCHLESS_MAX_4B {
+                make_branchless_filter::<UInt32Type>(&in_array, 4)
+            } else {
+                make_direct_probe_filter_reinterpreted::<UInt32Type>(&in_array)
+            }
+        }
+        8 => {
+            if len <= BRANCHLESS_MAX_8B {
+                make_branchless_filter::<UInt64Type>(&in_array, 8)
+            } else {
+                make_direct_probe_filter_reinterpreted::<UInt64Type>(&in_array)
+            }
+        }
+        16 => {
+            if len <= BRANCHLESS_MAX_16B {
+                make_branchless_filter::<Decimal128Type>(&in_array, 16)
+            } else {
+                make_direct_probe_filter_reinterpreted::<Decimal128Type>(&in_array)
+            }
+        }
+        _ => Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?)),
     }
 }
 
