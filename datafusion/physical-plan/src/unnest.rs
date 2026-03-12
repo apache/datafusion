@@ -206,6 +206,9 @@ impl UnnestExec {
     }
 
     fn disable_chunking_for_stacked_unnest(&self) -> bool {
+        // TODO(#20788): Re-enable chunking for stacked UNNEST once UnnestExec
+        // can preserve parent-row boundaries and stay memory-bounded across
+        // nested placeholder-driven stages.
         self.list_column_indices.iter().any(|unnest| {
             unnest.depth == 1
                 && is_unnest_placeholder_field(
