@@ -114,7 +114,6 @@ extended_tests = []
 arrow = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
-bytes = { workspace = true }
 bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
@@ -151,8 +150,6 @@ log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
-rand = { workspace = true }
-regex = { workspace = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
@@ -171,6 +168,7 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-macros = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
+bytes = { workspace = true }
 env_logger = { workspace = true }
 glob = { workspace = true }
 insta = { workspace = true }

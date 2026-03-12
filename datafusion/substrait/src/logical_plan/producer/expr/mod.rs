@@ -60,9 +60,6 @@ use substrait::version;
 ///
 /// Substrait also requires the input schema of the expressions to be included in the
 /// message.  The field names of the input schema will be serialized.
-// Silence deprecation warnings for `extension_uris` during the uri -> urn migration
-// See: https://github.com/substrait-io/substrait/issues/856
-#[expect(deprecated)]
 pub fn to_substrait_extended_expr(
     exprs: &[(&Expr, &Field)],
     schema: &DFSchemaRef,
@@ -87,7 +84,6 @@ pub fn to_substrait_extended_expr(
     Ok(Box::new(ExtendedExpression {
         advanced_extensions: None,
         expected_type_urls: vec![],
-        extension_uris: vec![],
         extension_urns: vec![],
         extensions: extensions.into(),
         version: Some(version::version_with_producer("datafusion")),

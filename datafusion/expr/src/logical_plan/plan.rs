@@ -4456,49 +4456,49 @@ mod tests {
         [
           {
             "Plan": {
+              "Node Type": "Projection",
               "Expressions": [
                 "employee_csv.id"
               ],
-              "Node Type": "Projection",
-              "Output": [
-                "id"
-              ],
               "Plans": [
                 {
-                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Node Type": "Filter",
-                  "Output": [
-                    "id",
-                    "state"
-                  ],
+                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Plans": [
                     {
                       "Node Type": "Subquery",
-                      "Output": [
-                        "state"
-                      ],
                       "Plans": [
                         {
                           "Node Type": "TableScan",
+                          "Relation Name": "employee_csv",
+                          "Plans": [],
                           "Output": [
                             "state"
-                          ],
-                          "Plans": [],
-                          "Relation Name": "employee_csv"
+                          ]
                         }
+                      ],
+                      "Output": [
+                        "state"
                       ]
                     },
                     {
                       "Node Type": "TableScan",
+                      "Relation Name": "employee_csv",
+                      "Plans": [],
                       "Output": [
                         "id",
                         "state"
-                      ],
-                      "Plans": [],
-                      "Relation Name": "employee_csv"
+                      ]
                     }
+                  ],
+                  "Output": [
+                    "id",
+                    "state"
                   ]
                 }
+              ],
+              "Output": [
+                "id"
               ]
             }
           }

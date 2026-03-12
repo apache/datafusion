@@ -23,7 +23,10 @@ use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
 use crate::ExecutionPlanProperties;
-use crate::execution_plan::{EmissionType, boundedness_from_children, stub_properties};
+use crate::execution_plan::{
+    EmissionType, boundedness_from_children, has_same_children_properties,
+    stub_properties,
+};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -373,9 +376,9 @@ impl HashJoinExecBuilder {
             children.len() == 2,
             "wrong number of children passed into `HashJoinExecBuilder`"
         );
+        self.preserve_properties &= has_same_children_properties(&self.exec, &children)?;
         self.exec.right = children.swap_remove(1);
         self.exec.left = children.swap_remove(0);
-        self.preserve_properties = false;
         Ok(self)
     }
 
