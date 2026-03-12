@@ -205,13 +205,14 @@ impl UnnestExec {
         }
     }
 
-    fn disable_chunking_for_stacked_unnest(&self) -> bool {
-        // TODO(#20788): Re-enable chunking for stacked UNNEST once UnnestExec
-        // can preserve parent-row boundaries and stay memory-bounded across
-        // nested placeholder-driven stages.
+    fn disable_chunking_for_recursive_or_staged_unnest(&self) -> bool {
+        // TODO(#20788): Re-enable chunking for recursive / staged UNNEST once
+        // UnnestExec can preserve parent-row boundaries across downstream
+        // repartitioning while remaining memory-bounded. Stacked UNNEST still
+        // needs a parent-row-aware chunking strategy to avoid order regressions.
         self.list_column_indices.iter().any(|unnest| {
-            unnest.depth == 1
-                && is_unnest_placeholder_field(
+            unnest.depth > 1
+                || is_unnest_placeholder_field(
                     self.input.schema().field(unnest.index_in_input_schema),
                 )
         })
@@ -292,8 +293,8 @@ impl ExecutionPlan for UnnestExec {
             list_type_columns: self.list_column_indices.clone(),
             struct_column_indices: self.struct_column_indices.iter().copied().collect(),
             pending: None,
-            disable_chunking_for_stacked_unnest: self
-                .disable_chunking_for_stacked_unnest(),
+            disable_chunking_for_recursive_or_staged_unnest: self
+                .disable_chunking_for_recursive_or_staged_unnest(),
             output_batch_size,
             options: self.options.clone(),
             metrics,
@@ -354,7 +355,7 @@ struct UnnestStream {
     list_type_columns: Vec<ListUnnest>,
     struct_column_indices: HashSet<usize>,
     pending: Option<PendingBatch>,
-    disable_chunking_for_stacked_unnest: bool,
+    disable_chunking_for_recursive_or_staged_unnest: bool,
     /// Target maximum number of output rows per emitted batch.
     output_batch_size: usize,
     /// Options
@@ -432,7 +433,7 @@ impl UnnestStream {
                 return Ok(None);
             }
 
-            let row_count = if self.disable_chunking_for_stacked_unnest {
+            let row_count = if self.disable_chunking_for_recursive_or_staged_unnest {
                 pending.batch.num_rows().saturating_sub(pending.next_row)
             } else {
                 next_input_slice_row_count(
@@ -1179,7 +1180,7 @@ mod tests {
     }
 
     #[test]
-    fn stacked_unnest_detection_uses_field_metadata() -> Result<()> {
+    fn chunking_is_disabled_for_staged_unnest_inputs() -> Result<()> {
         let input_schema = Arc::new(Schema::new(vec![
             Field::new(
                 "stacked_input",
@@ -1204,7 +1205,37 @@ mod tests {
             UnnestOptions::default(),
         )?;
 
-        assert!(exec.disable_chunking_for_stacked_unnest());
+        assert!(exec.disable_chunking_for_recursive_or_staged_unnest());
+        Ok(())
+    }
+
+    #[test]
+    fn chunking_is_disabled_for_recursive_unnest() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "recursive_input",
+            DataType::List(Arc::new(Field::new_list_field(
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ))),
+            true,
+        )]));
+        let output_schema = Arc::new(Schema::new(vec![Field::new(
+            "unnested",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            true,
+        )]));
+        let exec = UnnestExec::new(
+            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+            vec![ListUnnest {
+                index_in_input_schema: 0,
+                depth: 2,
+            }],
+            vec![],
+            output_schema,
+            UnnestOptions::default(),
+        )?;
+
+        assert!(exec.disable_chunking_for_recursive_or_staged_unnest());
         Ok(())
     }
 

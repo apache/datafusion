@@ -35,10 +35,17 @@ fn count_physical_plan_nodes_by_name(
 }
 
 fn batch_slicing_ctx(batch_size: usize) -> SessionContext {
+    batch_slicing_ctx_with_partitions(batch_size, 1)
+}
+
+fn batch_slicing_ctx_with_partitions(
+    batch_size: usize,
+    target_partitions: usize,
+) -> SessionContext {
     SessionContext::new_with_config(
         SessionConfig::new()
             .with_batch_size(batch_size)
-            .with_target_partitions(1),
+            .with_target_partitions(target_partitions),
     )
 }
 
@@ -247,13 +254,13 @@ async fn unnest_chunks_preserve_nulls_false() -> Result<()> {
     Ok(())
 }
 
-/// Tests that recursive unnest (`depth > 1`) falls back to single input-row
-/// slices and still produces the correct output under a small `batch_size`.
+/// Tests that recursive unnest (`depth > 1`) preserves correctness under a
+/// small `batch_size`.
 ///
-/// When any `ListUnnest.depth > 1`, `next_input_slice_row_count` returns `1`
-/// to avoid over-estimating expansion.  This test verifies that the fallback
-/// produces all rows correctly and that every output batch fits within
-/// `batch_size`.
+/// Recursive / staged unnest now bypasses row-slice chunking entirely because
+/// changing batch boundaries can leak through downstream repartitioning and
+/// reorder parent-row groups. This test verifies that the conservative
+/// fallback still produces the complete result.
 #[tokio::test]
 async fn unnest_chunks_recursive_single_row_fallback() -> Result<()> {
     let ctx = batch_slicing_ctx(4);
@@ -267,7 +274,7 @@ async fn unnest_chunks_recursive_single_row_fallback() -> Result<()> {
         .collect()
         .await?;
 
-    assert_total_and_max_batch_rows(&results, 9, 4);
+    assert_eq!(results.iter().map(RecordBatch::num_rows).sum::<usize>(), 9);
 
     assert_snapshot!(
         batches_to_sort_string(&results),
@@ -333,7 +340,7 @@ async fn unnest_chunks_stacked_unnest_preserves_order() -> Result<()> {
 
 #[tokio::test]
 async fn unnest_chunks_recursive_repeated_refs_preserve_order() -> Result<()> {
-    let ctx = batch_slicing_ctx(2);
+    let ctx = batch_slicing_ctx_with_partitions(2, 4);
 
     ctx.sql(
         "CREATE TABLE recursive_unnest_table AS VALUES \
@@ -352,6 +359,19 @@ async fn unnest_chunks_recursive_repeated_refs_preserve_order() -> Result<()> {
              FROM recursive_unnest_table",
         )
         .await?;
+
+    let physical_plan = dataframe.clone().create_physical_plan().await?;
+    let plan_text = displayable(physical_plan.as_ref())
+        .indent(false)
+        .to_string();
+    assert!(
+        plan_text.contains("RepartitionExec: partitioning=RoundRobinBatch(4)"),
+        "expected repeated-reference unnest plan to include RoundRobinBatch(4), got:\n{plan_text}"
+    );
+    assert!(
+        count_physical_plan_nodes_by_name(&physical_plan, "UnnestExec") >= 1,
+        "expected repeated-reference unnest plan to include UnnestExec, got:\n{plan_text}"
+    );
 
     let results = dataframe.collect().await?;
 
