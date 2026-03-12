@@ -428,7 +428,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// You should not call this method directly as it does not handle recursion. Instead use
     /// [`bind_runtime_physical_expr`] to handle recursion and bind the full expression tree.
     ///
-    /// Note for implementers: this method should *not* handle recursion.
+    /// Note for implementers: this method should not handle recursion.
     /// Recursion is handled in [`bind_runtime_physical_expr`].
     fn bind_runtime(
         &self,
