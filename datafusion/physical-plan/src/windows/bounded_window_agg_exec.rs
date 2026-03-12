@@ -395,9 +395,10 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stat = self.input.partition_statistics(partition)?;
-        self.statistics_helper(input_stat)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let input_stat =
+            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        Ok(Arc::new(self.statistics_helper(input_stat)?))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

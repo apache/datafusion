@@ -26,6 +26,7 @@ use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
+use std::fmt::Write;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::iter::repeat_n;
@@ -4959,8 +4960,10 @@ impl fmt::Display for ScalarValue {
             | ScalarValue::BinaryView(e) => match e {
                 Some(bytes) => {
                     // print up to first 10 bytes, with trailing ... if needed
+                    const HEX_CHARS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
                     for b in bytes.iter().take(10) {
-                        write!(f, "{b:02X}")?;
+                        f.write_char(HEX_CHARS_UPPER[(b >> 4) as usize] as char)?;
+                        f.write_char(HEX_CHARS_UPPER[(b & 0x0f) as usize] as char)?;
                     }
                     if bytes.len() > 10 {
                         write!(f, "...")?;

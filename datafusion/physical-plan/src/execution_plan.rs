@@ -553,7 +553,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// If statistics are not available, should return [`Statistics::new_unknown`]
     /// (the default), not an error.
     /// If `partition` is `None`, it returns statistics for the entire plan.
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(idx) = partition {
             // Validate partition index
             let partition_count = self.properties().partitioning.partition_count();
@@ -564,7 +564,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
                 partition_count
             );
         }
-        Ok(Statistics::new_unknown(&self.schema()))
+        Ok(Arc::new(Statistics::new_unknown(&self.schema())))
     }
 
     /// Returns `true` if a limit can be safely pushed down through this
@@ -579,6 +579,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     /// Returns a fetching variant of this `ExecutionPlan` node, if it supports
     /// fetch limits. Returns `None` otherwise.
+    ///
+    /// See physical optimizer rule [`limit_pushdown`] for details.
+    ///
+    /// [`limit_pushdown`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/limit_pushdown/index.html
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
@@ -1504,7 +1508,7 @@ pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executi
 /// replace is requested.
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
 pub fn has_same_children_properties(
-    plan: &Arc<impl ExecutionPlan>,
+    plan: &impl ExecutionPlan,
     children: &[Arc<dyn ExecutionPlan>],
 ) -> Result<bool> {
     let old_children = plan.children();
@@ -1527,7 +1531,10 @@ pub fn has_same_children_properties(
 #[macro_export]
 macro_rules! check_if_same_properties {
     ($plan: expr, $children: expr) => {
-        if $crate::execution_plan::has_same_children_properties(&$plan, &$children)? {
+        if $crate::execution_plan::has_same_children_properties(
+            $plan.as_ref(),
+            &$children,
+        )? {
             let plan = $plan.with_new_children_and_same_properties($children);
             return Ok(::std::sync::Arc::new(plan));
         }
@@ -1640,7 +1647,10 @@ mod tests {
             unimplemented!()
         }
 
-        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
     }
@@ -1710,7 +1720,10 @@ mod tests {
             unimplemented!()
         }
 
-        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
     }
@@ -1775,7 +1788,10 @@ mod tests {
             unimplemented!()
         }
 
-        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
     }

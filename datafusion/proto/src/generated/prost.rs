@@ -2001,6 +2001,8 @@ pub struct RepartitionExecNode {
     /// }
     #[prost(message, optional, tag = "5")]
     pub partitioning: ::core::option::Option<Partitioning>,
+    #[prost(bool, tag = "6")]
+    pub preserve_order: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {

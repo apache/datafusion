@@ -23,7 +23,10 @@ use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
 use crate::ExecutionPlanProperties;
-use crate::execution_plan::{EmissionType, boundedness_from_children, stub_properties};
+use crate::execution_plan::{
+    EmissionType, boundedness_from_children, has_same_children_properties,
+    stub_properties,
+};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -373,9 +376,9 @@ impl HashJoinExecBuilder {
             children.len() == 2,
             "wrong number of children passed into `HashJoinExecBuilder`"
         );
+        self.preserve_properties &= has_same_children_properties(&self.exec, &children)?;
         self.exec.right = children.swap_remove(1);
         self.exec.left = children.swap_remove(0);
-        self.preserve_properties = false;
         Ok(self)
     }
 
@@ -1441,7 +1444,7 @@ impl ExecutionPlan for HashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let stats = match (partition, self.mode) {
             // For CollectLeft mode, the left side is collected into a single partition,
             // so all left partitions are available to each output partition.
@@ -1451,8 +1454,8 @@ impl ExecutionPlan for HashJoinExec {
                 let right_stats = self.right.partition_statistics(Some(partition))?;
 
                 estimate_join_statistics(
-                    left_stats,
-                    right_stats,
+                    (*left_stats).clone(),
+                    (*right_stats).clone(),
                     &self.on,
                     &self.join_type,
                     &self.join_schema,
@@ -1466,8 +1469,8 @@ impl ExecutionPlan for HashJoinExec {
                 let right_stats = self.right.partition_statistics(Some(partition))?;
 
                 estimate_join_statistics(
-                    left_stats,
-                    right_stats,
+                    (*left_stats).clone(),
+                    (*right_stats).clone(),
                     &self.on,
                     &self.join_type,
                     &self.join_schema,
@@ -1480,9 +1483,11 @@ impl ExecutionPlan for HashJoinExec {
                 // TODO stats: it is not possible in general to know the output size of joins
                 // There are some special cases though, for example:
                 // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
+                let left_stats = self.left.partition_statistics(None)?;
+                let right_stats = self.right.partition_statistics(None)?;
                 estimate_join_statistics(
-                    self.left.partition_statistics(None)?,
-                    self.right.partition_statistics(None)?,
+                    (*left_stats).clone(),
+                    (*right_stats).clone(),
                     &self.on,
                     &self.join_type,
                     &self.join_schema,
@@ -1492,7 +1497,7 @@ impl ExecutionPlan for HashJoinExec {
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
         // Apply fetch limit to statistics
-        stats.with_fetch(self.fetch, 0, 1)
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the

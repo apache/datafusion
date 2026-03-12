@@ -1353,6 +1353,7 @@ message RepartitionExecNode{
   //   uint64 unknown = 4;
   // }
   Partitioning partitioning = 5;
+  bool preserve_order = 6;
 }
 
 message Partitioning {

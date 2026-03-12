@@ -1782,6 +1782,35 @@ fn roundtrip_union() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_repartition_preserve_order() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+    let sort_exprs: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    // Create two sorted single-partition inputs, then union them to get
+    // a sorted input with 2 partitions.
+    let source1 = SortExec::new(
+        sort_exprs.clone(),
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+    );
+    let source2 = SortExec::new(sort_exprs, Arc::new(EmptyExec::new(schema)));
+    let union = UnionExec::try_new(vec![
+        Arc::new(source1) as Arc<dyn ExecutionPlan>,
+        Arc::new(source2) as Arc<dyn ExecutionPlan>,
+    ])?;
+
+    let repartition = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
+        .with_preserve_order();
+    assert!(repartition.preserve_order());
+
+    roundtrip_test(Arc::new(repartition))
+}
+
+#[test]
 fn roundtrip_interleave() -> Result<()> {
     let field_a = Field::new("col", DataType::Int64, false);
     let schema_left = Schema::new(vec![field_a.clone()]);
