@@ -71,13 +71,6 @@ default = [
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "datafusion-common/force_hash_collisions"]
-# Used for testing ONLY: truncates hashes to 5 bits (32 distinct values) to create partial collisions.
-# Unlike force_hash_collisions (all hashes = 0), this creates a mix of colliding and non-colliding keys,
-# which triggers non-monotonic group indices in vectorized_intern (#20724).
-force_hash_partial_collisions = [
-    "datafusion-physical-plan/force_hash_partial_collisions",
-    "datafusion-common/force_hash_partial_collisions",
-]
 math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet", "datafusion-datasource-parquet"]
 parquet_encryption = [
