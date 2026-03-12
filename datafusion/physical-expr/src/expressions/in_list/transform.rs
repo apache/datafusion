@@ -49,6 +49,16 @@ fn views_as_i128(views: &ScalarBuffer<u128>) -> &[i128] {
     views.inner().typed_data()
 }
 
+#[inline]
+pub(crate) fn matches_reinterpreted_width(dt: &DataType, width: usize) -> bool {
+    dt.primitive_width() == Some(width)
+        || matches!(
+            dt,
+            DataType::FixedSizeBinary(byte_width)
+                if usize::try_from(*byte_width).ok() == Some(width)
+        )
+}
+
 /// Bitmap filter for signed 1-byte and 2-byte primitive arrays.
 ///
 /// The bitmap implementation is keyed by an unsigned primitive type (`UInt8` or
@@ -172,9 +182,9 @@ where
     }
 
     let width = size_of::<T::Native>();
-    if in_array.data_type().primitive_width() != Some(width) {
+    if !matches_reinterpreted_width(in_array.data_type(), width) {
         return Err(exec_datafusion_err!(
-            "BitmapFilter: expected {}-byte primitive array for {} bitmap, got {}",
+            "BitmapFilter: expected {}-byte primitive or fixed-size binary array for {} bitmap, got {}",
             width,
             T::DATA_TYPE,
             in_array.data_type()
@@ -209,9 +219,9 @@ where
     let arr = if is_native {
         Arc::clone(in_array)
     } else {
-        if in_array.data_type().primitive_width() != Some(width) {
+        if !matches_reinterpreted_width(in_array.data_type(), width) {
             return Err(exec_datafusion_err!(
-                "BranchlessFilter: expected {width}-byte primitive array, got {}",
+                "BranchlessFilter: expected {width}-byte primitive or fixed-size binary array, got {}",
                 in_array.data_type()
             ));
         }

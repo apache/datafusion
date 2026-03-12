@@ -15,6 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Filter selection strategy for InList expressions
+//!
+//! Selects the optimal lookup strategy based on data type and list size:
+//!
+//! - 1-byte types (Int8/UInt8): bitmap (32 bytes, O(1) bit test)
+//! - 2-byte types (Int16/UInt16): bitmap (8 KB, O(1) bit test)
+//! - 4-byte types (Int32/Float32): branchless (up to 32) or hash
+//! - 8-byte types (Int64/Float64): branchless (up to 16) or hash
+//! - 16-byte types (Decimal128): branchless (up to 4) or hash
+//! - Utf8View/BinaryView: short-string or masked-view filters
+//! - FixedSizeBinary(1/2/4/8/16): reinterpreted as fixed-width values
+//! - Other types: ArrayStaticFilter fallback
+
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, BooleanArray};
@@ -28,7 +41,8 @@ use super::static_filter::{StaticFilter, handle_dictionary};
 use super::transform::{
     make_bitmap_filter, make_branchless_filter, make_byte_view_masked_filter,
     make_utf8view_branchless_filter, make_utf8view_hash_filter,
-    reinterpret_any_primitive_to, utf8view_all_short_strings,
+    matches_reinterpreted_width, reinterpret_any_primitive_to,
+    utf8view_all_short_strings,
 };
 
 /// Maximum list size for branchless lookup on 1-byte primitives (Int8, UInt8).
@@ -127,6 +141,11 @@ pub(super) fn instantiate_static_filter(
         };
     }
 
+    // FixedSizeBinary with power-of-2 width: reinterpret as primitive
+    if let &DataType::FixedSizeBinary(byte_width) = dt {
+        return instantiate_fixed_size_binary_filter(in_array, byte_width);
+    }
+
     let strategy = select_strategy(dt, len);
 
     match (dt, strategy) {
@@ -157,6 +176,44 @@ pub(super) fn instantiate_static_filter(
 
         // Fallback for nested/complex types and strings.
         (_, Generic) => Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?)),
+    }
+}
+
+/// Creates the optimal filter for FixedSizeBinary(N) arrays.
+///
+/// Widths 1, 2, 4, 8, and 16 share the same contiguous values-buffer layout
+/// as the corresponding primitive width, so they can use the optimized
+/// bitmap, branchless, or direct-probe filters without copying values.
+fn instantiate_fixed_size_binary_filter(
+    in_array: ArrayRef,
+    byte_width: i32,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
+    let len = in_array.len() - in_array.null_count();
+    match byte_width {
+        1 => make_bitmap_filter::<UInt8Type>(&in_array),
+        2 => make_bitmap_filter::<UInt16Type>(&in_array),
+        4 => {
+            if len <= BRANCHLESS_MAX_4B {
+                make_branchless_filter::<UInt32Type>(&in_array)
+            } else {
+                make_direct_probe_filter_reinterpreted::<UInt32Type>(&in_array)
+            }
+        }
+        8 => {
+            if len <= BRANCHLESS_MAX_8B {
+                make_branchless_filter::<UInt64Type>(&in_array)
+            } else {
+                make_direct_probe_filter_reinterpreted::<UInt64Type>(&in_array)
+            }
+        }
+        16 => {
+            if len <= BRANCHLESS_MAX_16B {
+                make_branchless_filter::<Decimal128Type>(&in_array)
+            } else {
+                make_direct_probe_filter_reinterpreted::<Decimal128Type>(&in_array)
+            }
+        }
+        _ => Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?)),
     }
 }
 
@@ -215,9 +272,9 @@ where
     if in_array.data_type() == &D::DATA_TYPE {
         return Ok(Arc::new(DirectProbeFilter::<D>::try_new(in_array)?));
     }
-    if in_array.data_type().primitive_width() != Some(size_of::<D::Native>()) {
+    if !matches_reinterpreted_width(in_array.data_type(), size_of::<D::Native>()) {
         return Err(exec_datafusion_err!(
-            "DirectProbeFilter: expected {}-byte primitive array, got {}",
+            "DirectProbeFilter: expected {}-byte primitive or fixed-size binary array, got {}",
             size_of::<D::Native>(),
             in_array.data_type()
         ));
@@ -231,7 +288,7 @@ where
     }))
 }
 
-/// Wrapper for DirectProbeFilter with type reinterpretation.
+/// Direct-probe filter for primitive or FixedSizeBinary arrays with the same byte width.
 struct ReinterpretedDirectProbeFilter<D: ArrowPrimitiveType>
 where
     D::Native: DirectProbeHashable,
@@ -271,7 +328,7 @@ where
 mod tests {
     use super::*;
 
-    use arrow::array::{ArrayRef, BooleanArray, Float64Array};
+    use arrow::array::{ArrayRef, BooleanArray, FixedSizeBinaryArray, Float64Array};
 
     #[test]
     fn direct_probe_strategy_handles_reinterpreted_slices() -> Result<()> {
@@ -308,6 +365,41 @@ mod tests {
         assert_eq!(
             filter.contains(&needles, false)?,
             BooleanArray::from(vec![Some(true), None, Some(true)])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_size_binary_uses_bitmap_and_direct_probe_paths() -> Result<()> {
+        let haystack: ArrayRef = Arc::new(FixedSizeBinaryArray::try_from(vec![
+            [0x12, 0x34].as_slice(),
+            [0xab, 0xcd].as_slice(),
+        ])?);
+        let filter = instantiate_static_filter(haystack)?;
+        let needles = FixedSizeBinaryArray::try_from(vec![
+            [0xab, 0xcd].as_slice(),
+            [0xff, 0xff].as_slice(),
+        ])?;
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![Some(true), Some(false)])
+        );
+
+        let values: Vec<_> = (0_u32..33).map(u32::to_le_bytes).collect();
+        let haystack_values: Vec<_> = values.iter().map(|v| v.as_slice()).collect();
+        let haystack: ArrayRef =
+            Arc::new(FixedSizeBinaryArray::try_from(haystack_values)?);
+        let filter = instantiate_static_filter(haystack)?;
+        let direct_hit = 7_u32.to_le_bytes();
+        let direct_miss = 99_u32.to_le_bytes();
+        let needles = FixedSizeBinaryArray::try_from(vec![
+            direct_hit.as_slice(),
+            direct_miss.as_slice(),
+        ])?;
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![Some(true), Some(false)])
         );
 
         Ok(())
