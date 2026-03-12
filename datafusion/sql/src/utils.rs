@@ -706,9 +706,13 @@ mod tests {
     use std::{ops::Add, sync::Arc};
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema};
-    use datafusion_common::{Column, DFSchema, Result};
+    use datafusion_common::{
+        Column, DFSchema, Result, is_unnest_placeholder_field,
+        unnest_placeholder_field_metadata,
+    };
     use datafusion_expr::{
-        ColumnUnnestList, EmptyRelation, LogicalPlan, col, lit, unnest,
+        ColumnUnnestList, EmptyRelation, Expr, ExprSchemable, LogicalPlan, col, lit,
+        unnest,
     };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
@@ -736,6 +740,13 @@ mod tests {
             .collect();
         let l_formatted: Vec<String> = l.iter().map(|i| (*i).to_string()).collect();
         assert_eq!(l_formatted, r_formatted);
+    }
+
+    fn placeholder_alias(input_column: &str) -> Expr {
+        col(input_column).alias_with_metadata(
+            format!("__unnest_placeholder({input_column})"),
+            Some(unnest_placeholder_field_metadata()),
+        )
     }
 
     #[test]
@@ -799,12 +810,12 @@ mod tests {
 
         // Still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
+        let (_, placeholder_field) =
+            inner_projection_exprs[0].to_field(input.schema())?;
+        assert!(is_unnest_placeholder_field(placeholder_field.as_ref()));
         assert_eq!(
             inner_projection_exprs,
-            vec![
-                col("3d_col").alias("__unnest_placeholder(3d_col)"),
-                col("i64_col")
-            ]
+            vec![placeholder_alias("3d_col"), col("i64_col")]
         );
 
         // unnest(3d_col) as 2d_col
@@ -833,10 +844,7 @@ mod tests {
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
-            vec![
-                col("3d_col").alias("__unnest_placeholder(3d_col)"),
-                col("i64_col")
-            ]
+            vec![placeholder_alias("3d_col"), col("i64_col")]
         );
 
         Ok(())
@@ -897,7 +905,7 @@ mod tests {
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_col").alias("__unnest_placeholder(struct_col)"),]
+            vec![placeholder_alias("struct_col"),]
         );
 
         // unnest(array_col) + 1
@@ -931,8 +939,8 @@ mod tests {
         assert_eq!(
             inner_projection_exprs,
             vec![
-                col("struct_col").alias("__unnest_placeholder(struct_col)"),
-                col("array_col").alias("__unnest_placeholder(array_col)")
+                placeholder_alias("struct_col"),
+                placeholder_alias("array_col")
             ]
         );
 
@@ -1015,7 +1023,7 @@ mod tests {
 
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_list").alias("__unnest_placeholder(struct_list)")]
+            vec![placeholder_alias("struct_list")]
         );
 
         // continue rewrite another expr in select
@@ -1047,7 +1055,7 @@ mod tests {
 
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_list").alias("__unnest_placeholder(struct_list)")]
+            vec![placeholder_alias("struct_list")]
         );
 
         Ok(())
