@@ -67,6 +67,7 @@ default = [
     "parquet",
     "recursive_protection",
     "sql",
+    "arrow_canonical_extension_types",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
@@ -108,11 +109,12 @@ unicode_expressions = [
     "datafusion-sql?/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
+arrow_canonical_extension_types = ["arrow-schema/canonical_extension_types", "parquet?/arrow_canonical_extension_types"]
 extended_tests = []
 
 [dependencies]
 arrow = { workspace = true }
-arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
+arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
@@ -149,7 +151,7 @@ liblzma = { workspace = true, optional = true }
 log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
-parquet = { workspace = true, optional = true, default-features = true }
+parquet = { workspace = true, optional = true, default-features = true, features = ["arrow_canonical_extension_types"] }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }

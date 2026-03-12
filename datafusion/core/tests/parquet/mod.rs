@@ -44,6 +44,8 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+#[cfg(feature = "arrow_canonical_extension_types")]
+mod arrow_canonical_extension_types;
 mod custom_reader;
 #[cfg(feature = "parquet_encryption")]
 mod encryption;
