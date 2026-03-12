@@ -17,7 +17,6 @@
 
 //! Define a plan for unnesting values in columns that contain a list type.
 
-use std::cmp::{self, Ordering};
 use std::task::{Poll, ready};
 use std::{any::Any, sync::Arc};
 
@@ -567,8 +566,8 @@ fn flatten_struct_cols(
     let columns_expanded = input_batch
         .iter()
         .enumerate()
-        .map(|(idx, column_data)| match struct_column_indices.get(&idx) {
-            Some(_) => match column_data.data_type() {
+        .map(|(idx, column_data)| match struct_column_indices.contains(&idx) {
+            true => match column_data.data_type() {
                 DataType::Struct(_) => {
                     let struct_arr =
                         column_data.as_any().downcast_ref::<StructArray>().unwrap();
@@ -578,7 +577,7 @@ fn flatten_struct_cols(
                     "expecting column {idx} from input plan to be a struct, got {data_type}"
                 ),
             },
-            None => Ok(vec![Arc::clone(column_data)]),
+            false => Ok(vec![Arc::clone(column_data)]),
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -693,18 +692,17 @@ fn list_unnest_at_level(
         .iter()
         .enumerate()
         .map(|(i, _)| {
-            // Check if the column is needed in future levels (levels below the current one)
-            let needed_in_future_levels = list_type_unnests.iter().any(|unnesting| {
-                unnesting.index_in_input_schema == i && unnesting.depth < level_to_unnest
-            });
-
-            // Check if the column is involved in unnesting at any level
-            let is_involved_in_unnesting = list_type_unnests
-                .iter()
-                .any(|unnesting| unnesting.index_in_input_schema == i);
-
-            // Repeat columns needed in future levels or not unnested.
-            needed_in_future_levels || !is_involved_in_unnesting
+            let mut involved_in_unnesting = false;
+            for unnesting in list_type_unnests {
+                if unnesting.index_in_input_schema != i {
+                    continue;
+                }
+                involved_in_unnesting = true;
+                if unnesting.depth < level_to_unnest {
+                    return true;
+                }
+            }
+            !involved_in_unnesting
         })
         .collect();
 
@@ -714,11 +712,6 @@ fn list_unnest_at_level(
 
     Ok(Some(ret))
 }
-struct UnnestingResult {
-    arr: ArrayRef,
-    depth: usize,
-}
-
 /// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
 /// - For list columns: We will expand the values in each list into multiple rows,
 ///   taking the longest length among these lists, and shorter lists are padded with NULLs.
@@ -782,119 +775,65 @@ fn build_batch(
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
 ) -> Result<Option<RecordBatch>> {
-    let transformed = match list_type_columns.len() {
-        0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
-        _ => {
-            let mut temp_unnested_result = HashMap::new();
-            let max_recursion = list_type_columns
-                .iter()
-                .fold(0, |highest_depth, ListUnnest { depth, .. }| {
-                    cmp::max(highest_depth, *depth)
-                });
+    let transformed = if list_type_columns.is_empty() {
+        flatten_struct_cols(batch.columns(), schema, struct_column_indices)
+    } else {
+        let mut temp_unnested_result = HashMap::new();
+        let max_recursion = list_type_columns
+            .iter()
+            .map(|ListUnnest { depth, .. }| *depth)
+            .max()
+            .unwrap_or_default();
+        let mut flatten_arrs = vec![];
 
-            // This arr always has the same column count with the input batch
-            let mut flatten_arrs = vec![];
-
-            // Original batch has the same columns
-            // All unnesting results are written to temp_batch
-            for depth in (1..=max_recursion).rev() {
-                let input = match depth == max_recursion {
-                    true => batch.columns(),
-                    false => &flatten_arrs,
-                };
-                let Some(temp_result) = list_unnest_at_level(
-                    input,
-                    list_type_columns,
-                    &mut temp_unnested_result,
-                    depth,
-                    options,
-                )?
-                else {
-                    return Ok(None);
-                };
-                flatten_arrs = temp_result;
-            }
-            let unnested_array_map: HashMap<usize, Vec<UnnestingResult>> =
-                temp_unnested_result.into_iter().fold(
-                    HashMap::new(),
-                    |mut acc,
-                     (
-                        ListUnnest {
-                            index_in_input_schema,
-                            depth,
-                        },
-                        flattened_array,
-                    )| {
-                        acc.entry(index_in_input_schema).or_default().push(
-                            UnnestingResult {
-                                arr: flattened_array,
-                                depth,
-                            },
-                        );
-                        acc
-                    },
-                );
-            let output_order: HashMap<ListUnnest, usize> = list_type_columns
-                .iter()
-                .enumerate()
-                .map(|(order, unnest_def)| (*unnest_def, order))
-                .collect();
-
-            // One original column may be unnested multiple times into separate columns
-            let mut multi_unnested_per_original_index = unnested_array_map
-                .into_iter()
-                .map(
-                    // Each item in unnested_columns is the result of unnesting the same input column
-                    // we need to sort them to conform with the original expression order
-                    // e.g unnest(unnest(col)) must goes before unnest(col)
-                    |(original_index, mut unnested_columns)| {
-                        unnested_columns.sort_by(
-                            |UnnestingResult { depth: depth1, .. },
-                             UnnestingResult { depth: depth2, .. }|
-                             -> Ordering {
-                                output_order
-                                    .get(&ListUnnest {
-                                        depth: *depth1,
-                                        index_in_input_schema: original_index,
-                                    })
-                                    .unwrap()
-                                    .cmp(
-                                        output_order
-                                            .get(&ListUnnest {
-                                                depth: *depth2,
-                                                index_in_input_schema: original_index,
-                                            })
-                                            .unwrap(),
-                                    )
-                            },
-                        );
-                        (
-                            original_index,
-                            unnested_columns
-                                .into_iter()
-                                .map(|result| result.arr)
-                                .collect::<Vec<_>>(),
-                        )
-                    },
-                )
-                .collect::<HashMap<_, _>>();
-
-            let ret = flatten_arrs
-                .into_iter()
-                .enumerate()
-                .flat_map(|(col_idx, arr)| {
-                    // Convert original column into its unnested version(s)
-                    // Plural because one column can be unnested with different recursion level
-                    // and into separate output columns
-                    match multi_unnested_per_original_index.remove(&col_idx) {
-                        Some(unnested_arrays) => unnested_arrays,
-                        None => vec![arr],
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            flatten_struct_cols(&ret, schema, struct_column_indices)
+        for depth in (1..=max_recursion).rev() {
+            let input = if depth == max_recursion {
+                batch.columns()
+            } else {
+                &flatten_arrs
+            };
+            let Some(temp_result) = list_unnest_at_level(
+                input,
+                list_type_columns,
+                &mut temp_unnested_result,
+                depth,
+                options,
+            )?
+            else {
+                return Ok(None);
+            };
+            flatten_arrs = temp_result;
         }
+
+        let output_order: HashMap<ListUnnest, usize> = list_type_columns
+            .iter()
+            .enumerate()
+            .map(|(order, unnest_def)| (*unnest_def, order))
+            .collect();
+        let mut multi_unnested_per_original_index: HashMap<usize, Vec<ArrayRef>> =
+            HashMap::new();
+        let mut unnested_columns = temp_unnested_result.into_iter().collect::<Vec<_>>();
+        unnested_columns.sort_by_key(|(unnest, _)| {
+            output_order.get(unnest).copied().unwrap_or_default()
+        });
+        for (unnest, arr) in unnested_columns {
+            multi_unnested_per_original_index
+                .entry(unnest.index_in_input_schema)
+                .or_default()
+                .push(arr);
+        }
+
+        let ret = flatten_arrs
+            .into_iter()
+            .enumerate()
+            .flat_map(|(col_idx, arr)| {
+                multi_unnested_per_original_index
+                    .remove(&col_idx)
+                    .unwrap_or_else(|| vec![arr])
+            })
+            .collect::<Vec<_>>();
+
+        flatten_struct_cols(&ret, schema, struct_column_indices)
     }?;
     Ok(Some(transformed))
 }
