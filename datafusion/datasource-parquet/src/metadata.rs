@@ -52,6 +52,11 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Minimum fraction of row groups that must report NDV statistics for the
+/// merged result to be `Inexact` rather than `Absent`, as the estimate
+/// would be too unreliable otherwise.
+const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
+
 /// Handles fetching Parquet file schema, metadata and statistics
 /// from object store.
 ///
@@ -544,6 +549,7 @@ fn summarize_column_statistics(
     // Extract distinct counts from row group column statistics
     accumulators.distinct_counts_array[logical_schema_index] =
         if let Some(parquet_idx) = parquet_index {
+            let num_row_groups = row_groups_metadata.len();
             let distinct_counts: Vec<u64> = row_groups_metadata
                 .iter()
                 .filter_map(|rg| {
@@ -554,9 +560,12 @@ fn summarize_column_statistics(
                 })
                 .collect();
 
-            if distinct_counts.is_empty() {
+            let coverage =
+                distinct_counts.len() as f64 / num_row_groups.max(1) as f64;
+
+            if coverage < PARTIAL_NDV_THRESHOLD {
                 Precision::Absent
-            } else if distinct_counts.len() == 1 {
+            } else if distinct_counts.len() == 1 && num_row_groups == 1 {
                 // Single row group with distinct count - use exact value
                 Precision::Exact(distinct_counts[0] as usize)
             } else {
@@ -1029,20 +1038,17 @@ mod tests {
         }
 
         #[test]
-        fn test_distinct_count_partial_ndv_in_row_groups() {
-            // Some row groups have NDV, some don't - should use only those that have it
+        fn test_distinct_count_partial_ndv_below_threshold() {
+            // 1 of 2 row groups has NDV (50% < 75% threshold) -> Absent
             let schema_descr = create_schema_descr(1);
             let arrow_schema = create_arrow_schema(1);
 
-            // Row group 1: has distinct_count = 15
             let stats1 =
                 ParquetStatistics::int32(Some(1), Some(50), Some(15), Some(0), false);
-
-            // Row group 2: no distinct_count
             let stats2 = ParquetStatistics::int32(
                 Some(51),
                 Some(100),
-                None, // no distinct_count
+                None,
                 Some(0),
                 false,
             );
@@ -1060,10 +1066,39 @@ mod tests {
             )
             .unwrap();
 
-            // Only one row group has NDV, so it's Exact(15)
             assert_eq!(
                 result.column_statistics[0].distinct_count,
-                Precision::Exact(15)
+                Precision::Absent
+            );
+        }
+
+        #[test]
+        fn test_distinct_count_partial_ndv_above_threshold() {
+            // 3 of 4 row groups have NDV (75% >= 75% threshold) -> Inexact
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+
+            let stats_with =
+                |ndv| ParquetStatistics::int32(Some(1), Some(100), Some(ndv), Some(0), false);
+            let stats_without =
+                ParquetStatistics::int32(Some(1), Some(100), None, Some(0), false);
+
+            let rg1 = create_row_group_with_stats(&schema_descr, vec![Some(stats_with(10))], 250);
+            let rg2 = create_row_group_with_stats(&schema_descr, vec![Some(stats_with(20))], 250);
+            let rg3 = create_row_group_with_stats(&schema_descr, vec![Some(stats_with(15))], 250);
+            let rg4 = create_row_group_with_stats(&schema_descr, vec![Some(stats_without)], 250);
+            let metadata =
+                create_parquet_metadata(schema_descr, vec![rg1, rg2, rg3, rg4]);
+
+            let result = DFParquetMetadata::statistics_from_parquet_metadata(
+                &metadata,
+                &arrow_schema,
+            )
+            .unwrap();
+
+            assert_eq!(
+                result.column_statistics[0].distinct_count,
+                Precision::Inexact(20)
             );
         }
 
