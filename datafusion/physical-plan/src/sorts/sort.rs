@@ -1216,7 +1216,7 @@ impl ExecutionPlan for SortExec {
         assert_eq!(children.len(), 1, "SortExec should have exactly one child");
         new_sort.input = Arc::clone(&children[0]);
 
-        if !has_same_children_properties(&self, &children)? {
+        if !has_same_children_properties(self.as_ref(), &children)? {
             // Recompute the properties based on the new input since they may have changed
             let (cache, sort_prefix) = Self::compute_properties(
                 &new_sort.input,
