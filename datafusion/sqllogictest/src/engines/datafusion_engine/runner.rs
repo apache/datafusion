@@ -44,13 +44,13 @@ pub struct DataFusion {
 
 impl DataFusion {
     pub fn new(ctx: SessionContext, relative_path: PathBuf, pb: ProgressBar) -> Self {
-        let default_config = SessionContext::new()
+        let default_config = ctx
             .state()
             .config()
             .options()
             .entries()
-            .into_iter()
-            .map(|e| (e.key, e.value))
+            .iter()
+            .map(|e| (e.key.clone(), e.value.clone()))
             .collect();
 
         Self {
