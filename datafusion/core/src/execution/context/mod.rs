@@ -1369,7 +1369,7 @@ impl SessionContext {
         let first_part_of_secs = mins.unwrap_or_default().checked_mul(multiplier);
         if first_part_of_secs.is_none() {
             plan_err!(
-                "Duration is overflowed allowed maximum limit due to 'mins * {multiplier}' when setting '{config_name}'"
+                "Duration has overflowed allowed maximum limit due to 'mins * {multiplier}' when setting '{config_name}'"
             )?
         }
         let second_part_of_secs = first_part_of_secs
@@ -1377,7 +1377,7 @@ impl SessionContext {
             .checked_add(secs.unwrap_or_default());
         if second_part_of_secs.is_none() {
             plan_err!(
-                "Duration is overflowed allowed maximum limit due to 'mins * {multiplier} + secs' when setting '{config_name}'"
+                "Duration has overflowed allowed maximum limit due to 'mins * {multiplier} + secs' when setting '{config_name}'"
             )?
         }
         Ok(second_part_of_secs.unwrap())
@@ -2899,15 +2899,15 @@ mod tests {
             ),
             (
                 "307445734561825861m",
-                "Duration is overflowed allowed maximum limit due to",
+                "Duration has overflowed allowed maximum limit due to",
             ),
             (
                 "307445734561825860m60s",
-                "Duration is overflowed allowed maximum limit due to",
+                "Duration has overflowed allowed maximum limit due to",
             ),
             (
                 "1m18446744073709551556s",
-                "Duration is overflowed allowed maximum limit due to",
+                "Duration has overflowed allowed maximum limit due to",
             ),
         ] {
             let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
