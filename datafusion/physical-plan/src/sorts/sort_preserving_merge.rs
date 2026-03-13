@@ -398,7 +398,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(None)
     }
 

@@ -646,12 +646,11 @@ impl ConstEvaluator {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
-            Expr::Cast(Cast { expr, data_type })
-            | Expr::TryCast(TryCast { expr, data_type }) => {
+            Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => {
                 if let (
                     Ok(DataType::Struct(source_fields)),
                     DataType::Struct(target_fields),
-                ) = (expr.get_type(&DFSchema::empty()), data_type)
+                ) = (expr.get_type(&DFSchema::empty()), field.data_type())
                 {
                     // Don't const-fold struct casts with different field counts
                     if source_fields.len() != target_fields.len() {
@@ -1660,17 +1659,19 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
-            }) => Transformed::yes(simplify_regex_expr(left, op, right)?),
+            }) => simplify_regex_expr(left, op, right)?,
 
             // Rules for Like
             Expr::Like(like) => {
                 // `\` is implicit escape, see https://github.com/apache/datafusion/issues/13291
                 let escape_char = like.escape_char.unwrap_or('\\');
-                match as_string_scalar(&like.pattern) {
-                    Some((data_type, pattern_str)) => {
+
+                match StringScalar::try_from_expr(&like.pattern) {
+                    Some(string_scalar) => {
+                        let pattern_str = string_scalar.as_str();
                         match pattern_str {
                             None => return Ok(Transformed::yes(lit_bool_null())),
-                            Some(pattern_str) if pattern_str == "%" => {
+                            Some("%") => {
                                 // exp LIKE '%' is
                                 //   - when exp is not NULL, it's true
                                 //   - when exp is NULL, it's NULL
@@ -1702,10 +1703,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                                     .replace_all(pattern_str, "%")
                                     .to_string();
                                 Transformed::yes(Expr::Like(Like {
-                                    pattern: Box::new(to_string_scalar(
-                                        &data_type,
-                                        Some(simplified_pattern),
-                                    )),
+                                    pattern: Box::new(
+                                        string_scalar.to_expr(&simplified_pattern),
+                                    ),
                                     ..like
                                 }))
                             }
@@ -2126,21 +2126,54 @@ fn is_literal_or_literal_cast(expr: &Expr) -> bool {
     }
 }
 
-fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
-    match expr {
-        Expr::Literal(ScalarValue::Utf8(s), _) => Some((DataType::Utf8, s)),
-        Expr::Literal(ScalarValue::LargeUtf8(s), _) => Some((DataType::LargeUtf8, s)),
-        Expr::Literal(ScalarValue::Utf8View(s), _) => Some((DataType::Utf8View, s)),
-        _ => None,
-    }
+/// Helper for working with string scalar values (Utf8, LargeUtf8, Utf8View)
+pub(crate) enum StringScalar<'a> {
+    Utf8(&'a ScalarValue),
+    LargeUtf8(&'a ScalarValue),
+    Utf8View(&'a ScalarValue),
 }
 
-fn to_string_scalar(data_type: &DataType, value: Option<String>) -> Expr {
-    match data_type {
-        DataType::Utf8 => Expr::Literal(ScalarValue::Utf8(value), None),
-        DataType::LargeUtf8 => Expr::Literal(ScalarValue::LargeUtf8(value), None),
-        DataType::Utf8View => Expr::Literal(ScalarValue::Utf8View(value), None),
-        _ => unreachable!(),
+impl<'a> StringScalar<'a> {
+    /// Create a `StringScalar` view from an `Expr` if it is a supported string literal.
+    /// Returns `None` if the expression is not a string literal.
+    pub(crate) fn try_from_expr(expr: &'a Expr) -> Option<Self> {
+        match expr {
+            Expr::Literal(scalar, _) => Self::try_from_scalar(scalar),
+            _ => None,
+        }
+    }
+
+    /// Create a `StringScalar` view from a `ScalarValue` if it is a supported string type.
+    /// Returns `None` if the scalar value is not a supported string type.
+    fn try_from_scalar(scalar: &'a ScalarValue) -> Option<Self> {
+        match scalar {
+            ScalarValue::Utf8(_) => Some(Self::Utf8(scalar)),
+            ScalarValue::LargeUtf8(_) => Some(Self::LargeUtf8(scalar)),
+            ScalarValue::Utf8View(_) => Some(Self::Utf8View(scalar)),
+            _ => None,
+        }
+    }
+
+    /// Returns the underlying string slice.
+    pub(crate) fn as_str(&self) -> Option<&'a str> {
+        match self {
+            Self::Utf8(scalar) | Self::LargeUtf8(scalar) | Self::Utf8View(scalar) => {
+                scalar.try_as_str().flatten()
+            }
+        }
+    }
+
+    /// Build a new `Expr` of the same string type with the given value.
+    pub(crate) fn to_expr(&self, val: &str) -> Expr {
+        match self {
+            Self::Utf8(_) => Expr::Literal(ScalarValue::Utf8(Some(val.to_owned())), None),
+            Self::LargeUtf8(_) => {
+                Expr::Literal(ScalarValue::LargeUtf8(Some(val.to_owned())), None)
+            }
+            Self::Utf8View(_) => {
+                Expr::Literal(ScalarValue::Utf8View(Some(val.to_owned())), None)
+            }
+        }
     }
 }
 

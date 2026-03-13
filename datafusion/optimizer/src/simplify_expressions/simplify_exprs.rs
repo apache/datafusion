@@ -155,6 +155,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
 
+    use datafusion_common::ScalarValue;
     use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::*;
@@ -870,7 +871,7 @@ mod tests {
         ]);
         let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
 
-        // Test `= ".*"` transforms to true (except for empty strings)
+        // Test `~ ".*"` transforms to true for any non-NULL string
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexMatch, lit(".*")))?
             .build()?;
@@ -883,22 +884,22 @@ mod tests {
         "
         )?;
 
-        // Test `!= ".*"` transforms to checking if the column is empty
+        // Test `!~ ".*"` preserves NULL semantics while remaining false for non-NULL strings
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotMatch, lit(".*")))?
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
-            @ r#"
-        Filter: test.a = Utf8("")
+            @ r"
+        Filter: test.a IS NULL AND Boolean(NULL)
           TableScan: test
-        "#
+        "
         )?;
 
         // Test case-insensitive versions
 
-        // Test `=~ ".*"` (case-insensitive) transforms to true (except for empty strings)
+        // Test `~* ".*"` transforms to true for any non-NULL string
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("b"), Operator::RegexIMatch, lit(".*")))?
             .build()?;
@@ -911,17 +912,51 @@ mod tests {
         "
         )?;
 
-        // Test `!~ ".*"` (case-insensitive) transforms to checking if the column is empty
+        // Test NULL `!~ ".*"` transforms to Boolean(NULL)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(
+                lit(ScalarValue::Utf8(None)),
+                Operator::RegexNotMatch,
+                lit(".*"),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(NULL)
+          TableScan: test
+        "
+        )?;
+
+        // Test `!~* ".*"` preserves NULL semantics while remaining false for non-NULL strings
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotIMatch, lit(".*")))?
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
-            @ r#"
-        Filter: test.a = Utf8("")
+            @ r"
+        Filter: test.a IS NULL AND Boolean(NULL)
           TableScan: test
-        "#
+        "
+        )?;
+
+        // Test NULL `!~* ".*"` transforms to Boolean(NULL)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(
+                lit(ScalarValue::Utf8(None)),
+                Operator::RegexNotIMatch,
+                lit(".*"),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(NULL)
+          TableScan: test
+        "
         )
     }
 

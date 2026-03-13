@@ -22,8 +22,8 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
-    ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript, TrimWhereField,
-    TypedString, Value, ValueWithSpan,
+    ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, StructField, Subscript,
+    TrimWhereField, TypedString, Value, ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -292,15 +292,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("CAST with format is not supported: {format}");
                 }
 
-                Ok(Expr::TryCast(TryCast::new(
+                Ok(Expr::TryCast(TryCast::new_from_field(
                     Box::new(self.sql_expr_to_logical_expr(
                         *expr,
                         schema,
                         planner_context,
                     )?),
-                    self.convert_data_type_to_field(&data_type)?
-                        .data_type()
-                        .clone(),
+                    self.convert_data_type_to_field(&data_type)?,
                 )))
             }
 
@@ -308,11 +306,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 data_type,
                 value,
                 uses_odbc_syntax: _,
-            }) => Ok(Expr::Cast(Cast::new(
+            }) => Ok(Expr::Cast(Cast::new_from_field(
                 Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type_to_field(&data_type)?
-                    .data_type()
-                    .clone(),
+                self.convert_data_type_to_field(&data_type)?,
             ))),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
@@ -651,8 +647,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 options: Box::new(WildcardOptions::default()),
             }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
+            SQLExpr::JsonAccess { value, path } => {
+                self.parse_json_access(schema, planner_context, value, &path)
+            }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
+    }
+
+    fn parse_json_access(
+        &self,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        value: Box<SQLExpr>,
+        path: &JsonPath,
+    ) -> Result<Expr> {
+        let json_path = path.to_string();
+        let json_path = if let Some(json_path) = json_path.strip_prefix(":") {
+            // sqlparser's JsonPath display adds an extra `:` at the beginning.
+            json_path.to_owned()
+        } else {
+            json_path
+        };
+        self.build_logical_expr(
+            BinaryOperator::Custom(":".to_owned()),
+            self.sql_to_expr(*value, schema, planner_context)?,
+            // pass json path as a string literal, let the impl parse it when needed.
+            Expr::Literal(ScalarValue::Utf8(Some(json_path)), None),
+            schema,
+        )
     }
 
     /// Parses a struct(..) expression and plans it creation
@@ -1035,12 +1057,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => expr,
         };
 
-        // Currently drops metadata attached to the type
-        // https://github.com/apache/datafusion/issues/18060
-        Ok(Expr::Cast(Cast::new(
-            Box::new(expr),
-            dt.data_type().clone(),
-        )))
+        Ok(Expr::Cast(Cast::new_from_field(Box::new(expr), dt)))
     }
 
     /// Extracts the root expression and access chain from a compound expression.
