@@ -30,6 +30,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 
+use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::stream::RecordBatchStreamAdapter;
@@ -274,6 +275,15 @@ impl MultiLevelMergeBuilder {
 
                 let is_only_merging_memory_streams = sorted_spill_files.is_empty();
 
+                // If no spill files were selected (e.g. all too large for
+                // available memory but enough in-memory streams exist),
+                // return the pre-reserved bytes to self.reservation so
+                // create_new_merge_sort can transfer them to the merge
+                // stream's BatchBuilder.
+                if is_only_merging_memory_streams {
+                    mem::swap(&mut self.reservation, &mut memory_reservation);
+                }
+
                 for spill in sorted_spill_files {
                     let stream = self
                         .spill_manager
@@ -377,43 +387,38 @@ impl MultiLevelMergeBuilder {
             ) * buffer_len;
             total_needed += per_spill;
 
-            // Only request additional memory from the pool when total needed
-            // exceeds what's already reserved (which may include pre-reserved
-            // bytes from sort_spill_reservation_bytes).
-            if total_needed > reservation.size() {
-                match reservation.try_grow(total_needed - reservation.size()) {
-                    Ok(_) => {
-                        number_of_spills_to_read_for_current_phase += 1;
-                    }
-                    // If we can't grow the reservation, we need to stop
-                    Err(err) => {
-                        // We must have at least 2 streams to merge, so if we don't have enough memory
-                        // fail
-                        if minimum_number_of_required_streams
-                            > number_of_spills_to_read_for_current_phase
-                        {
-                            // Free the memory we reserved for this merge as we either try again or fail
-                            reservation.free();
-                            if buffer_len > 1 {
-                                // Try again with smaller buffer size, it will be slower but at least we can merge
-                                return self.get_sorted_spill_files_to_merge(
-                                    buffer_len - 1,
-                                    minimum_number_of_required_streams,
-                                    reservation,
-                                );
-                            }
-
-                            return Err(err);
+            // For memory pools that are not shared this is good, for other
+            // this is not and there should be some upper limit to memory
+            // reservation so we won't starve the system.
+            match try_grow_reservation_to_at_least(reservation, total_needed) {
+                Ok(_) => {
+                    number_of_spills_to_read_for_current_phase += 1;
+                }
+                // If we can't grow the reservation, we need to stop
+                Err(err) => {
+                    // We must have at least 2 streams to merge, so if we don't have enough memory
+                    // fail
+                    if minimum_number_of_required_streams
+                        > number_of_spills_to_read_for_current_phase
+                    {
+                        // Free the memory we reserved for this merge as we either try again or fail
+                        reservation.free();
+                        if buffer_len > 1 {
+                            // Try again with smaller buffer size, it will be slower but at least we can merge
+                            return self.get_sorted_spill_files_to_merge(
+                                buffer_len - 1,
+                                minimum_number_of_required_streams,
+                                reservation,
+                            );
                         }
 
-                        // We reached the maximum amount of memory we can use
-                        // for this merge
-                        break;
+                        return Err(err);
                     }
+
+                    // We reached the maximum amount of memory we can use
+                    // for this merge
+                    break;
                 }
-            } else {
-                // Pre-reserved bytes cover this spill file's buffer
-                number_of_spills_to_read_for_current_phase += 1;
             }
         }
 

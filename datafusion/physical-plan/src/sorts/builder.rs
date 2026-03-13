@@ -93,10 +93,7 @@ impl BatchBuilder {
         // Only request additional memory from the pool when actual batch
         // usage exceeds the current reservation (which may include
         // pre-reserved bytes from sort_spill_reservation_bytes).
-        if self.batches_mem_used > self.reservation.size() {
-            self.reservation
-                .try_grow(self.batches_mem_used - self.reservation.size())?;
-        }
+        try_grow_reservation_to_at_least(&mut self.reservation, self.batches_mem_used)?;
         let batch_idx = self.batches.len();
         self.batches.push((stream_idx, batch));
         self.cursors[stream_idx] = BatchCursor {
@@ -186,4 +183,20 @@ impl BatchBuilder {
             columns,
         )?))
     }
+}
+
+/// Try to grow `reservation` so it covers at least `needed` bytes.
+///
+/// When a reservation has been pre-loaded with bytes (e.g. via
+/// [`MemoryReservation::take()`]), this avoids redundant pool
+/// allocations: if the reservation already covers `needed`, this is
+/// a no-op; otherwise only the deficit is requested from the pool.
+pub(crate) fn try_grow_reservation_to_at_least(
+    reservation: &mut MemoryReservation,
+    needed: usize,
+) -> Result<()> {
+    if needed > reservation.size() {
+        reservation.try_grow(needed - reservation.size())?;
+    }
+    Ok(())
 }
