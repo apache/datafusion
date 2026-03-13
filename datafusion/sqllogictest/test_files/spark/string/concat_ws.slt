@@ -129,3 +129,11 @@ SELECT concat_ws(',', a, b) AS result FROM VALUES ('a', 'b'), ('c', CAST(NULL AS
 a,b
 c
 d
+
+## Scalar-only arguments over multiple rows (broadcast test)
+query T
+SELECT concat_ws(',', 'a', 'b') AS result FROM VALUES (1), (2), (3) AS t(x);
+----
+a,b
+a,b
+a,b

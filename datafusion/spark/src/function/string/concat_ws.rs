@@ -111,7 +111,7 @@ impl ScalarUDFImpl for SparkConcatWs {
 
         // Use our implementation for all cases to guarantee consistent Utf8 return type.
         // Core's concat_ws may return Utf8View which conflicts with our return_type.
-        spark_concat_ws_with_arrays(&args.args)
+        spark_concat_ws_with_arrays(&args.args, args.number_rows)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -147,16 +147,10 @@ impl ScalarUDFImpl for SparkConcatWs {
 }
 
 /// Implementation of concat_ws that supports array arguments.
-fn spark_concat_ws_with_arrays(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    // Determine number of rows
-    let num_rows = args
-        .iter()
-        .find_map(|x| match x {
-            ColumnarValue::Array(a) => Some(a.len()),
-            _ => None,
-        })
-        .unwrap_or(1);
-
+fn spark_concat_ws_with_arrays(
+    args: &[ColumnarValue],
+    num_rows: usize,
+) -> Result<ColumnarValue> {
     // Convert all to arrays for uniform processing
     let arrays: Vec<ArrayRef> = args
         .iter()
@@ -237,10 +231,10 @@ fn collect_parts(arr: &ArrayRef, row_idx: usize, parts: &mut Vec<String>) -> Res
             parts.push(str_arr.value(row_idx).to_string());
         }
         DataType::List(_) => {
-            collect_parts_from_list::<i32>(arr.as_list(), row_idx, parts)?;
+            collect_parts_from_list::<i32>(arr.as_list::<i32>(), row_idx, parts)?;
         }
         DataType::LargeList(_) => {
-            collect_parts_from_list::<i64>(arr.as_list(), row_idx, parts)?;
+            collect_parts_from_list::<i64>(arr.as_list::<i64>(), row_idx, parts)?;
         }
         other => {
             return exec_err!("concat_ws does not support data type {other:?}");
@@ -347,12 +341,15 @@ mod tests {
         let b: ArrayRef = Arc::new(StringArray::from(vec!["b"]));
         let c: ArrayRef = Arc::new(StringArray::from(vec!["c"]));
 
-        let result = spark_concat_ws_with_arrays(&[
-            ColumnarValue::Array(sep),
-            ColumnarValue::Array(a),
-            ColumnarValue::Array(b),
-            ColumnarValue::Array(c),
-        ])?;
+        let result = spark_concat_ws_with_arrays(
+            &[
+                ColumnarValue::Array(sep),
+                ColumnarValue::Array(a),
+                ColumnarValue::Array(b),
+                ColumnarValue::Array(c),
+            ],
+            1,
+        )?;
 
         match result {
             ColumnarValue::Array(arr) => {
@@ -371,12 +368,15 @@ mod tests {
         let b: ArrayRef = Arc::new(StringArray::from(vec![None::<&str>]));
         let c: ArrayRef = Arc::new(StringArray::from(vec![Some("c")]));
 
-        let result = spark_concat_ws_with_arrays(&[
-            ColumnarValue::Array(sep),
-            ColumnarValue::Array(a),
-            ColumnarValue::Array(b),
-            ColumnarValue::Array(c),
-        ])?;
+        let result = spark_concat_ws_with_arrays(
+            &[
+                ColumnarValue::Array(sep),
+                ColumnarValue::Array(a),
+                ColumnarValue::Array(b),
+                ColumnarValue::Array(c),
+            ],
+            1,
+        )?;
 
         match result {
             ColumnarValue::Array(arr) => {
@@ -393,10 +393,10 @@ mod tests {
         let sep: ArrayRef = Arc::new(StringArray::from(vec![None::<&str>]));
         let a: ArrayRef = Arc::new(StringArray::from(vec![Some("a")]));
 
-        let result = spark_concat_ws_with_arrays(&[
-            ColumnarValue::Array(sep),
-            ColumnarValue::Array(a),
-        ])?;
+        let result = spark_concat_ws_with_arrays(
+            &[ColumnarValue::Array(sep), ColumnarValue::Array(a)],
+            1,
+        )?;
 
         match result {
             ColumnarValue::Array(arr) => {
@@ -414,10 +414,10 @@ mod tests {
         let list = make_list_array(vec![Some(vec![Some("a"), Some("b"), Some("c")])]);
         let list_ref: ArrayRef = Arc::new(list);
 
-        let result = spark_concat_ws_with_arrays(&[
-            ColumnarValue::Array(sep),
-            ColumnarValue::Array(list_ref),
-        ])?;
+        let result = spark_concat_ws_with_arrays(
+            &[ColumnarValue::Array(sep), ColumnarValue::Array(list_ref)],
+            1,
+        )?;
 
         match result {
             ColumnarValue::Array(arr) => {
@@ -435,10 +435,10 @@ mod tests {
         let list = make_list_array(vec![Some(vec![Some("a"), None, Some("c")])]);
         let list_ref: ArrayRef = Arc::new(list);
 
-        let result = spark_concat_ws_with_arrays(&[
-            ColumnarValue::Array(sep),
-            ColumnarValue::Array(list_ref),
-        ])?;
+        let result = spark_concat_ws_with_arrays(
+            &[ColumnarValue::Array(sep), ColumnarValue::Array(list_ref)],
+            1,
+        )?;
 
         match result {
             ColumnarValue::Array(arr) => {
@@ -458,12 +458,15 @@ mod tests {
         let list_ref: ArrayRef = Arc::new(list);
         let y: ArrayRef = Arc::new(StringArray::from(vec!["y"]));
 
-        let result = spark_concat_ws_with_arrays(&[
-            ColumnarValue::Array(sep),
-            ColumnarValue::Array(x),
-            ColumnarValue::Array(list_ref),
-            ColumnarValue::Array(y),
-        ])?;
+        let result = spark_concat_ws_with_arrays(
+            &[
+                ColumnarValue::Array(sep),
+                ColumnarValue::Array(x),
+                ColumnarValue::Array(list_ref),
+                ColumnarValue::Array(y),
+            ],
+            1,
+        )?;
 
         match result {
             ColumnarValue::Array(arr) => {
@@ -482,11 +485,14 @@ mod tests {
         let b: ArrayRef =
             Arc::new(StringArray::from(vec![Some("b"), Some("y"), Some("z")]));
 
-        let result = spark_concat_ws_with_arrays(&[
-            ColumnarValue::Array(sep),
-            ColumnarValue::Array(a),
-            ColumnarValue::Array(b),
-        ])?;
+        let result = spark_concat_ws_with_arrays(
+            &[
+                ColumnarValue::Array(sep),
+                ColumnarValue::Array(a),
+                ColumnarValue::Array(b),
+            ],
+            3,
+        )?;
 
         match result {
             ColumnarValue::Array(arr) => {
