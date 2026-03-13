@@ -21,12 +21,167 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT levenshtein('kitten', 'sitting');
-## PySpark 3.5.5 Result: {'levenshtein(kitten, sitting)': 3, 'typeof(levenshtein(kitten, sitting))': 'int', 'typeof(kitten)': 'string', 'typeof(sitting)': 'string'}
-#query
-#SELECT levenshtein('kitten'::string, 'sitting'::string);
+## ── Basic usage ─────────────────────────────────────────────
 
-## Original Query: SELECT levenshtein('kitten', 'sitting', 2);
-## PySpark 3.5.5 Result: {'levenshtein(kitten, sitting, 2)': -1, 'typeof(levenshtein(kitten, sitting, 2))': 'int', 'typeof(kitten)': 'string', 'typeof(sitting)': 'string', 'typeof(2)': 'int'}
-#query
-#SELECT levenshtein('kitten'::string, 'sitting'::string, 2::int);
+## Basic distance
+query I
+SELECT levenshtein('kitten', 'sitting');
+----
+3
+
+## Identical strings
+query I
+SELECT levenshtein('hello', 'hello');
+----
+0
+
+## Empty string vs non-empty
+query I
+SELECT levenshtein('', 'abc');
+----
+3
+
+## Both empty strings
+query I
+SELECT levenshtein('', '');
+----
+0
+
+## Single character difference
+query I
+SELECT levenshtein('abc', 'adc');
+----
+1
+
+## ── Threshold (3-argument form) ─────────────────────────────
+
+## Distance within threshold
+query I
+SELECT levenshtein('kitten', 'sitting', 4);
+----
+3
+
+## Distance exceeds threshold → returns -1
+query I
+SELECT levenshtein('kitten', 'sitting', 2);
+----
+-1
+
+## Distance equals threshold (boundary) → returns distance
+query I
+SELECT levenshtein('kitten', 'sitting', 3);
+----
+3
+
+## Threshold zero with different strings
+query I
+SELECT levenshtein('abc', 'def', 0);
+----
+-1
+
+## Threshold zero with identical strings
+query I
+SELECT levenshtein('abc', 'abc', 0);
+----
+0
+
+## ── Null handling ───────────────────────────────────────────
+
+## First argument null
+query I
+SELECT levenshtein(CAST(NULL AS STRING), 'hello');
+----
+NULL
+
+## Second argument null
+query I
+SELECT levenshtein('hello', CAST(NULL AS STRING));
+----
+NULL
+
+## Both arguments null
+query I
+SELECT levenshtein(CAST(NULL AS STRING), CAST(NULL AS STRING));
+----
+NULL
+
+## Null threshold
+query I
+SELECT levenshtein('kitten', 'sitting', CAST(NULL AS INT));
+----
+NULL
+
+## ── Unicode and special characters ──────────────────────────
+
+## Unicode strings
+query I
+SELECT levenshtein('café', 'cafe');
+----
+1
+
+## Strings with spaces
+query I
+SELECT levenshtein('hello world', 'hello world!');
+----
+1
+
+## ── Column expressions ──────────────────────────────────────
+
+## Levenshtein on columns from inline table
+query I
+SELECT levenshtein(s1, s2) AS result FROM VALUES ('abc', 'abc'), ('abc', 'def'), ('kitten', 'sitting') AS t(s1, s2);
+----
+0
+3
+3
+
+## Threshold on columns from inline table
+query I
+SELECT levenshtein(s1, s2, 2) AS result FROM VALUES ('abc', 'abc'), ('abc', 'def'), ('kitten', 'sitting') AS t(s1, s2);
+----
+0
+-1
+-1
+
+## ── Per-row threshold ───────────────────────────────────────
+
+## Different threshold per row
+query I
+SELECT levenshtein(s1, s2, t) AS result FROM VALUES ('abc', 'def', 2), ('abc', 'def', 5), ('abc', 'def', 3) AS t(s1, s2, t);
+----
+-1
+3
+3
+
+## Null threshold per row — Spark treats null threshold as 0
+query I
+SELECT levenshtein(s1, s2, t) AS result FROM VALUES ('kitten', 'sitting', CAST(NULL AS INT)), ('abc', 'def', 1) AS t(s1, s2, t);
+----
+-1
+-1
+
+## Null threshold per row with identical strings — dist=0 <= 0 → returns 0
+query I
+SELECT levenshtein(s1, s2, t) AS result FROM VALUES ('abc', 'abc', CAST(NULL AS INT)) AS t(s1, s2, t);
+----
+0
+
+## ── Mixed type coercion ─────────────────────────────────────
+
+## Utf8 + arrow_cast to LargeUtf8 — should coerce correctly
+query I
+SELECT levenshtein('kitten', arrow_cast('sitting', 'LargeUtf8'));
+----
+3
+
+## Utf8View inputs
+query I
+SELECT levenshtein(arrow_cast('kitten', 'Utf8View'), arrow_cast('sitting', 'Utf8View'));
+----
+3
+
+## Utf8View with threshold
+query I
+SELECT levenshtein(arrow_cast('kitten', 'Utf8View'), arrow_cast('sitting', 'Utf8View'), 2);
+----
+-1
