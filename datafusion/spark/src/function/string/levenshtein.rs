@@ -20,14 +20,18 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::DataType;
-use datafusion_common::cast::{as_generic_string_array, as_int32_array, as_string_view_array};
-use datafusion_common::types::{logical_int32, logical_string, NativeType};
+use datafusion_common::cast::{
+    as_generic_string_array, as_int32_array, as_string_view_array,
+};
+use datafusion_common::types::{NativeType, logical_int32, logical_string};
 use datafusion_common::utils::datafusion_strsim;
-use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::type_coercion::binary::{binary_to_string_coercion, string_coercion};
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::type_coercion::binary::{
+    binary_to_string_coercion, string_coercion,
+};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -92,9 +96,8 @@ impl ScalarUDFImpl for SparkLevenshtein {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if let Some(coercion_data_type) =
-            string_coercion(&arg_types[0], &arg_types[1])
-                .or_else(|| binary_to_string_coercion(&arg_types[0], &arg_types[1]))
+        if let Some(coercion_data_type) = string_coercion(&arg_types[0], &arg_types[1])
+            .or_else(|| binary_to_string_coercion(&arg_types[0], &arg_types[1]))
         {
             match coercion_data_type {
                 DataType::LargeUtf8 => Ok(DataType::Int64),
@@ -148,10 +151,7 @@ impl ScalarUDFImpl for SparkLevenshtein {
 /// Spark-compatible Levenshtein distance with optional threshold.
 fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
-        return exec_err!(
-            "levenshtein expects 2 or 3 arguments, got {}",
-            args.len()
-        );
+        return exec_err!("levenshtein expects 2 or 3 arguments, got {}", args.len());
     }
 
     let str1 = &args[0];
@@ -162,9 +162,8 @@ fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
         None
     };
 
-    if let Some(coercion_data_type) =
-        string_coercion(str1.data_type(), str2.data_type())
-            .or_else(|| binary_to_string_coercion(str1.data_type(), str2.data_type()))
+    if let Some(coercion_data_type) = string_coercion(str1.data_type(), str2.data_type())
+        .or_else(|| binary_to_string_coercion(str1.data_type(), str2.data_type()))
     {
         let str1 = if str1.data_type() == &coercion_data_type {
             Arc::clone(str1)
@@ -195,8 +194,13 @@ fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
                             match &threshold {
                                 Some(t) => {
                                     // Spark: null threshold is treated as 0
-                                    let thresh = if t.is_null(i) { 0 } else { t.value(i) };
-                                    if dist > thresh { Some(-1i32) } else { Some(dist) }
+                                    let thresh =
+                                        if t.is_null(i) { 0 } else { t.value(i) };
+                                    if dist > thresh {
+                                        Some(-1i32)
+                                    } else {
+                                        Some(dist)
+                                    }
                                 }
                                 None => Some(dist),
                             }
@@ -223,8 +227,13 @@ fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
                             match &threshold {
                                 Some(t) => {
                                     // Spark: null threshold is treated as 0
-                                    let thresh = if t.is_null(i) { 0 } else { t.value(i) };
-                                    if dist > thresh { Some(-1i32) } else { Some(dist) }
+                                    let thresh =
+                                        if t.is_null(i) { 0 } else { t.value(i) };
+                                    if dist > thresh {
+                                        Some(-1i32)
+                                    } else {
+                                        Some(dist)
+                                    }
                                 }
                                 None => Some(dist),
                             }
@@ -250,8 +259,13 @@ fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
                             ) as i64;
                             match &threshold {
                                 Some(t) => {
-                                    let thresh = if t.is_null(i) { 0 } else { t.value(i) as i64 };
-                                    if dist > thresh { Some(-1i64) } else { Some(dist) }
+                                    let thresh =
+                                        if t.is_null(i) { 0 } else { t.value(i) as i64 };
+                                    if dist > thresh {
+                                        Some(-1i64)
+                                    } else {
+                                        Some(dist)
+                                    }
                                 }
                                 None => Some(dist),
                             }
