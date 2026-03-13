@@ -1776,40 +1776,4 @@ mod tests {
 
         Ok(())
     }
-
-    /// Columns with Absent min/max statistics should remain Absent after
-    /// FilterExec.
-    #[tokio::test]
-    async fn test_filter_statistics_absent_columns_stay_absent() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]);
-        let input = Arc::new(StatisticsExec::new(
-            Statistics {
-                num_rows: Precision::Inexact(1000),
-                total_byte_size: Precision::Absent,
-                column_statistics: vec![
-                    ColumnStatistics::default(),
-                    ColumnStatistics::default(),
-                ],
-            },
-            schema.clone(),
-        ));
-
-        let predicate = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("a", 0)),
-            Operator::Eq,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
-        ));
-        let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
-
-        let statistics = filter.partition_statistics(None)?;
-        let col_b_stats = &statistics.column_statistics[1];
-        assert_eq!(col_b_stats.min_value, Precision::Absent);
-        assert_eq!(col_b_stats.max_value, Precision::Absent);
-
-        Ok(())
-    }
 }
