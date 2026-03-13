@@ -50,7 +50,7 @@ pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
 }
 
 /// array function wrapper that differentiates between scalar (length 1) and array.
-pub(crate) fn make_scalar_function<F>(
+pub fn make_scalar_function<F>(
     inner: F,
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue>
 where

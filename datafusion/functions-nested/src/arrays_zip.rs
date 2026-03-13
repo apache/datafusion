@@ -156,7 +156,7 @@ impl ScalarUDFImpl for ArraysZip {
 /// has one field per input array. If arrays within a row have different
 /// lengths, shorter arrays are padded with NULLs.
 /// Supports List, LargeList, and Null input types.
-fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 {
         return exec_err!("arrays_zip requires at least two arguments");
     }
