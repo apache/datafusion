@@ -61,13 +61,13 @@ pub(crate) fn from_substrait_literal_without_names(
     consumer: &impl SubstraitConsumer,
     lit: &Literal,
 ) -> datafusion::common::Result<ScalarValue> {
-    from_substrait_literal(consumer, lit, &vec![], &mut 0)
+    from_substrait_literal(consumer, lit, &[], &mut 0)
 }
 
 pub(crate) fn from_substrait_literal(
     consumer: &impl SubstraitConsumer,
     lit: &Literal,
-    dfs_names: &Vec<String>,
+    dfs_names: &[String],
     name_idx: &mut usize,
 ) -> datafusion::common::Result<ScalarValue> {
     let scalar_value = match &lit.literal_type {

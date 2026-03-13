@@ -388,7 +388,7 @@ fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<Vec<OrderByExpr>> {
 /// Returns the order by expressions from the query with the select expressions.
 pub(crate) fn to_order_by_exprs_with_select(
     order_by: Option<OrderBy>,
-    select_exprs: Option<&Vec<Expr>>,
+    select_exprs: Option<&[Expr]>,
 ) -> Result<Vec<OrderByExpr>> {
     let Some(OrderBy { kind, interpolate }) = order_by else {
         // If no order by, return an empty array.

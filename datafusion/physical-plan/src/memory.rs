@@ -249,7 +249,7 @@ impl LazyMemoryExec {
     }
 
     /// Get the batch generators
-    pub fn generators(&self) -> &Vec<Arc<RwLock<dyn LazyBatchGenerator>>> {
+    pub fn generators(&self) -> &[Arc<RwLock<dyn LazyBatchGenerator>>] {
         &self.batch_generators
     }
 }

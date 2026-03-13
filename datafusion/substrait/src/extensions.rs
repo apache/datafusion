@@ -78,11 +78,11 @@ impl Extensions {
     }
 }
 
-impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
+impl TryFrom<&[SimpleExtensionDeclaration]> for Extensions {
     type Error = DataFusionError;
 
     fn try_from(
-        value: &Vec<SimpleExtensionDeclaration>,
+        value: &[SimpleExtensionDeclaration],
     ) -> datafusion::common::Result<Self> {
         let mut functions = HashMap::new();
         let mut types = HashMap::new();

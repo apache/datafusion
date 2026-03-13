@@ -82,7 +82,7 @@ impl RowGroupAccessPlanFilter {
     }
 
     /// Returns the is_fully_matched vector
-    pub fn is_fully_matched(&self) -> &Vec<bool> {
+    pub fn is_fully_matched(&self) -> &[bool] {
         &self.is_fully_matched
     }
 

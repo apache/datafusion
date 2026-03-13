@@ -223,7 +223,7 @@ impl CacheManager {
         self.cache.insert(k, v);
     }
 
-    pub fn get(&self, k: &LogicalPlan) -> Option<&Vec<Vec<RecordBatch>>> {
-        self.cache.get(k)
+    pub fn get(&self, k: &LogicalPlan) -> Option<&[Vec<RecordBatch>]> {
+        self.cache.get(k).map(Vec::as_slice)
     }
 }

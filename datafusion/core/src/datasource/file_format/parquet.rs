@@ -1594,7 +1594,7 @@ mod tests {
 
     fn assert_file_metadata(
         parquet_meta_data: ParquetMetaData,
-        expected_kv: &Vec<KeyValue>,
+        expected_kv: &[KeyValue],
     ) {
         let file_metadata = parquet_meta_data.file_metadata();
         let schema_descr = file_metadata.schema_descr();

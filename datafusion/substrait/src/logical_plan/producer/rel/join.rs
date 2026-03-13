@@ -85,7 +85,7 @@ pub fn from_join(
 
 fn to_substrait_join_expr(
     producer: &mut impl SubstraitProducer,
-    join_conditions: &Vec<(Expr, Expr)>,
+    join_conditions: &[(Expr, Expr)],
     eq_op: Operator,
     join_schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Option<Expression>> {

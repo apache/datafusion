@@ -122,7 +122,7 @@ impl TableProvider for StreamingTable {
         Ok(Arc::new(StreamingTableExec::try_new(
             Arc::clone(&self.schema),
             self.partitions.clone(),
-            projection,
+            projection.map(Vec::as_slice),
             LexOrdering::new(physical_sort),
             self.infinite,
             limit,

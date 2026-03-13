@@ -1467,7 +1467,7 @@ pub fn execute_input_stream(
 /// is returned.
 pub fn check_not_null_constraints(
     batch: RecordBatch,
-    column_indices: &Vec<usize>,
+    column_indices: &[usize],
 ) -> Result<RecordBatch> {
     for &index in column_indices {
         if batch.num_columns() <= index {
@@ -1862,7 +1862,7 @@ mod tests {
                 Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
                 vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
             )?,
-            &vec![0],
+            &[0],
         )?;
         Ok(())
     }
@@ -1874,7 +1874,7 @@ mod tests {
                 Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
                 vec![Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]))],
             )?,
-            &vec![0],
+            &[0],
         );
         assert!(result.is_err());
         assert_eq!(
@@ -1899,7 +1899,7 @@ mod tests {
                 )])),
                 vec![Arc::new(run_end_array)],
             )?,
-            &vec![0],
+            &[0],
         );
         assert!(result.is_err());
         assert_eq!(
@@ -1923,7 +1923,7 @@ mod tests {
                 )])),
                 vec![Arc::new(dictionary)],
             )?,
-            &vec![0],
+            &[0],
         );
         assert!(result.is_err());
         assert_eq!(
@@ -1953,7 +1953,7 @@ mod tests {
                 )])),
                 vec![Arc::new(dictionary)],
             )?,
-            &vec![0],
+            &[0],
         )?;
         Ok(())
     }
@@ -1966,7 +1966,7 @@ mod tests {
                 Arc::new(Schema::new(vec![Field::new("a", DataType::Null, true)])),
                 vec![Arc::new(NullArray::new(3))],
             )?,
-            &vec![0],
+            &[0],
         );
         assert!(result.is_err());
         assert_eq!(

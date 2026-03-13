@@ -199,7 +199,7 @@ impl FileFormat for ArrowFormat {
 
         let table_schema = TableSchema::new(
             Arc::clone(conf.file_schema()),
-            conf.table_partition_cols().clone(),
+            conf.table_partition_cols().to_vec(),
         );
 
         let mut source: Arc<dyn FileSource> =

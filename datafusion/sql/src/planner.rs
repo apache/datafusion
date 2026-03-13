@@ -504,7 +504,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Returns a vector of (column_name, default_expr) pairs
     pub(super) fn build_column_defaults(
         &self,
-        columns: &Vec<SQLColumnDef>,
+        columns: &[SQLColumnDef],
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<(String, Expr)>> {
         let mut column_defaults = vec![];

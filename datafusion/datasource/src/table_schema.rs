@@ -166,7 +166,7 @@ impl TableSchema {
     ///
     /// These are the columns derived from the directory structure that
     /// will be appended to each row during query execution.
-    pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
+    pub fn table_partition_cols(&self) -> &[FieldRef] {
         &self.table_partition_cols
     }
 

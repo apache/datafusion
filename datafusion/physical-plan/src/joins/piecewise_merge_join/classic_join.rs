@@ -78,7 +78,7 @@ impl SortedStreamBatch {
         }
     }
 
-    fn compare_key_values(&self) -> &Vec<ArrayRef> {
+    fn compare_key_values(&self) -> &[ArrayRef] {
         &self.compare_key_values
     }
 }
