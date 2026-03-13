@@ -96,6 +96,12 @@ impl ScalarUDFImpl for SparkLevenshtein {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() != 2 && arg_types.len() != 3 {
+            return exec_err!(
+                "levenshtein expects 2 or 3 arguments, got {}",
+                arg_types.len()
+            );
+        }
         if let Some(coercion_data_type) = string_coercion(&arg_types[0], &arg_types[1])
             .or_else(|| binary_to_string_coercion(&arg_types[0], &arg_types[1]))
         {
@@ -193,7 +199,6 @@ fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
                             ) as i32;
                             match &threshold {
                                 Some(t) => {
-                                    // Spark: null threshold is treated as 0
                                     let thresh =
                                         if t.is_null(i) { 0 } else { t.value(i) };
                                     if dist > thresh {
@@ -226,7 +231,6 @@ fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
                             ) as i32;
                             match &threshold {
                                 Some(t) => {
-                                    // Spark: null threshold is treated as 0
                                     let thresh =
                                         if t.is_null(i) { 0 } else { t.value(i) };
                                     if dist > thresh {
@@ -487,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_null_threshold_treated_as_zero() -> Result<()> {
-        // Spark: NULL threshold → treated as 0
+        // Spark JVM: per-row NULL threshold is treated as 0
         // distances: [3, 3, 0], thresholds: [NULL(→0), 1, NULL(→0)]
         // results:   [-1, -1, 0]
         let s1 = Arc::new(StringArray::from(vec!["kitten", "abc", "abc"]));
@@ -561,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_per_row_null_threshold_treated_as_zero() -> Result<()> {
-        // Spark: null threshold per row → treated as 0 → dist > 0 returns -1
+        // Spark JVM: null threshold per row → treated as 0 → dist > 0 returns -1
         // ('kitten','sitting',NULL) → dist=3 > 0 → -1
         // ('abc','def',1)           → dist=3 > 1 → -1
         let s1 = Arc::new(StringArray::from(vec!["kitten", "abc"]));

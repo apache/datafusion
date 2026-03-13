@@ -166,6 +166,63 @@ SELECT levenshtein(s1, s2, t) AS result FROM VALUES ('abc', 'abc', CAST(NULL AS 
 ----
 0
 
+## Null strings with threshold in columns
+query I
+SELECT levenshtein(s1, s2, t) AS result
+FROM VALUES
+  (CAST(NULL AS STRING), 'hello', 5),
+  ('hello', CAST(NULL AS STRING), 5),
+  (CAST(NULL AS STRING), CAST(NULL AS STRING), 5),
+  ('abc', 'abc', CAST(NULL AS INT)),
+  ('abc', 'def', CAST(NULL AS INT))
+AS t(s1, s2, t);
+----
+NULL
+NULL
+NULL
+0
+-1
+
+## ── Threshold edge cases ─────────────────────────────────────
+
+## Negative threshold returns minus one
+query I
+SELECT levenshtein('kitten', 'sitting', -1);
+----
+-1
+
+## Negative threshold with identical strings returns minus one
+query I
+SELECT levenshtein('abc', 'abc', -1);
+----
+-1
+
+## Very large threshold returns actual distance
+query I
+SELECT levenshtein('abc', 'def', 1000);
+----
+3
+
+## Threshold equals one at boundary
+query I
+SELECT levenshtein('abc', 'adc', 1);
+----
+1
+
+## ── Case sensitivity and long strings ────────────────────────
+
+## Case sensitive comparison
+query I
+SELECT levenshtein('ABC', 'abc');
+----
+3
+
+## Long strings
+query I
+SELECT levenshtein(REPEAT('a', 100), REPEAT('b', 100));
+----
+100
+
 ## ── Mixed type coercion ─────────────────────────────────────
 
 ## Utf8 + arrow_cast to LargeUtf8 — should coerce correctly

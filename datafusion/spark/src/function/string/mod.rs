@@ -89,7 +89,7 @@ pub mod expr_fn {
     export_functions!((
         levenshtein,
         "Returns the Levenshtein distance between two strings. Optionally accepts a threshold; returns -1 if the distance exceeds it.",
-        str1 str2
+        str1 str2 threshold
     ));
     export_functions!((
         like,
