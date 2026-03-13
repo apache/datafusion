@@ -1348,9 +1348,8 @@ impl SessionContext {
             }
         }
 
-        let duration = Duration::from_secs(
-            minutes.unwrap_or_default() * 60 + seconds.unwrap_or_default(),
-        );
+        let secs = Self::check_overflow(config_name, minutes, 60, seconds)?;
+        let duration = Duration::from_secs(secs);
 
         if duration.is_zero() {
             return plan_err!(
@@ -1359,6 +1358,29 @@ impl SessionContext {
         }
 
         Ok(duration)
+    }
+
+    fn check_overflow(
+        config_name: &str,
+        mins: Option<u64>,
+        multiplier: u64,
+        secs: Option<u64>,
+    ) -> Result<u64> {
+        let first_part_of_secs = mins.unwrap_or_default().checked_mul(multiplier);
+        if first_part_of_secs.is_none() {
+            plan_err!(
+                "Duration is overflowed allowed maximum limit due to 'mins * {multiplier}' when setting '{config_name}'"
+            )?
+        }
+        let second_part_of_secs = first_part_of_secs
+            .unwrap()
+            .checked_add(secs.unwrap_or_default());
+        if second_part_of_secs.is_none() {
+            plan_err!(
+                "Duration is overflowed allowed maximum limit due to 'mins * {multiplier} + secs' when setting '{config_name}'"
+            )?
+        }
+        Ok(second_part_of_secs.unwrap())
     }
 
     async fn create_custom_table(
@@ -2837,6 +2859,63 @@ mod tests {
                     .message()
                     .to_string()
                     .contains(LIST_FILES_CACHE_TTL)
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_duration_with_overflow_check() {
+        const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
+
+        // Valid durations which are close to max allowed limit
+        for (duration, want) in [
+            (
+                "18446744073709551615s",
+                Duration::from_secs(18446744073709551615),
+            ),
+            (
+                "307445734561825860m",
+                Duration::from_secs(307445734561825860 * 60),
+            ),
+            (
+                "307445734561825860m10s",
+                Duration::from_secs(307445734561825860 * 60 + 10),
+            ),
+            (
+                "1m18446744073709551555s",
+                Duration::from_secs(60 + 18446744073709551555),
+            ),
+        ] {
+            let have =
+                SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
+            assert_eq!(want, have);
+        }
+
+        // Invalid durations which overflow max allowed limit
+        for (duration, error_message_prefix) in [
+            (
+                "18446744073709551616s",
+                "Failed to parse number from duration",
+            ),
+            (
+                "307445734561825861m",
+                "Duration is overflowed allowed maximum limit due to",
+            ),
+            (
+                "307445734561825860m60s",
+                "Duration is overflowed allowed maximum limit due to",
+            ),
+            (
+                "1m18446744073709551556s",
+                "Duration is overflowed allowed maximum limit due to",
+            ),
+        ] {
+            let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
+            assert!(have.is_err());
+            let error_message = have.unwrap_err().message().to_string();
+            assert!(
+                error_message.contains(error_message_prefix)
+                    && error_message.contains(LIST_FILES_CACHE_TTL)
             );
         }
     }
