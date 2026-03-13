@@ -21,22 +21,111 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT concat_ws(' ', 'Spark', 'SQL');
-## PySpark 3.5.5 Result: {'concat_ws( , Spark, SQL)': 'Spark SQL', 'typeof(concat_ws( , Spark, SQL))': 'string', 'typeof( )': 'string', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
-#query
-#SELECT concat_ws(' '::string, 'Spark'::string, 'SQL'::string);
+## ── Basic scalar usage ──────────────────────────────────────
 
-## Original Query: SELECT concat_ws('/', 'foo', null, 'bar');
-## PySpark 3.5.5 Result: {'concat_ws(/, foo, NULL, bar)': 'foo/bar', 'typeof(concat_ws(/, foo, NULL, bar))': 'string', 'typeof(/)': 'string', 'typeof(foo)': 'string', 'typeof(NULL)': 'void', 'typeof(bar)': 'string'}
-#query
-#SELECT concat_ws('/'::string, 'foo'::string, NULL::void, 'bar'::string);
+## Multiple string arguments
+query T
+SELECT concat_ws(',', 'a', 'b', 'c');
+----
+a,b,c
 
-## Original Query: SELECT concat_ws('s');
-## PySpark 3.5.5 Result: {'concat_ws(s)': '', 'typeof(concat_ws(s))': 'string', 'typeof(s)': 'string'}
-#query
-#SELECT concat_ws('s'::string);
+## Space separator
+query T
+SELECT concat_ws(' ', 'Spark', 'SQL');
+----
+Spark SQL
 
-## Original Query: SELECT concat_ws(null, 'Spark', 'SQL');
-## PySpark 3.5.5 Result: {'concat_ws(NULL, Spark, SQL)': None, 'typeof(concat_ws(NULL, Spark, SQL))': 'string', 'typeof(NULL)': 'void', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
-#query
-#SELECT concat_ws(NULL::void, 'Spark'::string, 'SQL'::string);
+## Slash separator with null skipped
+query T
+SELECT concat_ws('/', 'foo', NULL, 'bar');
+----
+foo/bar
+
+## Single argument after separator
+query T
+SELECT concat_ws(',', 'a');
+----
+a
+
+## No arguments after separator → empty string
+query T
+SELECT concat_ws(',');
+----
+(empty)
+
+## Null separator returns null
+query T
+SELECT concat_ws(NULL, 'a', 'b', 'c');
+----
+NULL
+
+## All null arguments → empty string
+query T
+SELECT concat_ws(',', CAST(NULL AS STRING), CAST(NULL AS STRING));
+----
+(empty)
+
+## ── Array arguments ─────────────────────────────────────────
+
+## Array argument
+query T
+SELECT concat_ws(',', array('a', 'b', 'c'));
+----
+a,b,c
+
+## Array with nulls skipped
+query T
+SELECT concat_ws(',', array('a', NULL, 'c'));
+----
+a,c
+
+## Multiple arrays
+query T
+SELECT concat_ws(',', array('a', 'b'), array('c', 'd'));
+----
+a,b,c,d
+
+## Mixed scalar and array arguments
+query T
+SELECT concat_ws(',', 'x', array('a', 'b'), 'y');
+----
+x,a,b,y
+
+## Null array is skipped
+query T
+SELECT concat_ws(',', 'x', CAST(NULL AS ARRAY<STRING>), 'y');
+----
+x,y
+
+## ── Edge cases ───────────────────────────────────────────────
+
+## Separator column with no value arguments
+query T
+SELECT concat_ws(sep) AS result FROM VALUES (','), ('-') AS t(sep);
+----
+(empty)
+(empty)
+
+## Null separator in column with no value arguments
+query T
+SELECT concat_ws(sep) AS result FROM VALUES (CAST(NULL AS STRING)), (',') AS t(sep);
+----
+NULL
+(empty)
+
+## ── Column expressions ──────────────────────────────────────
+
+## concat_ws on columns
+query T
+SELECT concat_ws('-', a, b) AS result FROM VALUES ('hello', 'world'), ('foo', 'bar') AS t(a, b);
+----
+hello-world
+foo-bar
+
+## concat_ws with null in columns
+query T
+SELECT concat_ws(',', a, b) AS result FROM VALUES ('a', 'b'), ('c', CAST(NULL AS STRING)), (CAST(NULL AS STRING), 'd') AS t(a, b);
+----
+a,b
+c
+d

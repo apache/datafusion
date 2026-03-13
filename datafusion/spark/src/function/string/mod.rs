@@ -19,6 +19,7 @@ pub mod ascii;
 pub mod base64;
 pub mod char;
 pub mod concat;
+pub mod concat_ws;
 pub mod elt;
 pub mod format_string;
 pub mod ilike;
@@ -36,6 +37,7 @@ make_udf_function!(ascii::SparkAscii, ascii);
 make_udf_function!(base64::SparkBase64, base64);
 make_udf_function!(char::CharFunc, char);
 make_udf_function!(concat::SparkConcat, concat);
+make_udf_function!(concat_ws::SparkConcatWs, concat_ws);
 make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(length::SparkLengthFunc, length);
 make_udf_function!(elt::SparkElt, elt);
@@ -68,6 +70,11 @@ pub mod expr_fn {
         concat,
         "Concatenates multiple input strings into a single string. Returns NULL if any input is NULL.",
         args
+    ));
+    export_functions!((
+        concat_ws,
+        "Concatenates strings with separator. Supports arrays. Null values are skipped.",
+        sep args
     ));
     export_functions!((
         elt,
@@ -118,6 +125,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         base64(),
         char(),
         concat(),
+        concat_ws(),
         elt(),
         ilike(),
         length(),
