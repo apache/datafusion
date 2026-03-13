@@ -288,9 +288,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 }
             }
 
-            self.produced += self.in_progress.len();
+            let before = self.in_progress.len();
+            let result = self.in_progress.build_record_batch();
+            self.produced += before - self.in_progress.len();
 
-            return Poll::Ready(self.in_progress.build_record_batch().transpose());
+            return Poll::Ready(result.transpose());
         }
     }
 

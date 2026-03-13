@@ -18,8 +18,9 @@
 use crate::spill::get_record_batch_memory_size;
 use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use std::sync::Arc;
 
@@ -126,9 +127,28 @@ impl BatchBuilder {
         &self.schema
     }
 
+    /// Try to interleave all columns using the given index slice.
+    fn try_interleave_columns(
+        &self,
+        indices: &[(usize, usize)],
+    ) -> Result<Vec<Arc<dyn arrow::array::Array>>> {
+        (0..self.schema.fields.len())
+            .map(|column_idx| {
+                let arrays: Vec<_> = self
+                    .batches
+                    .iter()
+                    .map(|(_, batch)| batch.column(column_idx).as_ref())
+                    .collect();
+                Ok(interleave(&arrays, indices)?)
+            })
+            .collect::<Result<Vec<_>>>()
+    }
+
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them
     ///
-    /// Will then drop any batches for which all rows have been yielded to the output
+    /// Will then drop any batches for which all rows have been yielded to the output.
+    /// If an offset overflow occurs (e.g. string/list offsets exceed i32::MAX),
+    /// retries with progressively fewer rows until it succeeds.
     ///
     /// Returns `None` if no pending rows
     pub fn build_record_batch(&mut self) -> Result<Option<RecordBatch>> {
@@ -167,8 +187,35 @@ impl BatchBuilder {
             } else {
                 self.batches_mem_used -= get_record_batch_memory_size(batch);
             }
-            retain
-        });
+        };
+
+        // Remove consumed indices, keeping any remaining for the next call.
+        self.indices.drain(..end);
+
+        // Only clean up fully-consumed batches when all indices are drained,
+        // because remaining indices may still reference earlier batches.
+        if self.indices.is_empty() {
+            // New cursors are only created once the previous cursor for the stream
+            // is finished. This means all remaining rows from all but the last batch
+            // for each stream have been yielded to the newly created record batch
+            //
+            // We can therefore drop all but the last batch for each stream
+            let mut batch_idx = 0;
+            let mut retained = 0;
+            self.batches.retain(|(stream_idx, batch)| {
+                let stream_cursor = &mut self.cursors[*stream_idx];
+                let retain = stream_cursor.batch_idx == batch_idx;
+                batch_idx += 1;
+
+                if retain {
+                    stream_cursor.batch_idx = retained;
+                    retained += 1;
+                } else {
+                    self.reservation.shrink(get_record_batch_memory_size(batch));
+                }
+                retain
+            });
+        }
 
         // Release excess memory back to the pool, but never shrink below
         // initial_reservation to maintain the anti-starvation guarantee
@@ -185,6 +232,7 @@ impl BatchBuilder {
     }
 }
 
+<<<<<<< HEAD
 /// Try to grow `reservation` so it covers at least `needed` bytes.
 ///
 /// When a reservation has been pre-loaded with bytes (e.g. via
@@ -199,4 +247,13 @@ pub(crate) fn try_grow_reservation_to_at_least(
         reservation.try_grow(needed - reservation.size())?;
     }
     Ok(())
+=======
+/// Returns `true` if the error is an Arrow offset overflow error.
+fn is_offset_overflow(e: &DataFusionError) -> bool {
+    matches!(
+        e,
+        DataFusionError::ArrowError(err, _)
+            if matches!(err.as_ref(), ArrowError::OffsetOverflowError(_))
+    )
+>>>>>>> 967cf0a65 (Fix sort merge interleave overflow)
 }
