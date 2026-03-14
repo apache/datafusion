@@ -327,9 +327,11 @@ select
 ----
 2 -1 123 -123
 
-# ceil overflow with limited precision
-query error Decimal overflow while applying ceil
+# ceil with limited precision (no overflow since scale reduces to 0)
+query R
 select ceil(arrow_cast(9.23,'Decimal128(3,2)'));
+----
+10
 
 # ceil with decimal32 argument (ensure decimal output)
 query TTTTTTTT
@@ -343,7 +345,7 @@ select
   arrow_typeof(ceil(arrow_cast(-0.99,'Decimal32(7,2)'))),
   arrow_cast(ceil(arrow_cast(-0.99,'Decimal32(7,2)')), 'Utf8');
 ----
-Decimal32(7, 2) 10.00 Decimal32(7, 2) -9.00 Decimal32(7, 2) 10.00 Decimal32(7, 2) 0.00
+Decimal32(7, 0) 10 Decimal32(7, 0) -9 Decimal32(7, 0) 10 Decimal32(7, 0) 0
 
 # ceil with decimal64 zero scale
 query TTTT
@@ -363,7 +365,7 @@ select
   arrow_typeof(ceil(arrow_cast('-9999999999999999999999999999999999.01','Decimal256(38,2)'))),
   arrow_cast(ceil(arrow_cast('-9999999999999999999999999999999999.01','Decimal256(38,2)')), 'Utf8');
 ----
-Decimal256(38, 2) 10000000000000000000000000000000000.00 Decimal256(38, 2) -9999999999999999999999999999999999.00
+Decimal256(38, 0) 10000000000000000000000000000000000 Decimal256(38, 0) -9999999999999999999999999999999999
 
 ## degrees
 
@@ -522,9 +524,11 @@ select
 ----
 1 -2 123 -123
 
-# floor overflow with limited precision
-query error Decimal overflow while applying floor
+# floor with limited precision (no overflow since scale reduces to 0)
+query R
 select floor(arrow_cast(-9.23,'Decimal128(3,2)'));
+----
+-10
 
 # floor with decimal32 argument (ensure decimal output)
 query TTTTTTTT
@@ -538,7 +542,7 @@ select
   arrow_typeof(floor(arrow_cast(-0.01,'Decimal32(7,2)'))),
   arrow_cast(floor(arrow_cast(-0.01,'Decimal32(7,2)')), 'Utf8');
 ----
-Decimal32(7, 2) 9.00 Decimal32(7, 2) -10.00 Decimal32(7, 2) 10.00 Decimal32(7, 2) -1.00
+Decimal32(7, 0) 9 Decimal32(7, 0) -10 Decimal32(7, 0) 10 Decimal32(7, 0) -1
 
 # floor with decimal64 zero scale
 query TTTT
@@ -558,7 +562,7 @@ select
   arrow_typeof(floor(arrow_cast('-9999999999999999999999999999999999.99','Decimal256(38,2)'))),
   arrow_cast(floor(arrow_cast('-9999999999999999999999999999999999.99','Decimal256(38,2)')), 'Utf8');
 ----
-Decimal256(38, 2) 9999999999999999999999999999999999.00 Decimal256(38, 2) -10000000000000000000000000000000000.00
+Decimal256(38, 0) 9999999999999999999999999999999999 Decimal256(38, 0) -10000000000000000000000000000000000
 
 ## ln
 
