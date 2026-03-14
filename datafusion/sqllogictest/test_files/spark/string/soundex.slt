@@ -83,12 +83,12 @@ SELECT soundex(' hello');
 query T
 SELECT soundex('   ');
 ----
-(empty)
+
 
 query T
 SELECT soundex('\thello');
 ----
-	hello
+\thello
 
 query T
 SELECT soundex('😀hello');
