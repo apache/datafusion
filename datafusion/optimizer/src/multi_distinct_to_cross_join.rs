@@ -114,56 +114,59 @@ impl OptimizerRule for MultiDistinctToCrossJoin {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Aggregate(Aggregate {
-                ref group_expr,
-                ref aggr_expr,
-                ..
-            }) if is_multi_distinct_agg(group_expr, aggr_expr) => {
-                // Move out of the plan to avoid cloning
-                let LogicalPlan::Aggregate(Aggregate {
+        let LogicalPlan::Aggregate(Aggregate {
+            input,
+            aggr_expr,
+            schema,
+            group_expr,
+            ..
+        }) = plan
+        else {
+            return Ok(Transformed::no(plan));
+        };
+
+        if !is_multi_distinct_agg(&group_expr, &aggr_expr) {
+            return Ok(Transformed::no(LogicalPlan::Aggregate(
+                Aggregate::try_new_with_schema(
                     input,
+                    group_expr,
                     aggr_expr,
                     schema,
-                    ..
-                }) = plan
-                else {
-                    unreachable!()
-                };
-
-                // Build individual aggregates and cross join them
-                let mut builder: Option<LogicalPlanBuilder> = None;
-                let mut projection_exprs = Vec::with_capacity(aggr_expr.len());
-
-                for (idx, expr) in aggr_expr.iter().enumerate() {
-                    let single_agg = LogicalPlan::Aggregate(Aggregate::try_new(
-                        Arc::clone(&input),
-                        vec![],
-                        vec![expr.clone()],
-                    )?);
-
-                    // Reference the single output column by name
-                    let agg_col = ident(single_agg.schema().field(0).name());
-
-                    // Alias to preserve original schema names
-                    let (qualifier, original_field) = schema.qualified_field(idx);
-                    projection_exprs.push(
-                        agg_col
-                            .alias_qualified(qualifier.cloned(), original_field.name()),
-                    );
-
-                    builder = Some(match builder {
-                        None => LogicalPlanBuilder::from(single_agg),
-                        Some(b) => b.cross_join(single_agg)?,
-                    });
-                }
-
-                let result = builder.unwrap().project(projection_exprs)?.build()?;
-
-                Ok(Transformed::yes(result))
-            }
-            _ => Ok(Transformed::no(plan)),
+                )?,
+            )));
         }
+
+        // Build individual aggregates and cross join them.
+        // Use into_iter to avoid cloning each Expr.
+        let n = aggr_expr.len();
+        let mut builder: Option<LogicalPlanBuilder> = None;
+        let mut projection_exprs = Vec::with_capacity(n);
+
+        for (idx, expr) in aggr_expr.into_iter().enumerate() {
+            let single_agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                Arc::clone(&input),
+                vec![],
+                vec![expr],
+            )?);
+
+            // Reference the single output column by name
+            let agg_col = ident(single_agg.schema().field(0).name());
+
+            // Alias to preserve original schema names
+            let (qualifier, original_field) = schema.qualified_field(idx);
+            projection_exprs.push(
+                agg_col.alias_qualified(qualifier.cloned(), original_field.name()),
+            );
+
+            builder = Some(match builder {
+                None => LogicalPlanBuilder::from(single_agg),
+                Some(b) => b.cross_join(single_agg)?,
+            });
+        }
+
+        let result = builder.unwrap().project(projection_exprs)?.build()?;
+
+        Ok(Transformed::yes(result))
     }
 }
 
