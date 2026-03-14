@@ -1293,7 +1293,7 @@ impl Unparser<'_> {
             ScalarValue::Utf8(Some(str))
             | ScalarValue::Utf8View(Some(str))
             | ScalarValue::LargeUtf8(Some(str)) => {
-                if let Some(expr) = self.dialect.custom_string_literal_override(str) {
+                if let Some(expr) = self.dialect.string_literal_to_sql(str) {
                     return Ok(expr);
                 }
                 Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
@@ -2995,7 +2995,7 @@ mod tests {
                 Some('[')
             }
 
-            fn custom_string_literal_override(&self, s: &str) -> Option<ast::Expr> {
+            fn string_literal_to_sql(&self, s: &str) -> Option<ast::Expr> {
                 if !s.is_ascii() {
                     Some(ast::Expr::value(ast::Value::NationalStringLiteral(
                         s.to_string(),

@@ -256,7 +256,7 @@ pub trait Dialect: Send + Sync {
     ///
     /// For example, MSSQL requires non-ASCII strings to use national string
     /// literal syntax (`N'datafusion資料融合'`).
-    fn custom_string_literal_override(&self, _s: &str) -> Option<ast::Expr> {
+    fn string_literal_to_sql(&self, _s: &str) -> Option<ast::Expr> {
         None
     }
 }
