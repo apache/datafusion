@@ -59,6 +59,7 @@ pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod extract_leaf_expressions;
 pub mod filter_null_join_keys;
+pub mod multi_distinct_to_union;
 pub mod optimize_projections;
 pub mod optimize_unions;
 pub mod optimizer;
@@ -69,7 +70,6 @@ pub mod replace_distinct_aggregate;
 pub mod rewrite_set_comparison;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
-pub mod multi_distinct_to_union;
 pub mod single_distinct_to_groupby;
 pub mod utils;
 

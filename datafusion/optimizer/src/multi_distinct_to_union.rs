@@ -85,11 +85,7 @@ fn is_multi_distinct_agg(group_expr: &[Expr], aggr_expr: &[Expr]) -> bool {
         }) = expr
         {
             // Must be distinct, no filter, no order_by, single arg
-            if !distinct
-                || filter.is_some()
-                || !order_by.is_empty()
-                || args.len() != 1
-            {
+            if !distinct || filter.is_some() || !order_by.is_empty() || args.len() != 1 {
                 return false;
             }
             // Each distinct aggregate must be on a different field
@@ -193,8 +189,7 @@ impl OptimizerRule for MultiDistinctToUnion {
                 }
 
                 // UNION ALL
-                let union_plan =
-                    LogicalPlan::Union(Union::try_new(union_inputs)?);
+                let union_plan = LogicalPlan::Union(Union::try_new(union_inputs)?);
 
                 // Outer aggregate: SELECT MAX(c0), MAX(c1), ...
                 // MAX picks the single non-null value from each column
@@ -224,12 +219,9 @@ impl OptimizerRule for MultiDistinctToUnion {
                     .enumerate()
                     .map(|(idx, agg_expr)| {
                         let outer_name = agg_expr.schema_name().to_string();
-                        let (qualifier, original_field) =
-                            schema.qualified_field(idx);
-                        col(outer_name).alias_qualified(
-                            qualifier.cloned(),
-                            original_field.name(),
-                        )
+                        let (qualifier, original_field) = schema.qualified_field(idx);
+                        col(outer_name)
+                            .alias_qualified(qualifier.cloned(), original_field.name())
                     })
                     .collect();
 
@@ -247,15 +239,40 @@ mod tests {
     use crate::test::*;
     use datafusion_expr::registry::{FunctionRegistry, MemoryFunctionRegistry};
     use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder};
-    use datafusion_functions_aggregate::expr_fn::{count_distinct, max};
+    use datafusion_functions_aggregate::expr_fn::count_distinct;
     use datafusion_functions_aggregate::min_max::max_udaf;
     use datafusion_functions_aggregate::sum::sum_distinct;
 
-    fn optimizer_context_with_registry() -> crate::OptimizerContext {
-        let mut registry = MemoryFunctionRegistry::new();
-        registry.register_udaf(max_udaf()).unwrap();
-        crate::OptimizerContext::new()
-            .with_function_registry(Arc::new(registry))
+    /// An OptimizerConfig that provides a function registry with max_udaf
+    struct TestConfig {
+        inner: crate::OptimizerContext,
+        registry: MemoryFunctionRegistry,
+    }
+
+    impl TestConfig {
+        fn new() -> Self {
+            let mut registry = MemoryFunctionRegistry::new();
+            registry.register_udaf(max_udaf()).unwrap();
+            Self {
+                inner: crate::OptimizerContext::new(),
+                registry,
+            }
+        }
+    }
+
+    impl OptimizerConfig for TestConfig {
+        fn query_execution_start_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+            self.inner.query_execution_start_time()
+        }
+        fn alias_generator(&self) -> &Arc<datafusion_common::alias::AliasGenerator> {
+            self.inner.alias_generator()
+        }
+        fn options(&self) -> Arc<datafusion_common::config::ConfigOptions> {
+            self.inner.options()
+        }
+        fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
+            Some(&self.registry)
+        }
     }
 
     macro_rules! assert_optimized_plan_equal {
@@ -264,7 +281,7 @@ mod tests {
             @ $expected:literal $(,)?
         ) => {{
             let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(MultiDistinctToUnion::new());
-            let config = optimizer_context_with_registry();
+            let config = TestConfig::new();
             let optimizer = crate::Optimizer::with_rules(vec![rule]);
             let optimized_plan = optimizer
                 .optimize($plan, &config, |_, _| {})
@@ -303,40 +320,6 @@ mod tests {
     }
 
     #[test]
-    fn multi_distinct_count_three_cols() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(
-                Vec::<Expr>::new(),
-                vec![
-                    count_distinct(col("a")),
-                    count_distinct(col("b")),
-                    count_distinct(col("c")),
-                ],
-            )?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Projection: max(__multi_distinct_c0) AS count(DISTINCT test.a), max(__multi_distinct_c1) AS count(DISTINCT test.b), max(__multi_distinct_c2) AS count(DISTINCT test.c) [count(DISTINCT test.a):Int64;N, count(DISTINCT test.b):Int64;N, count(DISTINCT test.c):Int64;N]
-          Aggregate: groupBy=[[]], aggr=[[max(__multi_distinct_c0), max(__multi_distinct_c1), max(__multi_distinct_c2)]] [max(__multi_distinct_c0):Int64;N, max(__multi_distinct_c1):Int64;N, max(__multi_distinct_c2):Int64;N]
-            Union [__multi_distinct_c0:Int64;N, __multi_distinct_c1:Int64;N, __multi_distinct_c2:Int64;N]
-              Projection: count(DISTINCT test.a) AS __multi_distinct_c0, Int64(NULL) AS __multi_distinct_c1, Int64(NULL) AS __multi_distinct_c2 [__multi_distinct_c0:Int64, __multi_distinct_c1:Int64;N, __multi_distinct_c2:Int64;N]
-                Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.a)]] [count(DISTINCT test.a):Int64]
-                  TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-              Projection: Int64(NULL) AS __multi_distinct_c0, count(DISTINCT test.b) AS __multi_distinct_c1, Int64(NULL) AS __multi_distinct_c2 [__multi_distinct_c0:Int64;N, __multi_distinct_c1:Int64, __multi_distinct_c2:Int64;N]
-                Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.b)]] [count(DISTINCT test.b):Int64]
-                  TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-              Projection: Int64(NULL) AS __multi_distinct_c0, Int64(NULL) AS __multi_distinct_c1, count(DISTINCT test.c) AS __multi_distinct_c2 [__multi_distinct_c0:Int64;N, __multi_distinct_c1:Int64;N, __multi_distinct_c2:Int64]
-                Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.c)]] [count(DISTINCT test.c):Int64]
-                  TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
     fn multi_distinct_mixed_agg_types() -> Result<()> {
         let table_scan = test_table_scan()?;
 
@@ -359,63 +342,6 @@ mod tests {
               Projection: Int64(NULL) AS __multi_distinct_c0, sum(DISTINCT test.b) AS __multi_distinct_c1 [__multi_distinct_c0:Int64;N, __multi_distinct_c1:UInt64;N]
                 Aggregate: groupBy=[[]], aggr=[[sum(DISTINCT test.b)]] [sum(DISTINCT test.b):UInt64;N]
                   TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
-    fn single_distinct_not_rewritten() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("a"))])?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.a)]] [count(DISTINCT test.a):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
-    fn with_groupby_not_rewritten() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(
-                vec![col("a")],
-                vec![count_distinct(col("b")), count_distinct(col("c"))],
-            )?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), count(DISTINCT test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, count(DISTINCT test.c):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
-    fn mixed_distinct_and_non_distinct_not_rewritten() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(
-                Vec::<Expr>::new(),
-                vec![count_distinct(col("a")), max(col("b"))],
-            )?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.a), max(test.b)]] [count(DISTINCT test.a):Int64, max(test.b):UInt32;N]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }

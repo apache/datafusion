@@ -45,6 +45,7 @@ use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
+use crate::multi_distinct_to_union::MultiDistinctToUnion;
 use crate::optimize_projections::OptimizeProjections;
 use crate::optimize_unions::OptimizeUnions;
 use crate::plan_signature::LogicalPlanSignature;
@@ -55,7 +56,6 @@ use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
-use crate::multi_distinct_to_union::MultiDistinctToUnion;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::utils::log_plan;
 
@@ -151,6 +151,7 @@ pub trait OptimizerConfig {
 
 /// A standalone [`OptimizerConfig`] that can be used independently
 /// of DataFusion's config management
+#[derive(Debug)]
 pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
     /// expressions such as `now()` to use a literal value instead.
@@ -161,26 +162,6 @@ pub struct OptimizerContext {
     alias_generator: Arc<AliasGenerator>,
 
     options: Arc<ConfigOptions>,
-
-    /// Optional function registry for rules that need to look up functions
-    function_registry: Option<Arc<dyn FunctionRegistry + Send + Sync>>,
-}
-
-impl Debug for OptimizerContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OptimizerContext")
-            .field(
-                "query_execution_start_time",
-                &self.query_execution_start_time,
-            )
-            .field("alias_generator", &self.alias_generator)
-            .field("options", &self.options)
-            .field(
-                "function_registry",
-                &self.function_registry.as_ref().map(|_| "..."),
-            )
-            .finish()
-    }
 }
 
 impl OptimizerContext {
@@ -198,17 +179,7 @@ impl OptimizerContext {
             query_execution_start_time: Some(Utc::now()),
             alias_generator: Arc::new(AliasGenerator::new()),
             options,
-            function_registry: None,
         }
-    }
-
-    /// Set the function registry for looking up functions by name
-    pub fn with_function_registry(
-        mut self,
-        registry: Arc<dyn FunctionRegistry + Send + Sync>,
-    ) -> Self {
-        self.function_registry = Some(registry);
-        self
     }
 
     /// Specify whether to enable the filter_null_keys rule
@@ -267,12 +238,6 @@ impl OptimizerConfig for OptimizerContext {
 
     fn options(&self) -> Arc<ConfigOptions> {
         Arc::clone(&self.options)
-    }
-
-    fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
-        self.function_registry
-            .as_ref()
-            .map(|r| r.as_ref() as &dyn FunctionRegistry)
     }
 }
 
