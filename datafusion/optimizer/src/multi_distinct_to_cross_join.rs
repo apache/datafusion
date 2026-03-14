@@ -127,12 +127,7 @@ impl OptimizerRule for MultiDistinctToCrossJoin {
 
         if !is_multi_distinct_agg(&group_expr, &aggr_expr) {
             return Ok(Transformed::no(LogicalPlan::Aggregate(
-                Aggregate::try_new_with_schema(
-                    input,
-                    group_expr,
-                    aggr_expr,
-                    schema,
-                )?,
+                Aggregate::try_new_with_schema(input, group_expr, aggr_expr, schema)?,
             )));
         }
 
@@ -154,9 +149,8 @@ impl OptimizerRule for MultiDistinctToCrossJoin {
 
             // Alias to preserve original schema names
             let (qualifier, original_field) = schema.qualified_field(idx);
-            projection_exprs.push(
-                agg_col.alias_qualified(qualifier.cloned(), original_field.name()),
-            );
+            projection_exprs
+                .push(agg_col.alias_qualified(qualifier.cloned(), original_field.name()));
 
             builder = Some(match builder {
                 None => LogicalPlanBuilder::from(single_agg),
