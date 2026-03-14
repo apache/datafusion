@@ -49,3 +49,153 @@ query T
 SELECT soundex('Datafusion');
 ----
 D312
+
+query T
+SELECT soundex('Ashcroft');
+----
+A261
+
+query T
+SELECT soundex('B1B');
+----
+B100
+
+query T
+SELECT soundex('B B');
+----
+B100
+
+query T
+SELECT soundex('BAB');
+----
+B100
+
+query T
+SELECT soundex('#hello');
+----
+#hello
+
+query T
+SELECT soundex(' hello');
+----
+ hello
+
+query T
+SELECT soundex('   ');
+----
+(empty)
+
+query T
+SELECT soundex('\thello');
+----
+	hello
+
+query T
+SELECT soundex('😀hello');
+----
+😀hello
+
+query T
+SELECT soundex('123');
+----
+123
+
+query T
+SELECT soundex('1abc');
+----
+1abc
+
+query T
+SELECT soundex('A');
+----
+A000
+
+query T
+SELECT soundex('BFPV');
+----
+B000
+
+query T
+SELECT soundex('Robert');
+----
+R163
+
+query T
+SELECT soundex('Rupert');
+----
+R163
+
+query T
+SELECT soundex(NULL);
+----
+NULL
+
+query T
+SELECT soundex('');
+----
+(empty)
+
+query T
+SELECT soundex('robert');
+----
+R163
+
+query T
+SELECT soundex('rObErT');
+----
+R163
+
+query T
+SELECT soundex('Müller');
+----
+M460
+
+query T
+SELECT soundex('Abcdefghijklmnop');
+----
+A123
+
+query T
+SELECT soundex('Lloyd');
+----
+L300
+
+query T
+SELECT soundex('BWB');
+----
+B000
+
+query T
+SELECT soundex('BHB');
+----
+B000
+
+query T
+SELECT soundex('Tymczak');
+----
+T522
+
+query T
+SELECT soundex('Aeiou');
+----
+A000
+
+query T
+SELECT soundex('1Robert');
+----
+1Robert
+
+query T
+SELECT soundex('Smith-Jones');
+----
+S532
+
+query T
+SELECT soundex('#');
+----
+#
+
+query T
+SELECT soundex('\nhello');
+----
+\nhello
