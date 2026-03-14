@@ -85,3 +85,149 @@ query ?
 SELECT array(arrow_cast(array(1,2), 'LargeList(Int64)'), array(3));
 ----
 [[1, 2], [3]]
+
+## arrays_zip (aliases: `list_zip`)
+
+# Spark example: arrays_zip(array(1, 2, 3), array(2, 3, 4))
+query ?
+select arrays_zip([1, 2, 3], [2, 3, 4]);
+----
+[{0: 1, 1: 2}, {0: 2, 1: 3}, {0: 3, 1: 4}]
+
+# Spark example: arrays_zip(array(1, 2), array(2, 3), array(3, 4))
+query ?
+select arrays_zip([1, 2], [2, 3], [3, 4]);
+----
+[{0: 1, 1: 2, 2: 3}, {0: 2, 1: 3, 2: 4}]
+
+# basic: two integer arrays of equal length
+query ?
+select arrays_zip([1, 2, 3], [10, 20, 30]);
+----
+[{0: 1, 1: 10}, {0: 2, 1: 20}, {0: 3, 1: 30}]
+
+# basic: two arrays with different element types (int + string)
+query ?
+select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
+----
+[{0: 1, 1: a}, {0: 2, 1: b}, {0: 3, 1: c}]
+
+# three arrays of equal length
+query ?
+select arrays_zip([1, 2, 3], [10, 20, 30], [100, 200, 300]);
+----
+[{0: 1, 1: 10, 2: 100}, {0: 2, 1: 20, 2: 200}, {0: 3, 1: 30, 2: 300}]
+
+# four arrays of equal length
+query ?
+select arrays_zip([1], [2], [3], [4]);
+----
+[{0: 1, 1: 2, 2: 3, 3: 4}]
+
+# mixed element types: float + boolean
+query ?
+select arrays_zip([1.5, 2.5], [true, false]);
+----
+[{0: 1.5, 1: true}, {0: 2.5, 1: false}]
+
+# different length arrays: shorter array padded with NULLs
+query ?
+select arrays_zip([1, 2], [3, 4, 5]);
+----
+[{0: 1, 1: 3}, {0: 2, 1: 4}, {0: NULL, 1: 5}]
+
+# different length arrays: first longer
+query ?
+select arrays_zip([1, 2, 3], [10]);
+----
+[{0: 1, 1: 10}, {0: 2, 1: NULL}, {0: 3, 1: NULL}]
+
+# different length: one single element, other three elements
+query ?
+select arrays_zip([1], ['a', 'b', 'c']);
+----
+[{0: 1, 1: a}, {0: NULL, 1: b}, {0: NULL, 1: c}]
+
+# empty arrays
+query ?
+select arrays_zip([], []);
+----
+[]
+
+# one empty, one non-empty
+query ?
+select arrays_zip([], [1, 2, 3]);
+----
+[{0: NULL, 1: 1}, {0: NULL, 1: 2}, {0: NULL, 1: 3}]
+
+# NULL elements inside arrays
+query ?
+select arrays_zip([1, NULL, 3], ['a', 'b', 'c']);
+----
+[{0: 1, 1: a}, {0: NULL, 1: b}, {0: 3, 1: c}]
+
+# all NULL elements
+query ?
+select arrays_zip([NULL::int, NULL, NULL], [NULL::text, NULL, NULL]);
+----
+[{0: NULL, 1: NULL}, {0: NULL, 1: NULL}, {0: NULL, 1: NULL}]
+
+# both args are NULL (entire list null)
+query ?
+select arrays_zip(NULL::int[], NULL::int[]);
+----
+NULL
+
+# one arg is NULL list, other is real array
+query ?
+select arrays_zip(NULL::int[], [1, 2, 3]);
+----
+[{0: NULL, 1: 1}, {0: NULL, 1: 2}, {0: NULL, 1: 3}]
+
+# real array + NULL list
+query ?
+select arrays_zip([1, 2], NULL::text[]);
+----
+[{0: 1, 1: NULL}, {0: 2, 1: NULL}]
+
+# column-level test with multiple rows
+query ?
+select arrays_zip(a, b) from (values ([1, 2], [10, 20]), ([3, 4, 5], [30]), ([6], [60, 70])) as t(a, b);
+----
+[{0: 1, 1: 10}, {0: 2, 1: 20}]
+[{0: 3, 1: 30}, {0: 4, 1: NULL}, {0: 5, 1: NULL}]
+[{0: 6, 1: 60}, {0: NULL, 1: 70}]
+
+# column-level test with NULL rows
+query ?
+select arrays_zip(a, b) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6], null)) as t(a, b);
+----
+[{0: 1, 1: 10}, {0: 2, 1: 20}]
+[{0: NULL, 1: 30}, {0: NULL, 1: 40}]
+[{0: 5, 1: NULL}, {0: 6, 1: NULL}]
+
+# alias: list_zip
+query ?
+select list_zip([1, 2], [3, 4]);
+----
+[{0: 1, 1: 3}, {0: 2, 1: 4}]
+
+# column test: total values equal (3 each) but per-row lengths differ
+# a: [1]     b: [10, 20]   → row 0: a has 1, b has 2
+# a: [2, 3]  b: [30]       → row 0: a has 2, b has 1
+# total a values = 3, total b values = 3 (same!) but rows are misaligned
+query ?
+select arrays_zip(a, b) from (values ([1], [10, 20]), ([2, 3], [30])) as t(a, b);
+----
+[{0: 1, 1: 10}, {0: NULL, 1: 20}]
+[{0: 2, 1: 30}, {0: 3, 1: NULL}]
+
+# single element arrays
+query ?
+select arrays_zip([42], ['hello']);
+----
+[{0: 42, 1: hello}]
+
+# error: too few arguments
+statement error
+select arrays_zip([1, 2, 3]);
