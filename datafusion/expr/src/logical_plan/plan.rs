@@ -4194,7 +4194,9 @@ impl Unnest {
                                 }
                                 DataType::List(_)
                                 | DataType::FixedSizeList(_, _)
-                                | DataType::LargeList(_) => {
+                                | DataType::LargeList(_)
+                                | DataType::ListView(_)
+                                | DataType::LargeListView(_) => {
                                     list_columns.push((
                                         index,
                                         ColumnUnnestList {
@@ -4269,7 +4271,11 @@ fn get_unnested_columns(
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+        DataType::List(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => {
             let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
             let new_field = Arc::new(Field::new(
                 col_name, data_type,
@@ -4306,7 +4312,9 @@ fn get_unnested_list_datatype_recursive(
     match data_type {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
             if depth == 1 {
                 return Ok(field.data_type().clone());
             }
@@ -4456,49 +4464,49 @@ mod tests {
         [
           {
             "Plan": {
+              "Node Type": "Projection",
               "Expressions": [
                 "employee_csv.id"
               ],
-              "Node Type": "Projection",
-              "Output": [
-                "id"
-              ],
               "Plans": [
                 {
-                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Node Type": "Filter",
-                  "Output": [
-                    "id",
-                    "state"
-                  ],
+                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Plans": [
                     {
                       "Node Type": "Subquery",
-                      "Output": [
-                        "state"
-                      ],
                       "Plans": [
                         {
                           "Node Type": "TableScan",
+                          "Relation Name": "employee_csv",
+                          "Plans": [],
                           "Output": [
                             "state"
-                          ],
-                          "Plans": [],
-                          "Relation Name": "employee_csv"
+                          ]
                         }
+                      ],
+                      "Output": [
+                        "state"
                       ]
                     },
                     {
                       "Node Type": "TableScan",
+                      "Relation Name": "employee_csv",
+                      "Plans": [],
                       "Output": [
                         "id",
                         "state"
-                      ],
-                      "Plans": [],
-                      "Relation Name": "employee_csv"
+                      ]
                     }
+                  ],
+                  "Output": [
+                    "id",
+                    "state"
                   ]
                 }
+              ],
+              "Output": [
+                "id"
               ]
             }
           }

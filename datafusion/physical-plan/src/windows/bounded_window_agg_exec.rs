@@ -66,6 +66,7 @@ use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
 
+use crate::execution_plan::CardinalityEffect;
 use ahash::RandomState;
 use futures::stream::Stream;
 use futures::{StreamExt, ready};
@@ -394,9 +395,14 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stat = self.input.partition_statistics(partition)?;
-        self.statistics_helper(input_stat)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let input_stat =
+            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        Ok(Arc::new(self.statistics_helper(input_stat)?))
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
     }
 }
 
@@ -1266,6 +1272,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::common::collect;
+    use crate::execution_plan::CardinalityEffect;
     use crate::expressions::PhysicalSortExpr;
     use crate::projection::{ProjectionExec, ProjectionExpr};
     use crate::streaming::{PartitionStream, StreamingTableExec};
@@ -1848,6 +1855,24 @@ mod tests {
         +----+------+-------+
         ");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_bounded_window_agg_cardinality_effect() -> Result<()> {
+        let schema = test_schema();
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let plan = bounded_window_exec_pb_latent_range(input, 1, "hash", "sn")?;
+        let plan = plan
+            .as_any()
+            .downcast_ref::<BoundedWindowAggExec>()
+            .expect("expected BoundedWindowAggExec");
+
+        assert!(matches!(
+            plan.cardinality_effect(),
+            CardinalityEffect::Equal
+        ));
         Ok(())
     }
 }

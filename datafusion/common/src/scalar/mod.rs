@@ -26,6 +26,7 @@ use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
+use std::fmt::Write;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::iter::repeat_n;
@@ -3675,6 +3676,22 @@ impl ScalarValue {
                     .with_field(field)
                     .build_fixed_size_list_scalar(list_size)
             }
+            DataType::ListView(field) => {
+                let list_array = array.as_list_view::<i32>();
+                let nested_array = list_array.value(index);
+                // Store as List scalar since ScalarValue has no ListView variant.
+                SingleRowListArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_list_scalar()
+            }
+            DataType::LargeListView(field) => {
+                let list_array = array.as_list_view::<i64>();
+                let nested_array = list_array.value(index);
+                // Store as LargeList scalar since ScalarValue has no LargeListView variant.
+                SingleRowListArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_large_list_scalar()
+            }
             DataType::Date32 => typed_cast!(array, index, as_date32_array, Date32)?,
             DataType::Date64 => typed_cast!(array, index, as_date64_array, Date64)?,
             DataType::Time32(TimeUnit::Second) => {
@@ -4959,8 +4976,10 @@ impl fmt::Display for ScalarValue {
             | ScalarValue::BinaryView(e) => match e {
                 Some(bytes) => {
                     // print up to first 10 bytes, with trailing ... if needed
+                    const HEX_CHARS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
                     for b in bytes.iter().take(10) {
-                        write!(f, "{b:02X}")?;
+                        f.write_char(HEX_CHARS_UPPER[(b >> 4) as usize] as char)?;
+                        f.write_char(HEX_CHARS_UPPER[(b & 0x0f) as usize] as char)?;
                     }
                     if bytes.len() > 10 {
                         write!(f, "...")?;

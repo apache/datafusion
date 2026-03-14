@@ -157,7 +157,7 @@ pub trait DataSource: Send + Sync + Debug {
 
     /// Returns statistics for a specific partition, or aggregate statistics
     /// across all partitions if `partition` is `None`.
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>>;
 
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
@@ -228,6 +228,22 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
+
+    /// Injects arbitrary run-time state into this DataSource, returning a new instance
+    /// that incorporates that state *if* it is relevant to the concrete DataSource implementation.
+    ///
+    /// This is a generic entry point: the `state` can be any type wrapped in
+    /// `Arc<dyn Any + Send + Sync>`.  A data source that cares about the state should
+    /// down-cast it to the concrete type it expects and, if successful, return a
+    /// modified copy of itself that captures the provided value.  If the state is
+    /// not applicable, the default behaviour is to return `None` so that parent
+    /// nodes can continue propagating the attempt further down the plan tree.
+    fn with_new_state(
+        &self,
+        _state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn DataSource>> {
+        None
+    }
 }
 
 /// [`ExecutionPlan`] that reads one or more files
@@ -343,7 +359,7 @@ impl ExecutionPlan for DataSourceExec {
         Some(self.data_source.metrics().clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.data_source.partition_statistics(partition)
     }
 
@@ -427,6 +443,18 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Option<Arc<dyn ExecutionPlan>> {
         self.data_source
             .with_preserve_order(preserve_order)
+            .map(|new_data_source| {
+                Arc::new(self.clone().with_data_source(new_data_source))
+                    as Arc<dyn ExecutionPlan>
+            })
+    }
+
+    fn with_new_state(
+        &self,
+        state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.data_source
+            .with_new_state(state)
             .map(|new_data_source| {
                 Arc::new(self.clone().with_data_source(new_data_source))
                     as Arc<dyn ExecutionPlan>
