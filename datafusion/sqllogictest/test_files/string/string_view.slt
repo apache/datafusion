@@ -283,8 +283,21 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.column1_utf8), count(DISTINCT test.column1_utf8view), count(DISTINCT test.column1_dict)]]
-02)--TableScan: test projection=[column1_utf8, column1_utf8view, column1_dict]
+01)Projection: max(__multi_distinct_c0) AS count(DISTINCT test.column1_utf8), max(__multi_distinct_c1) AS count(DISTINCT test.column1_utf8view), max(__multi_distinct_c2) AS count(DISTINCT test.column1_dict)
+02)--Aggregate: groupBy=[[]], aggr=[[max(__multi_distinct_c0), max(__multi_distinct_c1), max(__multi_distinct_c2)]]
+03)----Union
+04)------Projection: count(alias1) AS __multi_distinct_c0, Int64(NULL) AS __multi_distinct_c1, Int64(NULL) AS __multi_distinct_c2
+05)--------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+06)----------Aggregate: groupBy=[[test.column1_utf8 AS alias1]], aggr=[[]]
+07)------------TableScan: test projection=[column1_utf8]
+08)------Projection: Int64(NULL) AS __multi_distinct_c0, count(alias1) AS __multi_distinct_c1, Int64(NULL) AS __multi_distinct_c2
+09)--------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+10)----------Aggregate: groupBy=[[test.column1_utf8view AS alias1]], aggr=[[]]
+11)------------TableScan: test projection=[column1_utf8view]
+12)------Projection: Int64(NULL) AS __multi_distinct_c0, Int64(NULL) AS __multi_distinct_c1, count(alias1) AS __multi_distinct_c2
+13)--------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+14)----------Aggregate: groupBy=[[test.column1_dict AS alias1]], aggr=[[]]
+15)------------TableScan: test projection=[column1_dict]
 
 
 ### `STARTS_WITH`
