@@ -3009,31 +3009,44 @@ mod tests {
         let dialect = MsSqlDialect;
         let unparser = Unparser::new(&dialect);
 
-        let expr =
-            Expr::Literal(ScalarValue::Utf8(Some("national string".to_string())), None);
-        let ast = unparser.expr_to_sql(&expr)?;
-        // no unicode characters, so no prefixed with N
-        assert_eq!(ast.to_string(), "'national string'");
+        // Get nation string literal for the custom mssql dialect
+        for (s, expected) in [
+            ("national string", "'national string'"),
+            ("datafusion資料融合", "N'datafusion資料融合'"),
+        ] {
+            let expr = Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
 
-        let expr = Expr::Literal(
-            ScalarValue::Utf8(Some("datafusion資料融合".to_string())),
-            None,
-        );
+            let expr = Expr::Literal(ScalarValue::Utf8View(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
 
-        let ast = unparser.expr_to_sql(&expr)?;
-        // contain unicode characters, so prefixed with N
-        assert_eq!(ast.to_string(), "N'datafusion資料融合'");
+            let expr = Expr::Literal(ScalarValue::LargeUtf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+        }
 
         let dialect = DefaultDialect {};
         let unparser = Unparser::new(&dialect);
 
-        let expr = Expr::Literal(
-            ScalarValue::Utf8(Some("datafusion資料融合".to_string())),
-            None,
-        );
-        let ast = unparser.expr_to_sql(&expr)?;
-        // no N prefix in default dialect
-        assert_eq!(ast.to_string(), "'datafusion資料融合'");
+        // Get normal string literal for default dialect
+        for (s, expected) in [
+            ("national string", "'national string'"),
+            ("datafusion資料融合", "'datafusion資料融合'"),
+        ] {
+            let expr = Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::Utf8View(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::LargeUtf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+        }
         Ok(())
     }
 
