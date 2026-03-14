@@ -179,20 +179,6 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::count_distinct;
     use datafusion_functions_aggregate::sum::sum_distinct;
 
-    macro_rules! assert_optimized_plan_equal {
-        (
-            $plan:expr,
-            @ $expected:literal $(,)?
-        ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(MultiDistinctToCrossJoin::new());
-            assert_optimized_plan_eq_display_indent_snapshot!(
-                rule,
-                $plan,
-                @ $expected,
-            )
-        }};
-    }
-
     #[test]
     fn multi_distinct_count_two_cols() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -204,7 +190,10 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(MultiDistinctToCrossJoin::new());
+        assert_optimized_plan_eq_display_indent_snapshot!(
+            rule,
             plan,
             @ r"
         Projection: count(DISTINCT test.a) AS count(DISTINCT test.a), count(DISTINCT test.b) AS count(DISTINCT test.b) [count(DISTINCT test.a):Int64, count(DISTINCT test.b):Int64]
@@ -228,7 +217,10 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(MultiDistinctToCrossJoin::new());
+        assert_optimized_plan_eq_display_indent_snapshot!(
+            rule,
             plan,
             @ r"
         Projection: count(DISTINCT test.a) AS count(DISTINCT test.a), sum(DISTINCT test.b) AS sum(DISTINCT test.b) [count(DISTINCT test.a):Int64, sum(DISTINCT test.b):UInt64;N]
