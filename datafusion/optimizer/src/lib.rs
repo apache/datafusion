@@ -69,6 +69,7 @@ pub mod replace_distinct_aggregate;
 pub mod rewrite_set_comparison;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
+pub mod multi_distinct_to_union;
 pub mod single_distinct_to_groupby;
 pub mod utils;
 
