@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod array_contains;
+pub mod arrays_zip;
 pub mod repeat;
 pub mod shuffle;
 pub mod slice;
