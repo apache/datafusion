@@ -45,7 +45,7 @@ use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
-use crate::multi_distinct_to_union::MultiDistinctToUnion;
+use crate::multi_distinct_to_union::MultiDistinctToCrossJoin;
 use crate::optimize_projections::OptimizeProjections;
 use crate::optimize_unions::OptimizeUnions;
 use crate::plan_signature::LogicalPlanSignature;
@@ -298,7 +298,7 @@ impl Optimizer {
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
-            Arc::new(MultiDistinctToUnion::new()),
+            Arc::new(MultiDistinctToCrossJoin::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules

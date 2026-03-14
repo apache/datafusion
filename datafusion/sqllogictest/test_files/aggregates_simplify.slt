@@ -144,39 +144,33 @@ query TT
 EXPLAIN SELECT SUM(DISTINCT column1 + 1), SUM(DISTINCT column1 + 2) FROM sum_simplify_t;
 ----
 logical_plan
-01)Projection: max(__multi_distinct_c0) AS sum(DISTINCT sum_simplify_t.column1 + Int64(1)), max(__multi_distinct_c1) AS sum(DISTINCT sum_simplify_t.column1 + Int64(2))
-02)--Aggregate: groupBy=[[]], aggr=[[max(__multi_distinct_c0), max(__multi_distinct_c1)]]
-03)----Union
-04)------Projection: sum(alias1) AS __multi_distinct_c0, Int64(NULL) AS __multi_distinct_c1
-05)--------Aggregate: groupBy=[[]], aggr=[[sum(alias1)]]
-06)----------Aggregate: groupBy=[[sum_simplify_t.column1 + Int64(1) AS alias1]], aggr=[[]]
-07)------------TableScan: sum_simplify_t projection=[column1]
-08)------Projection: Int64(NULL) AS __multi_distinct_c0, sum(alias1) AS __multi_distinct_c1
-09)--------Aggregate: groupBy=[[]], aggr=[[sum(alias1)]]
-10)----------Aggregate: groupBy=[[sum_simplify_t.column1 + Int64(2) AS alias1]], aggr=[[]]
-11)------------TableScan: sum_simplify_t projection=[column1]
+01)Cross Join:
+02)--Projection: sum(alias1) AS sum(DISTINCT sum_simplify_t.column1 + Int64(1))
+03)----Aggregate: groupBy=[[]], aggr=[[sum(alias1)]]
+04)------Aggregate: groupBy=[[sum_simplify_t.column1 + Int64(1) AS alias1]], aggr=[[]]
+05)--------TableScan: sum_simplify_t projection=[column1]
+06)--Projection: sum(alias1) AS sum(DISTINCT sum_simplify_t.column1 + Int64(2))
+07)----Aggregate: groupBy=[[]], aggr=[[sum(alias1)]]
+08)------Aggregate: groupBy=[[sum_simplify_t.column1 + Int64(2) AS alias1]], aggr=[[]]
+09)--------TableScan: sum_simplify_t projection=[column1]
 physical_plan
-01)ProjectionExec: expr=[max(__multi_distinct_c0)@0 as sum(DISTINCT sum_simplify_t.column1 + Int64(1)), max(__multi_distinct_c1)@1 as sum(DISTINCT sum_simplify_t.column1 + Int64(2))]
-02)--AggregateExec: mode=Final, gby=[], aggr=[max(__multi_distinct_c0), max(__multi_distinct_c1)]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[max(__multi_distinct_c0), max(__multi_distinct_c1)]
-05)--------UnionExec
-06)----------ProjectionExec: expr=[sum(alias1)@0 as __multi_distinct_c0, NULL as __multi_distinct_c1]
-07)------------AggregateExec: mode=Final, gby=[], aggr=[sum(alias1)]
-08)--------------CoalescePartitionsExec
-09)----------------AggregateExec: mode=Partial, gby=[], aggr=[sum(alias1)]
-10)------------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-11)--------------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-12)----------------------AggregateExec: mode=Partial, gby=[column1@0 + 1 as alias1], aggr=[]
-13)------------------------DataSourceExec: partitions=1, partition_sizes=[1]
-14)----------ProjectionExec: expr=[NULL as __multi_distinct_c0, sum(alias1)@0 as __multi_distinct_c1]
-15)------------AggregateExec: mode=Final, gby=[], aggr=[sum(alias1)]
-16)--------------CoalescePartitionsExec
-17)----------------AggregateExec: mode=Partial, gby=[], aggr=[sum(alias1)]
-18)------------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-19)--------------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-20)----------------------AggregateExec: mode=Partial, gby=[column1@0 + 2 as alias1], aggr=[]
-21)------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)CrossJoinExec
+02)--ProjectionExec: expr=[sum(alias1)@0 as sum(DISTINCT sum_simplify_t.column1 + Int64(1))]
+03)----AggregateExec: mode=Final, gby=[], aggr=[sum(alias1)]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[], aggr=[sum(alias1)]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[column1@0 + 1 as alias1], aggr=[]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)--ProjectionExec: expr=[sum(alias1)@0 as sum(DISTINCT sum_simplify_t.column1 + Int64(2))]
+11)----AggregateExec: mode=Final, gby=[], aggr=[sum(alias1)]
+12)------CoalescePartitionsExec
+13)--------AggregateExec: mode=Partial, gby=[], aggr=[sum(alias1)]
+14)----------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+15)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+16)--------------AggregateExec: mode=Partial, gby=[column1@0 + 2 as alias1], aggr=[]
+17)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # DISTINCT and non-DISTINCT aggregates
 query II

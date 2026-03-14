@@ -1183,54 +1183,51 @@ query TT
 EXPLAIN SELECT COUNT(DISTINCT "SearchPhrase"), COUNT(DISTINCT "MobilePhone"), COUNT(DISTINCT "MobilePhoneModel") FROM hits;
 ----
 logical_plan
-01)Projection: max(__multi_distinct_c0) AS count(DISTINCT hits.SearchPhrase), max(__multi_distinct_c1) AS count(DISTINCT hits.MobilePhone), max(__multi_distinct_c2) AS count(DISTINCT hits.MobilePhoneModel)
-02)--Aggregate: groupBy=[[]], aggr=[[max(__multi_distinct_c0), max(__multi_distinct_c1), max(__multi_distinct_c2)]]
-03)----Union
-04)------Projection: count(alias1) AS __multi_distinct_c0, Int64(NULL) AS __multi_distinct_c1, Int64(NULL) AS __multi_distinct_c2
-05)--------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
-06)----------Aggregate: groupBy=[[hits.SearchPhrase AS alias1]], aggr=[[]]
-07)------------SubqueryAlias: hits
-08)--------------TableScan: hits_raw projection=[SearchPhrase]
-09)------Projection: Int64(NULL) AS __multi_distinct_c0, count(alias1) AS __multi_distinct_c1, Int64(NULL) AS __multi_distinct_c2
-10)--------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
-11)----------Aggregate: groupBy=[[hits.MobilePhone AS alias1]], aggr=[[]]
-12)------------SubqueryAlias: hits
-13)--------------TableScan: hits_raw projection=[MobilePhone]
-14)------Projection: Int64(NULL) AS __multi_distinct_c0, Int64(NULL) AS __multi_distinct_c1, count(alias1) AS __multi_distinct_c2
-15)--------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
-16)----------Aggregate: groupBy=[[hits.MobilePhoneModel AS alias1]], aggr=[[]]
-17)------------SubqueryAlias: hits
-18)--------------TableScan: hits_raw projection=[MobilePhoneModel]
+01)Cross Join:
+02)--Cross Join:
+03)----Projection: count(alias1) AS count(DISTINCT hits.SearchPhrase)
+04)------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+05)--------Aggregate: groupBy=[[hits.SearchPhrase AS alias1]], aggr=[[]]
+06)----------SubqueryAlias: hits
+07)------------TableScan: hits_raw projection=[SearchPhrase]
+08)----Projection: count(alias1) AS count(DISTINCT hits.MobilePhone)
+09)------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+10)--------Aggregate: groupBy=[[hits.MobilePhone AS alias1]], aggr=[[]]
+11)----------SubqueryAlias: hits
+12)------------TableScan: hits_raw projection=[MobilePhone]
+13)--Projection: count(alias1) AS count(DISTINCT hits.MobilePhoneModel)
+14)----Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+15)------Aggregate: groupBy=[[hits.MobilePhoneModel AS alias1]], aggr=[[]]
+16)--------SubqueryAlias: hits
+17)----------TableScan: hits_raw projection=[MobilePhoneModel]
 physical_plan
-01)ProjectionExec: expr=[max(__multi_distinct_c0)@0 as count(DISTINCT hits.SearchPhrase), max(__multi_distinct_c1)@1 as count(DISTINCT hits.MobilePhone), max(__multi_distinct_c2)@2 as count(DISTINCT hits.MobilePhoneModel)]
-02)--AggregateExec: mode=Final, gby=[], aggr=[max(__multi_distinct_c0), max(__multi_distinct_c1), max(__multi_distinct_c2)]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[max(__multi_distinct_c0), max(__multi_distinct_c1), max(__multi_distinct_c2)]
-05)--------UnionExec
-06)----------ProjectionExec: expr=[count(alias1)@0 as __multi_distinct_c0, NULL as __multi_distinct_c1, NULL as __multi_distinct_c2]
-07)------------AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
-08)--------------CoalescePartitionsExec
-09)----------------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
-10)------------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-11)--------------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-12)----------------------AggregateExec: mode=Partial, gby=[SearchPhrase@0 as alias1], aggr=[]
-13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase], file_type=parquet
-14)----------ProjectionExec: expr=[NULL as __multi_distinct_c0, count(alias1)@0 as __multi_distinct_c1, NULL as __multi_distinct_c2]
-15)------------AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
-16)--------------CoalescePartitionsExec
-17)----------------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
-18)------------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-19)--------------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-20)----------------------AggregateExec: mode=Partial, gby=[MobilePhone@0 as alias1], aggr=[]
-21)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[MobilePhone], file_type=parquet
-22)----------ProjectionExec: expr=[NULL as __multi_distinct_c0, NULL as __multi_distinct_c1, count(alias1)@0 as __multi_distinct_c2]
-23)------------AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
-24)--------------CoalescePartitionsExec
-25)----------------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
-26)------------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-27)--------------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-28)----------------------AggregateExec: mode=Partial, gby=[MobilePhoneModel@0 as alias1], aggr=[]
-29)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[MobilePhoneModel], file_type=parquet
+01)ProjectionExec: expr=[count(DISTINCT hits.SearchPhrase)@1 as count(DISTINCT hits.SearchPhrase), count(DISTINCT hits.MobilePhone)@2 as count(DISTINCT hits.MobilePhone), count(DISTINCT hits.MobilePhoneModel)@0 as count(DISTINCT hits.MobilePhoneModel)]
+02)--CrossJoinExec
+03)----ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT hits.MobilePhoneModel)]
+04)------AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
+05)--------CoalescePartitionsExec
+06)----------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
+07)------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+08)--------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+09)----------------AggregateExec: mode=Partial, gby=[MobilePhoneModel@0 as alias1], aggr=[]
+10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[MobilePhoneModel], file_type=parquet
+11)----CrossJoinExec
+12)------ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT hits.SearchPhrase)]
+13)--------AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
+14)----------CoalescePartitionsExec
+15)------------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
+16)--------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+17)----------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+18)------------------AggregateExec: mode=Partial, gby=[SearchPhrase@0 as alias1], aggr=[]
+19)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase], file_type=parquet
+20)------ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT hits.MobilePhone)]
+21)--------AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
+22)----------CoalescePartitionsExec
+23)------------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
+24)--------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+25)----------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+26)------------------AggregateExec: mode=Partial, gby=[MobilePhone@0 as alias1], aggr=[]
+27)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[MobilePhone], file_type=parquet
 
 query III
 SELECT COUNT(DISTINCT "SearchPhrase"), COUNT(DISTINCT "MobilePhone"), COUNT(DISTINCT "MobilePhoneModel") FROM hits;
@@ -1241,27 +1238,51 @@ query TT
 EXPLAIN SELECT COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")  FROM hits;
 ----
 logical_plan
-01)Projection: max(__multi_distinct_c0) AS count(DISTINCT hits.HitColor), max(__multi_distinct_c1) AS count(DISTINCT hits.BrowserCountry), max(__multi_distinct_c2) AS count(DISTINCT hits.BrowserLanguage)
-02)--Aggregate: groupBy=[[]], aggr=[[max(__multi_distinct_c0), max(__multi_distinct_c1), max(__multi_distinct_c2)]]
-03)----Union
-04)------Projection: count(alias1) AS __multi_distinct_c0, Int64(NULL) AS __multi_distinct_c1, Int64(NULL) AS __multi_distinct_c2
-05)--------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
-06)----------Aggregate: groupBy=[[hits.HitColor AS alias1]], aggr=[[]]
-07)------------SubqueryAlias: hits
-08)--------------TableScan: hits_raw projection=[HitColor]
-09)------Projection: Int64(NULL) AS __multi_distinct_c0, count(alias1) AS __multi_distinct_c1, Int64(NULL) AS __multi_distinct_c2
-10)--------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
-11)----------Aggregate: groupBy=[[hits.BrowserCountry AS alias1]], aggr=[[]]
-12)------------SubqueryAlias: hits
-13)--------------TableScan: hits_raw projection=[BrowserCountry]
-14)------Projection: Int64(NULL) AS __multi_distinct_c0, Int64(NULL) AS __multi_distinct_c1, count(alias1) AS __multi_distinct_c2
-15)--------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
-16)----------Aggregate: groupBy=[[hits.BrowserLanguage AS alias1]], aggr=[[]]
-17)------------SubqueryAlias: hits
-18)--------------TableScan: hits_raw projection=[BrowserLanguage]
+01)Cross Join:
+02)--Cross Join:
+03)----Projection: count(alias1) AS count(DISTINCT hits.HitColor)
+04)------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+05)--------Aggregate: groupBy=[[hits.HitColor AS alias1]], aggr=[[]]
+06)----------SubqueryAlias: hits
+07)------------TableScan: hits_raw projection=[HitColor]
+08)----Projection: count(alias1) AS count(DISTINCT hits.BrowserCountry)
+09)------Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+10)--------Aggregate: groupBy=[[hits.BrowserCountry AS alias1]], aggr=[[]]
+11)----------SubqueryAlias: hits
+12)------------TableScan: hits_raw projection=[BrowserCountry]
+13)--Projection: count(alias1) AS count(DISTINCT hits.BrowserLanguage)
+14)----Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+15)------Aggregate: groupBy=[[hits.BrowserLanguage AS alias1]], aggr=[[]]
+16)--------SubqueryAlias: hits
+17)----------TableScan: hits_raw projection=[BrowserLanguage]
 physical_plan
-01)ProjectionExec: expr=[1 as count(DISTINCT hits.HitColor), 1 as count(DISTINCT hits.BrowserCountry), 1 as count(DISTINCT hits.BrowserLanguage)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(DISTINCT hits.HitColor)@1 as count(DISTINCT hits.HitColor), count(DISTINCT hits.BrowserCountry)@2 as count(DISTINCT hits.BrowserCountry), count(DISTINCT hits.BrowserLanguage)@0 as count(DISTINCT hits.BrowserLanguage)]
+02)--CrossJoinExec
+03)----ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT hits.BrowserLanguage)]
+04)------AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
+05)--------CoalescePartitionsExec
+06)----------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
+07)------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+08)--------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+09)----------------AggregateExec: mode=Partial, gby=[BrowserLanguage@0 as alias1], aggr=[]
+10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[BrowserLanguage], file_type=parquet
+11)----CrossJoinExec
+12)------ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT hits.HitColor)]
+13)--------AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
+14)----------CoalescePartitionsExec
+15)------------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
+16)--------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+17)----------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+18)------------------AggregateExec: mode=Partial, gby=[HitColor@0 as alias1], aggr=[]
+19)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[HitColor], file_type=parquet
+20)------ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT hits.BrowserCountry)]
+21)--------AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
+22)----------CoalescePartitionsExec
+23)------------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
+24)--------------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+25)----------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+26)------------------AggregateExec: mode=Partial, gby=[BrowserCountry@0 as alias1], aggr=[]
+27)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[BrowserCountry], file_type=parquet
 
 query III
 SELECT COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")  FROM hits;
