@@ -29,10 +29,9 @@ use datafusion_common::{HashSet, Result};
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_fn::ident;
 use datafusion_expr::{
-    Expr,
+    Expr, LogicalPlanBuilder,
     expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan},
-    LogicalPlanBuilder,
 };
 
 /// Optimizer rule that rewrites queries with multiple distinct aggregates on
@@ -82,11 +81,7 @@ fn is_multi_distinct_agg(group_expr: &[Expr], aggr_expr: &[Expr]) -> bool {
         }) = expr
         {
             // Must be distinct, no filter, no order_by, single arg
-            if !distinct
-                || filter.is_some()
-                || !order_by.is_empty()
-                || args.len() != 1
-            {
+            if !distinct || filter.is_some() || !order_by.is_empty() || args.len() != 1 {
                 return false;
             }
             // Each distinct aggregate must be on a different field
@@ -151,12 +146,11 @@ impl OptimizerRule for MultiDistinctToCrossJoin {
                     let agg_col = ident(single_agg.schema().field(0).name());
 
                     // Alias to preserve original schema names
-                    let (qualifier, original_field) =
-                        schema.qualified_field(idx);
-                    projection_exprs.push(agg_col.alias_qualified(
-                        qualifier.cloned(),
-                        original_field.name(),
-                    ));
+                    let (qualifier, original_field) = schema.qualified_field(idx);
+                    projection_exprs.push(
+                        agg_col
+                            .alias_qualified(qualifier.cloned(), original_field.name()),
+                    );
 
                     builder = Some(match builder {
                         None => LogicalPlanBuilder::from(single_agg),
@@ -164,10 +158,7 @@ impl OptimizerRule for MultiDistinctToCrossJoin {
                     });
                 }
 
-                let result = builder
-                    .unwrap()
-                    .project(projection_exprs)?
-                    .build()?;
+                let result = builder.unwrap().project(projection_exprs)?.build()?;
 
                 Ok(Transformed::yes(result))
             }
