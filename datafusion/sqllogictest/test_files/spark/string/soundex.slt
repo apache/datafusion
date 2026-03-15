@@ -196,6 +196,6 @@ SELECT soundex('\nhello');
 \nhello
 
 query T
-SELECT soundex('   ');
+SELECT concat(soundex('   '), 'Spark')
 ----
-
+   Spark
