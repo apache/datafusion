@@ -91,56 +91,56 @@ fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
-const US_ENGLISH_MAPPING: [u8; 26] = [
-    b'0', b'1', b'2', b'3', b'0', b'1', b'2', b'7', b'0', b'2', b'2', b'4', b'5', b'5',
-    b'0', b'1', b'2', b'6', b'2', b'3', b'0', b'1', b'7', b'2', b'0', b'2',
-];
-
-fn compute_soundex(s: &str) -> String {
-    let bytes = s.as_bytes();
-    if bytes.is_empty() {
+pub fn compute_soundex(s: &str) -> String {
+    if s.is_empty() {
         return String::new();
     }
 
-    let mut b = bytes[0];
+    let mut chars = s.chars();
+    let first_char = chars.next().unwrap();
 
-    if b.is_ascii_lowercase() {
-        b -= 32;
-    } else if !b.is_ascii_uppercase() {
-        return s.to_string();
-    }
+    let first_code = match classify_char(first_char) {
+        Some(code) => code,
+        None => return s.to_string(),
+    };
 
-    let mut soundex_code = [b, b'0', b'0', b'0'];
-    let mut sxi = 1;
-    let idx = (b - b'A') as usize;
-    let mut last_code = US_ENGLISH_MAPPING[idx];
+    let mut result = [first_code, b'0', b'0', b'0'];
+    let mut result_index = 1;
+    let mut last_code = first_code;
 
-    for i in bytes.iter().skip(1) {
-        let mut b = *i;
-
-        if b.is_ascii_lowercase() {
-            b -= 32;
-        } else if !b.is_ascii_uppercase() {
-            last_code = b'0';
-            continue;
-        }
-
-        let idx = (b - b'A') as usize;
-        let code = US_ENGLISH_MAPPING[idx];
-
-        if code == b'7' {
-            continue;
-        } else {
-            if code != b'0' && code != last_code {
-                soundex_code[sxi] = code;
-                sxi += 1;
-                if sxi > 3 {
-                    break;
-                }
+    for c in chars {
+        let current_code = match classify_char(c) {
+            Some(code) => code,
+            None => {
+                last_code = b'0';
+                continue;
             }
-            last_code = code;
+        };
+
+        if current_code != b'0' && current_code != last_code {
+            result[result_index] = current_code;
+            result_index += 1;
+            if result_index >= result.len() {
+                break;
+            }
         }
+
+        last_code = current_code;
     }
 
-    String::from_utf8_lossy(&soundex_code).to_string()
+    String::from_utf8_lossy(&result).to_string()
+}
+
+fn classify_char(c: char) -> Option<u8> {
+    match c.to_ascii_uppercase() {
+        'A' | 'E' | 'I' | 'O' | 'U' | 'Y' => Some(0),
+        'B' | 'F' | 'P' | 'V' => Some(1),
+        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => Some(2),
+        'D' | 'T' => Some(3),
+        'L' => Some(4),
+        'M' | 'N' => Some(5),
+        'R' => Some(6),
+        'H' | 'W' => Some(7),
+        _ => None,
+    }
 }
