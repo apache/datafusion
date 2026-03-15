@@ -523,6 +523,7 @@ mod tests {
             memory_limit: None,
             sort_spill_reservation_bytes: None,
             debug: false,
+            simulate_latency: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -560,6 +561,7 @@ mod tests {
             memory_limit: None,
             sort_spill_reservation_bytes: None,
             debug: false,
+            simulate_latency: false,
         };
         let opt = RunOpt {
             query: Some(query),
