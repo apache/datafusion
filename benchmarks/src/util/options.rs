@@ -15,18 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use clap::Args;
 use datafusion::{
     execution::{
         disk_manager::DiskManagerBuilder,
         memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool},
-        runtime_env::RuntimeEnvBuilder,
+        object_store::ObjectStoreUrl,
+        runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
     },
     prelude::SessionConfig,
 };
 use datafusion_common::{DataFusionError, Result};
+use object_store::{
+    local::LocalFileSystem,
+    throttle::{ThrottleConfig, ThrottledStore},
+};
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
@@ -61,6 +66,11 @@ pub struct CommonOpt {
     /// Activate debug mode to see more details
     #[arg(short, long)]
     pub debug: bool,
+
+    /// Simulate object store latency to mimic remote storage (e.g. S3).
+    /// Adds random latency in the range 20-200ms to each object store operation.
+    #[arg(long = "simulate-latency")]
+    pub simulate_latency: bool,
 }
 
 impl CommonOpt {
@@ -113,6 +123,28 @@ impl CommonOpt {
                 .with_disk_manager_builder(DiskManagerBuilder::default());
         }
         Ok(rt_builder)
+    }
+
+    /// Build the runtime environment, optionally wrapping the local filesystem
+    /// with a throttled object store to simulate remote storage latency.
+    pub fn build_runtime(&self) -> Result<Arc<RuntimeEnv>> {
+        let rt = self.runtime_env_builder()?.build_arc()?;
+        if self.simulate_latency {
+            let config = ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(100),
+                wait_list_per_call: Duration::from_millis(200),
+                wait_list_with_delimiter_per_call: Duration::from_millis(200),
+                ..Default::default()
+            };
+            let throttled: Arc<dyn object_store::ObjectStore> =
+                Arc::new(ThrottledStore::new(LocalFileSystem::new(), config));
+            let url = ObjectStoreUrl::parse("file:///")?;
+            rt.register_object_store(url.as_ref(), throttled);
+            println!(
+                "Simulating object store latency (get: 100ms, list: 200ms)"
+            );
+        }
+        Ok(rt)
     }
 }
 
