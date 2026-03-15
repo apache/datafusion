@@ -104,9 +104,9 @@ fn compute_soundex(s: &str) -> String {
 
     let mut b = bytes[0];
 
-    if (b'a'..=b'z').contains(&b) {
+    if b.is_ascii_lowercase() {
         b -= 32;
-    } else if !(b'A'..=b'Z').contains(&b) {
+    } else if !b.is_ascii_uppercase() {
         return s.to_string();
     }
 
@@ -119,9 +119,9 @@ fn compute_soundex(s: &str) -> String {
     for i in bytes.iter().skip(1) {
         let mut b = *i;
 
-        if (b'a'..=b'z').contains(&b) {
+        if b.is_ascii_lowercase() {
             b -= 32;
-        } else if !(b'A'..=b'Z').contains(&b) {
+        } else if !b.is_ascii_uppercase() {
             last_code = b'0';
             continue;
         }

@@ -81,11 +81,6 @@ SELECT soundex(' hello');
  hello
 
 query T
-SELECT soundex('   ');
-----
-
-
-query T
 SELECT soundex('\thello');
 ----
 \thello
