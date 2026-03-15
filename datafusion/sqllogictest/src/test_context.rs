@@ -23,11 +23,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray,
-    LargeStringArray, StringArray, TimestampNanosecondArray, UnionArray,
+    Array, ArrayRef, BinaryArray, FixedSizeListArray, Float64Array, Int32Array,
+    LargeBinaryArray, LargeStringArray, ListViewArray, StringArray,
+    TimestampNanosecondArray, UnionArray,
 };
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
+use arrow::datatypes::{
+    DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit, UnionFields,
+};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
@@ -142,6 +145,10 @@ impl TestContext {
             "async_udf.slt" => {
                 info!("Registering dummy async udf");
                 register_async_abs_udf(test_ctx.session_ctx())
+            }
+            "lambda.slt" => {
+                info!("Registering table with ListView column");
+                register_table_with_list_view(test_ctx.session_ctx())
             }
             _ => {
                 info!("Using default SessionContext");
@@ -512,4 +519,27 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     let async_abs = AsyncAbs::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_abs));
     ctx.register_udf(udf.into_scalar_udf());
+}
+
+fn register_table_with_list_view(session_ctx: &SessionContext) {
+    let data = vec![
+        Some(vec![Some(0), Some(1)]),
+        Some(vec![Some(3), None]),
+        Some(vec![None, None]),
+        None,
+    ];
+    let list_array = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(data, 2);
+    let list_view: ListViewArray = list_array.into();
+
+    let schema = Schema::new(vec![Field::new(
+        "list_view",
+        list_view.data_type().clone(),
+        true,
+    )]);
+    let batch =
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_view)]).unwrap();
+
+    session_ctx
+        .register_batch("table_with_list_view", batch)
+        .unwrap();
 }

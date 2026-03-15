@@ -219,6 +219,7 @@ impl Debug for SessionState {
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
+            .field("lambda_functions", &self.lambda_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
             .field("prepared_plans", &self.prepared_plans)
@@ -833,6 +834,11 @@ impl SessionState {
     pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
         &self.scalar_functions
     }
+    
+    /// Return reference to lambda_functions
+    pub fn lambda_functions(&self) -> &HashMap<String, Arc<dyn LambdaUDF>> {
+        &self.lambda_functions
+    }
 
     /// Return reference to aggregate_functions
     pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
@@ -1231,6 +1237,15 @@ impl SessionStateBuilder {
         self.scalar_functions = Some(scalar_functions);
         self
     }
+    
+    /// Set the map of [`LambdaUDF`]s
+    pub fn with_lambda_functions(
+        mut self,
+        lambda_functions: Vec<Arc<dyn LambdaUDF>>,
+    ) -> Self {
+        self.lambda_functions = Some(lambda_functions);
+        self
+    }
 
     /// Set the map of [`AggregateUDF`]s
     pub fn with_aggregate_functions(
@@ -1601,6 +1616,11 @@ impl SessionStateBuilder {
     pub fn scalar_functions(&mut self) -> &mut Option<Vec<Arc<ScalarUDF>>> {
         &mut self.scalar_functions
     }
+    
+    /// Returns the current scalar_functions value
+    pub fn lambda_functions(&mut self) -> &mut Option<Vec<Arc<dyn LambdaUDF>>> {
+        &mut self.lambda_functions
+    }
 
     /// Returns the current aggregate_functions value
     pub fn aggregate_functions(&mut self) -> &mut Option<Vec<Arc<AggregateUDF>>> {
@@ -1838,6 +1858,10 @@ impl ContextProvider for SessionContextProvider<'_> {
     fn udf_names(&self) -> Vec<String> {
         self.state.scalar_functions().keys().cloned().collect()
     }
+    
+    fn udlf_names(&self) -> Vec<String> {
+        self.state.lambda_functions().keys().cloned().collect()
+    }
 
     fn udaf_names(&self) -> Vec<String> {
         self.state.aggregate_functions().keys().cloned().collect()
@@ -1981,6 +2005,10 @@ impl FunctionRegistry for SessionState {
         &mut self,
         udlf: Arc<dyn LambdaUDF>,
     ) -> datafusion_common::Result<Option<Arc<dyn LambdaUDF>>> {
+        udlf.aliases().iter().for_each(|alias| {
+            self.lambda_functions
+                .insert(alias.clone(), Arc::clone(&udlf));
+        });
         Ok(self.lambda_functions.insert(udlf.name().into(), udlf))
     }
 
@@ -2139,10 +2167,10 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
+    use datafusion_expr::LambdaUDF;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_optimizer::Optimizer;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
-    use datafusion_session::Session;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -2419,7 +2447,7 @@ mod tests {
             self.state.scalar_functions().get(name).cloned()
         }
 
-        fn get_lambda_meta(&self, name: &str) -> Option<Arc<dyn datafusion_expr::LambdaUDF>> {
+        fn get_lambda_meta(&self, name: &str) -> Option<Arc<dyn LambdaUDF>> {
             self.state.lambda_functions().get(name).cloned()
         }
 
@@ -2441,6 +2469,10 @@ mod tests {
 
         fn udf_names(&self) -> Vec<String> {
             self.state.scalar_functions().keys().cloned().collect()
+        }
+        
+        fn udlf_names(&self) -> Vec<String> {
+            self.state.lambda_functions().keys().cloned().collect()
         }
 
         fn udaf_names(&self) -> Vec<String> {

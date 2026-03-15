@@ -17,26 +17,31 @@
 
 //! Physical lambda expression: [`LambdaExpr`]
 
+use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::{any::Any, sync::OnceLock};
 
-use crate::expressions::Column;
+use crate::expressions::{Column, LambdaVariable};
 use crate::physical_expr::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{internal_err, HashSet, Result};
+use datafusion_common::{internal_err, tree_node::TreeNodeVisitor, HashSet, Result};
+use datafusion_common::{
+    plan_err,
+    tree_node::{TreeNode, TreeNodeRecursion},
+};
 use datafusion_expr::ColumnarValue;
+use hashbrown::{hash_map::EntryRef, HashMap};
 
 /// Represents a lambda with the given parameters names and body
 #[derive(Debug, Eq, Clone)]
 pub struct LambdaExpr {
     params: Vec<String>,
     body: Arc<dyn PhysicalExpr>,
-    captures: OnceLock<HashSet<usize>>,
+    captured_columns: HashSet<usize>,
+    captured_variables: HashSet<String>,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808 [https://github.com/apache/datafusion/issues/13196]
@@ -55,11 +60,29 @@ impl Hash for LambdaExpr {
 
 impl LambdaExpr {
     /// Create a new lambda expression with the given parameters and body
-    pub fn new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Self {
+    pub fn try_new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Result<Self> {
+        if all_unique(&params) {
+            Ok(Self::new(params, body))
+        } else {
+            plan_err!("lambda params must be unique, got ({})", params.join(", "))
+        }
+    }
+
+    fn new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Self {
+        let (captured_columns, captured_variables) = {
+            let mut captures = Captures::new(&params);
+
+            body.visit(&mut captures)
+                .expect("visitor should be infallible");
+
+            (captures.columns, captures.variables)
+        };
+
         Self {
             params,
             body,
-            captures: OnceLock::new(),
+            captured_columns,
+            captured_variables,
         }
     }
 
@@ -73,22 +96,12 @@ impl LambdaExpr {
         &self.body
     }
 
-    pub fn captures(&self) -> &HashSet<usize> {
-        self.captures.get_or_init(|| {
-            let mut indices = HashSet::new();
+    pub(crate) fn captured_columns(&self) -> &HashSet<usize> {
+        &self.captured_columns
+    }
 
-            self.body
-                .apply(|expr| {
-                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                        indices.insert(column.index());
-                    }
-
-                    Ok(TreeNodeRecursion::Continue)
-                })
-                .expect("closure should be infallibe");
-
-            indices
-        })
+    pub(crate) fn captured_variables(&self) -> &HashSet<String> {
+        &self.captured_variables
     }
 }
 
@@ -123,14 +136,97 @@ impl PhysicalExpr for LambdaExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(Self {
-            params: self.params.clone(),
-            body: Arc::clone(&children[0]),
-            captures: OnceLock::new(),
-        }))
+        Ok(Arc::new(Self::new(
+            self.params.clone(),
+            Arc::clone(&children[0]),
+        )))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}) -> {}", self.params.join(", "), self.body)
+    }
+}
+
+/// Create a lambda expression
+pub fn lambda(
+    params: impl IntoIterator<Item = impl Into<String>>,
+    body: Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(LambdaExpr::try_new(
+        params.into_iter().map(Into::into).collect(),
+        body,
+    )?))
+}
+
+fn all_unique(params: &[String]) -> bool {
+    match params.len() {
+        0 | 1 => true,
+        2 => params[0] != params[1],
+        _ => {
+            let mut set = HashSet::with_capacity(params.len());
+
+            params.iter().all(|p| set.insert(p.as_str()))
+        }
+    }
+}
+
+struct Captures<'a> {
+    shadows: HashMap<&'a str, usize>,
+    columns: HashSet<usize>,
+    variables: HashSet<String>,
+}
+
+impl<'a> Captures<'a> {
+    fn new(params: &'a [String]) -> Self {
+        Self {
+            shadows: params.iter().map(|p| (p.as_str(), 1)).collect(),
+            columns: HashSet::new(),
+            variables: HashSet::new(),
+        }
+    }
+}
+
+impl<'n> TreeNodeVisitor<'n> for Captures<'n> {
+    type Node = Arc<dyn PhysicalExpr>;
+
+    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+        if let Some(lambda) = node.as_any().downcast_ref::<LambdaExpr>() {
+            for param in &lambda.params {
+                *self.shadows.entry_ref(param.as_str()).or_default() += 1;
+            }
+        } else if let Some(lambda_variable) =
+            node.as_any().downcast_ref::<LambdaVariable>()
+        {
+            if !self.shadows.contains_key(lambda_variable.name()) {
+                self.variables.insert(lambda_variable.name().to_owned());
+            }
+        } else if let Some(col) = node.as_any().downcast_ref::<Column>() {
+            self.columns.insert(col.index());
+        }
+
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn f_up(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+        if let Some(lambda) = node.as_any().downcast_ref::<LambdaExpr>() {
+            for param in &lambda.params {
+                match self.shadows.entry_ref(param.as_str()) {
+                    EntryRef::Occupied(mut v) => {
+                        if *v.get() > 1 {
+                            *v.get_mut() -= 1;
+                        } else {
+                            v.remove();
+                        }
+                    }
+                    EntryRef::Vacant(_v) => {
+                        unreachable!(
+                            "f_down should have inserted a value for every param"
+                        )
+                    }
+                }
+            }
+        }
+
+        Ok(TreeNodeRecursion::Continue)
     }
 }

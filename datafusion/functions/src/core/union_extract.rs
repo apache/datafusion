@@ -248,7 +248,6 @@ mod tests {
             .iter()
             .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
-
         let result = fun.invoke_with_args(ScalarFunctionArgs {
             args,
             arg_fields,

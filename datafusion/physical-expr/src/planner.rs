@@ -17,23 +17,23 @@
 
 use std::sync::Arc;
 
-use crate::expressions::{lambda_variable, LambdaExpr};
-use crate::{LambdaFunctionExpr, ScalarFunctionExpr};
 use crate::{
     expressions::{self, binary, like, similar_to, Column, Literal},
     PhysicalExpr,
 };
+use crate::{LambdaFunctionExpr, ScalarFunctionExpr};
 
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema, Result, ScalarValue,
     ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
-    Alias, Cast, InList, Lambda, LambdaFunction, LambdaVariable, Placeholder, ScalarFunction
+    Alias, Cast, InList, Lambda, LambdaFunction, LambdaVariable, Placeholder,
+    ScalarFunction,
 };
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
@@ -321,7 +321,6 @@ pub fn create_physical_expr(
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
-
             let config_options = match execution_props.config_options.as_ref() {
                 Some(config_options) => Arc::clone(config_options),
                 None => Arc::new(ConfigOptions::default()),
@@ -388,7 +387,7 @@ pub fn create_physical_expr(
         Expr::Placeholder(Placeholder { id, .. }) => {
             exec_err!("Placeholder '{id}' was not provided a value for execution.")
         }
-        Expr::LambdaFunction(LambdaFunction { func, args}) => {
+        Expr::LambdaFunction(LambdaFunction { func, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
@@ -404,17 +403,19 @@ pub fn create_physical_expr(
                 config_options,
             )?))
         }
-        Expr::Lambda(Lambda { params, body }) => Ok(Arc::new(LambdaExpr::new(
+        Expr::Lambda(Lambda { params, body }) => expressions::lambda(
             params.clone(),
             create_physical_expr(body, input_dfschema, execution_props)?,
-        ))),
+        ),
         Expr::LambdaVariable(LambdaVariable {
             name,
             field,
             spans: _,
-        }) => lambda_variable(
+        }) => expressions::lambda_variable(
             name,
-            Arc::clone(field),
+            Arc::clone(field.as_ref().ok_or_else(|| {
+                plan_datafusion_err!("unresolved LambdaVariable {name}")
+            })?),
         ),
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")

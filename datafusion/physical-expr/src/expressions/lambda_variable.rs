@@ -15,28 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical lambda column reference: [`LambdaVariable`]
+//! Physical lambda variable reference: [`LambdaVariable`]
 
 use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
-use arrow::array::ArrayRef;
 use arrow::datatypes::FieldRef;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{Result, exec_datafusion_err};
+
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 
-/// Represents the lambda column with a given name and field
+/// Represents the lambda variable with a given name and field
 #[derive(Debug, Clone)]
 pub struct LambdaVariable {
     name: String,
     field: FieldRef,
-    value: Option<ColumnarValue>,
 }
 
 impl Eq for LambdaVariable {}
@@ -55,31 +54,22 @@ impl Hash for LambdaVariable {
 }
 
 impl LambdaVariable {
-    /// Create a new lambda column expression
-    pub fn new(name: &str, field: FieldRef) -> Self {
+    /// Create a new lambda variable expression
+    pub fn new(name: String, field: FieldRef) -> Self {
         Self {
-            name: name.to_owned(),
+            name,
             field,
-            value: None,
         }
     }
 
-    /// Get the column's name
+    /// Get the variable's name
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Get the column's field
+    /// Get the variable's field
     pub fn field(&self) -> &FieldRef {
         &self.field
-    }
-    
-    pub fn with_value(self, value: ArrayRef) -> Self {
-        Self {
-            name: self.name,
-            field: self.field,
-            value: Some(ColumnarValue::Array(value)),
-        }
     }
 }
 
@@ -90,24 +80,23 @@ impl std::fmt::Display for LambdaVariable {
 }
 
 impl PhysicalExpr for LambdaVariable {
-    /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    /// Get the data type of this expression, given the schema of the input
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.field.data_type().clone())
     }
 
-    /// Decide whether this expression is nullable, given the schema of the input
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
         Ok(self.field.is_nullable())
     }
 
-    /// Evaluate the expression
-    fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        self.value.clone().ok_or_else(|| exec_datafusion_err!("Physical LambdaVariable {} missing value", self.name))
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        match batch.column_by_name(&self.name) {
+            Some(array) => Ok(ColumnarValue::Array(Arc::clone(array))),
+            None => exec_err!("LambdaVariable {} not present in batch", self.name),
+        }
     }
 
     fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
@@ -131,6 +120,6 @@ impl PhysicalExpr for LambdaVariable {
 }
 
 /// Create a lambda variable expression
-pub fn lambda_variable(name: &str, field: FieldRef) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(LambdaVariable::new(name, field)))
+pub fn lambda_variable(name: impl Into<String>, field: FieldRef) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(LambdaVariable::new(name.into(), field)))
 }

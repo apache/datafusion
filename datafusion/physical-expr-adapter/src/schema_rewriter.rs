@@ -21,10 +21,9 @@ use std::sync::Arc;
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     exec_err,
-    tree_node::{Transformed, TransformedResult},
+    tree_node::{Transformed, TransformedResult, TreeNode},
     Result, ScalarValue,
 };
 use datafusion_functions::core::getfield::GetFieldFunc;

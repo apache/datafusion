@@ -21,13 +21,13 @@ use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{ColumnarValue, Documentation, Expr};
-use arrow::array::RecordBatch;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, ScalarValue, not_impl_err};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
-use datafusion_expr_common::signature::{Volatility};
+use datafusion_expr_common::signature::Volatility;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::Ordering;
@@ -68,6 +68,9 @@ pub enum LambdaTypeSignature {
 
 /// Provides information necessary for calling a lambda function.
 ///
+/// - [`LambdaTypeSignature`] defines the argument types that a function has implementations
+///   for.
+///
 /// - [`Volatility`] defines how the output of the function changes with the input.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct LambdaSignature {
@@ -84,7 +87,7 @@ pub struct LambdaSignature {
 }
 
 impl LambdaSignature {
-    /// Creates a new LambdaSignature from a given type signature and volatility.
+    /// Creates a new `LambdaSignature` from a given type signature and volatility.
     pub fn new(type_signature: LambdaTypeSignature, volatility: Volatility) -> Self {
         LambdaSignature {
             type_signature,
@@ -163,35 +166,35 @@ impl Hash for dyn LambdaUDF {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ValueOrLambdaParameter<T> {
-    /// A value with the given associated data
-    Value(T),
-    /// A lambda
-    Lambda,
-}
-
 /// Arguments passed to [`LambdaUDF::invoke_with_args`] when invoking a
 /// lambda function.
 #[derive(Debug, Clone)]
 pub struct LambdaFunctionArgs {
     /// The evaluated arguments to the function
-    pub args: Vec<ValueOrLambda>,
+    pub args: Vec<ValueOrLambda<ColumnarValue, LambdaArgument>>,
     /// Field associated with each arg, if it exists
-    pub arg_fields: Vec<ValueOrLambdaField>,
+    pub arg_fields: Vec<ValueOrLambda<FieldRef, FieldRef>>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
-    /// The return field of the lambda function returned (from `return_type`
-    /// or `return_field_from_args`) when creating the physical expression
-    /// from the logical expression
+    /// The return field of the lambda function returned
+    /// (from `return_field_from_args`) when creating the
+    /// physical expression from the logical expression
     pub return_field: FieldRef,
     /// The config options at execution time
     pub config_options: Arc<ConfigOptions>,
 }
 
+impl LambdaFunctionArgs {
+    /// The return type of the function. See [`Self::return_field`] for more
+    /// details.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
+}
+
 /// A lambda argument to a LambdaFunction
 #[derive(Clone, Debug)]
-pub struct LambdaFunctionLambdaArg {
+pub struct LambdaArgument {
     /// The parameters defined in this lambda
     ///
     /// For example, for `array_transform([2], v -> -v)`,
@@ -203,26 +206,114 @@ pub struct LambdaFunctionLambdaArg {
     /// this will be the physical expression of `-v`
     pub body: Arc<dyn PhysicalExpr>,
     /// A RecordBatch containing at least the captured columns inside this lambda body, if any
-    /// Note that it may contain additional, non-specified columns, but that's implementation detail
+    /// Note that it may contain additional, non-specified columns, but that's a implementation detail
     ///
     /// For example, for `array_transform([2], v -> v + a + b)`,
-    /// this will be a `RecordBatch` with two columns, `a` and `b`
+    /// this will be a `RecordBatch` with at least two columns, `a` and `b`
     pub captures: Option<RecordBatch>,
 }
 
-impl LambdaFunctionArgs {
-    /// The return type of the function. See [`Self::return_field`] for more
-    /// details.
-    pub fn return_type(&self) -> &DataType {
-        self.return_field.data_type()
+impl LambdaArgument {
+    /// For adjusting multiple arrays by indices, use [`take_arrays`]
+    ///
+    /// [`take_arrays`]: arrow::compute::take_arrays
+    pub fn evaluate(
+        &self,
+        args: &[&dyn Fn() -> Result<ArrayRef>],
+        mut adjust: impl FnMut(&[ArrayRef]) -> Result<Vec<ArrayRef>>,
+    ) -> Result<ColumnarValue> {
+        let adjusted_captures = self
+            .captures
+            .as_ref()
+            .map(|captures| {
+                let adjusted_columns = adjust(captures.columns())?;
+
+                RecordBatch::try_new(captures.schema(), adjusted_columns)
+            })
+            .transpose()?;
+
+        let merged = merge_captures_with_variables(
+            adjusted_captures.as_ref(),
+            &self.params,
+            args,
+        )?;
+
+        self.body.evaluate(&merged)
     }
 }
 
-// An argument to a LambdaUDF that supports lambdas
-#[derive(Clone, Debug)]
-pub enum ValueOrLambda {
-    Value(ColumnarValue),
-    Lambda(LambdaFunctionLambdaArg),
+fn merge_captures_with_variables(
+    captures: Option<&RecordBatch>,
+    params: &[FieldRef],
+    variables: &[&dyn Fn() -> Result<ArrayRef>],
+) -> Result<RecordBatch> {
+    if variables.len() < params.len() {
+        return exec_err!(
+            "expected at least {} lambda arguments to merge with captures, got {}",
+            params.len(),
+            variables.len()
+        );
+    }
+
+    match captures {
+        Some(captures) => {
+            let old_fields = captures.schema_ref().fields();
+
+            let mut new_fields = old_fields
+                .iter()
+                .map(|field| {
+                    if !fields_contains(params, field.name()) {
+                        return Arc::clone(field);
+                    }
+
+                    let mut i = 0;
+
+                    loop {
+                        let alias = format!("{}_shadowed_{i}", field.name());
+
+                        if !fields_contains(params, &alias)
+                            && old_fields.find(&alias).is_none()
+                        {
+                            break Arc::new(Field::new(
+                                alias,
+                                field.data_type().clone(),
+                                field.is_nullable(),
+                            ));
+                        }
+
+                        i += 1;
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            new_fields.extend_from_slice(params);
+
+            let mut columns = captures.columns().to_vec();
+
+            for arg in &variables[..params.len()] {
+                columns.push(arg()?);
+            }
+
+            let new_schema = Arc::new(Schema::new(new_fields));
+
+            Ok(RecordBatch::try_new(new_schema, columns)?)
+        }
+        None => {
+            let columns = variables
+                .iter()
+                .take(params.len())
+                .map(|arg| arg())
+                .collect::<Result<_>>()?;
+
+            let schema = Arc::new(Schema::new(params));
+
+            Ok(RecordBatch::try_new(schema, columns)?)
+        }
+    }
+}
+
+fn fields_contains(fields: &[FieldRef], name: &str) -> bool {
+    fields.iter().any(|f| f.name().as_str() == name)
 }
 
 /// Information about arguments passed to the function
@@ -236,28 +327,31 @@ pub enum ValueOrLambda {
 pub struct LambdaReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
     ///
-    /// If argument `i` to the function is a lambda, it will be the field returned by the
-    /// lambda when executed with the arguments returned from `LambdaUDF::lambdas_parameters`
+    /// If argument `i` to the function is a lambda, it will be the field of the result of the
+    /// lambda if evaluated with the parameters returned from [`LambdaUDF::lambdas_parameters`]
     ///
     /// For example, with `array_transform([1], v -> v == 5)`
-    /// this field will be `[Field::new("", DataType::List(DataType::Int32), false), Field::new("", DataType::Boolean, false)]`
-    pub arg_fields: &'a [ValueOrLambdaField],
+    /// this field will be `[
+    ///     ValueOrLambda::Value(Field::new("", DataType::List(DataType::Int32), false)),
+    ///     ValueOrLambda::Lambda(Field::new("", DataType::Boolean, false))
+    /// ]`
+    pub arg_fields: &'a [ValueOrLambda<FieldRef, FieldRef>],
     /// Is argument `i` to the function a scalar (constant)?
     ///
     /// If the argument `i` is not a scalar, it will be None
     ///
-    /// For example, if a function is called like `my_function(column_a, 5)`
-    /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
+    /// For example, if a function is called like `array_transform([1], v -> v == 5)`
+    /// this field will be `[Some(ScalarValue::List(...), None]`
     pub scalar_arguments: &'a [Option<&'a ScalarValue>],
 }
 
-/// A tagged Field indicating whether it correspond to a value or a lambda argument
-#[derive(Clone, Debug)]
-pub enum ValueOrLambdaField {
-    /// The Field of a ColumnarValue argument
-    Value(FieldRef),
-    /// The Field of the return of the lambda body when evaluated with the parameters from LambdaUDF::lambda_parameters
-    Lambda(FieldRef),
+/// An argument to a lambda function
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ValueOrLambda<V, L> {
+    /// A value with associated data
+    Value(V),
+    /// A lambda with associated data
+    Lambda(L),
 }
 
 /// Trait for implementing user defined lambda functions.
@@ -265,10 +359,9 @@ pub enum ValueOrLambdaField {
 /// This trait exposes the full API for implementing user defined functions and
 /// can be used to implement any function.
 ///
-/// See [`advanced_udf.rs`] for a full example with complete implementation and
-/// [`LambdaUDF`] for other available options.
+/// See [`array_transform.rs`] for a commented complete implementation
 ///
-/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`array_transform.rs`]: https://github.com/apache/datafusion/blob/main/datafusion/functions-nested/src/array_transform.rs
 ///
 /// # Basic Example
 /// ```
@@ -364,7 +457,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// function has an implementation, and the function's [`Volatility`].
     ///
     /// See [`LambdaSignature`] for more details on argument type handling
-    /// and [`Self::return_type`] for computing the return type.
+    /// and [`Self::return_field_from_args`] for computing the return type.
     ///
     /// [`Volatility`]: datafusion_expr_common::signature::Volatility
     fn signature(&self) -> &LambdaSignature;
@@ -391,9 +484,15 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// * `Some(LambdaUDF)` - A new instance of this function configured with the new settings
     /// * `None` - If this function does not change with new configuration settings (the default)
-    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<Arc< dyn LambdaUDF>> {
+    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<Arc<dyn LambdaUDF>> {
         None
     }
+
+    /// Returns the parameters that any lambda supports
+    fn lambdas_parameters(
+        &self,
+        args: &[ValueOrLambda<FieldRef, ()>],
+    ) -> Result<Vec<Option<Vec<Field>>>>;
 
     /// What type will be returned by this function, given the arguments?
     ///
@@ -632,7 +731,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// arguments to these specific types.
     fn coerce_value_types(
         &self,
-        _arg_types: &[ValueOrLambdaParameter<DataType>],
+        _arg_types: &[ValueOrLambda<DataType, ()>],
     ) -> Result<Vec<Option<DataType>>> {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
@@ -643,14 +742,6 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// publicly facing documentation.
     fn documentation(&self) -> Option<&Documentation> {
         None
-    }
-
-    /// Returns the parameters that any lambda supports
-    fn lambdas_parameters(
-        &self,
-        args: &[ValueOrLambdaParameter<FieldRef>],
-    ) -> Result<Vec<Option<Vec<Field>>>> {
-        Ok(vec![None; args.len()])
     }
 }
 
@@ -680,7 +771,17 @@ mod tests {
             &self.signature
         }
 
-        fn return_field_from_args(&self, _args: LambdaReturnFieldArgs) -> Result<FieldRef> {
+        fn lambdas_parameters(
+            &self,
+            _args: &[ValueOrLambda<FieldRef, ()>],
+        ) -> Result<Vec<Option<Vec<Field>>>> {
+            unimplemented!()
+        }
+
+        fn return_field_from_args(
+            &self,
+            _args: LambdaReturnFieldArgs,
+        ) -> Result<FieldRef> {
             unimplemented!()
         }
 

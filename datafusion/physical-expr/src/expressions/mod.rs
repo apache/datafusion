@@ -52,7 +52,7 @@ pub use dynamic_filters::DynamicFilterPhysicalExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
-pub use lambda::LambdaExpr;
+pub use lambda::{LambdaExpr, lambda};
 pub use like::{like, LikeExpr};
 pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};

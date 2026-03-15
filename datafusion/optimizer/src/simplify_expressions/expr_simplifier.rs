@@ -469,10 +469,10 @@ impl TreeNodeRewriter for Canonicalizer {
         match (left.as_ref(), right.as_ref(), op.swap()) {
             // <col1> <op> <col2>
             (
-                left_col @ (Expr::Column(_) | Expr::LambdaVariable(_)),
-                right_col @ (Expr::Column(_) | Expr::LambdaVariable(_)),
+                left_ref @ (Expr::Column(_) | Expr::LambdaVariable(_)),
+                right_ref @ (Expr::Column(_) | Expr::LambdaVariable(_)),
                 Some(swapped_op),
-            ) if right_col > left_col => {
+            ) if right_ref > left_ref => {
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
                     left: right,
                     op: swapped_op,
@@ -655,8 +655,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::WindowFunction { .. }
             | Expr::GroupingSet(_)
             | Expr::Wildcard { .. }
-            | Expr::Placeholder(_)
-            | Expr::LambdaVariable(_) => false,
+            | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
@@ -684,7 +683,8 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::InList { .. }
-            | Expr::Lambda(_) => true,
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => true,
         }
     }
 

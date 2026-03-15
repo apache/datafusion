@@ -44,9 +44,8 @@ use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, LambdaFunctionArgs, LambdaFunctionLambdaArg,
-    LambdaReturnFieldArgs, LambdaUDF, ValueOrLambda, ValueOrLambdaField,
-    ValueOrLambdaParameter, Volatility,
+    expr_vec_fmt, ColumnarValue, LambdaArgument, LambdaFunctionArgs,
+    LambdaReturnFieldArgs, LambdaUDF, ValueOrLambda, Volatility,
 };
 
 /// Physical expression of a lambda function
@@ -100,8 +99,8 @@ impl LambdaFunctionExpr {
             .map(|e| {
                 let field = e.return_field(schema)?;
                 match e.as_any().downcast_ref::<LambdaExpr>() {
-                    Some(_lambda) => Ok(ValueOrLambdaField::Lambda(field)),
-                    None => Ok(ValueOrLambdaField::Value(field)),
+                    Some(_lambda) => Ok(ValueOrLambda::Lambda(field)),
+                    None => Ok(ValueOrLambda::Value(field)),
                 }
             })
             .collect::<Result<Vec<_>>>()?;
@@ -261,17 +260,19 @@ impl PhysicalExpr for LambdaFunctionExpr {
             .iter()
             .map(|e| {
                 let field = e.return_field(batch.schema_ref())?;
+
                 match e.as_any().downcast_ref::<LambdaExpr>() {
-                    Some(_lambda) => Ok(ValueOrLambdaField::Lambda(field)),
-                    None => Ok(ValueOrLambdaField::Value(field)),
+                    Some(_lambda) => Ok(ValueOrLambda::Lambda(field)),
+                    None => Ok(ValueOrLambda::Value(field)),
                 }
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let args_metadata = arg_fields.iter()
+        let args_metadata = arg_fields
+            .iter()
             .map(|field| match field {
-                ValueOrLambdaField::Value(field) => ValueOrLambdaParameter::Value(Arc::clone(field)),
-                ValueOrLambdaField::Lambda(_field) => ValueOrLambdaParameter::Lambda,
+                ValueOrLambda::Value(field) => ValueOrLambda::Value(Arc::clone(field)),
+                ValueOrLambda::Lambda(_field) => ValueOrLambda::Lambda(()),
             })
             .collect::<Vec<_>>();
 
@@ -289,20 +290,19 @@ impl PhysicalExpr for LambdaFunctionExpr {
                             );
                         }
 
-                        let captures = lambda.captures();
+                        let indices = lambda.captured_columns();
+                        let variables = lambda.captured_variables();
 
-                        let params = std::iter::zip(lambda.params(), lambda_params)
-                            .map(|(name, param)| Arc::new(param.with_name(name)))
-                            .collect();
-
-                        let captures = if !captures.is_empty() {
+                        let captures = if !indices.is_empty() || !variables.is_empty() {
                             let (fields, columns): (Vec<_>, _) = std::iter::zip(
                                 batch.schema_ref().fields(),
                                 batch.columns(),
                             )
                             .enumerate()
                             .map(|(column_index, (field, column))| {
-                                if captures.contains(&column_index) {
+                                if indices.contains(&column_index)
+                                    || variables.contains(field.name())
+                                {
                                     (Arc::clone(field), Arc::clone(column))
                                 } else {
                                     (
@@ -324,7 +324,11 @@ impl PhysicalExpr for LambdaFunctionExpr {
                             None
                         };
 
-                        Ok(ValueOrLambda::Lambda(LambdaFunctionLambdaArg {
+                        let params = std::iter::zip(lambda.params(), lambda_params)
+                            .map(|(name, param)| Arc::new(param.with_name(name)))
+                            .collect();
+
+                        Ok(ValueOrLambda::Lambda(LambdaArgument {
                             params,
                             body: Arc::clone(lambda.body()),
                             captures,
@@ -449,7 +453,7 @@ mod tests {
     use crate::LambdaFunctionExpr;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
-    use datafusion_expr::{LambdaFunctionArgs, LambdaUDF, LambdaSignature};
+    use datafusion_expr::{LambdaFunctionArgs, LambdaSignature, LambdaUDF};
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_physical_expr_common::physical_expr::is_volatile;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -471,6 +475,13 @@ mod tests {
 
         fn signature(&self) -> &LambdaSignature {
             &self.signature
+        }
+
+        fn lambdas_parameters(
+            &self,
+            _args: &[ValueOrLambda<FieldRef, ()>],
+        ) -> Result<Vec<Option<Vec<Field>>>> {
+            unimplemented!()
         }
 
         fn return_field_from_args(

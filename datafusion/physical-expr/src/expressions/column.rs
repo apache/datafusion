@@ -188,7 +188,6 @@ pub fn with_new_schema(
                     );
                 };
                 let new_col = Column::new(field.name(), idx);
-
                 Ok(Transformed::yes(Arc::new(new_col) as _))
             } else {
                 Ok(Transformed::no(expr))

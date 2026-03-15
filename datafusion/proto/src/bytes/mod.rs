@@ -27,8 +27,8 @@ use crate::protobuf;
 use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
-    create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LambdaUDF, LambdaSignature, LogicalPlan,
-    Volatility, WindowUDF,
+    create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LambdaSignature, LambdaUDF,
+    LogicalPlan, Volatility, WindowUDF,
 };
 use prost::{
     bytes::{Bytes, BytesMut},
@@ -193,6 +193,7 @@ impl Serializeable for Expr {
             }
 
             fn udlf(&self, name: &str) -> Result<Arc<dyn datafusion_expr::LambdaUDF>> {
+                // if a SimpleLambdaFunction get's added, use it instead of MockLambdaUDF
                 #[derive(Debug, PartialEq, Eq, Hash)]
                 struct MockLambdaUDF {
                     name: String,
@@ -210,6 +211,13 @@ impl Serializeable for Expr {
 
                     fn signature(&self) -> &LambdaSignature {
                         &self.signature
+                    }
+
+                    fn lambdas_parameters(
+                        &self,
+                        _args: &[datafusion_expr::ValueOrLambda<arrow::datatypes::FieldRef, ()>],
+                    ) -> Result<Vec<Option<Vec<arrow::datatypes::Field>>>> {
+                        not_impl_err!("mock LambdaUDF")
                     }
 
                     fn return_field_from_args(

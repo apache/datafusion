@@ -110,6 +110,9 @@ pub trait ContextProvider {
 
     /// Return all scalar function names
     fn udf_names(&self) -> Vec<String>;
+    
+    /// Return all lambda function names
+    fn udlf_names(&self) -> Vec<String>;
 
     /// Return all aggregate function names
     fn udaf_names(&self) -> Vec<String>;

@@ -22,15 +22,15 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::datatypes::DataType;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchema, Dependency, Diagnostic, Result, Span,
+    DFSchema, Dependency, Diagnostic, HashSet, Result, Span,
 };
 use datafusion_expr::expr::{Lambda, LambdaFunction, ScalarFunction, Unnest};
 use datafusion_expr::expr::{NullTreatment, WildcardOptions, WindowFunction};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::planner::{RawAggregateExpr, RawWindowExpr};
+use datafusion_expr::type_coercion::functions::value_fields_with_lambda_udf;
 use datafusion_expr::{
-    expr, Expr, ExprSchemable, ValueOrLambdaParameter, WindowFrame,
-    WindowFunctionDefinition,
+    expr, Expr, ExprSchemable, ValueOrLambda, WindowFrame, WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
@@ -279,9 +279,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         if let Some(fm) = self.context_provider.get_lambda_meta(&name) {
+            // plan non-lambda arguments first so we can get theirs datatype and call
+            // LambdaUDF::lambdas_parameters to then plan the lambda arguments with 
+            // resolved lambda variables
             enum ExprOrLambda {
-                ExprWithName((Expr, Option<String>)),
-                Lambda(sqlparser::ast::LambdaFunction),
+                Expr((Expr, Option<String>)),
+                Lambda((sqlparser::ast::LambdaFunction, Option<String>)),
             }
 
             let pairs = args
@@ -289,8 +292,39 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|a| match a {
                     FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Lambda(
                         lambda,
-                    ))) => Ok(ExprOrLambda::Lambda(lambda)),
-                    _ => Ok(ExprOrLambda::ExprWithName(
+                    ))) => {
+                        if !all_unique(&lambda.params) {
+                            return plan_err!(
+                                "lambda parameters names must be unique, got {}",
+                                lambda.params
+                            );
+                        }
+
+                        Ok(ExprOrLambda::Lambda((lambda, None)))
+                    }
+                    FunctionArg::Named {
+                        name,
+                        arg: FunctionArgExpr::Expr(SQLExpr::Lambda(lambda)),
+                        operator: _,
+                    }
+                    | FunctionArg::ExprNamed {
+                        name: SQLExpr::Identifier(name),
+                        arg: FunctionArgExpr::Expr(SQLExpr::Lambda(lambda)),
+                        operator: _,
+                    } => {
+                        if !all_unique(&lambda.params) {
+                            return plan_err!(
+                                "lambda parameters names must be unique, got {}",
+                                lambda.params
+                            );
+                        }
+
+                        Ok(ExprOrLambda::Lambda((
+                            lambda,
+                            Some(crate::utils::normalize_ident(name)),
+                        )))
+                    }
+                    _ => Ok(ExprOrLambda::Expr(
                         self.sql_fn_arg_to_logical_expr_with_name(
                             a,
                             schema,
@@ -300,28 +334,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let metadata = pairs
+            let current_fields = pairs
                 .iter()
                 .map(|e| match e {
-                    ExprOrLambda::ExprWithName((expr, _name)) => {
-                        Ok(ValueOrLambdaParameter::Value(expr.to_field(schema)?.1))
+                    ExprOrLambda::Expr((expr, _name)) => {
+                        Ok(ValueOrLambda::Value(expr.to_field(schema)?.1))
                     }
                     ExprOrLambda::Lambda(_lambda_function) => {
-                        Ok(ValueOrLambdaParameter::Lambda)
+                        Ok(ValueOrLambda::Lambda(()))
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let lambdas_parameters = fm.lambdas_parameters(&metadata)?;
+            let coerced = value_fields_with_lambda_udf(&current_fields, fm.as_ref())?;
+
+            let lambdas_parameters = fm.lambdas_parameters(&coerced)?;
 
             let pairs = pairs
                 .into_iter()
                 .zip(lambdas_parameters)
                 .map(|(e, lambda_parameters)| match (e, lambda_parameters) {
-                    (ExprOrLambda::ExprWithName(expr_with_name), None) => {
-                        Ok(expr_with_name)
-                    }
-                    (ExprOrLambda::Lambda(lambda), Some(lambda_params)) => {
+                    (ExprOrLambda::Expr(expr), None) => Ok(expr),
+                    (ExprOrLambda::Lambda((lambda, name)), Some(lambda_params)) => {
                         if lambda.params.len() > lambda_params.len() {
                             return plan_err!(
                                 "lambda defined {} params but UDF support only {}",
@@ -351,10 +385,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     &mut planner_context,
                                 )?),
                             }),
-                            None,
+                            name,
                         ))
                     }
-                    (ExprOrLambda::ExprWithName(_), Some(_)) => plan_err!(
+                    (ExprOrLambda::Expr(_), Some(_)) => plan_err!(
                         "{} reported parameters for an argument that is not a lambda",
                         fm.name()
                     ),
@@ -960,6 +994,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => {
                 plan_err!("unnest() can only be applied to array, struct and null")
             }
+        }
+    }
+}
+
+fn all_unique(params: &[sqlparser::ast::Ident]) -> bool {
+    match params.len() {
+        0 | 1 => true,
+        2 => params[0].value != params[1].value,
+        _ => {
+            let mut set = HashSet::with_capacity(params.len());
+
+            params.iter().all(|p| set.insert(p.value.as_str()))
         }
     }
 }

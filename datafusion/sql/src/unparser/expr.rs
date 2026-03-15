@@ -533,12 +533,12 @@ impl Unparser<'_> {
 
                 if let Some(expr) = self
                     .dialect
-                    .scalar_function_to_sql_overrides(self, func_name, args)?
+                    .lambda_function_to_sql_overrides(self, func_name, args)?
                 {
                     return Ok(expr);
                 }
 
-                self.scalar_function_to_sql(func_name, args)
+                self.function_to_sql_internal(func_name, args)
             }
             Expr::Lambda(Lambda { params, body }) => {
                 Ok(ast::Expr::Lambda(ast::LambdaFunction {
@@ -566,11 +566,11 @@ impl Unparser<'_> {
             "get_field" => self.get_field_to_sql(args),
             "map" => self.map_to_sql(args),
             // TODO: support for the construct and access functions of the `map` type
-            _ => self.scalar_function_to_sql_internal(func_name, args),
+            _ => self.function_to_sql_internal(func_name, args),
         }
     }
 
-    fn scalar_function_to_sql_internal(
+    fn function_to_sql_internal(
         &self,
         func_name: &str,
         args: &[Expr],

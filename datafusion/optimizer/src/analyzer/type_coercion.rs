@@ -42,7 +42,7 @@ use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
 use datafusion_expr::type_coercion::functions::{
-    data_types_with_scalar_udf, fields_with_aggregate_udf,
+    data_types_with_scalar_udf, fields_with_aggregate_udf, value_fields_with_lambda_udf,
 };
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
@@ -51,9 +51,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_u
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprSchemable, Join, LambdaTypeSignature, Limit, LogicalPlan,
-    Operator, Projection, ScalarUDF, Union, ValueOrLambdaParameter, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
+    AggregateUDF, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection,
+    ScalarUDF, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
 /// Performs type coercion by determining the schema
@@ -584,62 +583,36 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 Ok(Transformed::yes(new_expr))
             }
             Expr::LambdaFunction(LambdaFunction { func, args }) => {
-                match func.signature().type_signature {
-                    LambdaTypeSignature::UserDefined => {
-                        let args_types = args
-                            .iter()
-                            .map(|arg| match arg {
-                                Expr::Lambda(_) => Ok(ValueOrLambdaParameter::Lambda),
-                                _ => Ok(ValueOrLambdaParameter::Value(
-                                    arg.get_type(self.schema)?,
-                                )),
+                let current_fields = args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lambda(_) => Ok(ValueOrLambda::Lambda(())),
+                        _ => Ok(ValueOrLambda::Value(arg.to_field(self.schema)?.1)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let new_fields =
+                    value_fields_with_lambda_udf(&current_fields, func.as_ref())?;
+
+                let transformed = current_fields != new_fields;
+
+                let new_args = if transformed {
+                    std::iter::zip(args, new_fields)
+                            .map(|(arg, new_field)| match (&arg, new_field) {
+                                (Expr::Lambda(_lambda), ValueOrLambda::Lambda(_)) => Ok(arg),
+                                (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => plan_err!("value_fields_with_lambda_udf return a value for a lambda argument"),
+                                (_, ValueOrLambda::Value(new_field)) => arg.cast_to(new_field.data_type(), self.schema),
+                                (_, ValueOrLambda::Lambda(_)) => plan_err!("value_fields_with_lambda_udf return a lambda for a value argument"),
                             })
-                            .collect::<Result<Vec<_>>>()?;
+                            .collect::<Result<_>>()?
+                } else {
+                    args
+                };
 
-                        let value_types = func.coerce_value_types(&args_types)?;
-
-                        if args_types
-                            .iter()
-                            .map(|a| match a {
-                                ValueOrLambdaParameter::Value(ty) => Some(ty),
-                                ValueOrLambdaParameter::Lambda => None,
-                            })
-                            .eq(value_types.iter().map(|v| v.as_ref()))
-                        {
-                            return Ok(Transformed::no(Expr::LambdaFunction(
-                                LambdaFunction::new(func, args),
-                            )));
-                        }
-
-                        let args = std::iter::zip(args, value_types)
-                            .map(|(arg, ty)| match (&arg, ty) {
-                                (Expr::Lambda(_), None) => Ok(arg),
-                                (Expr::Lambda(_), Some(_ty)) => plan_err!("{} coerce_value_types returned Some for a lambda argument", func.name()),
-                                (_, Some(ty)) => arg.cast_to(&ty, self.schema),
-                                (_, None) => plan_err!("{} coerce_value_types returned None for a value argument", func.name()),
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-
-                        Ok(Transformed::yes(Expr::LambdaFunction(LambdaFunction::new(
-                            func, args,
-                        ))))
-                    }
-                    LambdaTypeSignature::VariadicAny => Ok(Transformed::no(
-                        Expr::LambdaFunction(LambdaFunction::new(func, args)),
-                    )),
-                    LambdaTypeSignature::Any(number) => {
-                        if args.len() != number {
-                            return plan_err!(
-                                "The function '{}' expected {number} arguments but received {}",
-                                func.name(), args.len()
-                            );
-                        }
-
-                        Ok(Transformed::no(Expr::LambdaFunction(LambdaFunction::new(
-                            func, args,
-                        ))))
-                    }
-                }
+                Ok(Transformed::new_transformed(
+                    Expr::LambdaFunction(LambdaFunction::new(func, new_args)),
+                    transformed,
+                ))
             }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
@@ -854,11 +827,9 @@ fn coerce_arguments_for_signature_with_scalar_udf(
         return Ok(expressions);
     }
 
-    let current_types = expressions.iter()
-        .map(|e| match e {
-            Expr::Lambda { .. } => Ok(DataType::Null),
-            _ => e.get_type(schema),
-        })
+    let current_types = expressions
+        .iter()
+        .map(|e| e.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
     let new_types = data_types_with_scalar_udf(&current_types, func)?;
@@ -866,10 +837,7 @@ fn coerce_arguments_for_signature_with_scalar_udf(
     expressions
         .into_iter()
         .enumerate()
-        .map(|(i, expr)| match expr {
-            lambda @ Expr::Lambda { .. } => Ok(lambda),
-            _ => expr.cast_to(&new_types[i], schema),
-        })
+        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
         .collect()
 }
 

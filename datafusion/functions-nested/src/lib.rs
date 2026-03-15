@@ -36,6 +36,9 @@
 #[macro_use]
 pub mod macros;
 
+#[macro_use]
+pub mod macros_lambda;
+
 pub mod array_has;
 pub mod array_transform;
 pub mod cardinality;
@@ -70,7 +73,7 @@ pub mod utils;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::ScalarUDF;
+use datafusion_expr::{LambdaUDF, ScalarUDF};
 use log::debug;
 use std::sync::Arc;
 
@@ -79,7 +82,7 @@ pub mod expr_fn {
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
-    //pub use super::array_transform::array_transform;
+    pub use super::array_transform::array_transform;
     pub use super::cardinality::cardinality;
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
@@ -147,7 +150,6 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
         array_has::array_has_any_udf(),
-        //array_transform::array_transform_udf(),
         empty::array_empty_udf(),
         length::array_length_udf(),
         distance::array_distance_udf(),
@@ -177,6 +179,10 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
     ]
 }
 
+pub fn all_default_lambda_functions() -> Vec<Arc<dyn LambdaUDF>> {
+    vec![array_transform::array_transform_udlf()]
+}
+
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<ScalarUDF>> = all_default_nested_functions();
@@ -188,25 +194,40 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         Ok(()) as Result<()>
     })?;
 
+    let functions: Vec<Arc<dyn LambdaUDF>> = all_default_lambda_functions();
+    functions.into_iter().try_for_each(|udlf| {
+        let existing_udlf = registry.register_udlf(udlf)?;
+        if let Some(existing_udlf) = existing_udlf {
+            debug!("Overwrite existing UDLF: {}", existing_udlf.name());
+        }
+        Ok(()) as Result<()>
+    })?;
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::all_default_nested_functions;
+    use crate::{all_default_lambda_functions, all_default_nested_functions};
     use datafusion_common::Result;
     use std::collections::HashSet;
 
     #[test]
     fn test_no_duplicate_name() -> Result<()> {
+        let scalars = all_default_nested_functions();
+        let scalars = scalars.iter().map(|s| (s.name(), s.aliases()));
+
+        let lambdas = all_default_lambda_functions();
+        let lambdas = lambdas.iter().map(|l| (l.name(), l.aliases()));
+
         let mut names = HashSet::new();
-        for func in all_default_nested_functions() {
+
+        for (name, aliases) in scalars.chain(lambdas) {
             assert!(
-                names.insert(func.name().to_string().to_lowercase()),
-                "duplicate function name: {}",
-                func.name()
+                names.insert(name.to_string().to_lowercase()),
+                "duplicate function name: {name}",
             );
-            for alias in func.aliases() {
+            for alias in aliases {
                 assert!(
                     names.insert(alias.to_string().to_lowercase()),
                     "duplicate function name: {alias}"

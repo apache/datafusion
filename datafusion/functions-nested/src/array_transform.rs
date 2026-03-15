@@ -20,35 +20,30 @@
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray,
-        RecordBatch, RecordBatchOptions,
-    },
-    compute::take_record_batch,
-    datatypes::{DataType, Field, FieldRef, Schema},
+    }, compute::take_arrays, datatypes::{DataType, Field, FieldRef}
 };
 use datafusion_common::{
-    exec_err,
-    tree_node::{
-        Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    exec_err, plan_err,
+    utils::{
+        adjust_offsets_for_slice, list_values, list_values_index, list_values_row_number,
+        take_function_args,
     },
-    utils::{elements_indices, list_indices, list_values, take_function_args},
-    HashMap, Result,
+    Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, LambdaFunctionArgs, LambdaSignature, LambdaUDF,
-    ValueOrLambda, ValueOrLambdaField, ValueOrLambdaParameter, Volatility,
+    ValueOrLambda, Volatility,
 };
 use datafusion_macros::user_doc;
-use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use std::{any::Any, sync::Arc};
+use std::{any::Any, fmt::Debug, sync::Arc};
 
-//make_udf_expr_and_func!(
-//    ArrayTransform,
-//    array_transform,
-//    array lambda,
-//    "transforms the values of a array",
-//    array_transform_udf
-//);
+make_udlf_expr_and_func!(
+    ArrayTransform,
+    array_transform,
+    array lambda,
+    "transforms the values of a array",
+    array_transform_udlf
+);
 
 #[user_doc(
     doc_section(label = "Array Functions"),
@@ -83,7 +78,7 @@ impl Default for ArrayTransform {
 impl ArrayTransform {
     pub fn new() -> Self {
         Self {
-            signature: LambdaSignature::any(2, Volatility::Immutable),
+            signature: LambdaSignature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("list_transform")],
         }
     }
@@ -106,19 +101,58 @@ impl LambdaUDF for ArrayTransform {
         &self.signature
     }
 
+    fn coerce_value_types(
+        &self,
+        arg_types: &[ValueOrLambda<DataType, ()>],
+    ) -> Result<Vec<Option<DataType>>> {
+        let (list, _lambda) = value_lambda_pair(self.name(), arg_types)?;
+
+        let coerced = match list {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _) => list.clone(),
+            DataType::ListView(field) => DataType::List(Arc::clone(field)),
+            DataType::LargeListView(field) => DataType::LargeList(Arc::clone(field)),
+            _ => {
+                return plan_err!(
+                    "{} expected a list as first argument, got {}",
+                    self.name(),
+                    list
+                )
+            }
+        };
+
+        Ok(vec![Some(coerced), None])
+    }
+
+    fn lambdas_parameters(
+        &self,
+        args: &[ValueOrLambda<FieldRef, ()>],
+    ) -> Result<Vec<Option<Vec<Field>>>> {
+        let (list, _lambda) = value_lambda_pair(self.name(), args)?;
+
+        let (field, index_type) = match list.data_type() {
+            DataType::List(field) => (field, DataType::Int32),
+            DataType::LargeList(field) => (field, DataType::Int64),
+            DataType::FixedSizeList(field, _) => (field, DataType::Int32),
+            _ => return plan_err!("expected list, got {list}"),
+        };
+
+        // we don't need to omit the index in the case the lambda don't specify, e.g. array_transform([], v -> v*2),
+        // nor check whether the lambda contains more than two parameters, e.g. array_transform([], (v, i, j) -> v+i+j),
+        // as datafusion will do that for us
+        let value = Field::new("", field.data_type().clone(), field.is_nullable())
+            .with_metadata(field.metadata().clone());
+        let index = Field::new("", index_type, false);
+
+        Ok(vec![None, Some(vec![value, index])])
+    }
+
     fn return_field_from_args(
         &self,
         args: datafusion_expr::LambdaReturnFieldArgs,
     ) -> Result<Arc<Field>> {
-        let [ValueOrLambdaField::Value(list), ValueOrLambdaField::Lambda(lambda)] =
-            take_function_args(self.name(), args.arg_fields)?
-        else {
-            return exec_err!(
-                "{} expects a value follewed by a lambda, got {:?}",
-                self.name(),
-                args
-            );
-        };
+        let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
 
         //TODO: should metadata be copied into the transformed array?
 
@@ -134,58 +168,45 @@ impl LambdaUDF for ArrayTransform {
             DataType::List(_) => DataType::List(field),
             DataType::LargeList(_) => DataType::LargeList(field),
             DataType::FixedSizeList(_, size) => DataType::FixedSizeList(field, *size),
-            _ => unreachable!(),
+            other => plan_err!("expected list, got {other}")?,
         };
 
         Ok(Arc::new(Field::new("", return_type, list.is_nullable())))
     }
 
     fn invoke_with_args(&self, args: LambdaFunctionArgs) -> Result<ColumnarValue> {
-        let [list_value, lambda] = take_function_args(self.name(), &args.args)?;
+        let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
 
-        let (ValueOrLambda::Value(list_value), ValueOrLambda::Lambda(lambda)) =
-            (list_value, lambda)
-        else {
-            return exec_err!(
-                "{} expects a value followed by a lambda, got {:?}",
-                self.name(),
-                &args.args
-            );
-        };
-
-        let list_array = list_value.to_array(args.number_rows)?;
+        let list_array = list.to_array(args.number_rows)?;
+        // as per list_values docs, if list_array is sliced, list_values will be sliced too, 
+        // so before constructing the transformed array below, we must adjust the list offsets with
+        // adjust_offsets_for_slice
         let list_values = list_values(&list_array)?;
 
         // if any column got captured, we need to adjust it to the values arrays,
         // duplicating values of list with mulitple values and removing values of empty lists
-        // list_indices is not cheap so is important to avoid it when no column is captured
-        let adjusted_captures = lambda
-            .captures
-            .as_ref()
-            .map(|captures| take_record_batch(captures, &list_indices(&list_array)?))
-            .transpose()?;
+        // list_values_row_number is not cheap so is important to avoid it when no column is captured
+        let mut adjust_indices = None;
 
-        // use closures and merge_captures_with_lazy_args so that it calls only the needed ones based on the number of arguments
-        // avoiding unnecessary computations
-        let values_param = || Ok(Arc::clone(list_values));
-        let indices_param = || elements_indices(&list_array);
+        // use closures so that lambda.evaluate calls only the needed ones
+        // based on the number of arguments avoiding unnecessary computations
+        let values_param = || Ok(Arc::clone(&list_values));
+        let indices_param = || list_values_index(&list_array);
 
-        let binded_body = bind_lambda_variables(
-            Arc::clone(&lambda.body),
-            &lambda.params,
-            &[&values_param, &indices_param],
-        )?;
-
-        // call the transforming expression with the record batch composed of the list values merged with captured columns
-        let transformed_values = binded_body
-            .evaluate(&adjusted_captures.unwrap_or_else(|| {
-                RecordBatch::try_new_with_options(
-                    Arc::new(Schema::empty()),
-                    vec![],
-                    &RecordBatchOptions::new().with_row_count(Some(list_values.len())),
-                )
-                .unwrap()
-            }))?
+        // call the transforming lambda with the record batch composed of the list values merged with captured columns
+        let transformed_values = lambda
+            .evaluate(
+                &[&values_param, &indices_param],
+                |arrays| {
+                    let indices = match &adjust_indices {
+                        Some(v) => v,
+                        None => {
+                            adjust_indices.insert(list_values_row_number(&list_array)?)
+                        }
+                    };
+                    Ok(take_arrays(arrays, indices, None)?)
+                },
+            )?
             .into_array(list_values.len())?;
 
         let field = match args.return_field.data_type() {
@@ -204,20 +225,26 @@ impl LambdaUDF for ArrayTransform {
         let transformed_list = match list_array.data_type() {
             DataType::List(_) => {
                 let list = list_array.as_list();
+                // since we called list_values above which would return sliced values for 
+                // a sliced list, we must adjust the offsets here as otherwise they would be invalid
+                let adjusted_offsets = adjust_offsets_for_slice(list);
 
                 Arc::new(ListArray::new(
                     field,
-                    list.offsets().clone(),
+                    adjusted_offsets,
                     transformed_values,
                     list.nulls().cloned(),
                 )) as ArrayRef
             }
             DataType::LargeList(_) => {
                 let large_list = list_array.as_list();
+                // since we called list_values above which would return sliced values for 
+                // a sliced list, we must adjust the offsets here as otherwise they would be invalid
+                let adjusted_offsets = adjust_offsets_for_slice(large_list);
 
                 Arc::new(LargeListArray::new(
                     field,
-                    large_list.offsets().clone(),
+                    adjusted_offsets,
                     transformed_values,
                     large_list.nulls().cloned(),
                 ))
@@ -236,99 +263,23 @@ impl LambdaUDF for ArrayTransform {
         Ok(ColumnarValue::Array(transformed_list))
     }
 
-    fn lambdas_parameters(
-        &self,
-        args: &[ValueOrLambdaParameter<FieldRef>],
-    ) -> Result<Vec<Option<Vec<Field>>>> {
-        let [ValueOrLambdaParameter::Value(list), ValueOrLambdaParameter::Lambda] = args
-        else {
-            return exec_err!(
-                "{} expects a value follewed by a lambda, got {:?}",
-                self.name(),
-                args
-            );
-        };
-
-        let (field, index_type) = match list.data_type() {
-            DataType::List(field) => (field, DataType::Int32),
-            DataType::LargeList(field) => (field, DataType::Int64),
-            DataType::FixedSizeList(field, _) => (field, DataType::Int32),
-            _ => return exec_err!("expected list, got {list}"),
-        };
-
-        // we don't need to omit the index in the case the lambda don't specify, e.g. array_transform([], v -> v*2),
-        // nor check whether the lambda contains more than two parameters, e.g. array_transform([], (v, i, j) -> v+i+j),
-        // as datafusion will do that for us
-        let value = Field::new("", field.data_type().clone(), field.is_nullable())
-            .with_metadata(field.metadata().clone());
-        let index = Field::new("", index_type, false);
-
-        Ok(vec![None, Some(vec![value, index])])
-    }
-
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
 }
 
-fn bind_lambda_variables(
-    expr: Arc<dyn PhysicalExpr>,
-    params: &[FieldRef],
-    args: &[&dyn Fn() -> Result<ArrayRef>],
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let columns = std::iter::zip(params, args)
-        .map(|(param, arg)| Ok((param.name().as_str(), (arg()?, 0))))
-        .collect::<Result<HashMap<_, _>>>()?;
+fn value_lambda_pair<'a, V: Debug, L: Debug>(
+    name: &str,
+    args: &'a [ValueOrLambda<V, L>],
+) -> Result<(&'a V, &'a L)> {
+    let [value, lambda] = take_function_args(name, args)?;
 
-    expr.rewrite(&mut BindLambdaVariable::new(columns)).data()
-}
+    let (ValueOrLambda::Value(value), ValueOrLambda::Lambda(lambda)) = (value, lambda)
+    else {
+        return plan_err!(
+            "{name} expects a value followed by a lambda, got {value:?} and {lambda:?}"
+        );
+    };
 
-struct BindLambdaVariable<'a> {
-    columns: HashMap<&'a str, (ArrayRef, usize)>,
-}
-
-impl<'a> BindLambdaVariable<'a> {
-    fn new(columns: HashMap<&'a str, (ArrayRef, usize)>) -> Self {
-        Self { columns }
-    }
-}
-
-impl TreeNodeRewriter for BindLambdaVariable<'_> {
-    type Node = Arc<dyn PhysicalExpr>;
-
-    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-        if let Some(lambda_variable) = node.as_any().downcast_ref::<LambdaVariable>() {
-            if let Some((value, shadows)) = self.columns.get(lambda_variable.name()) {
-                if *shadows == 0 {
-                    return Ok(Transformed::yes(Arc::new(
-                        lambda_variable.clone().with_value(Arc::clone(value)),
-                    )));
-                }
-            }
-        } else if let Some(inner_lambda) = node.as_any().downcast_ref::<LambdaExpr>() {
-            for param in inner_lambda.params() {
-                if let Some((_value, shadows)) = self.columns.get_mut(param.as_str()) {
-                    *shadows += 1;
-                }
-            }
-
-            if self.columns.values().all(|(_value, shadows)| *shadows > 0) {
-                return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
-            }
-        }
-
-        Ok(Transformed::no(node))
-    }
-
-    fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-        if let Some(inner_lambda) = node.as_any().downcast_ref::<LambdaExpr>() {
-            for param in inner_lambda.params() {
-                if let Some((_value, shadows)) = self.columns.get_mut(param.as_str()) {
-                    *shadows -= 1;
-                }
-            }
-        }
-
-        Ok(Transformed::no(node))
-    }
+    Ok((value, lambda))
 }

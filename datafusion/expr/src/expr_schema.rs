@@ -23,9 +23,10 @@ use crate::expr::{
 };
 use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::type_coercion::functions::{
-    fields_with_aggregate_udf, fields_with_window_udf,
+    fields_with_aggregate_udf, fields_with_window_udf, value_fields_with_lambda_udf,
 };
-use crate::udlf::{LambdaReturnFieldArgs, ValueOrLambdaField};
+use crate::udlf::LambdaReturnFieldArgs;
+use crate::ValueOrLambda;
 use crate::{
     type_coercion::functions::data_types_with_scalar_udf, udf::ReturnFieldArgs, utils,
     LogicalPlan, Projection, Subquery, WindowFunctionDefinition,
@@ -240,9 +241,11 @@ impl ExprSchemable for Expr {
                 Ok(return_type)
             }
             Expr::Lambda(Lambda { params: _, body }) => body.get_type(schema),
-            Expr::LambdaVariable(LambdaVariable { name: _, field, .. }) => {
-                Ok(field.data_type().clone())
-            }
+            Expr::LambdaVariable(LambdaVariable { name, field, .. }) => Ok(field
+                .as_ref()
+                .ok_or_else(|| plan_datafusion_err!("unresolved LambdaVariable {name}"))?
+                .data_type()
+                .clone()),
         }
     }
 
@@ -366,7 +369,13 @@ impl ExprSchemable for Expr {
                 Ok(nullable)
             }
             Expr::Lambda(l) => l.body.nullable(input_schema),
-            Expr::LambdaVariable(c) => Ok(c.field.is_nullable()),
+            Expr::LambdaVariable(l) => Ok(l
+                .field
+                .as_ref()
+                .ok_or_else(|| {
+                    plan_datafusion_err!("unresolved LambdaVariable {}", l.name)
+                })?
+                .is_nullable()),
         }
     }
 
@@ -563,7 +572,6 @@ impl ExprSchemable for Expr {
                     .into_iter()
                     .map(|f| (f.data_type().clone(), f))
                     .unzip();
-
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
                 let new_data_types = data_types_with_scalar_udf(&arg_types, func)
                     .map_err(|err| {
@@ -594,7 +602,6 @@ impl ExprSchemable for Expr {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-
                 let args = ReturnFieldArgs {
                     arg_fields: &new_fields,
                     scalar_arguments: &arguments,
@@ -635,15 +642,16 @@ impl ExprSchemable for Expr {
                     .map(|arg| {
                         let field = arg.to_field(schema)?.1;
                         match arg {
-                            Expr::Lambda(_lambda) => {
-                                Ok(ValueOrLambdaField::Lambda(field))
-                            }
-                            _ => Ok(ValueOrLambdaField::Value(field)),
+                            Expr::Lambda(_lambda) => Ok(ValueOrLambda::Lambda(field)),
+                            _ => Ok(ValueOrLambda::Value(field)),
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let arguments = func.args
+                let new_fields = value_fields_with_lambda_udf(&arg_fields, func.func.as_ref())?;
+
+                let arguments = func
+                    .args
                     .iter()
                     .map(|e| match e {
                         Expr::Literal(sv, _) => Some(sv),
@@ -652,13 +660,17 @@ impl ExprSchemable for Expr {
                     .collect::<Vec<_>>();
 
                 let args = LambdaReturnFieldArgs {
-                    arg_fields: &arg_fields,
+                    arg_fields: &new_fields,
                     scalar_arguments: &arguments,
                 };
 
                 func.func.return_field_from_args(args)
             }
-            Expr::LambdaVariable(c) => Ok(Arc::clone(&c.field)),
+            Expr::LambdaVariable(l) => {
+                Ok(Arc::clone(l.field.as_ref().ok_or_else(|| {
+                    plan_datafusion_err!("unresolved LambdaVariable {}", l.name)
+                })?))
+            }
         }?;
 
         Ok((

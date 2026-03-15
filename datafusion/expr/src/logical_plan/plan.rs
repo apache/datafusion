@@ -41,8 +41,7 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist, merge_schema, split_conjunction
 };
 use crate::{
     build_join_schema, expr_vec_fmt, requalify_sides_if_needed, BinaryExpr,
@@ -2052,6 +2051,14 @@ impl LogicalPlan {
             }
         }
         Wrapper(self)
+    }
+
+    pub fn resolve_lambdas_variables(self) -> Result<Transformed<LogicalPlan>> {
+        self.transform_with_subqueries(|plan| {
+            let schema = merge_schema(&plan.inputs());
+
+            plan.map_expressions(|expr| expr.resolve_lambdas_variables(&schema))
+        })
     }
 }
 

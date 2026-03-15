@@ -16,7 +16,10 @@
 // under the License.
 
 use super::binary::binary_numeric_coercion;
-use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
+use crate::{
+    AggregateUDF, LambdaTypeSignature, LambdaUDF, ScalarUDF, Signature, TypeSignature,
+    ValueOrLambda, WindowUDF,
+};
 use arrow::datatypes::FieldRef;
 use arrow::{
     compute::can_cast_types,
@@ -75,6 +78,70 @@ pub fn data_types_with_scalar_udf(
     }
 
     try_coerce_types(func.name(), valid_types, current_types, type_signature)
+}
+
+/// Performs type coercion for lambda function arguments.
+///
+/// For value arguments, returns the field to which each
+/// argument must be coerced to match `signature`.
+/// For lambda arguments, returns a clone of the associated data
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+pub fn value_fields_with_lambda_udf<L: Clone>(
+    current_fields: &[ValueOrLambda<FieldRef, L>],
+    func: &dyn LambdaUDF,
+) -> Result<Vec<ValueOrLambda<FieldRef, L>>> {
+    match func.signature().type_signature {
+        LambdaTypeSignature::UserDefined => {
+            let arg_types = current_fields
+                .iter()
+                .map(|p| match p {
+                    ValueOrLambda::Value(field) => {
+                        ValueOrLambda::Value(field.data_type().clone())
+                    }
+                    ValueOrLambda::Lambda(_) => ValueOrLambda::Lambda(()),
+                })
+                .collect::<Vec<_>>();
+
+            let coerced_types = func.coerce_value_types(&arg_types)?;
+
+            std::iter::zip(current_fields, coerced_types)
+                .map(|(field, coerce_to)| match (field, coerce_to) {
+                    (ValueOrLambda::Value(field), Some(coerce_to)) => {
+                        Ok(ValueOrLambda::Value(Arc::new(
+                            field.as_ref().clone().with_data_type(coerce_to),
+                        )))
+                    }
+                    (ValueOrLambda::Lambda(v), None) => {
+                        Ok(ValueOrLambda::Lambda(v.clone()))
+                    }
+                    (ValueOrLambda::Value(_), None) => plan_err!(
+                        "{} coerce_values_types returned None for a value",
+                        func.name()
+                    ),
+                    (ValueOrLambda::Lambda(_), Some(_)) => plan_err!(
+                        "{} coerce_values_types returned Some for a lambda",
+                        func.name()
+                    ),
+                })
+                .collect()
+        }
+        LambdaTypeSignature::VariadicAny => {
+            Ok(current_fields.to_vec())
+        }
+        LambdaTypeSignature::Any(number) => {
+            if current_fields.len() != number {
+                return plan_err!(
+                    "The function '{}' expected {number} arguments but received {}",
+                    func.name(),
+                    current_fields.len()
+                );
+            }
+
+            Ok(current_fields.to_vec())
+        }
+    }
 }
 
 /// Performs type coercion for aggregate function arguments.

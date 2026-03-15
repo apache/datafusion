@@ -27,17 +27,20 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
+use crate::type_coercion::functions::value_fields_with_lambda_udf;
 use crate::udlf::LambdaUDF;
-use crate::{AggregateUDF, Volatility};
+use crate::{AggregateUDF, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
+use datafusion_common::hash_map::EntryRef;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
+    plan_datafusion_err, plan_err, Column, DFSchema, ExprSchema, HashMap, Result,
+    ScalarValue, Spans, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 #[cfg(feature = "sql")]
@@ -399,12 +402,15 @@ pub enum Expr {
     OuterReferenceColumn(FieldRef, Column),
     /// Unnest expression
     Unnest(Unnest),
+    /// Call a lambda function with a set of arguments.
     LambdaFunction(LambdaFunction),
-    /// Lambda expression
+    /// A Lambda expression with a set of parameters names and a body
     Lambda(Lambda),
+    /// A named reference to a lambda parameter
     LambdaVariable(LambdaVariable),
 }
 
+/// Invoke a [`LambdaUDF`] with a set of arguments
 #[derive(Clone, Eq, PartialOrd, Debug)]
 pub struct LambdaFunction {
     pub func: Arc<dyn LambdaUDF>,
@@ -412,12 +418,33 @@ pub struct LambdaFunction {
 }
 
 impl LambdaFunction {
+    /// Create a new `LambdaFunction` from a [`LambdaUDF`]
     pub fn new(func: Arc<dyn LambdaUDF>, args: Vec<Expr>) -> Self {
         Self { func, args }
     }
 
     pub fn name(&self) -> &str {
         self.func.name()
+    }
+
+    /// Invokes the inner function [`LambdaUDF::lambdas_parameters`]
+    /// using the arguments of this invocation
+    pub fn lambdas_parameters(
+        &self,
+        schema: &dyn ExprSchema,
+    ) -> Result<Vec<Option<Vec<Field>>>> {
+        let args = self
+            .args
+            .iter()
+            .map(|e| match e {
+                Expr::Lambda(_lambda) => Ok(ValueOrLambda::Lambda(())),
+                _ => Ok(ValueOrLambda::Value(e.to_field(schema)?.1)),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let coerced = value_fields_with_lambda_udf(&args, self.func.as_ref())?;
+
+        self.func.lambdas_parameters(&coerced)
     }
 }
 
@@ -434,15 +461,38 @@ impl PartialEq for LambdaFunction {
     }
 }
 
+/// A named reference to a lambda parameter which includes it's own [`FieldRef`],
+/// which is used to implement [`ExprSchemable`], for example. It is an option only to make
+/// easier for `expr_api` users to construct lambda variables, but any expression
+/// tree or [`LogicalPlan`] containing unresolved variables must be resolved before
+/// usage with either [`Expr::resolve_lambdas_variables`] or
+/// [`LogicalPlan::resolve_lambdas_variables`]. The default SQL planner produces
+/// already resolved variables and no further resolving is required.
+///
+/// After resolving, if any non-lambda argument from the lambda function
+/// which this variables originates from have it's type, nullability or
+/// metadata changed, the resolved field may became outdated and must be
+/// resolved again.
+///
+/// [`LogicalPlan`]: crate::LogicalPlan
+/// [`LogicalPlan::resolve_lambdas_variables`]: LogicalPlan::resolve_lambdas_variables
+///
+//  todo: if substrait come to produce resolved variables, cite it above too
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub struct LambdaVariable {
     pub name: String,
-    pub field: FieldRef,
+    pub field: Option<FieldRef>,
     pub spans: Spans,
 }
 
 impl LambdaVariable {
-    pub fn new(name: String, field: FieldRef) -> Self {
+    /// Create a lambda variable from a name and an optional Field.
+    /// If the field is none, the expression tree or LogicalPlan which
+    /// owns this variable must be resolved before usage with either
+    /// [`Expr::resolve_lambdas_variables`] or [`LogicalPlan::resolve_lambdas_variables`].
+    ///
+    /// [`LogicalPlan::resolve_lambdas_variables`]: crate::LogicalPlan::resolve_lambdas_variables
+    pub fn new(name: String, field: Option<FieldRef>) -> Self {
         Self {
             name,
             field,
@@ -1266,7 +1316,7 @@ impl GroupingSet {
     }
 }
 
-/// Lambda expression.
+/// A Lambda expression with a set of parameters names and a body
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Lambda {
     pub params: Vec<String>,
@@ -2176,6 +2226,169 @@ impl Expr {
             Some(lit)
         } else {
             None
+        }
+    }
+
+    /// Return a `Expr` with all [`LambdaVariable`] resolved only if all of them
+    /// are contained in the subtree of the [`LambdaFunction`] it originates from,
+    /// otherwise returns an error
+    pub fn resolve_lambdas_variables(
+        self,
+        schema: &DFSchema,
+    ) -> Result<Transformed<Expr>> {
+        resolve_lambdas_variables(self, schema, &mut HashMap::new())
+    }
+}
+
+fn resolve_lambdas_variables(
+    expr: Expr,
+    schema: &DFSchema,
+    vars: &mut HashMap<String, Vec<FieldRef>>,
+) -> Result<Transformed<Expr>> {
+    expr.transform_down(|expr| match expr {
+        Expr::LambdaFunction(LambdaFunction { func, args }) => {
+            let args = if !vars.is_empty() {
+                /*  if this is a nested lambda, we must resolve non-lambda args before invoking
+                    lambdas_parameters because it will invoke ExprSchemable::to_field for every
+                    non-lambda parameter, and if one them contains a lambda variable, it will fail
+                    due to it being unresolved. Example query:
+
+                    array_transform([[1, 2]], a -> array_transform(a, b -> b+1))
+
+                    the nested array_transform's lambdas_parameters will call Lambdavariable::to_field
+                    on it's first argument, the variable `a`, which must be resolved
+                */
+                args.map_elements(|arg| match arg {
+                    Expr::Lambda(_) => Ok(Transformed::no(arg)),
+                    _ => resolve_lambdas_variables(arg, schema, vars),
+                })?
+            } else {
+                Transformed::no(args)
+            };
+
+            let transformed = args.transformed;
+            let func = LambdaFunction::new(func, args.data);
+
+            let mut lambdas_params = func.lambdas_parameters(schema)?.into_iter();
+
+            let num_args = func.args.len();
+            let num_lambdas_params = lambdas_params.len();
+
+            let args = func.args.map_elements(|arg| {
+                    let lambda_params = lambdas_params.next().ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "{} lambdas_parameters returned {num_lambdas_params} values for {num_args} args",
+                            func.func.name()
+                        )
+                    })?;
+
+                    match (arg, lambda_params) {
+                        (Expr::Lambda(mut lambda), Some(lambda_params)) => {
+                            if lambda.params.len() > lambda_params.len() {
+                                return plan_err!(
+                                "{} lambda defined {} params ({}), but only {} supported",
+                                func.func.name(),
+                                lambda.params.len(),
+                                display_comma_separated(&lambda.params),
+                                lambda_params.len()
+                            );
+                            }
+
+                            if !all_unique(&lambda.params) {
+                                return plan_err!(
+                                    "lambda params must be unique, got ({})",
+                                    lambda.params.join(", ")
+                                );
+                            }
+
+                            for (param, field) in
+                                std::iter::zip(&lambda.params, lambda_params)
+                            {
+                                vars.entry_ref(param)
+                                    .or_default()
+                                    .push(Arc::new(field));
+                            }
+
+                            let transformed = resolve_lambdas_variables(mem::take(lambda.body.as_mut()), schema, vars)?;
+
+                            *lambda.body = transformed.data;
+
+                            for param in &lambda.params {
+                                match vars.entry_ref(param) {
+                                    EntryRef::Occupied(mut v) => {
+                                        if v.get().len() == 1 {
+                                            v.remove();
+                                        } else {
+                                            v.get_mut()
+                                                .pop()
+                                                .expect("every entry should have at least one field");
+                                        }
+                                    },
+                                    EntryRef::Vacant(_v) => {
+                                        unreachable!("the loop above should have inserted a value for every param")
+                                    },
+                                }
+                            }
+
+                            Ok(Transformed::new(Expr::Lambda(lambda), transformed.transformed, TreeNodeRecursion::Jump))
+                        }
+                        (Expr::Lambda(_), None) => {
+                            plan_err!(
+                            "{} lambdas_parameters retured None for a lambda argument",
+                            func.func.name()
+                        )
+                        }
+                        (_, Some(_)) => {
+                            plan_err!(
+                        "{} lambdas_parameters retured Some for a non-lambda argument",
+                        func.func.name()
+                    )
+                        }
+                        (arg, None) => Ok(Transformed::no(arg)) // resolved above
+                    }
+                })?;
+
+            Ok(Transformed::new(
+                Expr::LambdaFunction(LambdaFunction::new(func.func, args.data)),
+                transformed || args.transformed,
+                TreeNodeRecursion::Jump,
+            ))
+        }
+        Expr::LambdaVariable(mut var) => {
+            let fields_chain = vars.get(&var.name).ok_or_else(|| {
+                plan_datafusion_err!(
+                    "missing field of lambda variable {} while resolving",
+                    var.name
+                )
+            })?;
+
+            let field = fields_chain
+                .last()
+                .expect("every entry should have at least one field");
+
+            let transformed = var.field.as_ref().is_none_or(|old| old != field);
+
+            if transformed {
+                var.field = Some(Arc::clone(field));
+            }
+
+            Ok(Transformed::new_transformed(
+                Expr::LambdaVariable(var),
+                transformed,
+            ))
+        }
+        _ => Ok(Transformed::no(expr)),
+    })
+}
+
+fn all_unique(params: &[String]) -> bool {
+    match params.len() {
+        0 | 1 => true,
+        2 => params[0] != params[1],
+        _ => {
+            let mut set = HashSet::with_capacity(params.len());
+
+            params.iter().all(|p| set.insert(p.as_str()))
         }
     }
 }
@@ -3090,7 +3303,12 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             Expr::Lambda(Lambda { params, body }) => {
-                write!(f, "({}) -> {body}", display_comma_separated(params))
+                write!(
+                    f,
+                    "({}) -> {}",
+                    display_comma_separated(params),
+                    SchemaDisplay(body)
+                )
             }
             Expr::LambdaVariable(c) => {
                 write!(f, "{}", c.name)
@@ -3631,13 +3849,15 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 mod test {
     use crate::expr_fn::col;
     use crate::{
-        case, lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
+        case, lambda, lambda_var, lit, placeholder, qualified_wildcard, wildcard,
+        wildcard_with_options, ColumnarValue, LambdaSignature, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Volatility,
     };
     use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};
     use std::any::Any;
+    use std::sync::Arc;
 
     #[test]
     fn infer_placeholder_in_clause() {
@@ -4117,5 +4337,129 @@ mod test {
                 unimplemented!()
             }
         }
+    }
+
+    #[test]
+    fn test_resolve_lambda_variables() {
+        let schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "c",
+            DataType::new_list(DataType::new_list(DataType::Int32, true), true),
+            true,
+        )]))
+        .unwrap();
+
+        #[derive(Debug, Hash, PartialEq, Eq)]
+        struct MockLambdaUDF {
+            signature: LambdaSignature,
+        }
+
+        impl LambdaUDF for MockLambdaUDF {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn name(&self) -> &str {
+                "array_transform"
+            }
+
+            fn signature(&self) -> &LambdaSignature {
+                &self.signature
+            }
+
+            fn lambdas_parameters(
+                &self,
+                args: &[ValueOrLambda<FieldRef, ()>],
+            ) -> Result<Vec<Option<Vec<Field>>>> {
+                let (ValueOrLambda::Value(list), ValueOrLambda::Lambda(_lambda)) =
+                    (&args[0], &args[1])
+                else {
+                    unreachable!()
+                };
+
+                let (field, index_type) = match list.data_type() {
+                    DataType::List(field) => (field, DataType::Int32),
+                    _ => unreachable!(),
+                };
+
+                let value =
+                    Field::new("", field.data_type().clone(), field.is_nullable())
+                        .with_metadata(field.metadata().clone());
+                let index = Field::new("", index_type, false);
+
+                Ok(vec![None, Some(vec![value, index])])
+            }
+
+            fn return_field_from_args(
+                &self,
+                _args: crate::LambdaReturnFieldArgs,
+            ) -> Result<FieldRef> {
+                unimplemented!()
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: crate::LambdaFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                unimplemented!()
+            }
+        }
+
+        let func = Arc::new(MockLambdaUDF {
+            signature: LambdaSignature::variadic_any(Volatility::Immutable),
+        }) as _;
+
+        // array_transform(c, v -> array_transform(v, (v, i) -> v+i))
+        let expr = Expr::LambdaFunction(LambdaFunction::new(
+            Arc::clone(&func),
+            vec![
+                col("c"),
+                lambda(
+                    ["v"],
+                    Expr::LambdaFunction(LambdaFunction::new(
+                        Arc::clone(&func),
+                        vec![
+                            lambda_var("v"),
+                            lambda(["v", "i"], lambda_var("v") + lambda_var("i")),
+                        ],
+                    )),
+                ),
+            ],
+        ));
+
+        let resolved_expr = expr.resolve_lambdas_variables(&schema).unwrap().data;
+
+        let expected = Expr::LambdaFunction(LambdaFunction::new(
+            Arc::clone(&func),
+            vec![
+                col("c"),
+                lambda(
+                    ["v"],
+                    Expr::LambdaFunction(LambdaFunction::new(
+                        func,
+                        vec![
+                            resolved_lambda_var(
+                                "v",
+                                DataType::new_list(DataType::Int32, true),
+                                true,
+                            ),
+                            lambda(
+                                ["v", "i"],
+                                resolved_lambda_var("v", DataType::Int32, true)
+                                    + resolved_lambda_var("i", DataType::Int32, false),
+                            ),
+                        ],
+                    )),
+                ),
+            ],
+        ));
+
+        assert_eq!(resolved_expr, expected);
+    }
+
+    fn resolved_lambda_var(name: &str, dt: DataType, nullable: bool) -> Expr {
+        Expr::LambdaVariable(LambdaVariable::new(
+            name.into(),
+            Some(Arc::new(Field::new("", dt, nullable))),
+        ))
     }
 }

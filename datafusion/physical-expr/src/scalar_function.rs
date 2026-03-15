@@ -105,7 +105,6 @@ impl ScalarFunctionExpr {
             .iter()
             .map(|f| f.data_type().clone())
             .collect::<Vec<_>>();
-
         data_types_with_scalar_udf(&arg_types, &fun)?;
 
         let arguments = args
@@ -116,14 +115,11 @@ impl ScalarFunctionExpr {
                     .map(|literal| literal.value())
             })
             .collect::<Vec<_>>();
-
         let ret_args = ReturnFieldArgs {
             arg_fields: &arg_fields,
             scalar_arguments: &arguments,
         };
-
         let return_field = fun.return_field_from_args(ret_args)?;
-
         Ok(Self {
             fun,
             name,
@@ -287,7 +283,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
             config_options: Arc::clone(&self.config_options),
         })?;
 
-        
         if let ColumnarValue::Array(array) = &output {
             if array.len() != batch.num_rows() {
                 // If the arguments are a non-empty slice of scalar values, we can assume that
@@ -372,19 +367,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-    use std::sync::Arc;
-
     use super::*;
     use crate::expressions::Column;
-    use crate::ScalarFunctionExpr;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::Result;
-    use datafusion_expr::{ScalarFunctionArgs, Volatility};
     use datafusion_expr::{ScalarUDF, ScalarUDFImpl, Signature};
-    use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_physical_expr_common::physical_expr::is_volatile;
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use std::any::Any;
 
     /// Test helper to create a mock UDF with a specific volatility
     #[derive(Debug, PartialEq, Eq, Hash)]

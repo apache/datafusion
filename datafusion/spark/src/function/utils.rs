@@ -60,7 +60,7 @@ pub mod test {
 
             let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
                 arg_fields: &arg_fields,
-                scalar_arguments: &scalar_arguments_refs,
+                scalar_arguments: &scalar_arguments_refs
             });
 
             match expected {
