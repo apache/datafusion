@@ -21,7 +21,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
-use crate::coalesce_batches::CoalesceBatches;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
@@ -34,12 +33,14 @@ use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
 use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
+use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
-use crate::coalesce_async_exec_input::CoalesceAsyncExecInput;
+use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
-use datafusion_common::config::ConfigOptions;
+use crate::pushdown_sort::PushdownSort;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
@@ -83,6 +84,12 @@ impl Default for PhysicalOptimizer {
 impl PhysicalOptimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
+        // NOTEs:
+        // - The order of rules in this list is important, as it determines the
+        //   order in which they are applied.
+        // - Adding a new rule here is expensive as it will be applied to all
+        //   queries, and will likely increase the optimization time. Please extend
+        //   existing rules when possible, rather than adding a new rule.
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
             // If there is a output requirement of the query, make sure that
             // this information is not lost across different rules during optimization.
@@ -120,10 +127,6 @@ impl PhysicalOptimizer {
             Arc::new(OptimizeAggregateOrder::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
-            // The CoalesceBatches rule will not influence the distribution and ordering of the
-            // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
-            Arc::new(CoalesceBatches::new()),
-            Arc::new(CoalesceAsyncExecInput::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),
@@ -136,10 +139,19 @@ impl PhysicalOptimizer {
             // This can possibly be combined with [LimitPushdown]
             // It needs to come after [EnforceSorting]
             Arc::new(LimitPushPastWindows::new()),
+            // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
+            // in the prob side of hash joins. That way, the probe side gets eagerly polled before
+            // the build side is completely finished.
+            Arc::new(HashJoinBuffering::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.
             Arc::new(LimitPushdown::new()),
+            // TopKRepartition pushes TopK (Sort with fetch) below Hash
+            // repartition when the partition key is a prefix of the sort key.
+            // This reduces data volume before a hash shuffle. It must run
+            // after LimitPushdown so that the TopK already exists on the SortExec.
+            Arc::new(TopKRepartition::new()),
             // The ProjectionPushdown rule tries to push projections towards
             // the sources in the execution plan. As a result of this process,
             // a projection can disappear if it reaches the source providers, and
@@ -147,6 +159,8 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // PushdownSort: Detect sorts that can be pushed down to data sources.
+            Arc::new(PushdownSort::new()),
             Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
             // Therefore it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.

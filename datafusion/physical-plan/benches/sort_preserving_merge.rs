@@ -20,9 +20,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_schema::{SchemaRef, SortOptions};
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
 use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_physical_plan::{
     collect, sorts::sort_preserving_merge::SortPreservingMergeExec,

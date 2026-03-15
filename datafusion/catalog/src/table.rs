@@ -24,7 +24,7 @@ use crate::session::Session;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
-use datafusion_common::{not_impl_err, Constraints, Statistics};
+use datafusion_common::{Constraints, Statistics, not_impl_err};
 use datafusion_expr::Expr;
 
 use datafusion_expr::dml::InsertOp;
@@ -327,6 +327,39 @@ pub trait TableProvider: Debug + Sync + Send {
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Insert into not implemented for this table")
+    }
+
+    /// Delete rows matching the filter predicates.
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    /// Empty `filters` deletes all rows.
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        _filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("DELETE not supported for {} table", self.table_type())
+    }
+
+    /// Update rows matching the filter predicates.
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    /// Empty `filters` updates all rows.
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        _assignments: Vec<(String, Expr)>,
+        _filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("UPDATE not supported for {} table", self.table_type())
+    }
+
+    /// Remove all rows from the table.
+    ///
+    /// Should return an [ExecutionPlan] producing a single row with count (UInt64),
+    /// representing the number of rows removed.
+    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("TRUNCATE not supported for {} table", self.table_type())
     }
 }
 

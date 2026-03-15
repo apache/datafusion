@@ -34,19 +34,19 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::expressions::{LambdaExpr, Literal};
 use crate::PhysicalExpr;
+use crate::expressions::{LambdaExpr, Literal};
 
 use arrow::array::{Array, NullArray, RecordBatch};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::value_fields_with_lambda_udf;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, LambdaArgument, LambdaFunctionArgs,
-    LambdaReturnFieldArgs, LambdaUDF, ValueOrLambda, Volatility,
+    ColumnarValue, LambdaArgument, LambdaFunctionArgs, LambdaReturnFieldArgs, LambdaUDF,
+    ValueOrLambda, Volatility, expr_vec_fmt,
 };
 
 /// Physical expression of a lambda function
@@ -107,7 +107,7 @@ impl LambdaFunctionExpr {
             .collect::<Result<Vec<_>>>()?;
 
         // verify that input data types is consistent with function's `LambdaTypeSignature`
-        value_fields_with_lambda_udf(&arg_fields, func.as_ref())?;
+        value_fields_with_lambda_udf(&arg_fields, fun.as_ref())?;
 
         let arguments = args
             .iter()
@@ -363,19 +363,22 @@ impl PhysicalExpr for LambdaFunctionExpr {
             config_options: Arc::clone(&self.config_options),
         })?;
 
-        if let ColumnarValue::Array(array) = &output {
-            if array.len() != batch.num_rows() {
-                // If the arguments are a non-empty slice of scalar values, we can assume that
-                // returning a one-element array is equivalent to returning a scalar.
-                let preserve_scalar =
-                    array.len() == 1 && !input_empty && input_all_scalar;
-                return if preserve_scalar {
-                    ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
-                } else {
-                    internal_err!("UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
-                            self.name, batch.num_rows(), array.len())
-                };
-            }
+        if let ColumnarValue::Array(array) = &output
+            && array.len() != batch.num_rows()
+        {
+            // If the arguments are a non-empty slice of scalar values, we can assume that
+            // returning a one-element array is equivalent to returning a scalar.
+            let preserve_scalar = array.len() == 1 && !input_empty && input_all_scalar;
+            return if preserve_scalar {
+                ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
+            } else {
+                internal_err!(
+                    "UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
+                    self.name,
+                    batch.num_rows(),
+                    array.len()
+                )
+            };
         }
         Ok(output)
     }
@@ -451,14 +454,14 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::expressions::Column;
     use crate::LambdaFunctionExpr;
+    use crate::expressions::Column;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
     use datafusion_expr::{LambdaFunctionArgs, LambdaSignature, LambdaUDF};
     use datafusion_expr_common::columnar_value::ColumnarValue;
-    use datafusion_physical_expr_common::physical_expr::is_volatile;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::physical_expr::is_volatile;
 
     /// Test helper to create a mock UDF with a specific volatility
     #[derive(Debug, PartialEq, Eq, Hash)]

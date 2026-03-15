@@ -16,10 +16,11 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    from_aggregate_function, substrait_field_ref, SubstraitProducer,
+    SubstraitProducer, from_aggregate_function, substrait_field_ref,
 };
-use datafusion::common::{internal_err, not_impl_err, DFSchemaRef, DataFusionError};
+use datafusion::common::{DFSchemaRef, internal_err, not_impl_err};
 use datafusion::logical_expr::expr::Alias;
+use datafusion::logical_expr::utils::powerset;
 use datafusion::logical_expr::{Aggregate, Distinct, Expr, GroupingSet};
 use substrait::proto::aggregate_rel::{Grouping, Measure};
 use substrait::proto::rel::RelType;
@@ -63,7 +64,7 @@ pub fn from_distinct(
                 .map(substrait_field_ref)
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
 
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
@@ -91,10 +92,22 @@ pub fn to_substrait_groupings(
     let groupings = match exprs.len() {
         1 => match &exprs[0] {
             Expr::GroupingSet(gs) => match gs {
-                GroupingSet::Cube(_) => Err(DataFusionError::NotImplemented(
-                    "GroupingSet CUBE is not yet supported".to_string(),
-                )),
-                GroupingSet::GroupingSets(sets) => Ok(sets
+                GroupingSet::Cube(set) => {
+                    // Generate power set of grouping expressions
+                    let cube_sets = powerset(set)?;
+                    cube_sets
+                        .iter()
+                        .map(|set| {
+                            parse_flat_grouping_exprs(
+                                producer,
+                                &set.iter().map(|v| (*v).clone()).collect::<Vec<_>>(),
+                                schema,
+                                &mut ref_group_exprs,
+                            )
+                        })
+                        .collect::<datafusion::common::Result<Vec<_>>>()
+                }
+                GroupingSet::GroupingSets(sets) => sets
                     .iter()
                     .map(|set| {
                         parse_flat_grouping_exprs(
@@ -104,14 +117,13 @@ pub fn to_substrait_groupings(
                             &mut ref_group_exprs,
                         )
                     })
-                    .collect::<datafusion::common::Result<Vec<_>>>()?),
+                    .collect::<datafusion::common::Result<Vec<_>>>(),
                 GroupingSet::Rollup(set) => {
                     let mut sets: Vec<Vec<Expr>> = vec![vec![]];
                     for i in 0..set.len() {
                         sets.push(set[..=i].to_vec());
                     }
-                    Ok(sets
-                        .iter()
+                    sets.iter()
                         .rev()
                         .map(|set| {
                             parse_flat_grouping_exprs(
@@ -121,7 +133,7 @@ pub fn to_substrait_groupings(
                                 &mut ref_group_exprs,
                             )
                         })
-                        .collect::<datafusion::common::Result<Vec<_>>>()?)
+                        .collect::<datafusion::common::Result<Vec<_>>>()
                 }
             },
             _ => Ok(vec![parse_flat_grouping_exprs(
@@ -156,7 +168,7 @@ pub fn parse_flat_grouping_exprs(
         ref_group_exprs.push(rex);
         expression_references.push((ref_group_exprs.len() - 1) as u32);
     }
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Ok(Grouping {
         grouping_expressions,
         expression_references,
@@ -169,7 +181,9 @@ pub fn to_substrait_agg_measure(
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Measure> {
     match expr {
-        Expr::AggregateFunction(agg_fn) => from_aggregate_function(producer, agg_fn, schema),
+        Expr::AggregateFunction(agg_fn) => {
+            from_aggregate_function(producer, agg_fn, schema)
+        }
         Expr::Alias(Alias { expr, .. }) => {
             to_substrait_agg_measure(producer, expr, schema)
         }

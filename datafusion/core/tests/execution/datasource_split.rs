@@ -22,7 +22,7 @@ use arrow::{
 };
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_execution::TaskContext;
-use datafusion_physical_plan::{common::collect, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, common::collect};
 use std::sync::Arc;
 
 /// Helper function to create a memory source with the given batch size and collect all batches

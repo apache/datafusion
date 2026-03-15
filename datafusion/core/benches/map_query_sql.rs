@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use parking_lot::Mutex;
-use rand::prelude::ThreadRng;
 use rand::Rng;
+use rand::prelude::ThreadRng;
 use tokio::runtime::Runtime;
 
 use datafusion::prelude::SessionContext;
@@ -33,11 +34,12 @@ use datafusion_functions_nested::map::map;
 mod data_utils;
 
 fn build_keys(rng: &mut ThreadRng) -> Vec<String> {
-    let mut keys = vec![];
-    for _ in 0..1000 {
-        keys.push(rng.random_range(0..9999).to_string());
+    let mut keys = HashSet::with_capacity(1000);
+    while keys.len() < 1000 {
+        let key = rng.random_range(0..9999).to_string();
+        keys.insert(key);
     }
-    keys
+    keys.into_iter().collect()
 }
 
 fn build_values(rng: &mut ThreadRng) -> Vec<i32> {

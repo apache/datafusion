@@ -17,6 +17,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
+use clap::Args;
 use datafusion::{
     execution::{
         disk_manager::DiskManagerBuilder,
@@ -26,40 +27,39 @@ use datafusion::{
     prelude::SessionConfig,
 };
 use datafusion_common::{DataFusionError, Result};
-use structopt::StructOpt;
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
-#[derive(Debug, StructOpt, Clone)]
+#[derive(Debug, Args, Clone)]
 pub struct CommonOpt {
     /// Number of iterations of each test run
-    #[structopt(short = "i", long = "iterations", default_value = "3")]
+    #[arg(short = 'i', long = "iterations", default_value = "3")]
     pub iterations: usize,
 
     /// Number of partitions to process in parallel. Defaults to number of available cores.
-    #[structopt(short = "n", long = "partitions")]
+    #[arg(short = 'n', long = "partitions")]
     pub partitions: Option<usize>,
 
     /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size")]
+    #[arg(short = 's', long = "batch-size")]
     pub batch_size: Option<usize>,
 
     /// The memory pool type to use, should be one of "fair" or "greedy"
-    #[structopt(long = "mem-pool-type", default_value = "fair")]
+    #[arg(long = "mem-pool-type", default_value = "fair")]
     pub mem_pool_type: String,
 
     /// Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query
     /// if there's any, otherwise run with no memory limit.
-    #[structopt(long = "memory-limit", parse(try_from_str = parse_memory_limit))]
+    #[arg(long = "memory-limit", value_parser = parse_capacity_limit)]
     pub memory_limit: Option<usize>,
 
     /// The amount of memory to reserve for sort spill operations. DataFusion's default value will be used
     /// if not specified.
-    #[structopt(long = "sort-spill-reservation-bytes", parse(try_from_str = parse_memory_limit))]
+    #[arg(long = "sort-spill-reservation-bytes", value_parser = parse_capacity_limit)]
     pub sort_spill_reservation_bytes: Option<usize>,
 
     /// Activate debug mode to see more details
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub debug: bool,
 }
 
@@ -105,7 +105,7 @@ impl CommonOpt {
                     return Err(DataFusionError::Configuration(format!(
                         "Invalid memory pool type: {}",
                         self.mem_pool_type
-                    )))
+                    )));
                 }
             };
             rt_builder = rt_builder
@@ -116,20 +116,26 @@ impl CommonOpt {
     }
 }
 
-/// Parse memory limit from string to number of bytes
-/// e.g. '1.5G', '100M' -> 1572864
-fn parse_memory_limit(limit: &str) -> Result<usize, String> {
+/// Parse capacity limit from string to number of bytes by allowing units: K, M and G.
+/// Supports formats like '1.5G' -> 1610612736, '100M' -> 104857600
+fn parse_capacity_limit(limit: &str) -> Result<usize, String> {
+    if limit.trim().is_empty() {
+        return Err("Capacity limit cannot be empty".to_string());
+    }
     let (number, unit) = limit.split_at(limit.len() - 1);
     let number: f64 = number
         .parse()
-        .map_err(|_| format!("Failed to parse number from memory limit '{limit}'"))?;
+        .map_err(|_| format!("Failed to parse number from capacity limit '{limit}'"))?;
+    if number.is_sign_negative() || number.is_infinite() {
+        return Err("Limit value should be positive finite number".to_string());
+    }
 
     match unit {
         "K" => Ok((number * 1024.0) as usize),
         "M" => Ok((number * 1024.0 * 1024.0) as usize),
         "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
         _ => Err(format!(
-            "Unsupported unit '{unit}' in memory limit '{limit}'"
+            "Unsupported unit '{unit}' in capacity limit '{limit}'. Unit must be one of: 'K', 'M', 'G'"
         )),
     }
 }
@@ -139,16 +145,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_memory_limit_all() {
+    fn test_parse_capacity_limit_all() {
         // Test valid inputs
-        assert_eq!(parse_memory_limit("100K").unwrap(), 102400);
-        assert_eq!(parse_memory_limit("1.5M").unwrap(), 1572864);
-        assert_eq!(parse_memory_limit("2G").unwrap(), 2147483648);
+        assert_eq!(parse_capacity_limit("100K").unwrap(), 102400);
+        assert_eq!(parse_capacity_limit("1.5M").unwrap(), 1572864);
+        assert_eq!(parse_capacity_limit("2G").unwrap(), 2147483648);
 
         // Test invalid unit
-        assert!(parse_memory_limit("500X").is_err());
+        assert!(parse_capacity_limit("500X").is_err());
 
         // Test invalid number
-        assert!(parse_memory_limit("abcM").is_err());
+        assert!(parse_capacity_limit("abcM").is_err());
+
+        // Test negative number
+        assert!(parse_capacity_limit("-1M").is_err());
+
+        // Test infinite number
+        assert!(parse_capacity_limit("infM").is_err());
+
+        // Test negative infinite number
+        assert!(parse_capacity_limit("-infM").is_err());
     }
 }

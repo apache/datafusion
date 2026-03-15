@@ -27,14 +27,16 @@
 //! DataFusion sqllogictest driver
 
 mod engines;
+mod test_file;
 
-pub use engines::convert_batches;
-pub use engines::convert_schema_to_types;
+pub use engines::CurrentlyExecutingSqlTracker;
 pub use engines::DFColumnType;
 pub use engines::DFOutput;
 pub use engines::DFSqlLogicTestError;
 pub use engines::DataFusion;
 pub use engines::DataFusionSubstraitRoundTrip;
+pub use engines::convert_batches;
+pub use engines::convert_schema_to_types;
 
 #[cfg(feature = "postgres")]
 pub use engines::Postgres;
@@ -45,4 +47,5 @@ mod util;
 
 pub use filters::*;
 pub use test_context::TestContext;
+pub use test_file::TestFile;
 pub use util::*;

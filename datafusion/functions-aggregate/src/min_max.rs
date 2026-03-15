@@ -23,13 +23,13 @@ mod min_max_struct;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    DurationSecondType, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, ColumnStatistics, Result};
+use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
 use std::cmp::Ordering;
@@ -46,8 +46,8 @@ use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
-    SetMonotonicity, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
+    function::AccumulatorArgs,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
@@ -193,10 +193,10 @@ impl FromColumnStatistics for Max {
         &self,
         col_stats: &ColumnStatistics,
     ) -> Option<ScalarValue> {
-        if let Precision::Exact(ref val) = col_stats.max_value {
-            if !val.is_null() {
-                return Some(val.clone());
-            }
+        if let Precision::Exact(ref val) = col_stats.max_value
+            && !val.is_null()
+        {
+            return Some(val.clone());
         }
         None
     }
@@ -480,10 +480,10 @@ impl FromColumnStatistics for Min {
         &self,
         col_stats: &ColumnStatistics,
     ) -> Option<ScalarValue> {
-        if let Precision::Exact(ref val) = col_stats.min_value {
-            if !val.is_null() {
-                return Some(val.clone());
-            }
+        if let Precision::Exact(ref val) = col_stats.min_value
+            && !val.is_null()
+        {
+            return Some(val.clone());
         }
         None
     }

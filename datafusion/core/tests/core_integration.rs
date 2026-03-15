@@ -48,14 +48,14 @@ mod optimizer;
 /// Run all tests that are found in the `physical_optimizer` directory
 mod physical_optimizer;
 
-/// Run all tests that are found in the `schema_adapter` directory
-mod schema_adapter;
-
 /// Run all tests that are found in the `serde` directory
 mod serde;
 
 /// Run all tests that are found in the `catalog` directory
 mod catalog;
+
+/// Run all tests that are found in the `catalog_listing` directory
+mod catalog_listing;
 
 /// Run all tests that are found in the `tracing` directory
 mod tracing;

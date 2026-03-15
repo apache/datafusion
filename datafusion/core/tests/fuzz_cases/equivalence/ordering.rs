@@ -16,19 +16,19 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    create_random_schema, create_test_params, create_test_schema_2,
+    TestScalarUDF, create_random_schema, create_test_params, create_test_schema_2,
     generate_table_for_eq_properties, generate_table_for_orderings,
-    is_table_same_after_sort, TestScalarUDF,
+    is_table_same_after_sort,
 };
 use arrow::compute::SortOptions;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{Operator, ScalarUDF};
+use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::equivalence::{
     convert_to_orderings, convert_to_sort_exprs,
 };
-use datafusion_physical_expr::expressions::{col, BinaryExpr};
-use datafusion_physical_expr::ScalarFunctionExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, col};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;

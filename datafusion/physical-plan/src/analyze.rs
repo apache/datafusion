@@ -31,9 +31,11 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::instant::Instant;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{DataFusionError, Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExpr;
 
 use futures::StreamExt;
 
@@ -51,7 +53,7 @@ pub struct AnalyzeExec {
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl AnalyzeExec {
@@ -70,7 +72,7 @@ impl AnalyzeExec {
             metric_types,
             input,
             schema,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -131,7 +133,7 @@ impl ExecutionPlan for AnalyzeExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -141,6 +143,13 @@ impl ExecutionPlan for AnalyzeExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -161,11 +170,11 @@ impl ExecutionPlan for AnalyzeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if 0 != partition {
-            return internal_err!(
-                "AnalyzeExec invalid partition. Expected 0, got {partition}"
-            );
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "AnalyzeExec invalid partition. Expected 0, got {partition}"
+        );
 
         // Gather futures that will run each input partition in
         // parallel (on a separate tokio task) using a JoinSet to
@@ -206,8 +215,8 @@ impl ExecutionPlan for AnalyzeExec {
                 show_statistics,
                 total_rows,
                 duration,
-                captured_input,
-                captured_schema,
+                &captured_input,
+                &captured_schema,
                 &metric_types,
             )
         };
@@ -225,8 +234,8 @@ fn create_output_batch(
     show_statistics: bool,
     total_rows: usize,
     duration: std::time::Duration,
-    input: Arc<dyn ExecutionPlan>,
-    schema: SchemaRef,
+    input: &Arc<dyn ExecutionPlan>,
+    schema: &SchemaRef,
     metric_types: &[MetricType],
 ) -> Result<RecordBatch> {
     let mut type_builder = StringBuilder::with_capacity(1, 1024);
@@ -262,7 +271,7 @@ fn create_output_batch(
     }
 
     RecordBatch::try_new(
-        schema,
+        Arc::clone(schema),
         vec![
             Arc::new(type_builder.finish()),
             Arc::new(plan_builder.finish()),
@@ -278,7 +287,7 @@ mod tests {
         collect,
         test::{
             assert_is_pending,
-            exec::{assert_strong_count_converges_to_zero, BlockingExec},
+            exec::{BlockingExec, assert_strong_count_converges_to_zero},
         },
     };
 

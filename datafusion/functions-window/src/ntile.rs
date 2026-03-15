@@ -23,7 +23,7 @@ use crate::utils::{
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_datafusion_err, exec_err, Result};
+use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
@@ -135,10 +135,10 @@ impl WindowUDFImpl for Ntile {
         }
 
         if scalar_n.is_unsigned() {
-            let n = get_unsigned_integer(scalar_n)?;
+            let n = get_unsigned_integer(&scalar_n)?;
             Ok(Box::new(NtileEvaluator { n }))
         } else {
-            let n: i64 = get_signed_integer(scalar_n)?;
+            let n: i64 = get_signed_integer(&scalar_n)?;
             if n <= 0 {
                 return exec_err!("NTILE requires a positive integer");
             }

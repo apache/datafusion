@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -54,9 +57,11 @@ datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-macros = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+hashbrown = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
+itoa = { workspace = true }
 log = { workspace = true }
-paste = "1.0.14"
+paste = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
@@ -64,7 +69,15 @@ rand = { workspace = true }
 
 [[bench]]
 harness = false
+name = "array_concat"
+
+[[bench]]
+harness = false
 name = "array_expression"
+
+[[bench]]
+harness = false
+name = "array_has"
 
 [[bench]]
 harness = false
@@ -72,4 +85,28 @@ name = "array_reverse"
 
 [[bench]]
 harness = false
+name = "array_slice"
+
+[[bench]]
+harness = false
 name = "map"
+
+[[bench]]
+harness = false
+name = "array_remove"
+
+[[bench]]
+harness = false
+name = "array_repeat"
+
+[[bench]]
+harness = false
+name = "array_set_ops"
+
+[[bench]]
+harness = false
+name = "array_to_string"
+
+[[bench]]
+harness = false
+name = "array_position"

@@ -19,29 +19,31 @@
 
 use arrow::{
     array::{Array, AsArray},
-    compute::{interleave_record_batch, prep_null_mask_filter, FilterBuilder},
+    compute::{FilterBuilder, interleave_record_batch, prep_null_mask_filter},
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
-use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
+use super::metrics::{
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
+};
 use crate::spill::get_record_batch_memory_size;
-use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
+use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, HashMap, Result, ScalarValue,
+    HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::{
-    expressions::{is_not_null, is_null, lit, BinaryExpr, DynamicFilterPhysicalExpr},
     PhysicalExpr,
+    expressions::{BinaryExpr, DynamicFilterPhysicalExpr, is_not_null, is_null, lit},
 };
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use parking_lot::RwLock;
@@ -129,6 +131,9 @@ pub struct TopK {
     pub(crate) finished: bool,
 }
 
+/// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
+///
+/// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
 #[derive(Debug, Clone)]
 pub struct TopKDynamicFilters {
     /// The current *global* threshold for the dynamic filter.
@@ -176,7 +181,8 @@ impl TopK {
     /// Create a new [`TopK`] that stores the top `k` values, as
     /// defined by the sort expressions in `expr`.
     // TODO: make a builder or some other nicer API
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(
         partition_id: usize,
         schema: SchemaRef,
@@ -224,6 +230,7 @@ impl TopK {
 
     /// Insert `batch`, remembering if any of its values are among
     /// the top k seen so far.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Updates on drop
         let baseline = self.metrics.baseline.clone();
@@ -375,7 +382,7 @@ impl TopK {
         };
 
         // Build the filter expression OUTSIDE any synchronization
-        let predicate = Self::build_filter_expression(&self.expr, thresholds)?;
+        let predicate = Self::build_filter_expression(&self.expr, &thresholds)?;
         let new_threshold = new_threshold_row.to_vec();
 
         // update the threshold. Since there was a lock gap, we must check if it is still the best
@@ -405,10 +412,10 @@ impl TopK {
         };
 
         // Update the filter expression
-        if let Some(pred) = predicate {
-            if !pred.eq(&lit(true)) {
-                filter.expr.update(pred)?;
-            }
+        if let Some(pred) = predicate
+            && !pred.eq(&lit(true))
+        {
+            filter.expr.update(pred)?;
         }
 
         Ok(())
@@ -418,7 +425,7 @@ impl TopK {
     /// This is now called outside of any locks to reduce critical section time.
     fn build_filter_expression(
         sort_exprs: &[PhysicalSortExpr],
-        thresholds: Vec<ScalarValue>,
+        thresholds: &[ScalarValue],
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // Create filter expressions for each threshold
         let mut filters: Vec<Arc<dyn PhysicalExpr>> =
@@ -589,14 +596,17 @@ impl TopK {
             common_sort_prefix_converter: _,
             common_sort_prefix: _,
             finished: _,
-            filter: _,
+            filter,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
+
+        // Mark the dynamic filter as complete now that TopK processing is finished.
+        filter.read().expr().mark_complete();
 
         // break into record batches as needed
         let mut batches = vec![];
         if let Some(mut batch) = heap.emit()? {
-            metrics.baseline.output_rows().add(batch.num_rows());
+            (&batch).record_output(&metrics.baseline);
 
             loop {
                 if batch.num_rows() <= batch_size {
@@ -714,8 +724,8 @@ impl TopKHeap {
         let row = row.as_ref();
 
         // Reuse storage for evicted item if possible
-        let new_top_k = if self.inner.len() == self.k {
-            let prev_min = self.inner.pop().unwrap();
+        if self.inner.len() == self.k {
+            let mut prev_min = self.inner.peek_mut().unwrap();
 
             // Update batch use
             if prev_min.batch_id == batch_entry.id {
@@ -726,15 +736,16 @@ impl TopKHeap {
 
             // update memory accounting
             self.owned_bytes -= prev_min.owned_size();
-            prev_min.with_new_row(row, batch_id, index)
+
+            prev_min.replace_with(row, batch_id, index);
+
+            self.owned_bytes += prev_min.owned_size();
         } else {
-            TopKRow::new(row, batch_id, index)
+            let new_row = TopKRow::new(row, batch_id, index);
+            self.owned_bytes += new_row.owned_size();
+            // put the new row into the heap
+            self.inner.push(new_row);
         };
-
-        self.owned_bytes += new_top_k.owned_size();
-
-        // put the new row into the heap
-        self.inner.push(new_top_k)
     }
 
     /// Returns the values stored in this heap, from values low to
@@ -863,7 +874,7 @@ impl TopKHeap {
                     ScalarValue::try_from_array(&array, 0)?
                 }
                 array => {
-                    return internal_err!("Expected a scalar value, got {:?}", array)
+                    return internal_err!("Expected a scalar value, got {:?}", array);
                 }
             };
 
@@ -901,26 +912,13 @@ impl TopKRow {
         }
     }
 
-    /// Create a new  TopKRow reusing the existing allocation
-    fn with_new_row(
-        self,
-        new_row: impl AsRef<[u8]>,
-        batch_id: u32,
-        index: usize,
-    ) -> Self {
-        let Self {
-            mut row,
-            batch_id: _,
-            index: _,
-        } = self;
-        row.clear();
-        row.extend_from_slice(new_row.as_ref());
+    // Replace the existing row capacity with new values
+    fn replace_with(&mut self, new_row: impl AsRef<[u8]>, batch_id: u32, index: usize) {
+        self.row.clear();
+        self.row.extend_from_slice(new_row.as_ref());
 
-        Self {
-            row,
-            batch_id,
-            index,
-        }
+        self.batch_id = batch_id;
+        self.index = index;
     }
 
     /// Returns the number of bytes owned by this row in the heap (not
@@ -1193,6 +1191,54 @@ mod tests {
             ],
             &results
         );
+
+        Ok(())
+    }
+
+    /// This test verifies that the dynamic filter is marked as complete after TopK processing finishes.
+    #[tokio::test]
+    async fn test_topk_marks_filter_complete() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let sort_expr = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+
+        let full_expr = LexOrdering::from([sort_expr.clone()]);
+        let prefix = vec![sort_expr];
+
+        // Create a dummy runtime environment and metrics
+        let runtime = Arc::new(RuntimeEnv::default());
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // Create a dynamic filter that we'll check for completion
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
+
+        // Create a TopK instance
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            prefix,
+            full_expr,
+            2,
+            10,
+            runtime,
+            &metrics,
+            Arc::new(RwLock::new(TopKDynamicFilters::new(dynamic_filter))),
+        )?;
+
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(1), Some(2)]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array])?;
+        topk.insert_batch(batch)?;
+
+        // Call emit to finish TopK processing
+        let _results: Vec<_> = topk.emit()?.try_collect().await?;
+
+        // After emit is called, the dynamic filter should be marked as complete
+        // wait_complete() should return immediately
+        dynamic_filter_clone.wait_complete().await;
 
         Ok(())
     }

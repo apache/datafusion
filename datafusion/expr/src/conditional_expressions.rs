@@ -17,9 +17,9 @@
 
 //! Conditional expressions
 use crate::expr::Case;
-use crate::{expr_schema::ExprSchemable, Expr};
+use crate::{Expr, expr_schema::ExprSchemable};
 use arrow::datatypes::DataType;
-use datafusion_common::{plan_err, DFSchema, HashSet, Result};
+use datafusion_common::{DFSchema, HashSet, Result, plan_err};
 use itertools::Itertools as _;
 
 /// Helper struct for building [Expr::Case]

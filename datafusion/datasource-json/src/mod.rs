@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
 pub mod file_format;
 pub mod source;
+pub mod utils;
 
 pub use file_format::*;

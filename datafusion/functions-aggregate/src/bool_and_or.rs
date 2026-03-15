@@ -28,10 +28,10 @@ use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef};
 
 use datafusion_common::internal_err;
-use datafusion_common::{downcast_value, not_impl_err};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{downcast_value, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
     Signature, Volatility,
@@ -114,11 +114,7 @@ pub struct BoolAnd {
 impl BoolAnd {
     fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Boolean],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![DataType::Boolean], Volatility::Immutable),
         }
     }
 }
@@ -151,12 +147,14 @@ impl AggregateUDFImpl for BoolAnd {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, self.name()),
-            DataType::Boolean,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, self.name()),
+                DataType::Boolean,
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -249,11 +247,7 @@ pub struct BoolOr {
 impl BoolOr {
     fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Boolean],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![DataType::Boolean], Volatility::Immutable),
         }
     }
 }
@@ -286,12 +280,14 @@ impl AggregateUDFImpl for BoolOr {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, self.name()),
-            DataType::Boolean,
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, self.name()),
+                DataType::Boolean,
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {

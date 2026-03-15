@@ -17,19 +17,19 @@
 
 //! Define the `SpillManager` struct, which is responsible for reading and writing `RecordBatch`es to raw files based on the provided configurations.
 
+use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
+use crate::coop::cooperative;
+use crate::{common::spawn_buffered, metrics::SpillMetrics};
 use arrow::array::StringViewArray;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_execution::runtime_env::RuntimeEnv;
-use std::sync::Arc;
-
-use datafusion_common::{config::SpillCompression, Result};
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_common::utils::memory::get_record_batch_memory_size;
+use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
-
-use super::{in_progress_spill_file::InProgressSpillFile, SpillReaderStream};
-use crate::coop::cooperative;
-use crate::{common::spawn_buffered, metrics::SpillMetrics};
+use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::runtime_env::RuntimeEnv;
+use std::borrow::Borrow;
+use std::sync::Arc;
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.
@@ -72,6 +72,11 @@ impl SpillManager {
         self
     }
 
+    /// Returns the schema for batches managed by this SpillManager
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
     /// Creates a temporary file for in-progress operations, returning an error
     /// message if file creation fails. The file can be used to append batches
     /// incrementally and then finish the file when done.
@@ -105,39 +110,29 @@ impl SpillManager {
         in_progress_file.finish()
     }
 
-    /// Refer to the documentation for [`Self::spill_record_batch_and_finish`]. This method
-    /// additionally spills the `RecordBatch` into smaller batches, divided by `row_limit`.
-    ///
-    /// # Errors
-    /// - Returns an error if spilling would exceed the disk usage limit configured
-    ///   by `max_temp_directory_size` in `DiskManager`
-    pub(crate) fn spill_record_batch_by_size_and_return_max_batch_memory(
+    /// Spill an iterator of `RecordBatch`es to disk and return the spill file and the size of the largest batch in memory
+    /// Note that this expects the caller to provide *non-sliced* batches, so the memory calculation of each batch is accurate.
+    pub(crate) fn spill_record_batch_iter_and_return_max_batch_memory(
         &self,
-        batch: &RecordBatch,
+        mut iter: impl Iterator<Item = Result<impl Borrow<RecordBatch>>>,
         request_description: &str,
-        row_limit: usize,
     ) -> Result<Option<(RefCountedTempFile, usize)>> {
-        let total_rows = batch.num_rows();
-        let mut batches = Vec::new();
-        let mut offset = 0;
-
-        // It's ok to calculate all slices first, because slicing is zero-copy.
-        while offset < total_rows {
-            let length = std::cmp::min(total_rows - offset, row_limit);
-            let sliced_batch = batch.slice(offset, length);
-            batches.push(sliced_batch);
-            offset += length;
-        }
-
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let mut max_record_batch_size = 0;
 
-        for batch in batches {
-            in_progress_file.append_batch(&batch)?;
+        iter.try_for_each(|batch| {
+            let batch = batch?;
+            let borrowed = batch.borrow();
+            if borrowed.num_rows() == 0 {
+                return Ok(());
+            }
+            in_progress_file.append_batch(borrowed)?;
 
-            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size()?);
-        }
+            max_record_batch_size =
+                max_record_batch_size.max(get_record_batch_memory_size(borrowed));
+            Result::<_, DataFusionError>::Ok(())
+        })?;
 
         let file = in_progress_file.finish()?;
 
@@ -183,6 +178,19 @@ impl SpillManager {
         )));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
+    }
+
+    /// Same as `read_spill_as_stream`, but without buffering.
+    pub fn read_spill_as_stream_unbuffered(
+        &self,
+        spill_file_path: RefCountedTempFile,
+        max_record_batch_memory: Option<usize>,
+    ) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(cooperative(SpillReaderStream::new(
+            Arc::clone(&self.schema),
+            spill_file_path,
+            max_record_batch_memory,
+        ))))
     }
 }
 

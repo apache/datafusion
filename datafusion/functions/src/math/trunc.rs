@@ -24,9 +24,9 @@ use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type, Int64Type};
 use datafusion_common::ScalarValue::Int64;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -110,7 +110,50 @@ impl ScalarUDFImpl for TruncFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(trunc, vec![])(&args.args)
+        // Extract precision from second argument (default 0)
+        let precision = match args.args.get(1) {
+            Some(ColumnarValue::Scalar(Int64(Some(p)))) => Some(*p),
+            Some(ColumnarValue::Scalar(Int64(None))) => None, // null precision
+            Some(ColumnarValue::Array(_)) => {
+                // Precision is an array - use array path
+                return make_scalar_function(trunc, vec![])(&args.args);
+            }
+            None => Some(0), // default precision
+            Some(cv) => {
+                return exec_err!(
+                    "trunc function requires precision to be Int64, got {:?}",
+                    cv.data_type()
+                );
+            }
+        };
+
+        // Scalar fast path using tuple matching for (value, precision)
+        match (&args.args[0], precision) {
+            // Null cases
+            (ColumnarValue::Scalar(sv), _) if sv.is_null() => {
+                ColumnarValue::Scalar(ScalarValue::Null).cast_to(args.return_type(), None)
+            }
+            (_, None) => {
+                ColumnarValue::Scalar(ScalarValue::Null).cast_to(args.return_type(), None)
+            }
+            // Scalar cases
+            (ColumnarValue::Scalar(ScalarValue::Float64(Some(v))), Some(p)) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(if p == 0 {
+                    v.trunc()
+                } else {
+                    compute_truncate64(*v, p)
+                }))),
+            ),
+            (ColumnarValue::Scalar(ScalarValue::Float32(Some(v))), Some(p)) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(if p == 0 {
+                    v.trunc()
+                } else {
+                    compute_truncate32(*v, p)
+                }))),
+            ),
+            // Array path for everything else
+            _ => make_scalar_function(trunc, vec![])(&args.args),
+        }
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
@@ -158,11 +201,7 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                     args[0]
                         .as_primitive::<Float64Type>()
                         .unary::<_, Float64Type>(|x: f64| {
-                            if x == 0_f64 {
-                                0_f64
-                            } else {
-                                x.trunc()
-                            }
+                            if x == 0_f64 { 0_f64 } else { x.trunc() }
                         }),
                 ) as ArrayRef)
             }
@@ -184,11 +223,7 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                     args[0]
                         .as_primitive::<Float32Type>()
                         .unary::<_, Float32Type>(|x: f32| {
-                            if x == 0_f32 {
-                                0_f32
-                            } else {
-                                x.trunc()
-                            }
+                            if x == 0_f32 { 0_f32 } else { x.trunc() }
                         }),
                 ) as ArrayRef)
             }
@@ -210,12 +245,12 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn compute_truncate32(x: f32, y: i64) -> f32 {
     let factor = 10.0_f32.powi(y as i32);
-    (x * factor).round() / factor
+    (x * factor).trunc() / factor
 }
 
 fn compute_truncate64(x: f64, y: i64) -> f64 {
     let factor = 10.0_f64.powi(y as i32);
-    (x * factor).round() / factor
+    (x * factor).trunc() / factor
 }
 
 #[cfg(test)]
@@ -246,9 +281,9 @@ mod test {
 
         assert_eq!(floats.len(), 5);
         assert_eq!(floats.value(0), 15.0);
-        assert_eq!(floats.value(1), 1_234.268);
+        assert_eq!(floats.value(1), 1_234.267);
         assert_eq!(floats.value(2), 1_233.12);
-        assert_eq!(floats.value(3), 3.312_98);
+        assert_eq!(floats.value(3), 3.312_97);
         assert_eq!(floats.value(4), -21.123_4);
     }
 
@@ -271,9 +306,9 @@ mod test {
 
         assert_eq!(floats.len(), 5);
         assert_eq!(floats.value(0), 5.0);
-        assert_eq!(floats.value(1), 234.268);
+        assert_eq!(floats.value(1), 234.267);
         assert_eq!(floats.value(2), 123.12);
-        assert_eq!(floats.value(3), 123.312_98);
+        assert_eq!(floats.value(3), 123.312_97);
         assert_eq!(floats.value(4), -321.123_1);
     }
 

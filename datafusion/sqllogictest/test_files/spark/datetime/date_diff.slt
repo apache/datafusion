@@ -15,18 +15,138 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+# date input
+query I
+SELECT date_diff('2009-07-30'::date, '2009-07-31'::date);
+----
+-1
 
-## Original Query: SELECT date_diff('2009-07-30', '2009-07-31');
-## PySpark 3.5.5 Result: {'date_diff(2009-07-30, 2009-07-31)': -1, 'typeof(date_diff(2009-07-30, 2009-07-31))': 'int', 'typeof(2009-07-30)': 'string', 'typeof(2009-07-31)': 'string'}
-#query
-#SELECT date_diff('2009-07-30'::string, '2009-07-31'::string);
+query I
+SELECT date_diff('2009-07-31'::date, '2009-07-30'::date);
+----
+1
 
-## Original Query: SELECT date_diff('2009-07-31', '2009-07-30');
-## PySpark 3.5.5 Result: {'date_diff(2009-07-31, 2009-07-30)': 1, 'typeof(date_diff(2009-07-31, 2009-07-30))': 'int', 'typeof(2009-07-31)': 'string', 'typeof(2009-07-30)': 'string'}
-#query
-#SELECT date_diff('2009-07-31'::string, '2009-07-30'::string);
+query I
+SELECT date_diff('2009-07-31'::string, '2009-07-30'::date);
+----
+1
+
+query I
+SELECT date_diff('2009-07-31'::timestamp, '2009-07-30'::date);
+----
+1
+
+# Date64 input
+query I
+SELECT date_diff(arrow_cast('2009-07-31', 'Date64'), arrow_cast('2009-07-30', 'Date64'));
+----
+1
+
+query I
+SELECT date_diff(arrow_cast('2009-07-30', 'Date64'), arrow_cast('2009-07-31', 'Date64'));
+----
+-1
+
+# Mixed Date32 and Date64 input
+query I
+SELECT date_diff('2009-07-31'::date, arrow_cast('2009-07-30', 'Date64'));
+----
+1
+
+query I
+SELECT date_diff(arrow_cast('2009-07-31', 'Date64'), '2009-07-30'::date);
+----
+1
+
+
+# Same date returns 0
+query I
+SELECT date_diff('2009-07-30'::date, '2009-07-30'::date);
+----
+0
+
+# Large difference
+query I
+SELECT date_diff('2020-01-01'::date, '1970-01-01'::date);
+----
+18262
+
+# timestamp input
+query I
+SELECT date_diff('2009-07-30 12:34:56'::timestamp, '2009-07-31 23:45:01'::timestamp);
+----
+-1
+
+query I
+SELECT date_diff('2009-07-31 23:45:01'::timestamp, '2009-07-30 12:34:56'::timestamp);
+----
+1
+
+query I
+SELECT date_diff('2009-07-31 23:45:01'::string, '2009-07-30 12:34:56'::timestamp);
+----
+1
+
+# string input
+query I
+SELECT date_diff('2009-07-30', '2009-07-31');
+----
+-1
+
+query I
+SELECT date_diff('2009-07-31', '2009-07-30');
+----
+1
+
+# NULL handling
+query I
+SELECT date_diff(NULL::date, '2009-07-30'::date);
+----
+NULL
+
+query I
+SELECT date_diff('2009-07-31'::date, NULL::date);
+----
+NULL
+
+query I
+SELECT date_diff(NULL::date, NULL::date);
+----
+NULL
+
+query I
+SELECT date_diff(column1, column2)
+FROM VALUES
+('2009-07-30'::date, '2009-07-31'::date),
+('2009-07-31'::date, '2009-07-30'::date),
+(NULL::date, '2009-07-30'::date),
+('2009-07-31'::date, NULL::date),
+(NULL::date, NULL::date);
+----
+-1
+1
+NULL
+NULL
+NULL
+
+
+# Alias datediff
+query I
+SELECT datediff('2009-07-30'::date, '2009-07-31'::date);
+----
+-1
+
+query I
+SELECT datediff(column1, column2)
+FROM VALUES
+('2009-07-30'::date, '2009-07-31'::date),
+('2009-07-31'::date, '2009-07-30'::date),
+(NULL::date, '2009-07-30'::date),
+('2009-07-31'::date, NULL::date),
+(NULL::date, NULL::date);
+----
+-1
+1
+NULL
+NULL
+NULL

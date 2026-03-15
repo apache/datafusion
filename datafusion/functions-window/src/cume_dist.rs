@@ -18,10 +18,10 @@
 //! `cume_dist` window function implementation
 
 use arrow::datatypes::FieldRef;
+use datafusion_common::Result;
 use datafusion_common::arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::Result;
 use datafusion_expr::{
     Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
@@ -167,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::single_range_in_vec_init)]
+    #[expect(clippy::single_range_in_vec_init)]
     fn test_cume_dist() -> Result<()> {
         test_f64_result(0, vec![], vec![])?;
 

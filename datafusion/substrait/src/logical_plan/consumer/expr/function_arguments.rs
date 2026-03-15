@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{not_impl_err, DFSchema};
+use datafusion::common::{DFSchema, not_impl_err};
 use datafusion::logical_expr::Expr;
-use substrait::proto::function_argument::ArgType;
 use substrait::proto::FunctionArgument;
+use substrait::proto::function_argument::ArgType;
 
 /// Convert Substrait FunctionArguments to DataFusion Exprs
 pub async fn from_substrait_func_args(

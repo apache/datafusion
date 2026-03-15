@@ -9,6 +9,9 @@ repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -20,10 +23,10 @@ datafusion-expr-common = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-itertools = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
 datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 insta = { workspace = true }
+itertools = { workspace = true }

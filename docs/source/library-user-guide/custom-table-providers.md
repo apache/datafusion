@@ -52,11 +52,12 @@ use std::any::Any;
 use std::sync::{Arc, Mutex};
 use std::collections::{BTreeMap, HashMap};
 use datafusion::common::Result;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     ExecutionPlan, SendableRecordBatchStream, DisplayAs, DisplayFormatType,
-    Statistics, PlanProperties
+    Statistics, PlanProperties, PhysicalExpr
 };
 use datafusion::execution::context::TaskContext;
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
@@ -108,7 +109,7 @@ impl ExecutionPlan for CustomExec {
     }
 
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         unreachable!()
     }
 
@@ -152,6 +153,13 @@ impl ExecutionPlan for CustomExec {
             self.schema(),
             None,
         )?))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 ```
@@ -232,7 +240,7 @@ The `scan` method of the `TableProvider` returns a `Result<Arc<dyn ExecutionPlan
 #     }
 #
 #
-#     fn properties(&self) -> &PlanProperties {
+#     fn properties(&self) -> &Arc<PlanProperties> {
 #         unreachable!()
 #     }
 #
@@ -277,12 +285,20 @@ The `scan` method of the `TableProvider` returns a `Result<Arc<dyn ExecutionPlan
 #             None,
 #         )?))
 #     }
+#
+#     fn apply_expressions(
+#         &self,
+#         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+#     ) -> Result<TreeNodeRecursion> {
+#         Ok(TreeNodeRecursion::Continue)
+#     }
 # }
 
 use async_trait::async_trait;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::logical_expr::expr::Expr;
 use datafusion::datasource::{TableProvider, TableType};
-use datafusion::physical_plan::project_schema;
+use datafusion::physical_plan::{project_schema, PhysicalExpr};
 use datafusion::catalog::Session;
 
 impl CustomExec {
@@ -424,7 +440,7 @@ This will allow you to use the custom table provider in DataFusion. For example,
 #     }
 #
 #
-#     fn properties(&self) -> &PlanProperties {
+#     fn properties(&self) -> &Arc<PlanProperties> {
 #         unreachable!()
 #     }
 #
@@ -469,12 +485,20 @@ This will allow you to use the custom table provider in DataFusion. For example,
 #             None,
 #         )?))
 #     }
+#
+#     fn apply_expressions(
+#         &self,
+#         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+#     ) -> Result<TreeNodeRecursion> {
+#         Ok(TreeNodeRecursion::Continue)
+#     }
 # }
 
 # use async_trait::async_trait;
+# use datafusion::common::tree_node::TreeNodeRecursion;
 # use datafusion::logical_expr::expr::Expr;
 # use datafusion::datasource::{TableProvider, TableType};
-# use datafusion::physical_plan::project_schema;
+# use datafusion::physical_plan::{project_schema, PhysicalExpr};
 # use datafusion::catalog::Session;
 #
 # impl CustomExec {
@@ -569,6 +593,6 @@ More abstractly, see the following traits for more information on how to impleme
 - `FileFormat` - a trait for reading a file format
 - `ListingTableProvider` - a useful trait for implementing a `TableProvider` that lists files in a directory
 
-[ex]: https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion-examples/examples/custom_datasource.rs#L214C1-L276
+[ex]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/custom_datasource.rs
 [csv]: https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/csv.rs#L57-L70
 [parquet]: https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/parquet.rs#L77-L104

@@ -19,14 +19,18 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use crc32fast::Hasher;
 use datafusion_common::cast::{
-    as_binary_array, as_binary_view_array, as_large_binary_array,
+    as_binary_array, as_binary_view_array, as_fixed_size_binary_array,
+    as_large_binary_array,
 };
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::types::{NativeType, logical_string};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -45,7 +49,14 @@ impl Default for SparkCrc32 {
 impl SparkCrc32 {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_implicit(
+                    TypeSignatureClass::Binary,
+                    vec![TypeSignatureClass::Native(logical_string())],
+                    NativeType::Binary,
+                )],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -64,29 +75,16 @@ impl ScalarUDFImpl for SparkCrc32 {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_crc32, vec![])(&args.args)
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!(
-                "`crc32` function requires 1 argument, got {}",
-                arg_types.len()
-            );
-        }
-        match arg_types[0] {
-            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-                Ok(vec![arg_types[0].clone()])
-            }
-            DataType::Utf8 | DataType::Utf8View => Ok(vec![DataType::Binary]),
-            DataType::LargeUtf8 => Ok(vec![DataType::LargeBinary]),
-            DataType::Null => Ok(vec![DataType::Binary]),
-            _ => exec_err!("`crc32` function does not support type {}", arg_types[0]),
-        }
     }
 }
 
@@ -104,14 +102,10 @@ fn spark_crc32_impl<'a>(input: impl Iterator<Item = Option<&'a [u8]>>) -> ArrayR
 }
 
 fn spark_crc32(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [input] = args else {
-        return internal_err!(
-            "Spark `crc32` function requires 1 argument, got {}",
-            args.len()
-        );
-    };
+    let [input] = take_function_args("crc32", args)?;
 
     match input.data_type() {
+        DataType::Null => Ok(Arc::new(Int64Array::new_null(input.len()))),
         DataType::Binary => {
             let input = as_binary_array(input)?;
             Ok(spark_crc32_impl(input.iter()))
@@ -124,11 +118,42 @@ fn spark_crc32(args: &[ArrayRef]) -> Result<ArrayRef> {
             let input = as_binary_view_array(input)?;
             Ok(spark_crc32_impl(input.iter()))
         }
-        _ => {
-            exec_err!(
-                "Spark `crc32` function: argument must be binary or large binary, got {:?}",
-                input.data_type()
-            )
+        DataType::FixedSizeBinary(_) => {
+            let input = as_fixed_size_binary_array(input)?;
+            Ok(spark_crc32_impl(input.iter()))
         }
+        dt => {
+            internal_err!("Unsupported data type for crc32: {dt}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crc32_nullability() -> Result<()> {
+        let crc32_func = SparkCrc32::new();
+
+        // non-nullable field should produce non-nullable output
+        let field_not_null = Arc::new(Field::new("data", DataType::Binary, false));
+        let result = crc32_func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: std::slice::from_ref(&field_not_null),
+            scalar_arguments: &[None],
+        })?;
+        assert!(!result.is_nullable());
+        assert_eq!(result.data_type(), &DataType::Int64);
+
+        // nullable field should produce nullable output
+        let field_nullable = Arc::new(Field::new("data", DataType::Binary, true));
+        let result = crc32_func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[field_nullable],
+            scalar_arguments: &[None],
+        })?;
+        assert!(result.is_nullable());
+        assert_eq!(result.data_type(), &DataType::Int64);
+
+        Ok(())
     }
 }

@@ -29,8 +29,8 @@ use arrow::{
     array::{ArrayRef, StringArray},
     datatypes::{DataType, Field, Schema},
 };
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use datafusion_expr::{function::AccumulatorArgs, GroupsAccumulator};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use datafusion_expr::{GroupsAccumulator, function::AccumulatorArgs};
 use datafusion_functions_aggregate::min_max;
 use datafusion_physical_expr::expressions::col;
 

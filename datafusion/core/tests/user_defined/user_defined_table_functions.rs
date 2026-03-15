@@ -21,17 +21,17 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::Int64Array;
-use arrow::csv::reader::Format;
 use arrow::csv::ReaderBuilder;
+use arrow::csv::reader::Format;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::test_util::batches_to_string;
-use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::error::Result;
 use datafusion::execution::TaskContext;
-use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
@@ -55,7 +55,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
         .collect()
         .await?;
 
-    insta::assert_snapshot!(batches_to_string(&rbs), @r###"
+    insta::assert_snapshot!(batches_to_string(&rbs), @r"
     +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
     | n_nationkey | n_name    | n_regionkey | n_comment                                                                                                   |
     +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
@@ -65,7 +65,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
     | 4           | EGYPT     | 4           | y above the carefully unusual theodolites. final dugouts are quickly across the furiously regular d         |
     | 5           | ETHIOPIA  | 0           | ven packages wake quickly. regu                                                                             |
     +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
-    "###);
+    ");
 
     // just run, return all rows
     let rbs = ctx
@@ -74,7 +74,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
         .collect()
         .await?;
 
-    insta::assert_snapshot!(batches_to_string(&rbs), @r###"
+    insta::assert_snapshot!(batches_to_string(&rbs), @r"
     +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
     | n_nationkey | n_name    | n_regionkey | n_comment                                                                                                          |
     +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
@@ -89,7 +89,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
     | 9           | INDONESIA | 2           |  slyly express asymptotes. regular deposits haggle slyly. carefully ironic hockey players sleep blithely. carefull |
     | 10          | IRAN      | 4           | efully alongside of the slyly final dependencies.                                                                  |
     +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -205,7 +205,7 @@ impl TableFunctionImpl for SimpleCsvTableFunc {
         let mut filepath = String::new();
         for expr in exprs {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(ref path)), _) => {
+                Expr::Literal(ScalarValue::Utf8(Some(path)), _) => {
                     filepath.clone_from(path);
                 }
                 expr => new_exprs.push(expr.clone()),
@@ -219,6 +219,31 @@ impl TableFunctionImpl for SimpleCsvTableFunc {
         };
         Ok(Arc::new(table))
     }
+}
+
+/// Test that expressions passed to UDTFs are properly type-coerced
+/// This is a regression test for https://github.com/apache/datafusion/issues/19914
+#[tokio::test]
+async fn test_udtf_type_coercion() -> Result<()> {
+    use datafusion::datasource::MemTable;
+
+    #[derive(Debug)]
+    struct NoOpTableFunc;
+
+    impl TableFunctionImpl for NoOpTableFunc {
+        fn call(&self, _: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+            let schema = Arc::new(arrow::datatypes::Schema::empty());
+            Ok(Arc::new(MemTable::try_new(schema, vec![vec![]])?))
+        }
+    }
+
+    let ctx = SessionContext::new();
+    ctx.register_udtf("f", Arc::new(NoOpTableFunc));
+
+    // This should not panic - the array elements should be coerced to Float64
+    let _ = ctx.sql("SELECT * FROM f(ARRAY[0.1, 1, 2])").await?;
+
+    Ok(())
 }
 
 fn read_csv_batches(csv_path: impl AsRef<Path>) -> Result<(SchemaRef, Vec<RecordBatch>)> {

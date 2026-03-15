@@ -22,14 +22,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{assert_expected_schema, InvariantLevel};
+use datafusion_expr::{InvariantLevel, assert_expected_schema};
 use log::{debug, warn};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
+use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -41,28 +41,29 @@ use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_group_by_constant::EliminateGroupByConstant;
 use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
-use crate::eliminate_nested_union::EliminateNestedUnion;
-use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
+use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::optimize_projections::OptimizeProjections;
+use crate::optimize_unions::OptimizeUnions;
 use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
+use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::utils::log_plan;
 
-/// `OptimizerRule`s transforms one [`LogicalPlan`] into another which
-/// computes the same results, but in a potentially more efficient
-/// way. If there are no suitable transformations for the input plan,
-/// the optimizer should simply return it unmodified.
+/// Transforms one [`LogicalPlan`] into another which computes the same results,
+/// but in a potentially more efficient way.
 ///
-/// To change the semantics of a `LogicalPlan`, see [`AnalyzerRule`]
+/// See notes on [`Self::rewrite`] for details on how to implement an `OptimizerRule`.
+///
+/// To change the semantics of a `LogicalPlan`, see [`AnalyzerRule`].
 ///
 /// Use [`SessionState::add_optimizer_rule`] to register additional
 /// `OptimizerRule`s.
@@ -87,8 +88,40 @@ pub trait OptimizerRule: Debug {
         true
     }
 
-    /// Try to rewrite `plan` to an optimized form, returning `Transformed::yes`
-    /// if the plan was rewritten and `Transformed::no` if it was not.
+    /// Try to rewrite `plan` to an optimized form, returning [`Transformed::yes`]
+    /// if the plan was rewritten and [`Transformed::no`] if it was not.
+    ///
+    /// # Notes for implementations:
+    ///
+    /// ## Return the same plan if no changes were made
+    ///
+    /// If there are no suitable transformations for the input plan,
+    /// the optimizer should simply return it unmodified.
+    ///
+    /// The optimizer will call `rewrite` several times until a fixed point is
+    /// reached, so it is important that `rewrite` return [`Transformed::no`] if
+    /// the output is the same.
+    ///
+    /// ## Matching on functions
+    ///
+    /// The rule should avoid function-specific transformations, and instead use
+    /// methods on [`ScalarUDFImpl`] and [`AggregateUDFImpl`]. Specifically, the
+    /// rule should not check function names as functions can be overridden, and
+    /// may not have the same semantics as the functions provided with
+    /// DataFusion.
+    ///
+    /// For example, if a rule rewrites a function based on the check
+    /// `func.name() == "sum"`, it may rewrite the plan incorrectly if the
+    /// registered `sum` function has different semantics (for example, the
+    /// `sum` function from the `datafusion-spark` crate).
+    ///
+    /// There are still several cases that rely on function name checking in
+    /// the rules included with DataFusion. Please see [#18643] for more details
+    /// and to help remove these cases.
+    ///
+    /// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
+    /// [`AggregateUDFImpl`]: datafusion_expr::ScalarUDFImpl
+    /// [#18643]: https://github.com/apache/datafusion/issues/18643
     fn rewrite(
         &self,
         _plan: LogicalPlan,
@@ -101,8 +134,9 @@ pub trait OptimizerRule: Debug {
 /// Options to control the DataFusion Optimizer.
 pub trait OptimizerConfig {
     /// Return the time at which the query execution started. This
-    /// time is used as the value for now()
-    fn query_execution_start_time(&self) -> DateTime<Utc>;
+    /// time is used as the value for `now()`. If `None`, time-dependent
+    /// functions like `now()` will not be simplified during optimization.
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>>;
 
     /// Return alias generator used to generate unique aliases for subqueries
     fn alias_generator(&self) -> &Arc<AliasGenerator>;
@@ -119,8 +153,9 @@ pub trait OptimizerConfig {
 #[derive(Debug)]
 pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
-    /// expressions such as `now()` to use a literal value instead
-    query_execution_start_time: DateTime<Utc>,
+    /// expressions such as `now()` to use a literal value instead.
+    /// If `None`, time-dependent functions will not be simplified.
+    query_execution_start_time: Option<DateTime<Utc>>,
 
     /// Alias generator used to generate unique aliases for subqueries
     alias_generator: Arc<AliasGenerator>,
@@ -140,7 +175,7 @@ impl OptimizerContext {
     /// Create a optimizer config with provided [ConfigOptions].
     pub fn new_with_config_options(options: Arc<ConfigOptions>) -> Self {
         Self {
-            query_execution_start_time: Utc::now(),
+            query_execution_start_time: Some(Utc::now()),
             alias_generator: Arc::new(AliasGenerator::new()),
             options,
         }
@@ -154,13 +189,19 @@ impl OptimizerContext {
         self
     }
 
-    /// Specify whether the optimizer should skip rules that produce
-    /// errors, or fail the query
+    /// Set the query execution start time
     pub fn with_query_execution_start_time(
         mut self,
-        query_execution_tart_time: DateTime<Utc>,
+        query_execution_start_time: DateTime<Utc>,
     ) -> Self {
-        self.query_execution_start_time = query_execution_tart_time;
+        self.query_execution_start_time = Some(query_execution_start_time);
+        self
+    }
+
+    /// Clear the query execution start time. When `None`, time-dependent
+    /// functions like `now()` will not be simplified during optimization.
+    pub fn without_query_execution_start_time(mut self) -> Self {
+        self.query_execution_start_time = None;
         self
     }
 
@@ -186,7 +227,7 @@ impl Default for OptimizerContext {
 }
 
 impl OptimizerConfig for OptimizerContext {
-    fn query_execution_start_time(&self) -> DateTime<Utc> {
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
         self.query_execution_start_time
     }
 
@@ -227,8 +268,18 @@ impl Default for Optimizer {
 impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
+        // NOTEs:
+        // - The order of rules in this list is important, as it determines the
+        //   order in which they are applied.
+        // - Adding a new rule here is expensive as it will be applied to all
+        //   queries, and will likely increase the optimization time. Please extend
+        //   existing rules when possible, rather than adding a new rule.
+        //   If you do add a new rule considering having aggressive no-op paths
+        //   (e.g. if the plan doesn't contain any of the nodes you are looking for
+        //    return `Transformed::no`; only works if you control the traversal).
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            Arc::new(EliminateNestedUnion::new()),
+            Arc::new(RewriteSetComparison::new()),
+            Arc::new(OptimizeUnions::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
@@ -241,8 +292,6 @@ impl Optimizer {
             Arc::new(EliminateCrossJoin::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
-            // Must be after PropagateEmptyRelation
-            Arc::new(EliminateOneUnion::new()),
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
@@ -253,6 +302,8 @@ impl Optimizer {
             // that might benefit from the following rules
             Arc::new(EliminateGroupByConstant::new()),
             Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
             Arc::new(OptimizeProjections::new()),
         ];
 
@@ -291,9 +342,7 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::TopDown {
-            {
-                self.rule.rewrite(node, self.config)
-            }
+            self.rule.rewrite(node, self.config)
         } else {
             Ok(Transformed::no(node))
         }
@@ -301,9 +350,7 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::BottomUp {
-            {
-                self.rule.rewrite(node, self.config)
-            }
+            self.rule.rewrite(node, self.config)
         } else {
             Ok(Transformed::no(node))
         }
@@ -467,10 +514,10 @@ mod tests {
 
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
-        assert_contains, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result,
+        DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
     };
     use datafusion_expr::logical_plan::EmptyRelation;
-    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
+    use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, Projection, col, lit};
 
     use crate::optimizer::Optimizer;
     use crate::test::test_table_scan;

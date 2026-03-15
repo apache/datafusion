@@ -20,13 +20,13 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
+use crate::RecordBatchStream;
 use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
-use crate::RecordBatchStream;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;

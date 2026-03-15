@@ -26,7 +26,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
-use datafusion_common::{exec_datafusion_err, exec_err, Result};
+use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -80,14 +80,15 @@ impl ParseUrl {
     /// * `Ok(Some(String))` - The extracted URL component as a string
     /// * `Ok(None)` - If the requested component doesn't exist or is empty
     /// * `Err(DataFusionError)` - If the URL is malformed and cannot be parsed
-    ///
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
         let url: std::result::Result<Url, ParseError> = Url::parse(value);
         if let Err(ParseError::RelativeUrlWithoutBase) = url {
             return if !value.contains("://") {
                 Ok(None)
             } else {
-                Err(exec_datafusion_err!("The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"))
+                Err(exec_datafusion_err!(
+                    "The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"
+                ))
             };
         };
         url.map_err(|e| exec_datafusion_err!("{e:?}"))
@@ -168,7 +169,6 @@ impl ScalarUDFImpl for ParseUrl {
 /// - A string array with extracted URL components
 /// - `None` values where extraction failed or component doesn't exist
 /// - The output array type (StringArray or LargeStringArray) is determined by input types
-///
 fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
     spark_handled_parse_url(args, |x| x)
 }
@@ -188,7 +188,7 @@ pub fn spark_handled_parse_url(
     let url = &args[0];
     let part = &args[1];
 
-    let result = if args.len() == 3 {
+    if args.len() == 3 {
         // In this case, the 'key' argument is passed
         let key = &args[2];
 
@@ -217,7 +217,12 @@ pub fn spark_handled_parse_url(
                     handler_err,
                 )
             }
-            _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
+            _ => exec_err!(
+                "`parse_url` expects STRING arguments, got ({}, {}, {})",
+                url.data_type(),
+                part.data_type(),
+                key.data_type()
+            ),
         }
     } else {
         // The 'key' argument is omitted, assume all values are null
@@ -253,10 +258,13 @@ pub fn spark_handled_parse_url(
                     handler_err,
                 )
             }
-            _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
+            _ => exec_err!(
+                "`parse_url` expects STRING arguments, got ({}, {})",
+                url.data_type(),
+                part.data_type()
+            ),
         }
-    };
-    result
+    }
 }
 
 fn process_parse_url<'a, A, B, C, T>(

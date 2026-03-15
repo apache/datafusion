@@ -18,7 +18,7 @@
 //! [`LambdaUDF`]: Lambda User Defined Functions
 
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
-use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
+use crate::simplify::{ExprSimplifyResult, SimplifyContext};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{ColumnarValue, Documentation, Expr};
 use arrow::array::{ArrayRef, RecordBatch};
@@ -556,7 +556,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         Ok(ExprSimplifyResult::Original(args))
     }

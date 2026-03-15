@@ -36,7 +36,7 @@ SELECT
     arrow_cast(column3, 'Utf8') as f2,
     arrow_cast(column4, 'Utf8') as f3,
     arrow_cast(column5, 'Float64') as f4,
-    arrow_cast(column6, 'Timestamp(Nanosecond, None)') as time
+    arrow_cast(column6, 'Timestamp(ns)') as time
 FROM (
     VALUES
     -- equivalent to the following line protocol data
@@ -111,7 +111,7 @@ SELECT
     arrow_cast(column1, 'Dictionary(Int32, Utf8)') as type,
     arrow_cast(column2, 'Dictionary(Int32, Utf8)') as tag_id,
     arrow_cast(column3, 'Float64') as f5,
-    arrow_cast(column4, 'Timestamp(Nanosecond, None)') as time
+    arrow_cast(column4, 'Timestamp(ns)') as time
 FROM (
     VALUES
     -- equivalent to the following line protocol data
@@ -410,9 +410,8 @@ logical_plan
 01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
 02)--TableScan: test projection=[column1, column2]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column2@1 = 1
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: column2@1 = 1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # try literal = col to verify order doesn't matter
 # filter should not cast column2
@@ -423,9 +422,8 @@ logical_plan
 01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
 02)--TableScan: test projection=[column1, column2]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column2@1 = 1
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: column2@1 = 1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 # Now query using an integer which must be coerced into a dictionary string
@@ -441,9 +439,8 @@ logical_plan
 01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
 02)--TableScan: test projection=[column1, column2]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column2@1 = 1
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: column2@1 = 1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Window Functions
 query I

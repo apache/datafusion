@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
 use crate::window::standard::add_new_ordering_expr_with_partition_by;
-use crate::window::window_expr::{filter_array, AggregateWindowExpr, WindowFn};
+use crate::window::window_expr::{AggregateWindowExpr, WindowFn, filter_array};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
 };
@@ -33,7 +33,7 @@ use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
 use datafusion_expr::{Accumulator, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 

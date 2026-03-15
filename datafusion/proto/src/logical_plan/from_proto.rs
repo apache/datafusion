@@ -17,39 +17,39 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::Field;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, plan_datafusion_err, NullEquality,
-    RecursionUnnestOption, Result, ScalarValue, TableReference, UnnestOptions,
+    NullEquality, RecursionUnnestOption, Result, ScalarValue, TableReference,
+    UnnestOptions, exec_datafusion_err, internal_err, plan_datafusion_err,
 };
 use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::{
-    expr::{self, InList, WindowFunction},
-    logical_plan::{PlanType, StringifiedPlan},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+    expr::{self, InList, WindowFunction},
+    logical_plan::{PlanType, StringifiedPlan},
 };
 use datafusion_expr::{ExprFunctionExt, WriteOp};
-use datafusion_proto_common::{from_proto::FromOptionalField, FromProtoError as Error};
+use datafusion_proto_common::{FromProtoError as Error, from_proto::FromOptionalField};
 
 use crate::protobuf::plan_type::PlanTypeEnum::{
     FinalPhysicalPlanWithSchema, InitialPhysicalPlanWithSchema,
 };
 use crate::protobuf::{
-    self,
+    self, AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
+    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
     plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
         FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
         InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
         OptimizedPhysicalPlan, PhysicalPlanError,
     },
-    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 
 use super::LogicalExtensionCodec;
@@ -240,6 +240,7 @@ impl From<protobuf::dml_node::Type> for WriteOp {
             }
             protobuf::dml_node::Type::InsertReplace => WriteOp::Insert(InsertOp::Replace),
             protobuf::dml_node::Type::Ctas => WriteOp::Ctas,
+            protobuf::dml_node::Type::Truncate => WriteOp::Truncate,
         }
     }
 }
@@ -527,8 +528,11 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::Cast(Cast::new(expr, data_type)))
+            let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
+            let field = data_type
+                .into_nullable_field()
+                .with_nullable(cast.nullable.unwrap_or(true));
+            Ok(Expr::Cast(Cast::new_from_field(expr, Arc::new(field))))
         }
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(
@@ -537,8 +541,14 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::TryCast(TryCast::new(expr, data_type)))
+            let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
+            let field = data_type
+                .into_nullable_field()
+                .with_nullable(cast.nullable.unwrap_or(true));
+            Ok(Expr::TryCast(TryCast::new_from_field(
+                expr,
+                Arc::new(field),
+            )))
         }
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
@@ -729,6 +739,10 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "RegexMatch" => Ok(Operator::RegexMatch),
         "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
         "RegexNotMatch" => Ok(Operator::RegexNotMatch),
+        "LikeMatch" => Ok(Operator::LikeMatch),
+        "ILikeMatch" => Ok(Operator::ILikeMatch),
+        "NotLikeMatch" => Ok(Operator::NotLikeMatch),
+        "NotILikeMatch" => Ok(Operator::NotILikeMatch),
         "StringConcat" => Ok(Operator::StringConcat),
         "AtArrow" => Ok(Operator::AtArrow),
         "ArrowAt" => Ok(Operator::ArrowAt),

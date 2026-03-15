@@ -23,6 +23,7 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Nested type Functions for [DataFusion].
 //!
@@ -41,6 +42,7 @@ pub mod macros_lambda;
 
 pub mod array_has;
 pub mod array_transform;
+pub mod arrays_zip;
 pub mod cardinality;
 pub mod concat;
 pub mod dimension;
@@ -83,6 +85,7 @@ pub mod expr_fn {
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
     pub use super::array_transform::array_transform;
+    pub use super::arrays_zip::arrays_zip;
     pub use super::cardinality::cardinality;
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
@@ -163,6 +166,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         set_ops::array_distinct_udf(),
         set_ops::array_intersect_udf(),
         set_ops::array_union_udf(),
+        arrays_zip::arrays_zip_udf(),
         position::array_position_udf(),
         position::array_positions_udf(),
         remove::array_remove_udf(),

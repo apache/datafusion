@@ -21,7 +21,7 @@
 
 ## 🧭 Background Concepts
 
-- **2024-06-13**: [2024 ACM SIGMOD International Conference on Management of Data: Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine](https://dl.acm.org/doi/10.1145/3626246.3653368) - [Download](http://andrew.nerdnetworks.org/other/SIGMOD-2024-lamb.pdf), [Talk](https://youtu.be/-DpKcPfnNms), [Slides](https://docs.google.com/presentation/d/1gqcxSNLGVwaqN0_yJtCbNm19-w5pqPuktII5_EDA6_k/edit#slide=id.p), [Recording ](https://youtu.be/-DpKcPfnNms)
+- **2024-06-13**: [2024 ACM SIGMOD International Conference on Management of Data: Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine](https://dl.acm.org/doi/10.1145/3626246.3653368) - [Download](https://andrew.nerdnetworks.org/pdf/SIGMOD-2024-lamb.pdf), [Talk](https://youtu.be/-DpKcPfnNms), [Slides](https://docs.google.com/presentation/d/1gqcxSNLGVwaqN0_yJtCbNm19-w5pqPuktII5_EDA6_k/edit#slide=id.p), [Recording ](https://youtu.be/-DpKcPfnNms)
 
 - **2024-06-07**: [Video: SIGMOD 2024 Practice: Apache Arrow DataFusion A Fast, Embeddable, Modular Analytic Query Engine](https://www.youtube.com/watch?v=-DpKcPfnNms&t=5s) - [Slides](https://docs.google.com/presentation/d/1gqcxSNLGVwaqN0_yJtCbNm19-w5pqPuktII5_EDA6_k/edit#slide=id.p)
 
@@ -36,6 +36,34 @@
 ## ✨ Good Reads
 
 This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find
+
+- **2026-01-12** [Blog: Extending SQL in DataFusion: from ->> to TABLESAMPLE](https://datafusion.apache.org/blog/2026/01/12/extending-sql)
+
+- **2025-12-15** [Blog: Optimizing Repartitions in DataFusion: How I Went From Database Noob to Core Contribution](https://datafusion.apache.org/blog/2025/12/15/avoid-consecutive-repartitions)
+
+- **2025-09-21** [Blog: Implementing User Defined Types and Custom Metadata in DataFusion](https://datafusion.apache.org/blog/2025/09/21/custom-types-using-metadata)
+
+- **2025-09-10** [Blog: Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries](https://datafusion.apache.org/blog/2025/09/10/dynamic-filters)
+
+- **2025-08-15** [Blog: Using External Indexes, Metadata Stores, Catalogs and Caches to Accelerate Queries on Apache Parquet](https://datafusion.apache.org/blog/2025/08/15/external-parquet-indexes)
+
+- **2025-07-14** [Blog: Embedding User-Defined Indexes in Apache Parquet Files](https://datafusion.apache.org/blog/2025/07/14/user-defined-parquet-indexes)
+
+- **2025-06-30** [Blog: Using Rust async for Query Execution and Cancelling Long-Running Queries](https://datafusion.apache.org/blog/2025/06/30/cancellation)
+
+- **2025-06-15** [Blog: Optimizing SQL (and DataFrames) in DataFusion, Part 1: Query Optimization Overview](https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one)
+
+- **2025-06-15** [Blog: Optimizing SQL (and DataFrames) in DataFusion, Part 2: Optimizers in Apache DataFusion](https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two)
+
+- **2025-04-19** [Blog: User defined Window Functions in DataFusion](https://datafusion.apache.org/blog/2025/04/19/user-defined-window-functions)
+
+- **2025-04-10** [Blog: tpchgen-rs World's fastest open source TPC-H data generator, written in Rust](https://datafusion.apache.org/blog/2025/04/10/fastest-tpch-generator)
+
+- **2025-03-11** [Blog: Using Ordering for Better Plans in Apache DataFusion](https://datafusion.apache.org/blog/2025/03/11/ordering-analysis)
+
+- **2024-05-07** [Blog: Announcing Apache Arrow DataFusion is now Apache DataFusion](https://datafusion.apache.org/blog/2024/05/07/datafusion-tlp)
+
+- **2024-03-06** [Blog: Announcing Apache Arrow DataFusion Comet](https://datafusion.apache.org/blog/2024/03/06/comet-donation)
 
 - **2025-03-21** [Blog: Efficient Filter Pushdown in Parquet](https://datafusion.apache.org/blog/2025/03/21/parquet-pushdown/)
 
@@ -59,15 +87,13 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 - **2024-10-29** [Video: MiDAS Seminar Fall 2024 on "Apache DataFusion" by Andrew Lamb](https://www.youtube.com/watch?v=CpnxuBwHbUc)
 
-- **2024-10-27** [Blog: Caching in DataFusion: Don't read twice](https://blog.haoxp.xyz/posts/caching-datafusion)
+- **2024-10-27** [Blog: Caching in DataFusion: Don't read twice](https://blog.xiangpeng.systems/posts/caching-datafusion/)
 
-- **2024-10-24** [Blog: Parquet pruning in DataFusion: Read no more than you need](https://blog.haoxp.xyz/posts/parquet-to-arrow/)
+- **2024-10-24** [Blog: Parquet pruning in DataFusion: Read no more than you need](https://blog.xiangpeng.systems/posts/parquet-to-arrow/)
 
 - **2024-09-13** [Blog: Using StringView / German Style Strings to make Queries Faster: Part 2 - String Operations](https://www.influxdata.com/blog/faster-queries-with-stringview-part-two-influxdb/) | [Reposted on DataFusion Blog](https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-2/)
 
 - **2024-09-13** [Blog: Using StringView / German Style Strings to Make Queries Faster: Part 1- Reading Parquet](https://www.influxdata.com/blog/faster-queries-with-stringview-part-one-influxdb/) | [Reposted on Datafusion Blog](https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/)
-
-- **2024-10-16** [Blog: Candle Image Segmentation](https://www.letsql.com/posts/candle-image-segmentation/)
 
 - **2024-09-23 → 2024-12-02** [Talks: Carnegie Mellon University: Database Building Blocks Seminar Series - Fall 2024](https://db.cs.cmu.edu/seminar2024/)
 
@@ -138,34 +164,35 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 ## 📅 Release Notes & Updates
 
-- **2025-03-24** [Apache DataFusion 46.0.0 Released](https://datafusion.apache.org/blog/2025/03/24/datafusion-46.0.0/)
-
-- **2024-09-14** [Apache DataFusion Python 43.1.0 Released](https://datafusion.apache.org/blog/2024/12/14/datafusion-python-43.1.0/)
-
-- **2024-08-24** [Apache DataFusion Python 40.1.0 Released, Significant usability updates](https://datafusion.apache.org/blog/2024/08/20/python-datafusion-40.0.0/)
-
-- **2024-07-24** [DataFusion 40.0.0 Release](https://datafusion.apache.org/blog/2024/07/24/datafusion-40.0.0/)
-
-- **2024-01-19** [DataFusion 34.0.0 Release](https://datafusion.apache.org/blog/2024/01/19/datafusion-34.0.0/)
-
-- **2023-06-24** [DataFusion 25.0.0 Release](https://arrow.apache.org/blog/2023/06/24/datafusion-25.0.0/)
-
-- **2023-01-19** [DataFusion 16.0.0 Release](https://arrow.apache.org/blog/2023/01/19/datafusion-16.0.0/)
-
-- **2022-10-25** [DataFusion 13.0.0 Release](https://arrow.apache.org/blog/2022/10/25/datafusion-13.0.0/)
-
-- **2022-05-16** [DataFusion 8.0.0 Release](https://arrow.apache.org/blog/2022/05/16/datafusion-8.0.0/)
-
-- **2022-02-28** [DataFusion 7.0.0 Release](https://arrow.apache.org/blog/2022/02/28/datafusion-7.0.0/)
-
-- **2021-11-19** [DataFusion 6.0.0 Release](https://arrow.apache.org/blog/2021/11/19/datafusion-6.0.0/)
-
-- **2021-08-18** [DataFusion 5.0.0 Release](https://arrow.apache.org/blog/2021/08/18/datafusion-5.0.0/)
-
-- **2019-09-22** [DataFusion 0.15.0 Release Notes](https://andygrove.io/2019/09/datafusion-0.15.0-release-notes/)
+- **2026-01-30** [Apache DataFusion Comet 0.13.0 Release](https://datafusion.apache.org/blog/2026/01/30/datafusion-comet-0.13.0)
+- **2026-01-12** [Apache DataFusion 52.0.0 Released](https://datafusion.apache.org/blog/2026/01/12/datafusion-52.0.0)
+- **2025-12-04** [Apache DataFusion Comet 0.12.0 Release](https://datafusion.apache.org/blog/2025/12/04/datafusion-comet-0.12.0)
+- **2025-11-25** [Apache DataFusion 51.0.0 Released](https://datafusion.apache.org/blog/2025/11/25/datafusion-51.0.0)
+- **2025-10-21** [Apache DataFusion Comet 0.11.0 Release](https://datafusion.apache.org/blog/2025/10/21/datafusion-comet-0.11.0)
+- **2025-09-29** [Apache DataFusion 50.0.0 Released](https://datafusion.apache.org/blog/2025/09/29/datafusion-50.0.0)
+- **2025-09-16** [Apache DataFusion Comet 0.10.0 Release](https://datafusion.apache.org/blog/2025/09/16/datafusion-comet-0.10.0)
+- **2025-07-28** [Apache DataFusion 49.0.0 Released](https://datafusion.apache.org/blog/2025/07/28/datafusion-49.0.0)
+- **2025-07-16** [Apache DataFusion 48.0.0 Released](https://datafusion.apache.org/blog/2025/07/16/datafusion-48.0.0)
+- **2025-07-11** [Apache DataFusion 47.0.0 Released](https://datafusion.apache.org/blog/2025/07/11/datafusion-47.0.0)
+- **2025-07-01** [Apache DataFusion Comet 0.9.0 Release](https://datafusion.apache.org/blog/2025/07/01/datafusion-comet-0.9.0)
+- **2025-05-06** [Apache DataFusion Comet 0.8.0 Release](https://datafusion.apache.org/blog/2025/05/06/datafusion-comet-0.8.0)
+- **2025-03-30** [Apache DataFusion Python 46.0.0 Released](https://datafusion.apache.org/blog/2025/03/30/datafusion-python-46.0.0)
+- **2025-03-24** [Apache DataFusion 46.0.0 Released](https://datafusion.apache.org/blog/2025/03/24/datafusion-46.0.0)
+- **2025-03-20** [Apache DataFusion Comet 0.7.0 Release](https://datafusion.apache.org/blog/2025/03/20/datafusion-comet-0.7.0)
+- **2025-02-20** [Apache DataFusion 45.0.0 Released](https://datafusion.apache.org/blog/2025/02/20/datafusion-45.0.0)
+- **2025-02-17** [Apache DataFusion Comet 0.6.0 Release](https://datafusion.apache.org/blog/2025/02/17/datafusion-comet-0.6.0)
+- **2025-02-02** [Apache DataFusion Ballista 43.0.0 Released](https://datafusion.apache.org/blog/2025/02/02/datafusion-ballista-43.0.0)
+- **2025-01-17** [Apache DataFusion Comet 0.5.0 Release](https://datafusion.apache.org/blog/2025/01/17/datafusion-comet-0.5.0)
 
 # 🌎 Community Events
 
+- **2026-07-22** [Denver Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18428) - [RSVP](https://luma.com/jsu6faie)
+- **2026-05-12** [New York City Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/20030) - [RSVP](https://luma.com/adhshv92)
+- **2026-04-23** [Seattle Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/13500) - [RSVP](https://luma.com/hxshbp0m)
+- **2026-03-05** [Stockholm Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18429) - [RSVP](https://luma.com/ctqtiqap)
+- **2026-02-19** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/19859) - [RSVP](https://luma.com/p7r6fp2z), [Recording](https://www.youtube.com/playlist?list=PL42Ljm2tTt5peGUWMBN7WFkASq73j8PoU)
+- **2025-11-12** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/16703) - [Recording](https://youtu.be/wCAud478Dg8), [Slides](https://drive.google.com/file/d/18KGH_wGHkgdAfjy5sQVKFhnN1GyYXSzU)
+- **2025-09-15** [New York City Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/16265) - [RSVP](https://lu.ma/qkcyycg0), [Recording](https://youtu.be/ElAiN_1fX_4)
 - **2025-01-23** [Amsterdam Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/12988) - [Slides](https://github.com/apache/datafusion/discussions/12988)
 - **2025-01-22** [Datadog Apache DataFusion Community Meeting](https://www.linkedin.com/posts/seshendranalla_apache-datafusion-community-meeting-2025-activity-7290384383201435648-8tqv) - [Recording](https://www.youtube.com/watch?v=ceTo2vUyRI0)
 - **2025-01-15** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/13165) - [Slides](https://docs.google.com/presentation/d/1_zBLHdqxPlhWuNK2oCA2d_hCpb6HWgHbVJBseiUXA80)

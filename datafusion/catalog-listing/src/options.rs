@@ -18,12 +18,12 @@
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_catalog::Session;
 use datafusion_common::plan_err;
-use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource::file_format::FileFormat;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::SortExpr;
 use futures::StreamExt;
-use futures::{future, TryStreamExt};
+use futures::{TryStreamExt, future};
 use itertools::Itertools;
 use std::sync::Arc;
 

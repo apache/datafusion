@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::{from_substrait_sorts, SubstraitConsumer};
+use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_sorts};
 use datafusion::common::not_impl_err;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use substrait::proto::SortRel;

@@ -69,10 +69,12 @@ fn do_query(sql: &'static str) -> Diagnostic {
 /// ## Example
 ///
 /// ```rust
-/// let spans = get_spans("SELECT /*whole+left*/speed/*left*/ + /*right*/10/*right+whole*/ FROM cars");
-/// // whole is                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/// // left is                                  ^^^^^
-/// // right is                                                          ^^
+/// let spans = get_spans(
+///     "SELECT /*whole+left*/speed/*left*/ + /*right*/10/*right+whole*/ FROM cars",
+///     // whole is           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+///     // left is            ^^^^^
+///     // right is                                    ^^
+/// );
 /// dbg!(&spans["whole"]);
 /// dbg!(&spans["left"]);
 /// dbg!(&spans["right"]);
@@ -202,8 +204,7 @@ fn test_ambiguous_reference() -> Result<()> {
 
 #[test]
 fn test_incompatible_types_binary_arithmetic() -> Result<()> {
-    let query =
-        "SELECT /*whole+left*/id/*left*/ + /*right*/first_name/*right+whole*/ FROM person";
+    let query = "SELECT /*whole+left*/id/*left*/ + /*right*/first_name/*right+whole*/ FROM person";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"expressions have incompatible types");

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 /// In this example we will declare a single-type, single return type UDAF that computes the geometric mean.
 /// The geometric mean is described here: https://en.wikipedia.org/wiki/Geometric_mean
 use datafusion::arrow::{

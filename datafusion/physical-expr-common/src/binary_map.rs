@@ -20,10 +20,10 @@
 
 use ahash::RandomState;
 use arrow::array::{
-    cast::AsArray,
-    types::{ByteArrayType, GenericBinaryType, GenericStringType},
     Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
     NullBufferBuilder, OffsetSizeTrait,
+    cast::AsArray,
+    types::{ByteArrayType, GenericBinaryType, GenericStringType},
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -349,7 +349,7 @@ where
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(values.len(), 0);
-        create_hashes(&[Arc::clone(values)], &self.random_state, batch_hashes)
+        create_hashes([values], &self.random_state, batch_hashes)
             // hash is supported for all types and create_hashes only
             // returns errors for unsupported types
             .unwrap();
@@ -389,7 +389,7 @@ where
                 // is value is already present in the set?
                 let entry = self.map.find_mut(hash, |header| {
                     // compare value if hashes match
-                    if header.len != value_len {
+                    if header.hash != hash || header.len != value_len {
                         return false;
                     }
                     // value is stored inline so no need to consult buffer
@@ -427,7 +427,7 @@ where
                 // Check if the value is already present in the set
                 let entry = self.map.find_mut(hash, |header| {
                     // compare value if hashes match
-                    if header.len != value_len {
+                    if header.hash != hash {
                         return false;
                     }
                     // Need to compare the bytes in the buffer

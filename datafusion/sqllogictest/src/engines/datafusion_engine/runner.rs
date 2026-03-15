@@ -15,10 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
-use super::{error::Result, normalize, DFSqlLogicTestError};
+use super::{DFSqlLogicTestError, error::Result, normalize};
+use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
+use crate::engines::output::{DFColumnType, DFOutput};
+use crate::is_spark_path;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
@@ -30,22 +34,43 @@ use log::{debug, log_enabled, warn};
 use sqllogictest::DBOutput;
 use tokio::time::Instant;
 
-use crate::engines::output::{DFColumnType, DFOutput};
-use crate::is_spark_path;
-
 pub struct DataFusion {
     ctx: SessionContext,
     relative_path: PathBuf,
     pb: ProgressBar,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    default_config: HashMap<String, Option<String>>,
 }
 
 impl DataFusion {
     pub fn new(ctx: SessionContext, relative_path: PathBuf, pb: ProgressBar) -> Self {
+        let default_config = ctx
+            .state()
+            .config()
+            .options()
+            .entries()
+            .iter()
+            .map(|e| (e.key.clone(), e.value.clone()))
+            .collect();
+
         Self {
             ctx,
             relative_path,
             pb,
+            currently_executing_sql_tracker: CurrentlyExecutingSqlTracker::default(),
+            default_config,
         }
+    }
+
+    /// Add a tracker that will track the currently executed SQL statement.
+    ///
+    /// This is useful for logging and debugging purposes.
+    pub fn with_currently_executing_sql_tracker(
+        mut self,
+        currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    ) -> Self {
+        self.currently_executing_sql_tracker = currently_executing_sql_tracker;
+        self
     }
 
     fn update_slow_count(&self) {
@@ -79,9 +104,13 @@ impl sqllogictest::AsyncDB for DataFusion {
             );
         }
 
+        let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
+
         let start = Instant::now();
         let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
         let duration = start.elapsed();
+
+        self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
         if duration.gt(&Duration::from_millis(500)) {
             self.update_slow_count();
@@ -114,6 +143,49 @@ impl sqllogictest::AsyncDB for DataFusion {
     }
 
     async fn shutdown(&mut self) {}
+}
+
+impl Drop for DataFusion {
+    fn drop(&mut self) {
+        let mut changed = false;
+
+        for e in self.ctx.state().config().options().entries() {
+            let default_entry = self.default_config.remove(&e.key);
+
+            if let Some(default_entry) = default_entry
+                && default_entry.as_ref() != e.value.as_ref()
+            {
+                if !changed {
+                    changed = true;
+                    self.pb.println(format!(
+                        "SLT file {} left modified configuration",
+                        self.relative_path.display()
+                    ));
+                }
+
+                let default = default_entry.as_deref().unwrap_or("NULL");
+                let current = e.value.as_deref().unwrap_or("NULL");
+
+                self.pb
+                    .println(format!("  {}: {} -> {}", e.key, default, current));
+            }
+        }
+
+        // Any remaining entries were present initially but removed during execution
+        for (key, value) in &self.default_config {
+            if !changed {
+                changed = true;
+                self.pb.println(format!(
+                    "SLT file {} left modified configuration",
+                    self.relative_path.display()
+                ));
+            }
+
+            let default = value.as_deref().unwrap_or("NULL");
+
+            self.pb.println(format!("  {key}: {default} -> NULL"));
+        }
+    }
 }
 
 async fn run_query(

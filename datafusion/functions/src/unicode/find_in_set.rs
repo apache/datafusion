@@ -19,14 +19,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
-    OffsetSizeTrait, PrimitiveArray,
+    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
+    PrimitiveArray,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::{
-    exec_err, internal_err, utils::take_function_args, Result, ScalarValue,
+    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -98,9 +98,8 @@ impl ScalarUDFImpl for FindInSetFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-
-        let [string, str_list] = take_function_args(self.name(), args)?;
+        let return_field = args.return_field;
+        let [string, str_list] = take_function_args(self.name(), args.args)?;
 
         match (string, str_list) {
             // both inputs are scalars
@@ -139,9 +138,11 @@ impl ScalarUDFImpl for FindInSetFunc {
                     | ScalarValue::LargeUtf8(str_list_literal),
                 ),
             ) => {
-                let result_array = match str_list_literal {
+                match str_list_literal {
                     // find_in_set(column_a, null) = null
-                    None => new_null_array(str_array.data_type(), str_array.len()),
+                    None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                        return_field.data_type(),
+                    )?)),
                     Some(str_list_literal) => {
                         let str_list = str_list_literal.split(',').collect::<Vec<&str>>();
                         let result = match str_array.data_type() {
@@ -149,31 +150,32 @@ impl ScalarUDFImpl for FindInSetFunc {
                                 let string_array = str_array.as_string::<i32>();
                                 find_in_set_right_literal::<Int32Type, _>(
                                     string_array,
-                                    str_list,
+                                    &str_list,
                                 )
                             }
                             DataType::LargeUtf8 => {
                                 let string_array = str_array.as_string::<i64>();
                                 find_in_set_right_literal::<Int64Type, _>(
                                     string_array,
-                                    str_list,
+                                    &str_list,
                                 )
                             }
                             DataType::Utf8View => {
                                 let string_array = str_array.as_string_view();
                                 find_in_set_right_literal::<Int32Type, _>(
                                     string_array,
-                                    str_list,
+                                    &str_list,
                                 )
                             }
                             other => {
-                                exec_err!("Unsupported data type {other:?} for function find_in_set")
+                                exec_err!(
+                                    "Unsupported data type {other:?} for function find_in_set"
+                                )
                             }
                         };
-                        Arc::new(result?)
+                        Ok(ColumnarValue::Array(Arc::new(result?)))
                     }
-                };
-                Ok(ColumnarValue::Array(result_array))
+                }
             }
 
             // `string` is scalar, `str_list` is an array
@@ -185,38 +187,45 @@ impl ScalarUDFImpl for FindInSetFunc {
                 ),
                 ColumnarValue::Array(str_list_array),
             ) => {
-                let res = match string_literal {
+                match string_literal {
                     // find_in_set(null, column_b) = null
-                    None => {
-                        new_null_array(str_list_array.data_type(), str_list_array.len())
-                    }
+                    None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                        return_field.data_type(),
+                    )?)),
                     Some(string) => {
                         let result = match str_list_array.data_type() {
                             DataType::Utf8 => {
                                 let str_list = str_list_array.as_string::<i32>();
-                                find_in_set_left_literal::<Int32Type, _>(string, str_list)
+                                find_in_set_left_literal::<Int32Type, _>(
+                                    &string, str_list,
+                                )
                             }
                             DataType::LargeUtf8 => {
                                 let str_list = str_list_array.as_string::<i64>();
-                                find_in_set_left_literal::<Int64Type, _>(string, str_list)
+                                find_in_set_left_literal::<Int64Type, _>(
+                                    &string, str_list,
+                                )
                             }
                             DataType::Utf8View => {
                                 let str_list = str_list_array.as_string_view();
-                                find_in_set_left_literal::<Int32Type, _>(string, str_list)
+                                find_in_set_left_literal::<Int32Type, _>(
+                                    &string, str_list,
+                                )
                             }
                             other => {
-                                exec_err!("Unsupported data type {other:?} for function find_in_set")
+                                exec_err!(
+                                    "Unsupported data type {other:?} for function find_in_set"
+                                )
                             }
                         };
-                        Arc::new(result?)
+                        Ok(ColumnarValue::Array(Arc::new(result?)))
                     }
-                };
-                Ok(ColumnarValue::Array(res))
+                }
             }
 
             // both inputs are arrays
             (ColumnarValue::Array(base_array), ColumnarValue::Array(exp_array)) => {
-                let res = find_in_set(base_array, exp_array)?;
+                let res = find_in_set(&base_array, &exp_array)?;
 
                 Ok(ColumnarValue::Array(res))
             }
@@ -234,7 +243,7 @@ impl ScalarUDFImpl for FindInSetFunc {
 /// Returns a value in the range of 1 to N if the string `str` is in the string list `strlist`
 /// consisting of N substrings. A string list is a string composed of substrings separated by `,`
 /// characters.
-fn find_in_set(str: ArrayRef, str_list: ArrayRef) -> Result<ArrayRef> {
+fn find_in_set(str: &ArrayRef, str_list: &ArrayRef) -> Result<ArrayRef> {
     match str.data_type() {
         DataType::Utf8 => {
             let string_array = str.as_string::<i32>();
@@ -257,10 +266,7 @@ fn find_in_set(str: ArrayRef, str_list: ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-pub fn find_in_set_general<'a, T, V>(
-    string_array: V,
-    str_list_array: V,
-) -> Result<ArrayRef>
+fn find_in_set_general<'a, T, V>(string_array: V, str_list_array: V) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
@@ -289,10 +295,7 @@ where
     Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
-fn find_in_set_left_literal<'a, T, V>(
-    string: String,
-    str_list_array: V,
-) -> Result<ArrayRef>
+fn find_in_set_left_literal<'a, T, V>(string: &str, str_list_array: V) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
@@ -318,7 +321,7 @@ where
 
 fn find_in_set_right_literal<'a, T, V>(
     string_array: V,
-    str_list: Vec<&str>,
+    str_list: &[&str],
 ) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,

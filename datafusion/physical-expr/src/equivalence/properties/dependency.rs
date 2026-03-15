@@ -389,8 +389,8 @@ mod tests {
     use crate::equivalence::tests::{
         convert_to_sort_reqs, create_test_params, create_test_schema, parse_sort_expr,
     };
-    use crate::equivalence::{convert_to_sort_exprs, ProjectionMapping};
-    use crate::expressions::{col, BinaryExpr, CastExpr, Column};
+    use crate::equivalence::{ProjectionMapping, convert_to_sort_exprs};
+    use crate::expressions::{BinaryExpr, CastColumnExpr, CastExpr, Column, col};
     use crate::projection::tests::output_schema;
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
@@ -398,8 +398,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Constraint, Constraints, Result};
-    use datafusion_expr::sort_properties::SortProperties;
     use datafusion_expr::Operator;
+    use datafusion_expr::sort_properties::SortProperties;
     use datafusion_functions::string::concat;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{
@@ -1015,6 +1015,44 @@ mod tests {
                 );
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_redundant_monotonic_sorts_cast_column_expr() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Date32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.reorder(
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|c| PhysicalSortExpr::new_default(col(c, schema.as_ref()).unwrap())),
+        )?;
+
+        let col_a = col("a", schema.as_ref())?;
+        let col_b = col("b", schema.as_ref())?;
+        let col_c = col("c", schema.as_ref())?;
+
+        let cast_c = Arc::new(CastColumnExpr::new(
+            Arc::clone(&col_c),
+            Arc::new(Field::new(
+                "c",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            )),
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+
+        properties.add_equal_conditions(cast_c, Arc::clone(&col_a))?;
+        properties.add_constants(std::iter::once(ConstExpr::from(col_b)))?;
+
+        let required = vec![PhysicalSortExpr::new_default(col("c", &schema)?)];
+        assert!(properties.ordering_satisfy(required)?);
 
         Ok(())
     }

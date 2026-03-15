@@ -31,9 +31,9 @@ pub use class::{AcrossPartitions, ConstExpr, EquivalenceClass, EquivalenceGroup}
 pub use ordering::OrderingEquivalenceClass;
 // Re-export for backwards compatibility, we recommend importing from
 // datafusion_physical_expr::projection instead
-pub use crate::projection::{project_ordering, project_orderings, ProjectionMapping};
+pub use crate::projection::{ProjectionMapping, project_ordering, project_orderings};
 pub use properties::{
-    calculate_union, join_equivalence_properties, EquivalenceProperties,
+    EquivalenceProperties, calculate_union, join_equivalence_properties,
 };
 
 // Convert each tuple to a `PhysicalSortExpr` and construct a vector.
@@ -57,7 +57,7 @@ pub fn convert_to_orderings<T: Borrow<Arc<dyn PhysicalExpr>>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, Column};
+    use crate::expressions::{Column, col};
     use crate::{LexRequirement, PhysicalSortExpr};
 
     use arrow::compute::SortOptions;

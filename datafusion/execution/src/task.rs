@@ -19,7 +19,7 @@ use crate::{
     config::SessionConfig, memory_pool::MemoryPool, registry::FunctionRegistry,
     runtime_env::RuntimeEnv,
 };
-use datafusion_common::{internal_datafusion_err, plan_datafusion_err, Result};
+use datafusion_common::{Result, internal_datafusion_err, plan_datafusion_err};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, LambdaUDF, WindowUDF};
 use std::collections::HashSet;
@@ -76,7 +76,7 @@ impl TaskContext {
     /// Most users will use [`SessionContext::task_ctx`] to create [`TaskContext`]s
     ///
     /// [`SessionContext::task_ctx`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.task_ctx
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         task_id: Option<String>,
         session_id: String,
@@ -238,6 +238,11 @@ impl FunctionRegistry for TaskContext {
     fn udwfs(&self) -> HashSet<String> {
         self.window_functions.keys().cloned().collect()
     }
+}
+
+/// Produce the [`TaskContext`].
+pub trait TaskContextProvider {
+    fn task_ctx(&self) -> Arc<TaskContext>;
 }
 
 #[cfg(test)]

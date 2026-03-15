@@ -22,11 +22,11 @@ use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
 
-use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
+use datafusion_expr::{AggregateUDFImpl, GroupsAccumulator, function::AccumulatorArgs};
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_physical_expr::expressions::col;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
     let field = Field::new("f", data_type.clone(), true).into();
@@ -47,6 +47,7 @@ fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
     sum_fn.create_groups_accumulator(accumulator_args).unwrap()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn convert_to_state_bench(
     c: &mut Criterion,
     name: &str,

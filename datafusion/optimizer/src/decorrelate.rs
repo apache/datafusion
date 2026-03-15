@@ -26,17 +26,16 @@ use crate::simplify_expressions::ExprSimplifier;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{plan_err, Column, DFSchemaRef, HashMap, Result, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, HashMap, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    expr, lit, BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator,
+    BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan, LogicalPlanBuilder,
+    Operator, expr, lit,
 };
-use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// This struct rewrite the sub query plan by pull up the correlated
 /// expressions(contains outer reference columns) from the inner subquery's
@@ -509,8 +508,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         let result_expr = result_expr.unalias();
-        let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+        let info = SimplifyContext::default().with_schema(Arc::clone(schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
@@ -543,8 +541,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         if result_expr.ne(expr) {
-            let props = ExecutionProps::new();
-            let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+            let info = SimplifyContext::default().with_schema(Arc::clone(schema));
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
@@ -584,8 +581,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         .data()?;
 
     let pull_up_expr = if result_expr.ne(filter_expr) {
-        let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(schema);
+        let info = SimplifyContext::default().with_schema(schema);
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {

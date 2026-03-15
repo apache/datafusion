@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
@@ -25,11 +25,11 @@ use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{Result, not_impl_err, plan_err};
+use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
-use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
 };
@@ -111,18 +111,10 @@ An alternative syntax is also supported:
         description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
     )
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct ApproxPercentileContWithWeight {
     signature: Signature,
     approx_percentile_cont: ApproxPercentileCont,
-}
-
-impl Debug for ApproxPercentileContWithWeight {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ApproxPercentileContWithWeight")
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for ApproxPercentileContWithWeight {
@@ -184,7 +176,9 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             );
         }
         if arg_types[2] != DataType::Float64 {
-            return plan_err!("approx_percentile_cont_with_weight requires float64 percentile input types");
+            return plan_err!(
+                "approx_percentile_cont_with_weight requires float64 percentile input types"
+            );
         }
         if arg_types.len() == 4 && !arg_types[3].is_integer() {
             return plan_err!(
@@ -244,22 +238,17 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             is_distinct: acc_args.is_distinct,
         };
         let approx_percentile_cont_accumulator =
-            self.approx_percentile_cont.create_accumulator(sub_args)?;
+            self.approx_percentile_cont.create_accumulator(&sub_args)?;
         let accumulator = ApproxPercentileWithWeightAccumulator::new(
             approx_percentile_cont_accumulator,
         );
         Ok(Box::new(accumulator))
     }
 
-    #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.approx_percentile_cont.state_fields(args)
-    }
-
-    fn supports_null_handling_clause(&self) -> bool {
-        false
     }
 
     fn supports_within_group_clause(&self) -> bool {

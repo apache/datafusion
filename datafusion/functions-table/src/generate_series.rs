@@ -26,10 +26,10 @@ use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{Expr, TableType};
-use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
@@ -55,6 +55,10 @@ impl LazyBatchGenerator for Empty {
 
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
         Ok(None)
+    }
+
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+        Arc::new(RwLock::new(Empty { name: self.name }))
     }
 }
 
@@ -398,6 +402,12 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
         Ok(Some(batch))
     }
+
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+        let mut new = self.clone();
+        new.current = new.start.clone();
+        Arc::new(RwLock::new(new))
+    }
 }
 
 impl<T: SeriesValue> fmt::Display for GenericSeriesState<T> {
@@ -415,11 +425,7 @@ impl<T: SeriesValue> fmt::Display for GenericSeriesState<T> {
 
 fn reach_end_int64(val: i64, end: i64, step: i64, include_end: bool) -> bool {
     if step > 0 {
-        if include_end {
-            val > end
-        } else {
-            val >= end
-        }
+        if include_end { val > end } else { val >= end }
     } else if include_end {
         val < end
     } else {
@@ -427,24 +433,9 @@ fn reach_end_int64(val: i64, end: i64, step: i64, include_end: bool) -> bool {
     }
 }
 
-fn validate_interval_step(
-    step: IntervalMonthDayNano,
-    start: i64,
-    end: i64,
-) -> Result<()> {
+fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
     if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
         return plan_err!("Step interval cannot be zero");
-    }
-
-    let step_is_positive = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
-    let step_is_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
-
-    if start > end && step_is_positive {
-        return plan_err!("Start is bigger than end, but increment is positive: Cannot generate infinite series");
-    }
-
-    if start < end && step_is_negative {
-        return plan_err!("Start is smaller than end, but increment is negative: Cannot generate infinite series");
     }
 
     Ok(())
@@ -529,7 +520,7 @@ impl GenerateSeriesFuncImpl {
                         "Argument #{} must be an INTEGER or NULL, got {:?}",
                         expr_index + 1,
                         other
-                    )
+                    );
                 }
             };
         }
@@ -556,14 +547,6 @@ impl GenerateSeriesFuncImpl {
                 return plan_err!("{} function requires 1 to 3 arguments", self.name);
             }
         };
-
-        if start > end && step > 0 {
-            return plan_err!("Start is bigger than end, but increment is positive: Cannot generate infinite series");
-        }
-
-        if start < end && step < 0 {
-            return plan_err!("Start is smaller than end, but increment is negative: Cannot generate infinite series");
-        }
 
         if step == 0 {
             return plan_err!("Step cannot be zero");
@@ -598,7 +581,7 @@ impl GenerateSeriesFuncImpl {
                 return plan_err!(
                     "First argument must be a timestamp or NULL, got {:?}",
                     other
-                )
+                );
             }
         };
 
@@ -610,7 +593,7 @@ impl GenerateSeriesFuncImpl {
                 return plan_err!(
                     "Second argument must be a timestamp or NULL, got {:?}",
                     other
-                )
+                );
             }
         };
 
@@ -622,7 +605,7 @@ impl GenerateSeriesFuncImpl {
                 return plan_err!(
                     "Third argument must be an interval or NULL, got {:?}",
                     other
-                )
+                );
             }
         };
 
@@ -642,7 +625,7 @@ impl GenerateSeriesFuncImpl {
         };
 
         // Validate step interval
-        validate_interval_step(step, start, end)?;
+        validate_interval_step(step)?;
 
         Ok(Arc::new(GenerateSeriesTable {
             schema,
@@ -685,7 +668,7 @@ impl GenerateSeriesFuncImpl {
                 return plan_err!(
                     "First argument must be a date or NULL, got {:?}",
                     other
-                )
+                );
             }
         };
 
@@ -703,7 +686,7 @@ impl GenerateSeriesFuncImpl {
                 return plan_err!(
                     "Second argument must be a date or NULL, got {:?}",
                     other
-                )
+                );
             }
         };
 
@@ -723,7 +706,7 @@ impl GenerateSeriesFuncImpl {
                 return plan_err!(
                     "Third argument must be an interval or NULL, got {:?}",
                     other
-                )
+                );
             }
         };
 
@@ -735,7 +718,7 @@ impl GenerateSeriesFuncImpl {
         let end_ts = end_date as i64 * NANOS_PER_DAY;
 
         // Validate step interval
-        validate_interval_step(step_interval, start_ts, end_ts)?;
+        validate_interval_step(step_interval)?;
 
         Ok(Arc::new(GenerateSeriesTable {
             schema,
@@ -773,5 +756,42 @@ impl TableFunctionImpl for RangeFunc {
             include_end: false,
         };
         impl_func.call(exprs)
+    }
+}
+
+#[cfg(test)]
+mod generate_series_tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::Result;
+    use datafusion_physical_plan::memory::LazyBatchGenerator;
+
+    use crate::generate_series::GenericSeriesState;
+
+    #[test]
+    fn test_generic_series_state_reset() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let mut state = GenericSeriesState::<i64> {
+            schema,
+            start: 1,
+            end: 5,
+            step: 1,
+            current: 1,
+            batch_size: 8192,
+            include_end: true,
+            name: "test",
+        };
+        let batch = state.generate_next_batch()?.expect("missing batch");
+
+        let state_reset = state.reset_state();
+        let reset_batch = state_reset
+            .write()
+            .generate_next_batch()?
+            .expect("missing reset batch");
+
+        assert_eq!(batch, reset_batch);
+
+        Ok(())
     }
 }

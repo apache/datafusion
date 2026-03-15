@@ -70,6 +70,36 @@ cargo test --test sqllogictests -- ddl --complete
 RUST_LOG=debug cargo test --test sqllogictests -- ddl
 ```
 
+### Per-file timing summary
+
+The sqllogictest runner can emit deterministic per-file elapsed timings to help
+identify slow test files.
+
+By default (`--timing-summary auto`), timing summary output is disabled in local
+TTY runs and shows a top-slowest summary in non-TTY/CI runs.
+
+`--timing-top-n` / `SLT_TIMING_TOP_N` must be a positive integer (`>= 1`).
+
+```shell
+# Show top 10 slowest files (good for CI)
+cargo test --test sqllogictests -- --timing-summary top --timing-top-n 10
+```
+
+```shell
+# Show full per-file timing table
+cargo test --test sqllogictests -- --timing-summary full
+```
+
+```shell
+# Same controls via environment variables
+SLT_TIMING_SUMMARY=top SLT_TIMING_TOP_N=15 cargo test --test sqllogictests
+```
+
+```shell
+# Optional debug logging for per-task slow files (>30s), disabled by default
+SLT_TIMING_DEBUG_SLOW_FILES=1 cargo test --test sqllogictests
+```
+
 ## Cookbook: Adding Tests
 
 1. Add queries
@@ -140,6 +170,17 @@ query TT
 select substr('Andrew Lamb', 1, 6), '|'
 ----
 Andrew |
+```
+
+## Cookbook: Ignoring volatile output
+
+Sometimes parts of a result change every run (timestamps, counters, etc.). To keep the rest of the snapshot checked in, replace those fragments with the `<slt:ignore>` marker inside the expected block. During validation the marker acts like a wildcard, so only the surrounding text must match.
+
+```text
+query TT
+EXPLAIN ANALYZE SELECT * FROM generate_series(100);
+----
+Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 ```
 
 # Reference

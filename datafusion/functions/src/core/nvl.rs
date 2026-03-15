@@ -18,7 +18,7 @@
 use crate::core::coalesce::CoalesceFunc;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::Result;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, Volatility,
@@ -124,7 +124,7 @@ impl ScalarUDFImpl for NVLFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         self.coalesce.simplify(args, info)
     }

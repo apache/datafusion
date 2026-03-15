@@ -78,18 +78,18 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::{
     execution::context::TaskContext,
     physical_plan::{
+        ExecutionPlan, ExecutionPlanProperties,
         coalesce_partitions::CoalescePartitionsExec,
-        sorts::sort_preserving_merge::SortPreservingMergeExec, ExecutionPlan,
-        ExecutionPlanProperties,
+        sorts::sort_preserving_merge::SortPreservingMergeExec,
     },
     prelude::SessionContext,
 };
 use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Benchmarks for SortPreservingMerge stream
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -355,14 +355,14 @@ fn utf8_high_cardinality_streams(sorted: bool) -> PartitionedBatches {
 
 /// Create a batch of (utf8_low, utf8_low, utf8_high)
 fn utf8_tuple_streams(sorted: bool) -> PartitionedBatches {
-    let mut gen = DataGenerator::new();
+    let mut data_gen = DataGenerator::new();
 
     // need to sort by the combined key, so combine them together
-    let mut tuples: Vec<_> = gen
+    let mut tuples: Vec<_> = data_gen
         .utf8_low_cardinality_values()
         .into_iter()
-        .zip(gen.utf8_low_cardinality_values())
-        .zip(gen.utf8_high_cardinality_values())
+        .zip(data_gen.utf8_low_cardinality_values())
+        .zip(data_gen.utf8_high_cardinality_values())
         .collect();
 
     if sorted {
@@ -388,14 +388,14 @@ fn utf8_tuple_streams(sorted: bool) -> PartitionedBatches {
 
 /// Create a batch of (utf8_view_low, utf8_view_low, utf8_view_high)
 fn utf8_view_tuple_streams(sorted: bool) -> PartitionedBatches {
-    let mut gen = DataGenerator::new();
+    let mut data_gen = DataGenerator::new();
 
     // need to sort by the combined key, so combine them together
-    let mut tuples: Vec<_> = gen
+    let mut tuples: Vec<_> = data_gen
         .utf8_low_cardinality_values()
         .into_iter()
-        .zip(gen.utf8_low_cardinality_values())
-        .zip(gen.utf8_high_cardinality_values())
+        .zip(data_gen.utf8_low_cardinality_values())
+        .zip(data_gen.utf8_high_cardinality_values())
         .collect();
 
     if sorted {
@@ -421,15 +421,15 @@ fn utf8_view_tuple_streams(sorted: bool) -> PartitionedBatches {
 
 /// Create a batch of (f64, utf8_low, utf8_low, i64)
 fn mixed_tuple_streams(sorted: bool) -> PartitionedBatches {
-    let mut gen = DataGenerator::new();
+    let mut data_gen = DataGenerator::new();
 
     // need to sort by the combined key, so combine them together
-    let mut tuples: Vec<_> = gen
+    let mut tuples: Vec<_> = data_gen
         .i64_values()
         .into_iter()
-        .zip(gen.utf8_low_cardinality_values())
-        .zip(gen.utf8_low_cardinality_values())
-        .zip(gen.i64_values())
+        .zip(data_gen.utf8_low_cardinality_values())
+        .zip(data_gen.utf8_low_cardinality_values())
+        .zip(data_gen.i64_values())
         .collect();
 
     if sorted {
@@ -459,15 +459,15 @@ fn mixed_tuple_streams(sorted: bool) -> PartitionedBatches {
 
 /// Create a batch of (f64, utf8_view_low, utf8_view_low, i64)
 fn mixed_tuple_with_utf8_view_streams(sorted: bool) -> PartitionedBatches {
-    let mut gen = DataGenerator::new();
+    let mut data_gen = DataGenerator::new();
 
     // need to sort by the combined key, so combine them together
-    let mut tuples: Vec<_> = gen
+    let mut tuples: Vec<_> = data_gen
         .i64_values()
         .into_iter()
-        .zip(gen.utf8_low_cardinality_values())
-        .zip(gen.utf8_low_cardinality_values())
-        .zip(gen.i64_values())
+        .zip(data_gen.utf8_low_cardinality_values())
+        .zip(data_gen.utf8_low_cardinality_values())
+        .zip(data_gen.i64_values())
         .collect();
 
     if sorted {
@@ -497,8 +497,8 @@ fn mixed_tuple_with_utf8_view_streams(sorted: bool) -> PartitionedBatches {
 
 /// Create a batch of (utf8_dict)
 fn dictionary_streams(sorted: bool) -> PartitionedBatches {
-    let mut gen = DataGenerator::new();
-    let mut values = gen.utf8_low_cardinality_values();
+    let mut data_gen = DataGenerator::new();
+    let mut values = data_gen.utf8_low_cardinality_values();
     if sorted {
         values.sort_unstable();
     }
@@ -512,12 +512,12 @@ fn dictionary_streams(sorted: bool) -> PartitionedBatches {
 
 /// Create a batch of (utf8_dict, utf8_dict, utf8_dict)
 fn dictionary_tuple_streams(sorted: bool) -> PartitionedBatches {
-    let mut gen = DataGenerator::new();
-    let mut tuples: Vec<_> = gen
+    let mut data_gen = DataGenerator::new();
+    let mut tuples: Vec<_> = data_gen
         .utf8_low_cardinality_values()
         .into_iter()
-        .zip(gen.utf8_low_cardinality_values())
-        .zip(gen.utf8_low_cardinality_values())
+        .zip(data_gen.utf8_low_cardinality_values())
+        .zip(data_gen.utf8_low_cardinality_values())
         .collect();
 
     if sorted {
@@ -543,13 +543,13 @@ fn dictionary_tuple_streams(sorted: bool) -> PartitionedBatches {
 
 /// Create a batch of (utf8_dict, utf8_dict, utf8_dict, i64)
 fn mixed_dictionary_tuple_streams(sorted: bool) -> PartitionedBatches {
-    let mut gen = DataGenerator::new();
-    let mut tuples: Vec<_> = gen
+    let mut data_gen = DataGenerator::new();
+    let mut tuples: Vec<_> = data_gen
         .utf8_low_cardinality_values()
         .into_iter()
-        .zip(gen.utf8_low_cardinality_values())
-        .zip(gen.utf8_low_cardinality_values())
-        .zip(gen.i64_values())
+        .zip(data_gen.utf8_low_cardinality_values())
+        .zip(data_gen.utf8_low_cardinality_values())
+        .zip(data_gen.i64_values())
         .collect();
 
     if sorted {

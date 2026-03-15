@@ -20,17 +20,16 @@
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
-};
-use datafusion_common::{
-    exec_datafusion_err, utils::take_function_args, DataFusionError,
+    Result, ScalarValue, arrow_datafusion_err, datatype::DataTypeExt,
+    exec_datafusion_err, exec_err, internal_err, types::logical_string,
+    utils::take_function_args,
 };
 use std::any::Any;
 
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -104,7 +103,13 @@ impl Default for ArrowCastFunc {
 impl ArrowCastFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Any),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -155,7 +160,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // convert this into a real cast
         let target_type = data_type_from_args(&args)?;
@@ -171,7 +176,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
-                data_type: target_type,
+                field: target_type.into_nullable_field_ref(),
             })
         };
         // return the newly written argument to DataFusion

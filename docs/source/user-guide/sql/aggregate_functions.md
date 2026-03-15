@@ -48,6 +48,36 @@ FROM employees;
 
 Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/`MAX` return `NULL`.
 
+## WITHIN GROUP / Ordered-set aggregates
+
+Some aggregate functions accept the SQL `WITHIN GROUP (ORDER BY ...)` clause to specify the ordering the
+aggregate relies on. In DataFusion this is opt-in: only aggregate functions whose implementation returns
+`true` from `AggregateUDFImpl::supports_within_group_clause()` accept the `WITHIN GROUP` clause. Attempting to
+use `WITHIN GROUP` with a regular aggregate (for example, `SELECT SUM(x) WITHIN GROUP (ORDER BY x)`) will fail
+during planning with an error: "WITHIN GROUP is only supported for ordered-set aggregate functions".
+
+Currently, the built-in aggregate functions that support `WITHIN GROUP` are:
+
+- `percentile_cont` — exact percentile aggregate (also available as `percentile_cont(column, percentile)`)
+- `approx_percentile_cont` — approximate percentile using the t-digest algorithm
+- `approx_percentile_cont_with_weight` — approximate weighted percentile using the t-digest algorithm
+
+Note: rank-like functions such as `rank()`, `dense_rank()`, and `percent_rank()` are window functions and
+use the `OVER (...)` clause; they are not ordered-set aggregates that accept `WITHIN GROUP` in DataFusion.
+
+Example (ordered-set aggregate):
+
+```sql
+percentile_cont(0.5) WITHIN GROUP (ORDER BY value)
+```
+
+Example (invalid usage — planner will error):
+
+```sql
+-- This will fail: SUM is not an ordered-set aggregate
+SELECT SUM(x) WITHIN GROUP (ORDER BY x) FROM t;
+```
+
 ## General Functions
 
 - [array_agg](#array_agg)

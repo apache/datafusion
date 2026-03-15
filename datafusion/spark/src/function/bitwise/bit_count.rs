@@ -20,11 +20,11 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::{
-    DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    DataType, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -77,7 +77,20 @@ impl ScalarUDFImpl for SparkBitCount {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32) // Spark returns int (Int32)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        use arrow::datatypes::Field;
+        // bit_count returns Int32 with the same nullability as the input
+        Ok(Arc::new(Field::new(
+            args.arg_fields[0].name(),
+            DataType::Int32,
+            args.arg_fields[0].is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -102,24 +115,25 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Int8 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int8Type>()
-                .unary(|v| bit_count(v.into()));
+                .unary(|v| (v as i64).count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int16 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int16Type>()
-                .unary(|v| bit_count(v.into()));
+                .unary(|v| (v as i64).count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int32 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int32Type>()
-                .unary(|v| bit_count(v.into()));
+                .unary(|v| (v as i64).count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int64 => {
-            let result: Int32Array =
-                value_array.as_primitive::<Int64Type>().unary(bit_count);
+            let result: Int32Array = value_array
+                .as_primitive::<Int64Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::UInt8 => {
@@ -155,28 +169,14 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-// Here’s the equivalent Rust implementation of the bitCount function (similar to Apache Spark's bitCount for LongType)
-// Spark: https://github.com/apache/spark/blob/ac717dd7aec665de578d7c6b0070e8fcdde3cea9/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/bitwiseExpressions.scala#L243
-// Java impl: https://github.com/openjdk/jdk/blob/d226023643f90027a8980d161ec6d423887ae3ce/src/java.base/share/classes/java/lang/Long.java#L1584
-fn bit_count(i: i64) -> i32 {
-    let mut u = i as u64;
-    u = u - ((u >> 1) & 0x5555555555555555);
-    u = (u & 0x3333333333333333) + ((u >> 2) & 0x3333333333333333);
-    u = (u + (u >> 4)) & 0x0f0f0f0f0f0f0f0f;
-    u = u + (u >> 8);
-    u = u + (u >> 16);
-    u = u + (u >> 32);
-    (u as i32) & 0x7f
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{
-        Array, BooleanArray, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        Array, BooleanArray, Int8Array, Int16Array, Int32Array, Int64Array, UInt8Array,
+        UInt16Array, UInt32Array, UInt64Array,
     };
-    use arrow::datatypes::Int32Type;
+    use arrow::datatypes::{Field, Int32Type};
 
     #[test]
     fn test_bit_count_basic() {
@@ -348,5 +348,38 @@ mod tests {
         assert_eq!(arr.value(0), 2); // 0b11
         assert!(arr.is_null(1));
         assert_eq!(arr.value(2), 3); // 0b111
+    }
+
+    #[test]
+    fn test_bit_count_nullability() -> Result<()> {
+        use datafusion_expr::ReturnFieldArgs;
+
+        let bit_count = SparkBitCount::new();
+
+        // Test with non-nullable Int32 field
+        let non_nullable_field = Arc::new(Field::new("num", DataType::Int32, false));
+
+        let result = bit_count.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&non_nullable_field)],
+            scalar_arguments: &[None],
+        })?;
+
+        // The result should not be nullable (same as input)
+        assert!(!result.is_nullable());
+        assert_eq!(result.data_type(), &DataType::Int32);
+
+        // Test with nullable Int32 field
+        let nullable_field = Arc::new(Field::new("num", DataType::Int32, true));
+
+        let result = bit_count.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&nullable_field)],
+            scalar_arguments: &[None],
+        })?;
+
+        // The result should be nullable (same as input)
+        assert!(result.is_nullable());
+        assert_eq!(result.data_type(), &DataType::Int32);
+
+        Ok(())
     }
 }

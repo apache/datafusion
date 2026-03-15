@@ -113,7 +113,7 @@ mod tests {
     };
     use datafusion_execution::config::SessionConfig;
 
-    use tempfile::{tempdir, TempDir};
+    use tempfile::{TempDir, tempdir};
 
     #[tokio::test]
     async fn read_with_glob_path() -> Result<()> {
@@ -355,7 +355,9 @@ mod tests {
         let expected_path = binding[0].as_str();
         assert_eq!(
             read_df.unwrap_err().strip_backtrace(),
-            format!("Execution error: File path '{expected_path}' does not match the expected extension '.parquet'")
+            format!(
+                "Execution error: File path '{expected_path}' does not match the expected extension '.parquet'"
+            )
         );
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.

@@ -17,29 +17,29 @@
 
 //! This module provides the bisect function, which implements binary search.
 
+pub(crate) mod aggregate;
 pub mod expr;
 pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{
-    _exec_datafusion_err, _exec_err, _internal_datafusion_err, _internal_err,
-};
+use crate::assert_or_internal_err;
+use crate::error::{_exec_datafusion_err, _exec_err, _internal_datafusion_err};
 use crate::{Result, ScalarValue};
 use arrow::array::{
-    cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
+    cast::AsArray,
 };
 use arrow::array::{ArrowPrimitiveType, GenericListArray, Int32Array, PrimitiveArray};
 use arrow::buffer::OffsetBuffer;
-use arrow::compute::{partition, SortColumn, SortOptions};
+use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{
     ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
 };
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::collections::HashSet;
 use std::iter::repeat_n;
 use std::num::NonZero;
@@ -75,10 +75,10 @@ use std::thread::available_parallelism;
 /// ```
 pub fn project_schema(
     schema: &SchemaRef,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&impl AsRef<[usize]>>,
 ) -> Result<SchemaRef> {
     let schema = match projection {
-        Some(columns) => Arc::new(schema.project(columns)?),
+        Some(columns) => Arc::new(schema.project(columns.as_ref())?),
         None => Arc::clone(schema),
     };
     Ok(schema)
@@ -271,10 +271,10 @@ fn needs_quotes(s: &str) -> bool {
     let mut chars = s.chars();
 
     // first char can not be a number unless escaped
-    if let Some(first_char) = chars.next() {
-        if !(first_char.is_ascii_lowercase() || first_char == '_') {
-            return true;
-        }
+    if let Some(first_char) = chars.next()
+        && !(first_char.is_ascii_lowercase() || first_char == '_')
+    {
+        return true;
     }
 
     !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
@@ -521,13 +521,12 @@ impl SingleRowListArrayBuilder {
 /// );
 ///
 /// assert_eq!(list_arr, expected);
+/// ```
 pub fn arrays_into_list_array(
     arr: impl IntoIterator<Item = ArrayRef>,
 ) -> Result<ListArray> {
     let arr = arr.into_iter().collect::<Vec<_>>();
-    if arr.is_empty() {
-        return _internal_err!("Cannot wrap empty array into list array");
-    }
+    assert_or_internal_err!(!arr.is_empty(), "Cannot wrap empty array into list array");
 
     let lens = arr.iter().map(|x| x.len()).collect::<Vec<_>>();
     // Assume data type is consistent
@@ -594,6 +593,7 @@ pub enum ListCoercion {
 /// let base_type = DataType::Float64;
 /// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type, None);
 /// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))));
+/// ```
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
     base_type: &DataType,
@@ -700,10 +700,14 @@ pub mod datafusion_strsim {
     }
 
     /// Calculates the minimum number of insertions, deletions, and substitutions
-    /// required to change one sequence into the other.
-    fn generic_levenshtein<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
+    /// required to change one sequence into the other, using a reusable cache buffer.
+    ///
+    /// This is the generic implementation that works with any iterator types.
+    /// The `cache` buffer will be resized as needed and reused across calls.
+    fn generic_levenshtein_with_buffer<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
         a: &'a Iter1,
         b: &'b Iter2,
+        cache: &mut Vec<usize>,
     ) -> usize
     where
         &'a Iter1: IntoIterator<Item = Elem1>,
@@ -716,7 +720,9 @@ pub mod datafusion_strsim {
             return b_len;
         }
 
-        let mut cache: Vec<usize> = (1..b_len + 1).collect();
+        // Resize cache to fit b_len elements
+        cache.clear();
+        cache.extend(1..=b_len);
 
         let mut result = 0;
 
@@ -737,6 +743,21 @@ pub mod datafusion_strsim {
     }
 
     /// Calculates the minimum number of insertions, deletions, and substitutions
+    /// required to change one sequence into the other.
+    fn generic_levenshtein<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
+        a: &'a Iter1,
+        b: &'b Iter2,
+    ) -> usize
+    where
+        &'a Iter1: IntoIterator<Item = Elem1>,
+        &'b Iter2: IntoIterator<Item = Elem2>,
+        Elem1: PartialEq<Elem2>,
+    {
+        let mut cache = Vec::new();
+        generic_levenshtein_with_buffer(a, b, &mut cache)
+    }
+
+    /// Calculates the minimum number of insertions, deletions, and substitutions
     /// required to change one string into the other.
     ///
     /// ```
@@ -746,6 +767,15 @@ pub mod datafusion_strsim {
     /// ```
     pub fn levenshtein(a: &str, b: &str) -> usize {
         generic_levenshtein(&StringWrapper(a), &StringWrapper(b))
+    }
+
+    /// Calculates the Levenshtein distance using a reusable cache buffer.
+    /// This avoids allocating a new Vec for each call, improving performance
+    /// when computing many distances.
+    ///
+    /// The `cache` buffer will be resized as needed and reused across calls.
+    pub fn levenshtein_with_buffer(a: &str, b: &str, cache: &mut Vec<usize>) -> usize {
+        generic_levenshtein_with_buffer(&StringWrapper(a), &StringWrapper(b), cache)
     }
 
     /// Calculates the normalized Levenshtein distance between two strings.
@@ -1043,13 +1073,13 @@ pub fn adjust_offsets_for_slice<O: OffsetSizeTrait>(
 ) -> OffsetBuffer<O> {
     let offsets = list.offsets();
 
-    if let (Some(first), Some(last)) = (offsets.first(), offsets.last()) {
-        if !first.is_zero() || last.to_usize().unwrap() != list.values().len() {
-            let offsets = offsets.iter().map(|offset| *offset - *first).collect();
+    if let (Some(first), Some(last)) = (offsets.first(), offsets.last())
+        && (!first.is_zero() || last.to_usize().unwrap() != list.values().len())
+    {
+        let offsets = offsets.iter().map(|offset| *offset - *first).collect();
 
-            //todo: use unsafe Offset::new_unchecked?
-            return OffsetBuffer::new(offsets);
-        }
+        //todo: use unsafe Offset::new_unchecked?
+        return OffsetBuffer::new(offsets);
     }
 
     offsets.clone()
@@ -1113,7 +1143,6 @@ mod tests {
     use crate::ScalarValue::Null;
     use arrow::array::{Float64Array, Int32Array};
     use sqlparser::ast::Ident;
-    use sqlparser::tokenizer::Span;
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -1342,7 +1371,7 @@ mod tests {
             let expected_parsed = vec![Ident {
                 value: identifier.to_string(),
                 quote_style,
-                span: Span::empty(),
+                span: sqlparser::tokenizer::Span::empty(),
             }];
 
             assert_eq!(

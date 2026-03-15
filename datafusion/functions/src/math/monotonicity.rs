@@ -17,11 +17,11 @@
 
 use std::sync::LazyLock;
 
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_doc::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_expr::Documentation;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::Documentation;
 
 /// Non-increasing on the interval \[−1, 1\], undefined otherwise.
 pub fn acos_order(input: &[ExprProperties]) -> Result<SortProperties> {
@@ -31,7 +31,7 @@ pub fn acos_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let valid_domain =
         Interval::make_symmetric_unit_interval(&range.lower().data_type())?;
 
-    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+    if valid_domain.contains(range)? == Interval::TRUE {
         Ok(-arg.sort_properties)
     } else {
         exec_err!("Input range of ACOS contains out-of-domain values")
@@ -72,7 +72,7 @@ pub fn acosh_order(input: &[ExprProperties]) -> Result<SortProperties> {
         ScalarValue::try_from(&range.upper().data_type())?,
     )?;
 
-    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+    if valid_domain.contains(range)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of ACOSH contains out-of-domain values")
@@ -110,7 +110,7 @@ pub fn asin_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let valid_domain =
         Interval::make_symmetric_unit_interval(&range.lower().data_type())?;
 
-    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+    if valid_domain.contains(range)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of ASIN contains out-of-domain values")
@@ -207,7 +207,7 @@ pub fn atanh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let valid_domain =
         Interval::make_symmetric_unit_interval(&range.lower().data_type())?;
 
-    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+    if valid_domain.contains(range)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of ATANH contains out-of-domain values")
@@ -309,30 +309,6 @@ pub fn ceil_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
-static DOCUMENTATION_CEIL: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
-        DOC_SECTION_MATH,
-        "Returns the nearest integer greater than or equal to a number.",
-        "ceil(numeric_expression)",
-    )
-    .with_standard_argument("numeric_expression", Some("Numeric"))
-    .with_sql_example(
-        r#"```sql
-    > SELECT ceil(3.14);
-+------------+
-| ceil(3.14) |
-+------------+
-| 4.0        |
-+------------+
-```"#,
-    )
-    .build()
-});
-
-pub fn get_ceil_doc() -> &'static Documentation {
-    &DOCUMENTATION_CEIL
-}
-
 /// Non-increasing on \[0, π\] and then non-decreasing on \[π, 2π\].
 /// This pattern repeats periodically with a period of 2π.
 // TODO: Implement ordering rule of the ATAN2 function.
@@ -371,9 +347,9 @@ pub fn cosh_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
-    } else if range.lt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    } else if range.lt_eq(&zero_point)? == Interval::TRUE {
         Ok(-arg.sort_properties)
     } else {
         Ok(SortProperties::Unordered)
@@ -467,30 +443,6 @@ pub fn floor_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
-static DOCUMENTATION_FLOOR: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
-        DOC_SECTION_MATH,
-        "Returns the nearest integer less than or equal to a number.",
-        "floor(numeric_expression)",
-    )
-    .with_standard_argument("numeric_expression", Some("Numeric"))
-    .with_sql_example(
-        r#"```sql
-> SELECT floor(3.14);
-+-------------+
-| floor(3.14) |
-+-------------+
-| 3.0         |
-+-------------+
-```"#,
-    )
-    .build()
-});
-
-pub fn get_floor_doc() -> &'static Documentation {
-    &DOCUMENTATION_FLOOR
-}
-
 /// Non-decreasing for x ≥ 0, undefined otherwise.
 pub fn ln_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
@@ -498,7 +450,7 @@ pub fn ln_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of LN contains out-of-domain values")
@@ -536,7 +488,7 @@ pub fn log2_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of LOG2 contains out-of-domain values")
@@ -574,7 +526,7 @@ pub fn log10_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of LOG10 contains out-of-domain values")
@@ -701,7 +653,7 @@ pub fn sqrt_order(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+    if range.gt_eq(&zero_point)? == Interval::TRUE {
         Ok(arg.sort_properties)
     } else {
         exec_err!("Input range of SQRT contains out-of-domain values")

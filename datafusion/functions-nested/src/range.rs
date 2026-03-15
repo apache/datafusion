@@ -23,28 +23,28 @@ use arrow::datatypes::TimeUnit;
 use arrow::datatypes::{DataType, Field, IntervalUnit::MonthDayNano};
 use arrow::{
     array::{
+        Array, ArrayRef, Int64Array, ListArray, ListBuilder, NullBufferBuilder,
         builder::{Date32Builder, TimestampNanosecondBuilder},
         temporal_conversions::as_datetime_with_timezone,
         timezone::Tz,
         types::{Date32Type, IntervalMonthDayNanoType, TimestampNanosecondType},
-        Array, ArrayRef, Int64Array, ListArray, ListBuilder, NullBufferBuilder,
     },
     compute::cast,
 };
 use datafusion_common::internal_err;
 use datafusion_common::{
+    Result, exec_datafusion_err, exec_err, not_impl_datafusion_err,
+    utils::take_function_args,
+};
+use datafusion_common::{
+    ScalarValue,
     cast::{
         as_date32_array, as_int64_array, as_interval_mdn_array,
         as_timestamp_nanosecond_array,
     },
     types::{
-        logical_date, logical_int64, logical_interval_mdn, logical_string, NativeType,
+        NativeType, logical_date, logical_int64, logical_interval_mdn, logical_string,
     },
-    ScalarValue,
-};
-use datafusion_common::{
-    exec_datafusion_err, exec_err, not_impl_datafusion_err, utils::take_function_args,
-    Result,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
@@ -392,20 +392,27 @@ impl Range {
             }
 
             let stop = if !self.include_upper_bound {
-                Date32Type::subtract_month_day_nano(stop, step)
+                Date32Type::subtract_month_day_nano_opt(stop, step).ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "Cannot generate date range where stop {} - {step:?}) overflows",
+                        date32_to_string(stop)
+                    )
+                })?
             } else {
                 stop
             };
 
             let neg = months < 0 || days < 0;
-            let mut new_date = start;
+            let mut new_date = Some(start);
 
             let values = from_fn(|| {
-                if (neg && new_date < stop) || (!neg && new_date > stop) {
+                let Some(current_date) = new_date else {
+                    return None; // previous overflow
+                };
+                if (neg && current_date < stop) || (!neg && current_date > stop) {
                     None
                 } else {
-                    let current_date = new_date;
-                    new_date = Date32Type::add_month_day_nano(new_date, step);
+                    new_date = Date32Type::add_month_day_nano_opt(current_date, step);
                     Some(Some(current_date))
                 }
             });
@@ -573,8 +580,16 @@ fn gen_range_iter(
 }
 
 fn parse_tz(tz: &Option<&str>) -> Result<Tz> {
-    let tz = tz.as_ref().map_or_else(|| "+00", |s| s);
+    let tz = tz.unwrap_or_else(|| "+00");
 
     Tz::from_str(tz)
         .map_err(|op| exec_datafusion_err!("failed to parse timezone {tz}: {:?}", op))
+}
+
+fn date32_to_string(value: i32) -> String {
+    if let Some(d) = Date32Type::to_naive_date_opt(value) {
+        format!("{value} ({d})")
+    } else {
+        format!("{value} (unknown date)")
+    }
 }

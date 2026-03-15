@@ -15,26 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, ffi::c_void, sync::Arc};
+use std::any::Any;
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
-    StableAbi,
+use abi_stable::StableAbi;
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use datafusion_catalog::{CatalogProvider, SchemaProvider};
+use datafusion_common::error::Result;
+use datafusion_proto::logical_plan::{
+    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
-use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use tokio::runtime::Handle;
 
-use crate::{
-    df_result, rresult_return,
-    schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider},
-};
-
-use datafusion::error::Result;
+use crate::execution::FFI_TaskContextProvider;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider};
+use crate::util::FFIResult;
+use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_CatalogProvider {
     pub schema_names: unsafe extern "C" fn(provider: &Self) -> RVec<RString>,
 
@@ -43,19 +45,21 @@ pub struct FFI_CatalogProvider {
         name: RString,
     ) -> ROption<FFI_SchemaProvider>,
 
-    pub register_schema:
-        unsafe extern "C" fn(
-            provider: &Self,
-            name: RString,
-            schema: &FFI_SchemaProvider,
-        ) -> RResult<ROption<FFI_SchemaProvider>, RString>,
+    pub register_schema: unsafe extern "C" fn(
+        provider: &Self,
+        name: RString,
+        schema: &FFI_SchemaProvider,
+    )
+        -> FFIResult<ROption<FFI_SchemaProvider>>,
 
-    pub deregister_schema:
-        unsafe extern "C" fn(
-            provider: &Self,
-            name: RString,
-            cascade: bool,
-        ) -> RResult<ROption<FFI_SchemaProvider>, RString>,
+    pub deregister_schema: unsafe extern "C" fn(
+        provider: &Self,
+        name: RString,
+        cascade: bool,
+    )
+        -> FFIResult<ROption<FFI_SchemaProvider>>,
+
+    pub logical_codec: FFI_LogicalExtensionCodec,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -70,6 +74,11 @@ pub struct FFI_CatalogProvider {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignCatalogProvider`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_CatalogProvider {}
@@ -82,93 +91,132 @@ struct ProviderPrivateData {
 
 impl FFI_CatalogProvider {
     unsafe fn inner(&self) -> &Arc<dyn CatalogProvider + Send> {
-        let private_data = self.private_data as *const ProviderPrivateData;
-        &(*private_data).provider
+        unsafe {
+            let private_data = self.private_data as *const ProviderPrivateData;
+            &(*private_data).provider
+        }
     }
 
     unsafe fn runtime(&self) -> Option<Handle> {
-        let private_data = self.private_data as *const ProviderPrivateData;
-        (*private_data).runtime.clone()
+        unsafe {
+            let private_data = self.private_data as *const ProviderPrivateData;
+            (*private_data).runtime.clone()
+        }
     }
 }
 
 unsafe extern "C" fn schema_names_fn_wrapper(
     provider: &FFI_CatalogProvider,
 ) -> RVec<RString> {
-    let names = provider.inner().schema_names();
-    names.into_iter().map(|s| s.into()).collect()
+    unsafe {
+        let names = provider.inner().schema_names();
+        names.into_iter().map(|s| s.into()).collect()
+    }
 }
 
 unsafe extern "C" fn schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
     name: RString,
 ) -> ROption<FFI_SchemaProvider> {
-    let maybe_schema = provider.inner().schema(name.as_str());
-    maybe_schema
-        .map(|schema| FFI_SchemaProvider::new(schema, provider.runtime()))
-        .into()
+    unsafe {
+        let maybe_schema = provider.inner().schema(name.as_str());
+        maybe_schema
+            .map(|schema| {
+                FFI_SchemaProvider::new_with_ffi_codec(
+                    schema,
+                    provider.runtime(),
+                    provider.logical_codec.clone(),
+                )
+            })
+            .into()
+    }
 }
 
 unsafe extern "C" fn register_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
     name: RString,
     schema: &FFI_SchemaProvider,
-) -> RResult<ROption<FFI_SchemaProvider>, RString> {
-    let runtime = provider.runtime();
-    let provider = provider.inner();
-    let schema = Arc::new(ForeignSchemaProvider::from(schema));
+) -> FFIResult<ROption<FFI_SchemaProvider>> {
+    unsafe {
+        let runtime = provider.runtime();
+        let inner_provider = provider.inner();
+        let schema: Arc<dyn SchemaProvider + Send> = schema.into();
 
-    let returned_schema =
-        rresult_return!(provider.register_schema(name.as_str(), schema))
-            .map(|schema| FFI_SchemaProvider::new(schema, runtime))
-            .into();
+        let returned_schema =
+            rresult_return!(inner_provider.register_schema(name.as_str(), schema))
+                .map(|schema| {
+                    FFI_SchemaProvider::new_with_ffi_codec(
+                        schema,
+                        runtime,
+                        provider.logical_codec.clone(),
+                    )
+                })
+                .into();
 
-    RResult::ROk(returned_schema)
+        RResult::ROk(returned_schema)
+    }
 }
 
 unsafe extern "C" fn deregister_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
     name: RString,
     cascade: bool,
-) -> RResult<ROption<FFI_SchemaProvider>, RString> {
-    let runtime = provider.runtime();
-    let provider = provider.inner();
+) -> FFIResult<ROption<FFI_SchemaProvider>> {
+    unsafe {
+        let runtime = provider.runtime();
+        let inner_provider = provider.inner();
 
-    let maybe_schema =
-        rresult_return!(provider.deregister_schema(name.as_str(), cascade));
+        let maybe_schema =
+            rresult_return!(inner_provider.deregister_schema(name.as_str(), cascade));
 
-    RResult::ROk(
-        maybe_schema
-            .map(|schema| FFI_SchemaProvider::new(schema, runtime))
-            .into(),
-    )
+        RResult::ROk(
+            maybe_schema
+                .map(|schema| {
+                    FFI_SchemaProvider::new_with_ffi_codec(
+                        schema,
+                        runtime,
+                        provider.logical_codec.clone(),
+                    )
+                })
+                .into(),
+        )
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_CatalogProvider) {
-    let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
-    drop(private_data);
+    unsafe {
+        debug_assert!(!provider.private_data.is_null());
+        let private_data =
+            Box::from_raw(provider.private_data as *mut ProviderPrivateData);
+        drop(private_data);
+        provider.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
     provider: &FFI_CatalogProvider,
 ) -> FFI_CatalogProvider {
-    let old_private_data = provider.private_data as *const ProviderPrivateData;
-    let runtime = (*old_private_data).runtime.clone();
+    unsafe {
+        let old_private_data = provider.private_data as *const ProviderPrivateData;
+        let runtime = (*old_private_data).runtime.clone();
 
-    let private_data = Box::into_raw(Box::new(ProviderPrivateData {
-        provider: Arc::clone(&(*old_private_data).provider),
-        runtime,
-    })) as *mut c_void;
+        let private_data = Box::into_raw(Box::new(ProviderPrivateData {
+            provider: Arc::clone(&(*old_private_data).provider),
+            runtime,
+        })) as *mut c_void;
 
-    FFI_CatalogProvider {
-        schema_names: schema_names_fn_wrapper,
-        schema: schema_fn_wrapper,
-        register_schema: register_schema_fn_wrapper,
-        deregister_schema: deregister_schema_fn_wrapper,
-        clone: clone_fn_wrapper,
-        release: release_fn_wrapper,
-        version: super::version,
-        private_data,
+        FFI_CatalogProvider {
+            schema_names: schema_names_fn_wrapper,
+            schema: schema_fn_wrapper,
+            register_schema: register_schema_fn_wrapper,
+            deregister_schema: deregister_schema_fn_wrapper,
+            logical_codec: provider.logical_codec.clone(),
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            version: super::version,
+            private_data,
+            library_marker_id: crate::get_library_marker_id,
+        }
     }
 }
 
@@ -183,6 +231,24 @@ impl FFI_CatalogProvider {
     pub fn new(
         provider: Arc<dyn CatalogProvider + Send>,
         runtime: Option<Handle>,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
+        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
+    ) -> Self {
+        let task_ctx_provider = task_ctx_provider.into();
+        let logical_codec =
+            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            logical_codec,
+            runtime.clone(),
+            task_ctx_provider.clone(),
+        );
+        Self::new_with_ffi_codec(provider, runtime, logical_codec)
+    }
+
+    pub fn new_with_ffi_codec(
+        provider: Arc<dyn CatalogProvider + Send>,
+        runtime: Option<Handle>,
+        logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
@@ -191,10 +257,12 @@ impl FFI_CatalogProvider {
             schema: schema_fn_wrapper,
             register_schema: register_schema_fn_wrapper,
             deregister_schema: deregister_schema_fn_wrapper,
+            logical_codec,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -204,14 +272,19 @@ impl FFI_CatalogProvider {
 /// defined on this struct must only use the stable functions provided in
 /// FFI_CatalogProvider to interact with the foreign table provider.
 #[derive(Debug)]
-pub struct ForeignCatalogProvider(FFI_CatalogProvider);
+pub struct ForeignCatalogProvider(pub(crate) FFI_CatalogProvider);
 
 unsafe impl Send for ForeignCatalogProvider {}
 unsafe impl Sync for ForeignCatalogProvider {}
 
-impl From<&FFI_CatalogProvider> for ForeignCatalogProvider {
+impl From<&FFI_CatalogProvider> for Arc<dyn CatalogProvider + Send> {
     fn from(provider: &FFI_CatalogProvider) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(unsafe { provider.inner() });
+        }
+
+        Arc::new(ForeignCatalogProvider(provider.clone()))
+            as Arc<dyn CatalogProvider + Send>
     }
 }
 
@@ -254,7 +327,11 @@ impl CatalogProvider for ForeignCatalogProvider {
         unsafe {
             let schema = match schema.as_any().downcast_ref::<ForeignSchemaProvider>() {
                 Some(s) => &s.0,
-                None => &FFI_SchemaProvider::new(schema, None),
+                None => &FFI_SchemaProvider::new_with_ffi_codec(
+                    schema,
+                    None,
+                    self.0.logical_codec.clone(),
+                ),
             };
             let returned_schema: Option<FFI_SchemaProvider> =
                 df_result!((self.0.register_schema)(&self.0, name.into(), schema))?
@@ -292,15 +369,20 @@ mod tests {
         let prior_schema = Arc::new(MemorySchemaProvider::new());
 
         let catalog = Arc::new(MemoryCatalogProvider::new());
-        assert!(catalog
-            .as_ref()
-            .register_schema("prior_schema", prior_schema)
-            .unwrap()
-            .is_none());
+        assert!(
+            catalog
+                .as_ref()
+                .register_schema("prior_schema", prior_schema)
+                .unwrap()
+                .is_none()
+        );
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
-        let ffi_catalog = FFI_CatalogProvider::new(catalog, None);
+        let mut ffi_catalog =
+            FFI_CatalogProvider::new(catalog, None, task_ctx_provider, None);
+        ffi_catalog.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
 
         let prior_schema_names = foreign_catalog.schema_names();
         assert_eq!(prior_schema_names.len(), 1);
@@ -334,5 +416,33 @@ mod tests {
         // Retrieve valid schema
         let returned_schema = foreign_catalog.schema("second_schema");
         assert!(returned_schema.is_some());
+    }
+
+    #[test]
+    fn test_ffi_catalog_provider_local_bypass() {
+        let catalog = Arc::new(MemoryCatalogProvider::new());
+
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let mut ffi_catalog =
+            FFI_CatalogProvider::new(catalog, None, task_ctx_provider, None);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
+        assert!(
+            foreign_catalog
+                .as_any()
+                .downcast_ref::<MemoryCatalogProvider>()
+                .is_some()
+        );
+
+        // Verify different library markers generate foreign providers
+        ffi_catalog.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
+        assert!(
+            foreign_catalog
+                .as_any()
+                .downcast_ref::<ForeignCatalogProvider>()
+                .is_some()
+        );
     }
 }

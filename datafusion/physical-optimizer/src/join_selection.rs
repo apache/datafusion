@@ -27,10 +27,10 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, JoinSide, JoinType};
+use datafusion_common::{JoinSide, JoinType, internal_err};
 use datafusion_expr_common::sort_properties::SortProperties;
-use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
@@ -47,7 +47,7 @@ use std::sync::Arc;
 pub struct JoinSelection {}
 
 impl JoinSelection {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -87,16 +87,18 @@ fn supports_collect_by_thresholds(
     threshold_byte_size: usize,
     threshold_num_rows: usize,
 ) -> bool {
-    // Currently we do not trust the 0 value from stats, due to stats collection might have bug
-    // TODO check the logic in datasource::get_statistics_with_limit()
     let Ok(stats) = plan.partition_statistics(None) else {
         return false;
     };
 
+    // Stats use `Precision<T>` to represent stats, where `Absent` means unknown.
+    // `Exact(0)` and `Inexact(0)` are both valid stats, and we should not treat
+    // them as unknown, `Absent` will return None (this is in regards to why
+    // `!=0` is not checked)
     if let Some(byte_size) = stats.total_byte_size.get_value() {
-        *byte_size != 0 && *byte_size < threshold_byte_size
+        *byte_size < threshold_byte_size
     } else if let Some(num_rows) = stats.num_rows.get_value() {
-        *num_rows != 0 && *num_rows < threshold_num_rows
+        *num_rows < threshold_num_rows
     } else {
         false
     }
@@ -184,35 +186,30 @@ pub(crate) fn try_collect_left(
 
     match (left_can_collect, right_can_collect) {
         (true, true) => {
+            // Don't swap null-aware anti joins as they have specific side requirements
             if hash_join.join_type().supports_swap()
+                && !hash_join.null_aware
                 && should_swap_join_order(&**left, &**right)?
             {
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
             } else {
-                Ok(Some(Arc::new(HashJoinExec::try_new(
-                    Arc::clone(left),
-                    Arc::clone(right),
-                    hash_join.on().to_vec(),
-                    hash_join.filter().cloned(),
-                    hash_join.join_type(),
-                    hash_join.projection.clone(),
-                    PartitionMode::CollectLeft,
-                    hash_join.null_equality(),
-                )?)))
+                Ok(Some(Arc::new(
+                    hash_join
+                        .builder()
+                        .with_partition_mode(PartitionMode::CollectLeft)
+                        .build()?,
+                )))
             }
         }
-        (true, false) => Ok(Some(Arc::new(HashJoinExec::try_new(
-            Arc::clone(left),
-            Arc::clone(right),
-            hash_join.on().to_vec(),
-            hash_join.filter().cloned(),
-            hash_join.join_type(),
-            hash_join.projection.clone(),
-            PartitionMode::CollectLeft,
-            hash_join.null_equality(),
-        )?))),
+        (true, false) => Ok(Some(Arc::new(
+            hash_join
+                .builder()
+                .with_partition_mode(PartitionMode::CollectLeft)
+                .build()?,
+        ))),
         (false, true) => {
-            if hash_join.join_type().supports_swap() {
+            // Don't swap null-aware anti joins as they have specific side requirements
+            if hash_join.join_type().supports_swap() && !hash_join.null_aware {
                 hash_join.swap_inputs(PartitionMode::CollectLeft).map(Some)
             } else {
                 Ok(None)
@@ -232,20 +229,29 @@ pub(crate) fn partitioned_hash_join(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    if hash_join.join_type().supports_swap() && should_swap_join_order(&**left, &**right)?
+    // Don't swap null-aware anti joins as they have specific side requirements
+    if hash_join.join_type().supports_swap()
+        && !hash_join.null_aware
+        && should_swap_join_order(&**left, &**right)?
     {
         hash_join.swap_inputs(PartitionMode::Partitioned)
     } else {
-        Ok(Arc::new(HashJoinExec::try_new(
-            Arc::clone(left),
-            Arc::clone(right),
-            hash_join.on().to_vec(),
-            hash_join.filter().cloned(),
-            hash_join.join_type(),
-            hash_join.projection.clone(),
-            PartitionMode::Partitioned,
-            hash_join.null_equality(),
-        )?))
+        // Null-aware anti joins must use CollectLeft mode because they track probe-side state
+        // (probe_side_non_empty, probe_side_has_null) per-partition, but need global knowledge
+        // for correct null handling. With partitioning, a partition might not see probe rows
+        // even if the probe side is globally non-empty, leading to incorrect NULL row handling.
+        let partition_mode = if hash_join.null_aware {
+            PartitionMode::CollectLeft
+        } else {
+            PartitionMode::Partitioned
+        };
+
+        Ok(Arc::new(
+            hash_join
+                .builder()
+                .with_partition_mode(partition_mode)
+                .build()?,
+        ))
     }
 }
 
@@ -277,7 +283,9 @@ fn statistical_join_selection_subrule(
                 PartitionMode::Partitioned => {
                     let left = hash_join.left();
                     let right = hash_join.right();
+                    // Don't swap null-aware anti joins as they have specific side requirements
                     if hash_join.join_type().supports_swap()
+                        && !hash_join.null_aware
                         && should_swap_join_order(&**left, &**right)?
                     {
                         hash_join
@@ -481,19 +489,16 @@ pub fn hash_join_swap_subrule(
     mut input: Arc<dyn ExecutionPlan>,
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        if hash_join.left.boundedness().is_unbounded()
-            && !hash_join.right.boundedness().is_unbounded()
-            && matches!(
-                *hash_join.join_type(),
-                JoinType::Inner
-                    | JoinType::Left
-                    | JoinType::LeftSemi
-                    | JoinType::LeftAnti
-            )
-        {
-            input = swap_join_according_to_unboundedness(hash_join)?;
-        }
+    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>()
+        && hash_join.left.boundedness().is_unbounded()
+        && !hash_join.right.boundedness().is_unbounded()
+        && !hash_join.null_aware // Don't swap null-aware anti joins
+        && matches!(
+            *hash_join.join_type(),
+            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
+        )
+    {
+        input = swap_join_according_to_unboundedness(hash_join)?;
     }
     Ok(input)
 }

@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
-use datafusion_expr::expr::{Exists, InSubquery};
+use datafusion_common::{DFSchema, Diagnostic, Result, Span, Spans, plan_err};
+use datafusion_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
 use sqlparser::ast::Expr as SQLExpr;
-use sqlparser::ast::{Query, SelectItem, SetExpr};
+use sqlparser::ast::{BinaryOperator, Query, SelectItem, SetExpr};
 use std::sync::Arc;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -31,11 +31,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+        planner_context.append_outer_query_schema(input_schema.clone().into());
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.set_outer_query_schema(old_outer_query_schema);
+        planner_context.pop_outer_query_schema();
         Ok(Expr::Exists(Exists {
             subquery: Subquery {
                 subquery: Arc::new(sub_plan),
@@ -54,27 +53,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+        planner_context.append_outer_query_schema(Arc::new(input_schema.clone()));
 
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = &subquery.body.as_ref() {
             for item in &select.projection {
-                if let SelectItem::UnnamedExpr(SQLExpr::Identifier(ident)) = item {
-                    if let Some(span) = Span::try_from_sqlparser_span(ident.span) {
-                        spans.add_span(span);
-                    }
+                if let SelectItem::UnnamedExpr(SQLExpr::Identifier(ident)) = item
+                    && let Some(span) = Span::try_from_sqlparser_span(ident.span)
+                {
+                    spans.add_span(span);
                 }
             }
         }
 
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.set_outer_query_schema(old_outer_query_schema);
+        planner_context.pop_outer_query_schema();
 
         self.validate_single_column(
             &sub_plan,
-            spans.clone(),
+            &spans,
             "Too many columns! The subquery should only return one column",
             "Select only one column in the subquery",
         )?;
@@ -98,25 +96,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+        planner_context.append_outer_query_schema(Arc::new(input_schema.clone()));
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
             for item in &select.projection {
-                if let SelectItem::ExprWithAlias { alias, .. } = item {
-                    if let Some(span) = Span::try_from_sqlparser_span(alias.span) {
-                        spans.add_span(span);
-                    }
+                if let SelectItem::ExprWithAlias { alias, .. } = item
+                    && let Some(span) = Span::try_from_sqlparser_span(alias.span)
+                {
+                    spans.add_span(span);
                 }
             }
         }
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.set_outer_query_schema(old_outer_query_schema);
+        planner_context.pop_outer_query_schema();
 
         self.validate_single_column(
             &sub_plan,
-            spans.clone(),
+            &spans,
             "Too many columns! The subquery should only return one column",
             "Select only one column in the subquery",
         )?;
@@ -131,7 +128,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn validate_single_column(
         &self,
         sub_plan: &LogicalPlan,
-        spans: Spans,
+        spans: &Spans,
         error_message: &str,
         help_message: &str,
     ) -> Result<()> {
@@ -148,7 +145,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn build_multi_column_diagnostic(
         &self,
-        spans: Spans,
+        spans: &Spans,
         error_message: &str,
         help_message: &str,
     ) -> Diagnostic {
@@ -161,5 +158,51 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         diagnostic.add_help(help_message, None);
         diagnostic
+    }
+
+    pub(super) fn parse_set_comparison_subquery(
+        &self,
+        left_expr: SQLExpr,
+        subquery: Query,
+        compare_op: &BinaryOperator,
+        quantifier: SetQuantifier,
+        input_schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        planner_context.append_outer_query_schema(Arc::new(input_schema.clone()));
+
+        let mut spans = Spans::new();
+        if let SetExpr::Select(select) = subquery.body.as_ref() {
+            for item in &select.projection {
+                if let SelectItem::ExprWithAlias { alias, .. } = item
+                    && let Some(span) = Span::try_from_sqlparser_span(alias.span)
+                {
+                    spans.add_span(span);
+                }
+            }
+        }
+
+        let sub_plan = self.query_to_plan(subquery, planner_context)?;
+        let outer_ref_columns = sub_plan.all_out_ref_exprs();
+        planner_context.pop_outer_query_schema();
+
+        self.validate_single_column(
+            &sub_plan,
+            &spans,
+            "Too many columns! The subquery should only return one column",
+            "Select only one column in the subquery",
+        )?;
+
+        let expr_obj = self.sql_to_expr(left_expr, input_schema, planner_context)?;
+        Ok(Expr::SetComparison(SetComparison::new(
+            Box::new(expr_obj),
+            Subquery {
+                subquery: Arc::new(sub_plan),
+                outer_ref_columns,
+                spans,
+            },
+            self.parse_sql_binary_op(compare_op)?,
+            quantifier,
+        )))
     }
 }

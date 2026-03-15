@@ -46,5 +46,9 @@ extend-exclude = [
     "dev/changelog/**",
     "benchmarks/**",
     "*.csv",
-    "docs/source/contributor-guide/governance.md"
+    "docs/source/contributor-guide/governance.md",
+    # submodules
+    "parquet-testing/**",
+    "datafusion-testing/**",
+    "testing/**",
 ]

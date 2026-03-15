@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
-};
+use crate::function::error_utils::unsupported_data_type_exec_err;
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Float64Type};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -31,7 +30,6 @@ use std::sync::Arc;
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkExpm1 {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for SparkExpm1 {
@@ -43,8 +41,7 @@ impl Default for SparkExpm1 {
 impl SparkExpm1 {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec![],
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
         }
     }
 }
@@ -67,10 +64,8 @@ impl ScalarUDFImpl for SparkExpm1 {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 {
-            return Err(invalid_arg_count_exec_err("expm1", (1, 1), args.args.len()));
-        }
-        match &args.args[0] {
+        let [arg] = take_function_args(self.name(), args.args)?;
+        match arg {
             ColumnarValue::Scalar(ScalarValue::Float64(value)) => Ok(
                 ColumnarValue::Scalar(ScalarValue::Float64(value.map(|x| x.exp_m1()))),
             ),
@@ -93,53 +88,5 @@ impl ScalarUDFImpl for SparkExpm1 {
                 &other.data_type(),
             )),
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("expm1", (1, 1), arg_types.len()));
-        }
-        if arg_types[0].is_numeric() {
-            Ok(vec![DataType::Float64])
-        } else {
-            Err(unsupported_data_type_exec_err(
-                "expm1",
-                "Numeric Type",
-                &arg_types[0],
-            ))
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::function::math::expm1::SparkExpm1;
-    use crate::function::utils::test::test_scalar_function;
-    use arrow::array::{Array, Float64Array};
-    use arrow::datatypes::DataType::Float64;
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
-
-    macro_rules! test_expm1_float64_invoke {
-        ($INPUT:expr, $EXPECTED:expr) => {
-            test_scalar_function!(
-                SparkExpm1::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::Float64($INPUT))],
-                $EXPECTED,
-                f64,
-                Float64,
-                Float64Array
-            );
-        };
-    }
-
-    #[test]
-    fn test_expm1_invoke() -> Result<()> {
-        test_expm1_float64_invoke!(Some(0f64), Ok(Some(0.0f64)));
-        Ok(())
     }
 }

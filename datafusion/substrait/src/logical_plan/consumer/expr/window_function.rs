@@ -16,19 +16,19 @@
 // under the License.
 
 use crate::logical_plan::consumer::{
-    from_substrait_func_args, from_substrait_rex_vec, from_substrait_sorts,
-    substrait_fun_name, SubstraitConsumer,
+    SubstraitConsumer, from_substrait_func_args, from_substrait_rex_vec,
+    from_substrait_sorts, substrait_fun_name,
 };
 use datafusion::common::{
-    not_impl_err, plan_datafusion_err, plan_err, substrait_err, DFSchema, ScalarValue,
+    DFSchema, ScalarValue, not_impl_err, plan_datafusion_err, plan_err, substrait_err,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::WindowFunctionParams;
 use datafusion::logical_expr::{
-    expr, Expr, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    Expr, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, expr,
 };
-use substrait::proto::expression::window_function::{Bound, BoundsType};
 use substrait::proto::expression::WindowFunction;
+use substrait::proto::expression::window_function::{Bound, BoundsType};
 use substrait::proto::expression::{
     window_function::bound as SubstraitBound, window_function::bound::Kind as BoundKind,
 };

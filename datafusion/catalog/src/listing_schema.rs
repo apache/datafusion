@@ -26,7 +26,7 @@ use crate::{SchemaProvider, TableProvider, TableProviderFactory};
 
 use crate::Session;
 use datafusion_common::{
-    internal_datafusion_err, DFSchema, DataFusionError, HashMap, TableReference,
+    DFSchema, DataFusionError, HashMap, TableReference, internal_datafusion_err,
 };
 use datafusion_expr::CreateExternalTable;
 
@@ -127,22 +127,13 @@ impl ListingSchemaProvider {
                     .factory
                     .create(
                         state,
-                        &CreateExternalTable {
-                            schema: Arc::new(DFSchema::empty()),
+                        &CreateExternalTable::builder(
                             name,
-                            location: table_url,
-                            file_type: self.format.clone(),
-                            table_partition_cols: vec![],
-                            if_not_exists: false,
-                            or_replace: false,
-                            temporary: false,
-                            definition: None,
-                            order_exprs: vec![],
-                            unbounded: false,
-                            options: Default::default(),
-                            constraints: Default::default(),
-                            column_defaults: Default::default(),
-                        },
+                            table_url,
+                            self.format.clone(),
+                            Arc::new(DFSchema::empty()),
+                        )
+                        .build(),
                     )
                     .await?;
                 let _ =

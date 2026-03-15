@@ -20,6 +20,7 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use super::options::ReadOptions;
 use crate::datasource::dynamic_file::DynamicListTableFactory;
@@ -33,20 +34,20 @@ use crate::{
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
-    datasource::{provider_as_source, MemTable, ViewTable},
+    datasource::{MemTable, ViewTable, provider_as_source},
     error::Result,
     execution::{
+        FunctionRegistry,
         options::ArrowReadOptions,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
-        FunctionRegistry,
     },
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, SetVariable,
-        TableType, UNNAMED_TABLE,
+        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, ResetVariable,
+        SetVariable, TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -58,33 +59,44 @@ pub use crate::execution::session_state::SessionState;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::MemoryCatalogProvider;
+use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
+    DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
     plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
+};
+pub use datafusion_execution::TaskContext;
+use datafusion_execution::cache::cache_manager::{
+    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
+    DEFAULT_METADATA_CACHE_LIMIT,
 };
 pub use datafusion_execution::config::SessionConfig;
+use datafusion_execution::disk_manager::{
+    DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
+};
 use datafusion_execution::registry::SerializerRegistry;
-pub use datafusion_execution::TaskContext;
 use datafusion_expr::LambdaUDF;
 pub use datafusion_expr::execution_props::ExecutionProps;
+#[cfg(feature = "sql")]
+use datafusion_expr::planner::RelationPlanner;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
+    Expr, UserDefinedLogicalNode, WindowUDF,
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
-    Expr, UserDefinedLogicalNode, WindowUDF,
 };
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
-use datafusion_optimizer::Analyzer;
+use datafusion_optimizer::simplify_expressions::ExprSimplifier;
+use datafusion_optimizer::{Analyzer, OptimizerContext};
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use datafusion_session::SessionStore;
 
@@ -477,6 +489,11 @@ impl SessionContext {
         self.state.write().append_optimizer_rule(optimizer_rule);
     }
 
+    /// Removes an optimizer rule by name, returning `true` if it existed.
+    pub fn remove_optimizer_rule(&self, name: &str) -> bool {
+        self.state.write().remove_optimizer_rule(name)
+    }
+
     /// Adds an analyzer rule to the end of the existing rules.
     ///
     /// See [`SessionState`] for more control of when the rule is applied.
@@ -679,7 +696,7 @@ impl SessionContext {
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
                         (Box::pin(async move { self.create_external_table(&cmd).await })
-                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>)
+                            as std::pin::Pin<Box<dyn Future<Output = _> + Send>>)
                             .await
                     }
                     DdlStatement::CreateMemoryTable(cmd) => {
@@ -710,7 +727,12 @@ impl SessionContext {
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
-                self.set_variable(stmt).await
+                self.set_variable(stmt).await?;
+                self.return_empty_dataframe()
+            }
+            LogicalPlan::Statement(Statement::ResetVariable(stmt)) => {
+                self.reset_variable(stmt).await?;
+                self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
@@ -728,12 +750,19 @@ impl SessionContext {
                         );
                     }
                 }
-                // Store the unoptimized plan into the session state. Although storing the
-                // optimized plan or the physical plan would be more efficient, doing so is
-                // not currently feasible. This is because `now()` would be optimized to a
-                // constant value, causing each EXECUTE to yield the same result, which is
-                // incorrect behavior.
-                self.state.write().store_prepared(name, fields, input)?;
+                // Optimize the plan without evaluating expressions like now()
+                let optimizer_context = OptimizerContext::new_with_config_options(
+                    Arc::clone(self.state().config().options()),
+                )
+                .without_query_execution_start_time();
+                let plan = self.state().optimizer().optimize(
+                    Arc::unwrap_or_clone(input),
+                    &optimizer_context,
+                    |_1, _2| {},
+                )?;
+                self.state
+                    .write()
+                    .store_prepared(name, fields, Arc::new(plan))?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Execute(execute)) => {
@@ -775,7 +804,7 @@ impl SessionContext {
     /// * [`SessionState::create_physical_expr`] for a lower level API
     ///
     /// [simplified]: datafusion_optimizer::simplify_expressions
-    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
     pub fn create_physical_expr(
         &self,
         expr: Expr,
@@ -1053,22 +1082,22 @@ impl SessionContext {
             } else if allow_missing {
                 return self.return_empty_dataframe();
             } else {
-                return self.schema_doesnt_exist_err(name);
+                return self.schema_doesnt_exist_err(&name);
             }
         };
         let dereg = catalog.deregister_schema(name.schema_name(), cascade)?;
         match (dereg, allow_missing) {
             (None, true) => self.return_empty_dataframe(),
-            (None, false) => self.schema_doesnt_exist_err(name),
+            (None, false) => self.schema_doesnt_exist_err(&name),
             (Some(_), _) => self.return_empty_dataframe(),
         }
     }
 
-    fn schema_doesnt_exist_err(&self, schemaref: SchemaReference) -> Result<DataFrame> {
+    fn schema_doesnt_exist_err(&self, schemaref: &SchemaReference) -> Result<DataFrame> {
         exec_err!("Schema '{schemaref}' doesn't exist.")
     }
 
-    async fn set_variable(&self, stmt: SetVariable) -> Result<DataFrame> {
+    async fn set_variable(&self, stmt: SetVariable) -> Result<()> {
         let SetVariable {
             variable, value, ..
         } = stmt;
@@ -1098,11 +1127,37 @@ impl SessionContext {
             for udf in udfs_to_update {
                 state.register_udf(udf)?;
             }
-
-            drop(state);
         }
 
-        self.return_empty_dataframe()
+        Ok(())
+    }
+
+    async fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
+        let variable = stmt.variable;
+        if variable.starts_with("datafusion.runtime.") {
+            return self.reset_runtime_variable(&variable);
+        }
+
+        let mut state = self.state.write();
+        state.config_mut().options_mut().reset(&variable)?;
+
+        // Refresh UDFs to ensure configuration-dependent behavior updates
+        let config_options = state.config().options();
+        let udfs_to_update: Vec<_> = state
+            .scalar_functions()
+            .values()
+            .filter_map(|udf| {
+                udf.inner()
+                    .with_updated_config(config_options)
+                    .map(Arc::new)
+            })
+            .collect();
+
+        for udf in udfs_to_update {
+            state.register_udf(udf)?;
+        }
+
+        Ok(())
     }
 
     fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
@@ -1113,17 +1168,64 @@ impl SessionContext {
         let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
         builder = match key {
             "memory_limit" => {
-                let memory_limit = Self::parse_memory_limit(value)?;
+                let memory_limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_memory_limit(memory_limit, 1.0)
             }
             "max_temp_directory_size" => {
-                let directory_size = Self::parse_memory_limit(value)?;
+                let directory_size = Self::parse_capacity_limit(variable, value)?;
                 builder.with_max_temp_directory_size(directory_size as u64)
             }
             "temp_directory" => builder.with_temp_file_path(value),
             "metadata_cache_limit" => {
-                let limit = Self::parse_memory_limit(value)?;
+                let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_metadata_cache_limit(limit)
+            }
+            "list_files_cache_limit" => {
+                let limit = Self::parse_capacity_limit(variable, value)?;
+                builder.with_object_list_cache_limit(limit)
+            }
+            "list_files_cache_ttl" => {
+                let duration = Self::parse_duration(variable, value)?;
+                builder.with_object_list_cache_ttl(Some(duration))
+            }
+            _ => return plan_err!("Unknown runtime configuration: {variable}"),
+            // Remember to update `reset_runtime_variable()` when adding new options
+        };
+
+        *state = SessionStateBuilder::from(state.clone())
+            .with_runtime_env(Arc::new(builder.build()?))
+            .build();
+
+        Ok(())
+    }
+
+    fn reset_runtime_variable(&self, variable: &str) -> Result<()> {
+        let key = variable.strip_prefix("datafusion.runtime.").unwrap();
+
+        let mut state = self.state.write();
+
+        let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
+        match key {
+            "memory_limit" => {
+                builder.memory_pool = None;
+            }
+            "max_temp_directory_size" => {
+                builder =
+                    builder.with_max_temp_directory_size(DEFAULT_MAX_TEMP_DIRECTORY_SIZE);
+            }
+            "temp_directory" => {
+                builder.disk_manager_builder = Some(DiskManagerBuilder::default());
+            }
+            "metadata_cache_limit" => {
+                builder = builder.with_metadata_cache_limit(DEFAULT_METADATA_CACHE_LIMIT);
+            }
+            "list_files_cache_limit" => {
+                builder = builder
+                    .with_object_list_cache_limit(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT);
+            }
+            "list_files_cache_ttl" => {
+                builder =
+                    builder.with_object_list_cache_ttl(DEFAULT_LIST_FILES_CACHE_TTL);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
@@ -1151,11 +1253,23 @@ impl SessionContext {
     ///     (1.5 * 1024.0 * 1024.0 * 1024.0) as usize
     /// );
     /// ```
+    #[deprecated(
+        since = "53.0.0",
+        note = "please use `parse_capacity_limit` function instead."
+    )]
     pub fn parse_memory_limit(limit: &str) -> Result<usize> {
+        if limit.trim().is_empty() {
+            return Err(plan_datafusion_err!("Empty limit value found!"));
+        }
         let (number, unit) = limit.split_at(limit.len() - 1);
         let number: f64 = number.parse().map_err(|_| {
             plan_datafusion_err!("Failed to parse number from memory limit '{limit}'")
         })?;
+        if number.is_sign_negative() || number.is_infinite() {
+            return Err(plan_datafusion_err!(
+                "Limit value should be positive finite number"
+            ));
+        }
 
         match unit {
             "K" => Ok((number * 1024.0) as usize),
@@ -1163,6 +1277,111 @@ impl SessionContext {
             "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
             _ => plan_err!("Unsupported unit '{unit}' in memory limit '{limit}'"),
         }
+    }
+
+    /// Parse capacity limit from string to number of bytes by allowing units: K, M and G.
+    /// Supports formats like '1.5G', '100M', '512K'
+    ///
+    /// # Examples
+    /// ```
+    /// use datafusion::execution::context::SessionContext;
+    ///
+    /// assert_eq!(
+    ///     SessionContext::parse_capacity_limit("datafusion.runtime.memory_limit", "1M").unwrap(),
+    ///     1024 * 1024
+    /// );
+    /// assert_eq!(
+    ///     SessionContext::parse_capacity_limit("datafusion.runtime.memory_limit", "1.5G").unwrap(),
+    ///     (1.5 * 1024.0 * 1024.0 * 1024.0) as usize
+    /// );
+    /// ```
+    pub fn parse_capacity_limit(config_name: &str, limit: &str) -> Result<usize> {
+        if limit.trim().is_empty() {
+            return Err(plan_datafusion_err!(
+                "Empty limit value found for '{config_name}'"
+            ));
+        }
+        let (number, unit) = limit.split_at(limit.len() - 1);
+        let number: f64 = number.parse().map_err(|_| {
+            plan_datafusion_err!(
+                "Failed to parse number from '{config_name}', limit '{limit}'"
+            )
+        })?;
+        if number.is_sign_negative() || number.is_infinite() {
+            return Err(plan_datafusion_err!(
+                "Limit value should be positive finite number for '{config_name}'"
+            ));
+        }
+
+        match unit {
+            "K" => Ok((number * 1024.0) as usize),
+            "M" => Ok((number * 1024.0 * 1024.0) as usize),
+            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            _ => plan_err!(
+                "Unsupported unit '{unit}' in '{config_name}', limit '{limit}'. \
+            Unit must be one of: 'K', 'M', 'G'"
+            ),
+        }
+    }
+
+    fn parse_duration(config_name: &str, duration: &str) -> Result<Duration> {
+        if duration.trim().is_empty() {
+            return Err(plan_datafusion_err!(
+                "Duration should not be empty or blank for '{config_name}'"
+            ));
+        }
+
+        let mut minutes = None;
+        let mut seconds = None;
+
+        for duration in duration.split_inclusive(&['m', 's']) {
+            let (number, unit) = duration.split_at(duration.len() - 1);
+            let number: u64 = number.parse().map_err(|_| {
+                plan_datafusion_err!("Failed to parse number from duration '{duration}' for '{config_name}'")
+            })?;
+
+            match unit {
+                "m" if minutes.is_none() && seconds.is_none() => minutes = Some(number),
+                "s" if seconds.is_none() => seconds = Some(number),
+                other => plan_err!(
+                    "Invalid duration unit: '{other}'. The unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order for '{config_name}'"
+                )?,
+            }
+        }
+
+        let secs = Self::check_overflow(config_name, minutes, 60, seconds)?;
+        let duration = Duration::from_secs(secs);
+
+        if duration.is_zero() {
+            return plan_err!(
+                "Duration must be greater than 0 seconds for '{config_name}'"
+            );
+        }
+
+        Ok(duration)
+    }
+
+    fn check_overflow(
+        config_name: &str,
+        mins: Option<u64>,
+        multiplier: u64,
+        secs: Option<u64>,
+    ) -> Result<u64> {
+        let first_part_of_secs = mins.unwrap_or_default().checked_mul(multiplier);
+        if first_part_of_secs.is_none() {
+            plan_err!(
+                "Duration has overflowed allowed maximum limit due to 'mins * {multiplier}' when setting '{config_name}'"
+            )?
+        }
+        let second_part_of_secs = first_part_of_secs
+            .unwrap()
+            .checked_add(secs.unwrap_or_default());
+        if second_part_of_secs.is_none() {
+            plan_err!(
+                "Duration has overflowed allowed maximum limit due to 'mins * {multiplier} + secs' when setting '{config_name}'"
+            )?
+        }
+        Ok(second_part_of_secs.unwrap())
     }
 
     async fn create_custom_table(
@@ -1191,20 +1410,24 @@ impl SessionContext {
         let table = table_ref.table().to_owned();
         let maybe_schema = {
             let state = self.state.read();
-            let resolved = state.resolve_table_ref(table_ref);
+            let resolved = state.resolve_table_ref(table_ref.clone());
             state
                 .catalog_list()
                 .catalog(&resolved.catalog)
                 .and_then(|c| c.schema(&resolved.schema))
         };
 
-        if let Some(schema) = maybe_schema {
-            if let Some(table_provider) = schema.table(&table).await? {
-                if table_provider.table_type() == table_type {
-                    schema.deregister_table(&table)?;
-                    return Ok(true);
-                }
+        if let Some(schema) = maybe_schema
+            && let Some(table_provider) = schema.table(&table).await?
+            && table_provider.table_type() == table_type
+        {
+            schema.deregister_table(&table)?;
+            if table_type == TableType::Base
+                && let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache()
+            {
+                lfc.drop_table_entries(&Some(table_ref))?;
             }
+            return Ok(true);
         }
 
         Ok(false)
@@ -1220,7 +1443,7 @@ impl SessionContext {
                 _ => {
                     return Err(DataFusionError::Configuration(
                         "Function factory has not been configured".to_string(),
-                    ))
+                    ));
                 }
             }
         };
@@ -1270,14 +1493,23 @@ impl SessionContext {
             exec_datafusion_err!("Prepared statement '{}' does not exist", name)
         })?;
 
+        let state = self.state.read();
+        let context = SimplifyContext::default()
+            .with_schema(Arc::clone(prepared.plan.schema()))
+            .with_config_options(Arc::clone(state.config_options()))
+            .with_query_execution_start_time(
+                state.execution_props().query_execution_start_time,
+            );
+        let simplifier = ExprSimplifier::new(context);
+
         // Only allow literals as parameters for now.
         let mut params: Vec<ScalarAndMetadata> = parameters
             .into_iter()
-            .map(|e| match e {
+            .map(|e| match simplifier.simplify(e)? {
                 Expr::Literal(scalar, metadata) => {
                     Ok(ScalarAndMetadata::new(scalar, metadata))
                 }
-                _ => not_impl_err!("Unsupported parameter type: {}", e),
+                e => not_impl_err!("Unsupported parameter type: {e}"),
             })
             .collect::<Result<_>>()?;
 
@@ -1358,6 +1590,18 @@ impl SessionContext {
     /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
     pub fn register_udwf(&self, f: WindowUDF) {
         self.state.write().register_udwf(Arc::new(f)).ok();
+    }
+
+    #[cfg(feature = "sql")]
+    /// Registers a [`RelationPlanner`] to customize SQL table-factor planning.
+    ///
+    /// Planners are invoked in reverse registration order, allowing newer
+    /// planners to take precedence over existing ones.
+    pub fn register_relation_planner(
+        &self,
+        planner: Arc<dyn RelationPlanner>,
+    ) -> Result<()> {
+        self.state.write().register_relation_planner(planner)
     }
 
     /// Deregisters a UDF within this context.
@@ -1804,6 +2048,12 @@ impl FunctionRegistry for SessionContext {
     }
 }
 
+impl datafusion_execution::TaskContextProvider for SessionContext {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        SessionContext::task_ctx(self)
+    }
+}
+
 /// Create a new task context instance from SessionContext
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
@@ -1847,7 +2097,7 @@ pub trait QueryPlanner: Debug {
 /// because the implementation and requirements vary widely. Please see
 /// [function_factory example] for a reference implementation.
 ///
-/// [function_factory example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/function_factory.rs
+/// [function_factory example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/function_factory.rs
 ///
 /// # Examples of syntax that can be supported
 ///
@@ -2014,7 +2264,9 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow::datatypes::{DataType, TimeUnit};
+    use arrow_schema::FieldRef;
     use datafusion_common::DataFusionError;
+    use datafusion_common::datatype::DataTypeExt;
     use std::error::Error;
     use std::path::PathBuf;
 
@@ -2039,7 +2291,7 @@ mod tests {
         // configure with same memory / disk manager
         let memory_pool = ctx1.runtime_env().memory_pool.clone();
 
-        let mut reservation = MemoryConsumer::new("test").register(&memory_pool);
+        let reservation = MemoryConsumer::new("test").register(&memory_pool);
         reservation.grow(100);
 
         let disk_manager = ctx1.runtime_env().disk_manager.clone();
@@ -2531,7 +2783,7 @@ mod tests {
     struct MyTypePlanner {}
 
     impl TypePlanner for MyTypePlanner {
-        fn plan_type(&self, sql_type: &ast::DataType) -> Result<Option<DataType>> {
+        fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
             match sql_type {
                 ast::DataType::Datetime(precision) => {
                     let precision = match precision {
@@ -2541,10 +2793,213 @@ mod tests {
                         None | Some(9) => TimeUnit::Nanosecond,
                         _ => unreachable!(),
                     };
-                    Ok(Some(DataType::Timestamp(precision, None)))
+                    Ok(Some(
+                        DataType::Timestamp(precision, None).into_nullable_field_ref(),
+                    ))
                 }
                 _ => Ok(None),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn remove_optimizer_rule() -> Result<()> {
+        let get_optimizer_rules = |ctx: &SessionContext| {
+            ctx.state()
+                .optimizer()
+                .rules
+                .iter()
+                .map(|r| r.name().to_owned())
+                .collect::<HashSet<_>>()
+        };
+
+        let ctx = SessionContext::new();
+        assert!(get_optimizer_rules(&ctx).contains("simplify_expressions"));
+
+        // default plan
+        let plan = ctx
+            .sql("select 1 + 1")
+            .await?
+            .into_optimized_plan()?
+            .to_string();
+        assert_snapshot!(plan, @r"
+        Projection: Int64(2) AS Int64(1) + Int64(1)
+          EmptyRelation: rows=1
+        ");
+
+        assert!(ctx.remove_optimizer_rule("simplify_expressions"));
+        assert!(!get_optimizer_rules(&ctx).contains("simplify_expressions"));
+
+        // plan without the simplify_expressions rule
+        let plan = ctx
+            .sql("select 1 + 1")
+            .await?
+            .into_optimized_plan()?
+            .to_string();
+        assert_snapshot!(plan, @r"
+        Projection: Int64(1) + Int64(1)
+          EmptyRelation: rows=1
+        ");
+
+        // attempting to remove a non-existing rule returns false
+        assert!(!ctx.remove_optimizer_rule("simplify_expressions"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_duration() {
+        const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
+
+        // Valid durations
+        for (duration, want) in [
+            ("1s", Duration::from_secs(1)),
+            ("1m", Duration::from_secs(60)),
+            ("1m0s", Duration::from_secs(60)),
+            ("1m1s", Duration::from_secs(61)),
+        ] {
+            let have =
+                SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
+            assert_eq!(want, have);
+        }
+
+        // Invalid durations
+        for duration in [
+            "0s", "0m", "1s0m", "1s1m", "XYZ", "1h", "XYZm2s", "", " ", "-1m", "1m 1s",
+            "1m1s ", " 1m1s",
+        ] {
+            let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
+            assert!(have.is_err());
+            assert!(
+                have.unwrap_err()
+                    .message()
+                    .to_string()
+                    .contains(LIST_FILES_CACHE_TTL)
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_duration_with_overflow_check() {
+        const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
+
+        // Valid durations which are close to max allowed limit
+        for (duration, want) in [
+            (
+                "18446744073709551615s",
+                Duration::from_secs(18446744073709551615),
+            ),
+            (
+                "307445734561825860m",
+                Duration::from_secs(307445734561825860 * 60),
+            ),
+            (
+                "307445734561825860m10s",
+                Duration::from_secs(307445734561825860 * 60 + 10),
+            ),
+            (
+                "1m18446744073709551555s",
+                Duration::from_secs(60 + 18446744073709551555),
+            ),
+        ] {
+            let have =
+                SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
+            assert_eq!(want, have);
+        }
+
+        // Invalid durations which overflow max allowed limit
+        for (duration, error_message_prefix) in [
+            (
+                "18446744073709551616s",
+                "Failed to parse number from duration",
+            ),
+            (
+                "307445734561825861m",
+                "Duration has overflowed allowed maximum limit due to",
+            ),
+            (
+                "307445734561825860m60s",
+                "Duration has overflowed allowed maximum limit due to",
+            ),
+            (
+                "1m18446744073709551556s",
+                "Duration has overflowed allowed maximum limit due to",
+            ),
+        ] {
+            let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
+            assert!(have.is_err());
+            let error_message = have.unwrap_err().message().to_string();
+            assert!(
+                error_message.contains(error_message_prefix)
+                    && error_message.contains(LIST_FILES_CACHE_TTL)
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_memory_limit() {
+        // Valid memory_limit
+        for (limit, want) in [
+            ("1.5K", (1.5 * 1024.0) as usize),
+            ("2M", (2f64 * 1024.0 * 1024.0) as usize),
+            ("1G", (1f64 * 1024.0 * 1024.0 * 1024.0) as usize),
+        ] {
+            #[expect(deprecated)]
+            let have = SessionContext::parse_memory_limit(limit).unwrap();
+            assert_eq!(want, have);
+        }
+
+        // Invalid memory_limit
+        for limit in [
+            "1B",
+            "1T",
+            "",
+            " ",
+            "XYZG",
+            "-1G",
+            "infG",
+            "-infG",
+            "G",
+            "1024B",
+            "invalid_size",
+        ] {
+            #[expect(deprecated)]
+            let have = SessionContext::parse_memory_limit(limit);
+            assert!(have.is_err());
+        }
+    }
+
+    #[test]
+    fn test_parse_capacity_limit() {
+        const MEMORY_LIMIT: &str = "datafusion.runtime.memory_limit";
+
+        // Valid capacity_limit
+        for (limit, want) in [
+            ("1.5K", (1.5 * 1024.0) as usize),
+            ("2M", (2f64 * 1024.0 * 1024.0) as usize),
+            ("1G", (1f64 * 1024.0 * 1024.0 * 1024.0) as usize),
+        ] {
+            let have = SessionContext::parse_capacity_limit(MEMORY_LIMIT, limit).unwrap();
+            assert_eq!(want, have);
+        }
+
+        // Invalid capacity_limit
+        for limit in [
+            "1B",
+            "1T",
+            "",
+            " ",
+            "XYZG",
+            "-1G",
+            "infG",
+            "-infG",
+            "G",
+            "1024B",
+            "invalid_size",
+        ] {
+            let have = SessionContext::parse_capacity_limit(MEMORY_LIMIT, limit);
+            assert!(have.is_err());
+            assert!(have.unwrap_err().to_string().contains(MEMORY_LIMIT));
         }
     }
 }

@@ -15,13 +15,45 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query D
+SELECT add_months('2016-07-30'::date, 1::int);
+----
+2016-08-30
 
-## Original Query: SELECT add_months('2016-08-31', 1);
-## PySpark 3.5.5 Result: {'add_months(2016-08-31, 1)': datetime.date(2016, 9, 30), 'typeof(add_months(2016-08-31, 1))': 'date', 'typeof(2016-08-31)': 'string', 'typeof(1)': 'int'}
-#query
-#SELECT add_months('2016-08-31'::string, 1::int);
+query D
+SELECT add_months('2016-07-30'::date, 0::int);
+----
+2016-07-30
+
+query D
+SELECT add_months('2016-07-30'::date, 10000::int);
+----
+2849-11-30
+
+# Test integer overflow
+# TODO: Enable with next arrow upgrade (>=58.0.0)
+# query D
+# SELECT add_months('2016-07-30'::date, 2147483647::int);
+# ----
+# NULL
+
+query D
+SELECT add_months('2016-07-30'::date, -5::int);
+----
+2016-02-29
+
+# Test with NULL values
+query D
+SELECT add_months(NULL::date, 1::int);
+----
+NULL
+
+query D
+SELECT add_months('2016-07-30'::date, NULL::int);
+----
+NULL
+
+query D
+SELECT add_months(NULL::date, NULL::int);
+----
+NULL

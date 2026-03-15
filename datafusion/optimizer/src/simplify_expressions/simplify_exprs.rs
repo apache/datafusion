@@ -20,18 +20,19 @@
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::merge_schema;
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::Expr;
-
-use crate::optimizer::ApplyOrder;
-use crate::utils::NamePreserver;
-use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection};
+use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::utils::{
+    columnize_expr, find_aggregate_exprs, grouping_set_to_exprlist, merge_schema,
+};
 
 use super::ExprSimplifier;
+use crate::optimizer::ApplyOrder;
+use crate::simplify_expressions::linear_aggregates::rewrite_multiple_linear_aggregates;
+use crate::utils::NamePreserver;
+use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
 /// [`Expr`]`s evaluating constants and applying algebraic
@@ -67,17 +68,14 @@ impl OptimizerRule for SimplifyExpressions {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        let mut execution_props = ExecutionProps::new();
-        execution_props.query_execution_start_time = config.query_execution_start_time();
-        execution_props.config_options = Some(config.options());
-        Self::optimize_internal(plan, &execution_props)
+        Self::optimize_internal(plan, config)
     }
 }
 
 impl SimplifyExpressions {
     fn optimize_internal(
         plan: LogicalPlan,
-        execution_props: &ExecutionProps,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(&plan.inputs()))
@@ -100,7 +98,10 @@ impl SimplifyExpressions {
             Arc::new(DFSchema::empty())
         };
 
-        let info = SimplifyContext::new(execution_props).with_schema(schema);
+        let info = SimplifyContext::default()
+            .with_schema(schema)
+            .with_config_options(config.options())
+            .with_query_execution_start_time(config.query_execution_start_time());
 
         // Inputs have already been rewritten (due to bottom-up traversal handled by Optimizer)
         // Just need to rewrite our own expressions
@@ -138,15 +139,108 @@ impl SimplifyExpressions {
             } else {
                 rewrite_expr(expr)
             }
-        })
+        })?
+        .transform_data(rewrite_aggregate_non_aggregate_aggr_expr)
     }
 }
 
 impl SimplifyExpressions {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
+}
+
+/// Ensures that `LogicalPlan::Aggregate` is well formed after rewrites
+/// by potentially introducing an extra `Projection`.
+///
+/// Also applies the [`rewrite_multiple_linear_aggregates`] special case
+///
+/// # Rationale:
+///
+/// [`LogicalPlan::Aggregate`] requires agg expressions to be (possibly aliased)
+/// [`Expr::AggregateFunction`]. Some UDAF simplifiers may return other [`Expr`]
+/// variants.
+///
+/// # Operation
+///
+/// Rewrites things like this (note that `exp1` is not an aggregate):
+/// * `Aggregate(group_expr, aggr_expr=[exp1 + agg(exp2)])`
+///
+/// into:
+/// * `Projection(exp1 + _X)`
+/// * `  Aggregate(group_expr, aggr_expr=[agg(exp2) AS _X])`
+fn rewrite_aggregate_non_aggregate_aggr_expr(
+    plan: LogicalPlan,
+) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::Aggregate(Aggregate {
+        input,
+        group_expr,
+        mut aggr_expr,
+        schema,
+        ..
+    }) = plan
+    else {
+        return Ok(Transformed::no(plan));
+    };
+
+    let rewrote_aggs = rewrite_multiple_linear_aggregates(&mut aggr_expr)?;
+
+    // Ensure that all Aggregate arguments are AggregateExpr
+    if aggr_expr.iter().all(is_top_level_aggregate_expr) {
+        let new_plan = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+            input, group_expr, aggr_expr, schema,
+        )?);
+        return if !rewrote_aggs {
+            Ok(Transformed::no(new_plan))
+        } else {
+            Ok(Transformed::yes(new_plan))
+        };
+    }
+
+    // Otherwise we need to add a Projection above Aggregate to calculate
+    // the final output expressions.
+
+    let inner_aggr_expr = find_aggregate_exprs(aggr_expr.iter());
+    let inner_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+        Arc::clone(&input),
+        group_expr.clone(),
+        inner_aggr_expr,
+    )?);
+    let inner_aggregate = Arc::new(inner_aggregate);
+
+    let mut projection_exprs = aggregate_output_exprs(&group_expr)?;
+    projection_exprs.extend(aggr_expr);
+    let projection_exprs = projection_exprs
+        .into_iter()
+        .map(|expr| columnize_expr(expr, inner_aggregate.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Transformed::yes(LogicalPlan::Projection(
+        Projection::try_new(projection_exprs, inner_aggregate)?,
+    )))
+}
+
+fn is_top_level_aggregate_expr(expr: &Expr) -> bool {
+    matches!(
+        expr.clone().unalias_nested().data,
+        Expr::AggregateFunction(_)
+    )
+}
+
+fn aggregate_output_exprs(group_expr: &[Expr]) -> Result<Vec<Expr>> {
+    let mut output_exprs = grouping_set_to_exprlist(group_expr)?
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if matches!(group_expr, [Expr::GroupingSet(_)]) {
+        output_exprs.push(Expr::Column(Column::from_name(
+            Aggregate::INTERNAL_GROUPING_ID,
+        )));
+    }
+
+    Ok(output_exprs)
 }
 
 #[cfg(test)]
@@ -156,14 +250,15 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
 
+    use datafusion_common::ScalarValue;
     use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::*;
-    use datafusion_functions_aggregate::expr_fn::{max, min};
+    use datafusion_functions_aggregate::expr_fn::{max, min, sum};
 
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::{assert_fields_eq, test_table_scan_with_name};
-    use crate::OptimizerContext;
 
     use super::*;
 
@@ -219,7 +314,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
             table_scan,
-            @ r"TableScan: test projection=[a], full_filters=[Boolean(true)]"
+            @ "TableScan: test projection=[a], full_filters=[Boolean(true)]"
         )
     }
 
@@ -252,11 +347,57 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-            Filter: test.b > Int32(1)
-              Projection: test.a
-                TableScan: test
-            "
+        Filter: test.b > Int32(1)
+          Projection: test.a
+            TableScan: test
+        "
         )
+    }
+
+    #[test]
+    fn test_simplify_udaf_to_non_aggregate_expr() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?
+            .build()
+            .expect("building scan");
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![sum(col("a") + lit(2i64))])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a + Int64(2))]]
+          TableScan: test
+        "
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_common_sum_arg() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?
+            .build()
+            .expect("building scan");
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![sum(col("a") + lit(2i64)), sum(col("a") + lit(3i64))],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: sum(test.a) + Int64(2) * CAST(count(test.a) AS Int64) AS sum(test.a + Int64(2)), sum(test.a) + Int64(3) * CAST(count(test.a) AS Int64) AS sum(test.a + Int64(3))
+          Aggregate: groupBy=[[]], aggr=[[sum(test.a), count(test.a)]]
+            TableScan: test
+        "
+        )?;
+        Ok(())
     }
 
     #[test]
@@ -270,10 +411,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-            Filter: test.b > Int32(1)
-              Projection: test.a
-                TableScan: test
-            "
+        Filter: test.b > Int32(1)
+          Projection: test.a
+            TableScan: test
+        "
         )
     }
 
@@ -492,8 +633,7 @@ mod tests {
             .build()?;
 
         let actual = get_optimized_plan_formatted(plan, &time);
-        let expected =
-            "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
+        let expected = "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
@@ -872,7 +1012,7 @@ mod tests {
         ]);
         let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
 
-        // Test `= ".*"` transforms to true (except for empty strings)
+        // Test `~ ".*"` transforms to true for any non-NULL string
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexMatch, lit(".*")))?
             .build()?;
@@ -885,22 +1025,22 @@ mod tests {
         "
         )?;
 
-        // Test `!= ".*"` transforms to checking if the column is empty
+        // Test `!~ ".*"` preserves NULL semantics while remaining false for non-NULL strings
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotMatch, lit(".*")))?
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
-            @ r#"
-        Filter: test.a = Utf8("")
+            @ r"
+        Filter: test.a IS NULL AND Boolean(NULL)
           TableScan: test
-        "#
+        "
         )?;
 
         // Test case-insensitive versions
 
-        // Test `=~ ".*"` (case-insensitive) transforms to true (except for empty strings)
+        // Test `~* ".*"` transforms to true for any non-NULL string
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("b"), Operator::RegexIMatch, lit(".*")))?
             .build()?;
@@ -913,17 +1053,51 @@ mod tests {
         "
         )?;
 
-        // Test `!~ ".*"` (case-insensitive) transforms to checking if the column is empty
+        // Test NULL `!~ ".*"` transforms to Boolean(NULL)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(
+                lit(ScalarValue::Utf8(None)),
+                Operator::RegexNotMatch,
+                lit(".*"),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(NULL)
+          TableScan: test
+        "
+        )?;
+
+        // Test `!~* ".*"` preserves NULL semantics while remaining false for non-NULL strings
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotIMatch, lit(".*")))?
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
-            @ r#"
-        Filter: test.a = Utf8("")
+            @ r"
+        Filter: test.a IS NULL AND Boolean(NULL)
           TableScan: test
-        "#
+        "
+        )?;
+
+        // Test NULL `!~* ".*"` transforms to Boolean(NULL)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(
+                lit(ScalarValue::Utf8(None)),
+                Operator::RegexNotIMatch,
+                lit(".*"),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(NULL)
+          TableScan: test
+        "
         )
     }
 

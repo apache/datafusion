@@ -18,7 +18,7 @@
 //! [`VersionFunc`]: Implementation of the `version` function.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -53,7 +53,7 @@ impl Default for VersionFunc {
 impl VersionFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![], Volatility::Immutable),
+            signature: Signature::nullary(Volatility::Immutable),
         }
     }
 }

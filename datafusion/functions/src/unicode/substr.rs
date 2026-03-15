@@ -27,9 +27,13 @@ use arrow::array::{
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::types::{
+    NativeType, logical_int32, logical_int64, logical_string,
+};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -44,7 +48,7 @@ use datafusion_macros::user_doc;
 | substr(Utf8("datafusion"),Int64(5),Int64(3)) |
 +----------------------------------------------+
 | fus                                          |
-+----------------------------------------------+ 
++----------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
     argument(
@@ -70,14 +74,30 @@ impl Default for SubstrFunc {
 
 impl SubstrFunc {
     pub fn new() -> Self {
+        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let int64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![TypeSignatureClass::Native(logical_int32())],
+            NativeType::Int64,
+        );
         Self {
-            signature: Signature::user_defined(Volatility::Immutable)
-                .with_parameter_names(vec![
-                    "str".to_string(),
-                    "start_pos".to_string(),
-                    "length".to_string(),
-                ])
-                .expect("valid parameter names"),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![string.clone(), int64.clone()]),
+                    TypeSignature::Coercible(vec![
+                        string.clone(),
+                        int64.clone(),
+                        int64.clone(),
+                    ]),
+                ],
+                Volatility::Immutable,
+            )
+            .with_parameter_names(vec![
+                "str".to_string(),
+                "start_pos".to_string(),
+                "length".to_string(),
+            ])
+            .expect("valid parameter names"),
             aliases: vec![String::from("substring")],
         }
     }
@@ -112,72 +132,6 @@ impl ScalarUDFImpl for SubstrFunc {
         &self.aliases
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() < 2 || arg_types.len() > 3 {
-            return plan_err!(
-                "The {} function requires 2 or 3 arguments, but got {}.",
-                self.name(),
-                arg_types.len()
-            );
-        }
-        let first_data_type = match &arg_types[0] {
-            DataType::Null => Ok(DataType::Utf8),
-            DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(arg_types[0].clone()),
-            DataType::Dictionary(key_type, value_type) => {
-                if key_type.is_integer() {
-                    match value_type.as_ref() {
-                        DataType::Null => Ok(DataType::Utf8),
-                        DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(*value_type.clone()),
-                        _ => plan_err!(
-                                "The first argument of the {} function can only be a string, but got {:?}.",
-                                self.name(),
-                                arg_types[0]
-                        ),
-                    }
-                } else {
-                    plan_err!(
-                        "The first argument of the {} function can only be a string, but got {:?}.",
-                        self.name(),
-                        arg_types[0]
-                    )
-                }
-            }
-            _ => plan_err!(
-                "The first argument of the {} function can only be a string, but got {:?}.",
-                self.name(),
-                arg_types[0]
-            )
-        }?;
-
-        if ![DataType::Int64, DataType::Int32, DataType::Null].contains(&arg_types[1]) {
-            return plan_err!(
-                "The second argument of the {} function can only be an integer, but got {:?}.",
-                self.name(),
-                arg_types[1]
-            );
-        }
-
-        if arg_types.len() == 3
-            && ![DataType::Int64, DataType::Int32, DataType::Null].contains(&arg_types[2])
-        {
-            return plan_err!(
-                "The third argument of the {} function can only be an integer, but got {:?}.",
-                self.name(),
-                arg_types[2]
-            );
-        }
-
-        if arg_types.len() == 2 {
-            Ok(vec![first_data_type.to_owned(), DataType::Int64])
-        } else {
-            Ok(vec![
-                first_data_type.to_owned(),
-                DataType::Int64,
-                DataType::Int64,
-            ])
-        }
-    }
-
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -187,7 +141,7 @@ impl ScalarUDFImpl for SubstrFunc {
 /// substr('alphabet', 3) = 'phabet'
 /// substr('alphabet', 3, 2) = 'ph'
 /// The implementation uses UTF-8 code points as characters
-pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
@@ -222,7 +176,7 @@ pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
 // `get_true_start_end('Hi🌏', 1, None) -> (0, 6)`
 // `get_true_start_end('Hi🌏', 1, 1) -> (0, 1)`
 // `get_true_start_end('Hi🌏', -10, 2) -> (0, 0)`
-fn get_true_start_end(
+pub fn get_true_start_end(
     input: &str,
     start: i64,
     count: Option<u64>,
@@ -231,7 +185,10 @@ fn get_true_start_end(
     let start = start.checked_sub(1).unwrap_or(start);
 
     let end = match count {
-        Some(count) => start + count as i64,
+        Some(count) => {
+            let count_i64 = i64::try_from(count).unwrap_or(i64::MAX);
+            start.saturating_add(count_i64)
+        }
         None => input.len() as i64,
     };
     let count_to_end = count.is_some();
@@ -281,7 +238,7 @@ fn get_true_start_end(
 // string, such as `substr(long_str_with_1k_chars, 1, 32)`.
 // In such case the overhead of ASCII-validation may not be worth it, so
 // skip the validation for short prefix for now.
-fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
+pub fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
     string_array: &V,
     start: &Int64Array,
     count: Option<&Int64Array>,
@@ -293,7 +250,7 @@ fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
 
             // HACK: can be simplified if function has specialized
             // implementation for `ScalarValue` (implement without `make_scalar_function()`)
-            let avg_prefix_len = start
+            let total_prefix_len = start
                 .iter()
                 .zip(count.iter())
                 .take(n_sample)
@@ -301,11 +258,11 @@ fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
                     let start = start.unwrap_or(0);
                     let count = count.unwrap_or(0);
                     // To get substring, need to decode from 0 to start+count instead of start to start+count
-                    start + count
+                    start.saturating_add(count)
                 })
-                .sum::<i64>();
+                .fold(0i64, |acc, val| acc.saturating_add(val));
 
-            avg_prefix_len as f64 / n_sample as f64 <= short_prefix_threshold
+            (total_prefix_len as f64 / n_sample as f64) <= short_prefix_threshold
         }
         None => false,
     };
@@ -410,7 +367,7 @@ fn string_view_substr(
         other => {
             return exec_err!(
                 "substr was called with {other} arguments. It requires 2 or 3."
-            )
+            );
         }
     }
 
@@ -516,7 +473,7 @@ mod tests {
     use arrow::array::{Array, StringViewArray};
     use arrow::datatypes::DataType::Utf8View;
 
-    use datafusion_common::{exec_err, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::unicode::substr::SubstrFunc;
@@ -856,7 +813,7 @@ mod tests {
             SubstrFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::from("abc")),
-                ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
+                ColumnarValue::Scalar(ScalarValue::from(i64::MIN)),
             ],
             Ok(Some("abc")),
             &str,
@@ -867,10 +824,22 @@ mod tests {
             SubstrFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::from("overflow")),
-                ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
+                ColumnarValue::Scalar(ScalarValue::from(i64::MIN)),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
             ],
             exec_err!("negative overflow when calculating skip value"),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            SubstrFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("large count")),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::Scalar(ScalarValue::from(i64::MAX)),
+            ],
+            Ok(Some("arge count")),
             &str,
             Utf8View,
             StringViewArray

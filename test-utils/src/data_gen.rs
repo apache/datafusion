@@ -129,7 +129,7 @@ impl BatchBuilder {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn append_row(
         &mut self,
         rng: &mut StdRng,

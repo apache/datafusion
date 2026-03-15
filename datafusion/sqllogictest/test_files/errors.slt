@@ -61,7 +61,7 @@ WITH t AS (WITH u as (SELECT 1) SELECT 1) SELECT * from u
 
 # select_wildcard_without_table
 statement error Error during planning: SELECT \* with no tables specified is not valid
-SELECT * 
+SELECT *
 
 # invalid_qualified_table_references
 statement error Error during planning: table 'datafusion\.nonexistentschema\.aggregate_test_100' not found
@@ -72,6 +72,11 @@ SELECT COUNT(*) FROM nonexistentcatalog.public.aggregate_test_100
 
 statement error DataFusion error: Error during planning: Unsupported compound identifier 'way\.too\.many\.namespaces\.as\.ident\.prefixes\.aggregate_test_100'\. Expected 1, 2 or 3 parts, got 8
 SELECT COUNT(*) FROM way.too.many.namespaces.as.ident.prefixes.aggregate_test_100
+
+
+# fetch_clause_not_supported
+statement error FETCH clause is not supported yet
+SELECT 1 FETCH NEXT 1 ROW ONLY
 
 
 
@@ -120,7 +125,7 @@ from aggregate_test_100
 order by c9
 
 # WindowFunction wrong signature
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'nth_value' function: coercion from Int32, Int64, Int64 to the signature OneOf\(\[Any\(0\), Any\(1\), Any\(2\)\]\) failed
+statement error DataFusion error: Error during planning: Internal error: Function 'nth_value' failed to match any signature
 select
 c9,
 nth_value(c5, 2, 3) over (order by c9) as nv1

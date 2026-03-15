@@ -23,12 +23,12 @@ use arrow::datatypes::{DataType, Field};
 use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::expr::Placeholder;
-use datafusion_expr::{col, create_udf, lit, ColumnarValue};
+use datafusion_expr::{ColumnarValue, col, create_udf, lit};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_functions::string;
 use datafusion_proto::bytes::Serializeable;
-use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+use datafusion_proto::logical_plan::to_proto::serialize_expr;
 
 #[test]
 #[should_panic(
@@ -42,7 +42,7 @@ fn bad_decode() {
 #[cfg(feature = "json")]
 fn plan_to_json() {
     use datafusion_common::DFSchema;
-    use datafusion_expr::{logical_plan::EmptyRelation, LogicalPlan};
+    use datafusion_expr::{LogicalPlan, logical_plan::EmptyRelation};
     use datafusion_proto::bytes::logical_plan_to_json;
 
     let plan = LogicalPlan::EmptyRelation(EmptyRelation {

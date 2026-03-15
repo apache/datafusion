@@ -146,3 +146,106 @@ query I
 select shiftrightunsigned(3::int,-32);
 ----
 3
+
+# i32 + nulls
+query IT
+SELECT
+	shiftrightunsigned(arrow_cast(value, 'Int32'), shift),
+	arrow_typeof(shiftrightunsigned(arrow_cast(value, 'Int32'), shift))
+FROM VALUES
+(4, 1),
+(8, 2),
+(16, 3),
+(32, 4),
+(null, 2),
+(8, null)
+t(value, shift)
+----
+2 Int32
+2 Int32
+2 Int32
+2 Int32
+NULL Int32
+NULL Int32
+
+# negative shift
+query IT
+SELECT
+	shiftrightunsigned(arrow_cast(value, 'Int32'), shift),
+	arrow_typeof(shiftrightunsigned(arrow_cast(value, 'Int32'), shift))
+FROM VALUES
+(4, -1),
+(8, -2),
+(16, -3)
+t(value, shift)
+----
+0 Int32
+0 Int32
+0 Int32
+
+# Negative values are treated as large positive values
+# -4 as u32 = 4294967292, 4294967292 >>> 1 = 2147483646
+# -8 as u32 = 4294967288, 4294967288 >>> 2 = 1073741822
+# -16 as u32 = 4294967280, 4294967280 >>> 3 = 536870910
+query IT
+SELECT
+	shiftrightunsigned(arrow_cast(value, 'Int32'), shift),
+	arrow_typeof(shiftrightunsigned(arrow_cast(value, 'Int32'), shift))
+FROM VALUES
+(-4, 1),
+(-8, 2),
+(-16, 3)
+t(value, shift)
+----
+2147483646 Int32
+1073741822 Int32
+536870910 Int32
+
+# i64 value
+query IT
+SELECT
+	shiftrightunsigned(arrow_cast(value, 'Int64'), shift),
+	arrow_typeof(shiftrightunsigned(arrow_cast(value, 'Int64'), shift))
+FROM VALUES (4, 1), (8, 2), (16, 3) t(value, shift)
+----
+2 Int64
+2 Int64
+2 Int64
+
+# u32 value
+query IT
+SELECT
+	shiftrightunsigned(arrow_cast(value, 'UInt32'), shift),
+	arrow_typeof(shiftrightunsigned(arrow_cast(value, 'UInt32'), shift))
+FROM VALUES (4, 1), (8, 2), (16, 3) t(value, shift)
+----
+2 UInt32
+2 UInt32
+2 UInt32
+
+# u64 value
+query IT
+SELECT
+	shiftrightunsigned(arrow_cast(value, 'UInt64'), shift),
+	arrow_typeof(shiftrightunsigned(arrow_cast(value, 'UInt64'), shift))
+FROM VALUES (4, 1), (8, 2), (16, 3) t(value, shift)
+----
+2 UInt64
+2 UInt64
+2 UInt64
+
+# pure null handling
+query IT
+SELECT shiftrightunsigned(null, 1), arrow_typeof(shiftrightunsigned(null, 1));
+----
+NULL Int32
+
+query IT
+SELECT shiftrightunsigned(null, null), arrow_typeof(shiftrightunsigned(null, null));
+----
+NULL Int32
+
+query IT
+SELECT shiftrightunsigned(1::bigint, null), arrow_typeof(shiftrightunsigned(1::bigint, null));
+----
+NULL Int64

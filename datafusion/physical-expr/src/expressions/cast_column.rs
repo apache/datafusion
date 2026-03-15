@@ -17,6 +17,7 @@
 
 //! Physical expression for struct-aware casting of columns.
 
+use super::cast::cast_expr_properties;
 use crate::physical_expr::PhysicalExpr;
 use arrow::{
     compute::CastOptions,
@@ -24,9 +25,10 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column, Result, ScalarValue,
+    Result, ScalarValue, format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_expr_common::sort_properties::ExprProperties;
 use std::{
     any::Any,
     fmt::{self, Display},
@@ -114,7 +116,7 @@ impl Display for CastColumnExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "CAST_COLUMN({} AS {:?})",
+            "CAST_COLUMN({} AS {})",
             self.expr,
             self.target_field.data_type()
         )
@@ -177,6 +179,12 @@ impl PhysicalExpr for CastColumnExpr {
         )))
     }
 
+    /// A [`CastColumnExpr`] preserves the ordering of its child if the cast is done
+    /// under the same datatype family.
+    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+        cast_expr_properties(&children[0], self.target_field.data_type())
+    }
+
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
     }
@@ -192,8 +200,8 @@ mod tests {
         datatypes::{DataType, Field, Fields, SchemaRef},
     };
     use datafusion_common::{
-        cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
         Result as DFResult, ScalarValue,
+        cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
     };
 
     fn make_schema(field: &Field) -> SchemaRef {
