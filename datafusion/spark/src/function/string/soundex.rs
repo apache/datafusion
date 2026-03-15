@@ -110,8 +110,7 @@ fn compute_soundex(s: &str) -> String {
         return s.to_string();
     }
 
-    let mut sx = [b'0', b'0', b'0', b'0'];
-    sx[0] = b;
+    let mut soundex_code = [b, b'0', b'0', b'0'];
     let mut sxi = 1;
     let idx = (b - b'A') as usize;
     let mut last_code = US_ENGLISH_MAPPING[idx];
@@ -133,7 +132,7 @@ fn compute_soundex(s: &str) -> String {
             continue;
         } else {
             if code != b'0' && code != last_code {
-                sx[sxi] = code;
+                soundex_code[sxi] = code;
                 sxi += 1;
                 if sxi > 3 {
                     break;
@@ -143,5 +142,5 @@ fn compute_soundex(s: &str) -> String {
         }
     }
 
-    String::from_utf8_lossy(&sx).to_string()
+    String::from_utf8_lossy(&soundex_code).to_string()
 }
