@@ -140,9 +140,7 @@ impl CommonOpt {
                 Arc::new(ThrottledStore::new(LocalFileSystem::new(), config));
             let url = ObjectStoreUrl::parse("file:///")?;
             rt.register_object_store(url.as_ref(), throttled);
-            println!(
-                "Simulating object store latency (get: 100ms, list: 200ms)"
-            );
+            println!("Simulating object store latency (get: 100ms, list: 200ms)");
         }
         Ok(rt)
     }
