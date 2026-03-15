@@ -275,9 +275,8 @@ mod tests {
     async fn nested_list_expressions() -> Result<()> {
         // Tests that a Substrait Nested list expression containing non-literal
         // expressions (column references) uses the make_array UDF.
-        let proto_plan = read_json(
-            "tests/testdata/test_plans/nested_list_expressions.substrait.json",
-        );
+        let proto_plan =
+            read_json("tests/testdata/test_plans/nested_list_expressions.substrait.json");
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
