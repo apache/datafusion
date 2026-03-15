@@ -194,3 +194,8 @@ query T
 SELECT soundex('\nhello');
 ----
 \nhello
+
+query T
+SELECT soundex('   ');
+----
+
