@@ -413,7 +413,9 @@ pub enum Expr {
 /// Invoke a [`LambdaUDF`] with a set of arguments
 #[derive(Clone, Eq, PartialOrd, Debug)]
 pub struct LambdaFunction {
+    /// The function
     pub func: Arc<dyn LambdaUDF>,
+    /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
 }
 
@@ -1319,7 +1321,9 @@ impl GroupingSet {
 /// A Lambda expression with a set of parameters names and a body
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Lambda {
+    /// The parameters names
     pub params: Vec<String>,
+    /// The body expression
     pub body: Box<Expr>,
 }
 
@@ -3810,7 +3814,7 @@ impl Display for Expr {
                 write!(f, "({}) -> {body}", params.join(", "))
             }
             Expr::LambdaVariable(c) => {
-                write!(f, "{}", c.name)
+                f.write_str(&c.name)
             }
         }
     }

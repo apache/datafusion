@@ -57,8 +57,6 @@ pub enum LambdaTypeSignature {
     ///
     /// If this signature is specified,
     /// DataFusion will call [`LambdaUDF::coerce_value_types`] to prepare argument types.
-    ///
-    /// [`LambdaUDF::coerce_value_types`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.LambdaUDF.html#method.coerce_value_types
     UserDefined,
     /// One or more lambdas or arguments with arbitrary types
     VariadicAny,
@@ -80,7 +78,7 @@ pub struct LambdaSignature {
     pub volatility: Volatility,
     /// Optional parameter names for the function arguments.
     ///
-    /// If provided, enables named argument notation for function calls (e.g., `func(a => 1, b => 2)`).
+    /// If provided, enables named argument notation for function calls (e.g., `func(a => 1, b => v -> v+1)`).
     ///
     /// Defaults to `None`, meaning only positional arguments are supported.
     pub parameter_names: Option<Vec<String>>,
@@ -170,9 +168,12 @@ impl Hash for dyn LambdaUDF {
 /// lambda function.
 #[derive(Debug, Clone)]
 pub struct LambdaFunctionArgs {
-    /// The evaluated arguments to the function
+    /// The evaluated arguments and lambdas to the function
     pub args: Vec<ValueOrLambda<ColumnarValue, LambdaArgument>>,
     /// Field associated with each arg, if it exists
+    /// For lambdas, it will be the field of the result of 
+    /// the lambda if evaluated with the parameters 
+    /// returned from [`LambdaUDF::lambdas_parameters`]
     pub arg_fields: Vec<ValueOrLambda<FieldRef, FieldRef>>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
@@ -199,22 +200,41 @@ pub struct LambdaArgument {
     ///
     /// For example, for `array_transform([2], v -> -v)`,
     /// this will be `vec![Field::new("v", DataType::Int32, true)]`
-    pub params: Vec<FieldRef>,
+    params: Vec<FieldRef>,
     /// The body of the lambda
     ///
     /// For example, for `array_transform([2], v -> -v)`,
     /// this will be the physical expression of `-v`
-    pub body: Arc<dyn PhysicalExpr>,
+    body: Arc<dyn PhysicalExpr>,
     /// A RecordBatch containing at least the captured columns inside this lambda body, if any
     /// Note that it may contain additional, non-specified columns, but that's a implementation detail
     ///
     /// For example, for `array_transform([2], v -> v + a + b)`,
     /// this will be a `RecordBatch` with at least two columns, `a` and `b`
-    pub captures: Option<RecordBatch>,
+    captures: Option<RecordBatch>,
 }
 
 impl LambdaArgument {
-    /// For adjusting multiple arrays by indices, use [`take_arrays`]
+    pub fn new(
+        params: Vec<FieldRef>,
+        body: Arc<dyn PhysicalExpr>,
+        captures: Option<RecordBatch>,
+    ) -> Self {
+        Self {
+            params,
+            body,
+            captures,
+        }
+    }
+
+    /// Evaluate this lambda
+    /// `args` should evalute to the value of each parameter
+    /// of the correspondent lambda returned in [LambdaUDF::lambdas_parameters].
+    ///
+    /// `adjust` should adjust the captured columns of this
+    /// lambda, if any, relative to it's parameters
+    ///
+    /// Tip: For adjusting multiple arrays by indices, use [`take_arrays`]
     ///
     /// [`take_arrays`]: arrow::compute::take_arrays
     pub fn evaluate(
@@ -362,66 +382,6 @@ pub enum ValueOrLambda<V, L> {
 /// See [`array_transform.rs`] for a commented complete implementation
 ///
 /// [`array_transform.rs`]: https://github.com/apache/datafusion/blob/main/datafusion/functions-nested/src/array_transform.rs
-///
-/// # Basic Example
-/// ```
-/// # use std::any::Any;
-/// # use std::sync::LazyLock;
-/// # use arrow::datatypes::DataType;
-/// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Documentation, LambdaFunctionArgs, LambdaSignature, Volatility};
-/// # use datafusion_expr::LambdaUDF;
-/// # use datafusion_expr::lambda_doc_sections::DOC_SECTION_MATH;
-/// /// This struct for a simple UDF that adds one to an int32
-/// #[derive(Debug, PartialEq, Eq, Hash)]
-/// struct AddOne {
-///   signature: LambdaSignature,
-/// }
-///
-/// impl AddOne {
-///   fn new() -> Self {
-///     Self {
-///       signature: LambdaSignature::new(Volatility::Immutable),
-///      }
-///   }
-/// }
-///
-/// static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
-///         Documentation::builder(DOC_SECTION_MATH, "Add one to an int32", "add_one(2)")
-///             .with_argument("arg1", "The int32 number to add one to")
-///             .build()
-///     });
-///
-/// fn get_doc() -> &'static Documentation {
-///     &DOCUMENTATION
-/// }
-///
-/// /// Implement the LambdaUDF trait for AddOne
-/// impl LambdaUDF for AddOne {
-///    fn as_any(&self) -> &dyn Any { self }
-///    fn name(&self) -> &str { "add_one" }
-///    fn signature(&self) -> &LambdaSignature { &self.signature }
-///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-///      if !matches!(args.get(0), Some(&DataType::Int32)) {
-///        return plan_err!("add_one only accepts Int32 arguments");
-///      }
-///      Ok(DataType::Int32)
-///    }
-///    // The actual implementation would add one to the argument
-///    fn invoke_with_args(&self, args: LambdaFunctionArgs) -> Result<ColumnarValue> {
-///         unimplemented!()
-///    }
-///    fn documentation(&self) -> Option<&Documentation> {
-///         Some(get_doc())
-///     }
-/// }
-///
-/// // Create a new LambdaUDF from the implementation
-/// let add_one = LambdaUDF::from(AddOne::new());
-///
-/// // Call the function `add_one(col)`
-/// let expr = add_one.call(vec![col("a")]);
-/// ```
 pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
@@ -488,29 +448,49 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
         None
     }
 
-    /// Returns the parameters that any lambda supports
+    /// Returns a list of the same size as args where each value is the logic below applied to value at the correspondent position in args:
+    /// 
+    /// If it's a value, return None
+    /// If it's a lambda, return the list of all parameters that that lambda supports
+    /// 
+    /// Example for array_transform:
+    /// 
+    /// `array_transform([2.0, 8.0], v -> v > 4.0)`
+    /// 
+    /// ```ignore
+    /// let lambdas_parameters = array_transform.lambdas_parameters(&[
+    ///      ValueOrLambdaParameter::Value(Field::new("", DataType::new_list(DataType::Float32, false)))]), // the Field of the literal `[2, 8]`
+    ///      ValueOrLambdaParameter::Lambda, // A lambda
+    /// ]?;
+    ///
+    /// assert_eq!(
+    ///      lambdas_parameters,
+    ///      vec![
+    ///         // it's a value, return None
+    ///         None,
+    ///         // it's a lambda, return it's supported parameters, regardless of how many are actually used
+    ///         Some(vec![
+    ///             // the value being transformed
+    ///             Field::new("", DataType::Float32, false),
+    ///             // the 1-based index being transformed, not used on the example above, 
+    ///             //but implementations doesn't need to care about it
+    ///             Field::new("", DataType::Int32, false),
+    ///         ])
+    ///      ]
+    /// )
+    /// ```
+    /// 
+    /// The implementation can assume that some other part of the code has coerced
+    /// the actual argument types to match [`Self::signature`].
     fn lambdas_parameters(
         &self,
         args: &[ValueOrLambda<FieldRef, ()>],
     ) -> Result<Vec<Option<Vec<Field>>>>;
 
     /// What type will be returned by this function, given the arguments?
-    ///
-    /// By default, this function calls [`Self::return_type`] with the
-    /// types of each argument.
-    ///
-    /// # Notes
-    ///
-    /// For the majority of UDFs, implementing [`Self::return_type`] is sufficient,
-    /// as the result type is typically a deterministic function of the input types
-    /// (e.g., `sqrt(f32)` consistently yields `f32`). Implementing this method directly
-    /// is generally unnecessary unless the return type depends on runtime values.
-    ///
-    /// This function can be used for more advanced cases such as:
-    ///
-    /// 1. specifying nullability
-    /// 2. return types based on the **values** of the arguments (rather than
-    ///    their **types**.
+    /// 
+    /// The implementation can assume that some other part of the code has coerced
+    /// the actual argument types to match [`Self::signature`].
     ///
     /// # Example creating `Field`
     ///
@@ -532,21 +512,6 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// }
     /// # }
     /// ```
-    ///
-    /// # Output Type based on Values
-    ///
-    /// For example, the following two function calls get the same argument
-    /// types (something and a `Utf8` string) but return different types based
-    /// on the value of the second argument:
-    ///
-    /// * `arrow_cast(x, 'Int16')` --> `Int16`
-    /// * `arrow_cast(x, 'Float32')` --> `Float32`
-    ///
-    /// # Requirements
-    ///
-    /// This function **must** consistently return the same type for the same
-    /// logical input even if the input is simplified (e.g. it must return the same
-    /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_field_from_args(&self, args: LambdaReturnFieldArgs) -> Result<FieldRef>;
 
     /// Invoke the function returning the appropriate result.

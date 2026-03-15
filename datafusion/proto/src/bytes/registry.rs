@@ -64,15 +64,15 @@ impl FunctionRegistry for NoRegistry {
         vec![]
     }
 
+    fn udlfs(&self) -> HashSet<String> {
+        HashSet::new()
+    }
+
     fn udafs(&self) -> HashSet<String> {
         HashSet::new()
     }
 
     fn udwfs(&self) -> HashSet<String> {
-        HashSet::new()
-    }
-    
-    fn udlfs(&self) -> HashSet<String> {
         HashSet::new()
     }
 }

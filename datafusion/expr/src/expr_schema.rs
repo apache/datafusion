@@ -369,12 +369,9 @@ impl ExprSchemable for Expr {
                 Ok(nullable)
             }
             Expr::Lambda(l) => l.body.nullable(input_schema),
-            Expr::LambdaVariable(l) => Ok(l
-                .field
+            Expr::LambdaVariable(LambdaVariable { name, field, .. }) => Ok(field
                 .as_ref()
-                .ok_or_else(|| {
-                    plan_datafusion_err!("unresolved LambdaVariable {}", l.name)
-                })?
+                .ok_or_else(|| plan_datafusion_err!("unresolved LambdaVariable {name}"))?
                 .is_nullable()),
         }
     }
@@ -648,7 +645,8 @@ impl ExprSchemable for Expr {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let new_fields = value_fields_with_lambda_udf(&arg_fields, func.func.as_ref())?;
+                let new_fields =
+                    value_fields_with_lambda_udf(&arg_fields, func.func.as_ref())?;
 
                 let arguments = func
                     .args

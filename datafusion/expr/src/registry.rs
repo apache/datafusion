@@ -44,7 +44,7 @@ pub trait FunctionRegistry {
     /// `name`.
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
 
-    /// Returns a reference to the user defined lambda function (udf) named
+    /// Returns a reference to the user defined lambda function (udlf) named
     /// `name`.
     fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>>;
 
@@ -206,6 +206,13 @@ impl FunctionRegistry for MemoryFunctionRegistry {
             .ok_or_else(|| plan_datafusion_err!("Function {name} not found"))
     }
 
+    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
+        self.udlfs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("Lambda Function {name} not found"))
+    }
+
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         self.udafs
             .get(name)
@@ -223,6 +230,12 @@ impl FunctionRegistry for MemoryFunctionRegistry {
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         Ok(self.udfs.insert(udf.name().to_string(), udf))
     }
+    fn register_udlf(
+        &mut self,
+        udlf: Arc<dyn LambdaUDF>,
+    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
+        Ok(self.udlfs.insert(udlf.name().into(), udlf))
+    }
     fn register_udaf(
         &mut self,
         udaf: Arc<AggregateUDF>,
@@ -237,29 +250,15 @@ impl FunctionRegistry for MemoryFunctionRegistry {
         vec![]
     }
 
+    fn udlfs(&self) -> HashSet<String> {
+        self.udlfs.keys().cloned().collect()
+    }
+
     fn udafs(&self) -> HashSet<String> {
         self.udafs.keys().cloned().collect()
     }
 
     fn udwfs(&self) -> HashSet<String> {
         self.udwfs.keys().cloned().collect()
-    }
-
-    fn udlfs(&self) -> HashSet<String> {
-        self.udlfs.keys().cloned().collect()
-    }
-
-    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
-        self.udlfs
-            .get(name)
-            .cloned()
-            .ok_or_else(|| plan_datafusion_err!("Lambda Function {name} not found"))
-    }
-
-    fn register_udlf(
-        &mut self,
-        udlf: Arc<dyn LambdaUDF>,
-    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
-        Ok(self.udlfs.insert(udlf.name().into(), udlf))
     }
 }

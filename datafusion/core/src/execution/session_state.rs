@@ -59,7 +59,8 @@ use datafusion_expr::simplify::SimplifyInfo;
 #[cfg(feature = "sql")]
 use datafusion_expr::TableSource;
 use datafusion_expr::{
-    AggregateUDF, Explain, Expr, ExprSchemable, LambdaUDF, LogicalPlan, ScalarUDF, WindowUDF
+    AggregateUDF, Explain, Expr, ExprSchemable, LambdaUDF, LogicalPlan, ScalarUDF,
+    WindowUDF,
 };
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
@@ -255,7 +256,7 @@ impl Session for SessionState {
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
         &self.scalar_functions
     }
-    
+
     fn lambda_functions(&self) -> &HashMap<String, Arc<dyn LambdaUDF>> {
         &self.lambda_functions
     }
@@ -834,7 +835,7 @@ impl SessionState {
     pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
         &self.scalar_functions
     }
-    
+
     /// Return reference to lambda_functions
     pub fn lambda_functions(&self) -> &HashMap<String, Arc<dyn LambdaUDF>> {
         &self.lambda_functions
@@ -1063,7 +1064,7 @@ impl SessionStateBuilder {
         self.scalar_functions
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_scalar_functions());
-        
+
         self.lambda_functions
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_lambda_functions());
@@ -1237,7 +1238,7 @@ impl SessionStateBuilder {
         self.scalar_functions = Some(scalar_functions);
         self
     }
-    
+
     /// Set the map of [`LambdaUDF`]s
     pub fn with_lambda_functions(
         mut self,
@@ -1476,7 +1477,7 @@ impl SessionStateBuilder {
                 }
             }
         }
-        
+
         if let Some(lambda_functions) = lambda_functions {
             for udlf in lambda_functions {
                 let config_options = state.config().options();
@@ -1616,7 +1617,7 @@ impl SessionStateBuilder {
     pub fn scalar_functions(&mut self) -> &mut Option<Vec<Arc<ScalarUDF>>> {
         &mut self.scalar_functions
     }
-    
+
     /// Returns the current scalar_functions value
     pub fn lambda_functions(&mut self) -> &mut Option<Vec<Arc<dyn LambdaUDF>>> {
         &mut self.lambda_functions
@@ -1858,7 +1859,7 @@ impl ContextProvider for SessionContextProvider<'_> {
     fn udf_names(&self) -> Vec<String> {
         self.state.scalar_functions().keys().cloned().collect()
     }
-    
+
     fn udlf_names(&self) -> Vec<String> {
         self.state.lambda_functions().keys().cloned().collect()
     }
@@ -1902,6 +1903,13 @@ impl FunctionRegistry for SessionState {
         })
     }
 
+    fn udlf(&self, name: &str) -> datafusion_common::Result<Arc<dyn LambdaUDF>> {
+        self.lambda_functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("Lambda Function {name} not found"))
+    }
+
     fn udaf(&self, name: &str) -> datafusion_common::Result<Arc<AggregateUDF>> {
         let result = self.aggregate_functions.get(name);
 
@@ -1927,6 +1935,17 @@ impl FunctionRegistry for SessionState {
                 .insert(alias.clone(), Arc::clone(&udf));
         });
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
+    }
+
+    fn register_udlf(
+        &mut self,
+        udlf: Arc<dyn LambdaUDF>,
+    ) -> datafusion_common::Result<Option<Arc<dyn LambdaUDF>>> {
+        udlf.aliases().iter().for_each(|alias| {
+            self.lambda_functions
+                .insert(alias.clone(), Arc::clone(&udlf));
+        });
+        Ok(self.lambda_functions.insert(udlf.name().into(), udlf))
     }
 
     fn register_udaf(
@@ -1964,6 +1983,19 @@ impl FunctionRegistry for SessionState {
         Ok(udf)
     }
 
+    fn deregister_udlf(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<dyn LambdaUDF>>> {
+        let udlf = self.lambda_functions.remove(name);
+        if let Some(udlf) = &udlf {
+            for alias in udlf.aliases() {
+                self.lambda_functions.remove(alias);
+            }
+        }
+        Ok(udlf)
+    }
+
     fn deregister_udaf(
         &mut self,
         name: &str,
@@ -1990,41 +2022,6 @@ impl FunctionRegistry for SessionState {
         Ok(udwf)
     }
 
-    fn udlfs(&self) -> HashSet<String> {
-        self.lambda_functions.keys().cloned().collect()
-    }
-
-    fn udlf(&self, name: &str) -> datafusion_common::Result<Arc<dyn LambdaUDF>> {
-        self.lambda_functions
-            .get(name)
-            .cloned()
-            .ok_or_else(|| plan_datafusion_err!("Lambda Function {name} not found"))
-    }
-
-    fn register_udlf(
-        &mut self,
-        udlf: Arc<dyn LambdaUDF>,
-    ) -> datafusion_common::Result<Option<Arc<dyn LambdaUDF>>> {
-        udlf.aliases().iter().for_each(|alias| {
-            self.lambda_functions
-                .insert(alias.clone(), Arc::clone(&udlf));
-        });
-        Ok(self.lambda_functions.insert(udlf.name().into(), udlf))
-    }
-
-    fn deregister_udlf(
-        &mut self,
-        name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn LambdaUDF>>> {
-        let udlf = self.lambda_functions.remove(name);
-        if let Some(udlf) = &udlf {
-            for alias in udlf.aliases() {
-                self.lambda_functions.remove(alias);
-            }
-        }
-        Ok(udlf)
-    }
-
     fn register_function_rewrite(
         &mut self,
         rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
@@ -2043,6 +2040,10 @@ impl FunctionRegistry for SessionState {
     ) -> datafusion_common::Result<()> {
         self.expr_planners.push(expr_planner);
         Ok(())
+    }
+
+    fn udlfs(&self) -> HashSet<String> {
+        self.lambda_functions.keys().cloned().collect()
     }
 
     fn udafs(&self) -> HashSet<String> {
@@ -2470,7 +2471,7 @@ mod tests {
         fn udf_names(&self) -> Vec<String> {
             self.state.scalar_functions().keys().cloned().collect()
         }
-        
+
         fn udlf_names(&self) -> Vec<String> {
             self.state.lambda_functions().keys().cloned().collect()
         }

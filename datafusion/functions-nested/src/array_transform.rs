@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarUDFImpl`] definitions for array_transform function.
+//! [`LambdaUDF`] definitions for array_transform function.
 
 use arrow::{
-    array::{
-        Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray,
-    }, compute::take_arrays, datatypes::{DataType, Field, FieldRef}
+    array::{Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray},
+    compute::take_arrays,
+    datatypes::{DataType, Field, FieldRef},
 };
 use datafusion_common::{
     exec_err, plan_err,
@@ -31,8 +31,8 @@ use datafusion_common::{
     Result,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, LambdaFunctionArgs, LambdaSignature, LambdaUDF,
-    ValueOrLambda, Volatility,
+    ColumnarValue, Documentation, LambdaFunctionArgs, LambdaReturnFieldArgs,
+    LambdaSignature, LambdaUDF, ValueOrLambda, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::{any::Any, fmt::Debug, sync::Arc};
@@ -148,10 +148,7 @@ impl LambdaUDF for ArrayTransform {
         Ok(vec![None, Some(vec![value, index])])
     }
 
-    fn return_field_from_args(
-        &self,
-        args: datafusion_expr::LambdaReturnFieldArgs,
-    ) -> Result<Arc<Field>> {
+    fn return_field_from_args(&self, args: LambdaReturnFieldArgs) -> Result<Arc<Field>> {
         let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
 
         //TODO: should metadata be copied into the transformed array?
@@ -178,7 +175,8 @@ impl LambdaUDF for ArrayTransform {
         let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
 
         let list_array = list.to_array(args.number_rows)?;
-        // as per list_values docs, if list_array is sliced, list_values will be sliced too, 
+        
+        // as per list_values docs, if list_array is sliced, list_values will be sliced too,
         // so before constructing the transformed array below, we must adjust the list offsets with
         // adjust_offsets_for_slice
         let list_values = list_values(&list_array)?;
@@ -188,25 +186,19 @@ impl LambdaUDF for ArrayTransform {
         // list_values_row_number is not cheap so is important to avoid it when no column is captured
         let mut adjust_indices = None;
 
-        // use closures so that lambda.evaluate calls only the needed ones
-        // based on the number of arguments avoiding unnecessary computations
+        // by passing closures, lambda.evaluate can evaluate only those actually needed
         let values_param = || Ok(Arc::clone(&list_values));
         let indices_param = || list_values_index(&list_array);
 
-        // call the transforming lambda with the record batch composed of the list values merged with captured columns
+        // call the transforming lambda
         let transformed_values = lambda
-            .evaluate(
-                &[&values_param, &indices_param],
-                |arrays| {
-                    let indices = match &adjust_indices {
-                        Some(v) => v,
-                        None => {
-                            adjust_indices.insert(list_values_row_number(&list_array)?)
-                        }
-                    };
-                    Ok(take_arrays(arrays, indices, None)?)
-                },
-            )?
+            .evaluate(&[&values_param, &indices_param], |arrays| {
+                let indices = match &adjust_indices {
+                    Some(v) => v,
+                    None => adjust_indices.insert(list_values_row_number(&list_array)?),
+                };
+                Ok(take_arrays(arrays, indices, None)?)
+            })?
             .into_array(list_values.len())?;
 
         let field = match args.return_field.data_type() {
@@ -225,7 +217,7 @@ impl LambdaUDF for ArrayTransform {
         let transformed_list = match list_array.data_type() {
             DataType::List(_) => {
                 let list = list_array.as_list();
-                // since we called list_values above which would return sliced values for 
+                // since we called list_values above which would return sliced values for
                 // a sliced list, we must adjust the offsets here as otherwise they would be invalid
                 let adjusted_offsets = adjust_offsets_for_slice(list);
 
@@ -238,7 +230,7 @@ impl LambdaUDF for ArrayTransform {
             }
             DataType::LargeList(_) => {
                 let large_list = list_array.as_list();
-                // since we called list_values above which would return sliced values for 
+                // since we called list_values above which would return sliced values for
                 // a sliced list, we must adjust the offsets here as otherwise they would be invalid
                 let adjusted_offsets = adjust_offsets_for_slice(large_list);
 

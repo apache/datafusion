@@ -953,11 +953,8 @@ fn list_array_values_row_number<T: ArrowPrimitiveType>(
         offsets[offsets.len() - 1].to_usize().unwrap() - offsets[0].to_usize().unwrap(),
     );
 
-    for (i, (&start, &end)) in std::iter::zip(&offsets[..], &offsets[1..]).enumerate() {
-        rows_number.extend(repeat_n(
-            T::Native::usize_as(i),
-            end.as_usize() - start.as_usize(),
-        ));
+    for (i, len) in offsets.lengths().enumerate() {
+        rows_number.extend(repeat_n(T::Native::usize_as(i), len));
     }
 
     PrimitiveArray::new(rows_number.into(), None)
@@ -971,9 +968,8 @@ fn list_array_values_index<T: ArrowPrimitiveType>(
         offsets[offsets.len() - 1].to_usize().unwrap() - offsets[0].to_usize().unwrap(),
     );
 
-    for (&start, &end) in std::iter::zip(&offsets[..], &offsets[1..]) {
-        indices
-            .extend((1..1 + end.as_usize() - start.as_usize()).map(T::Native::usize_as));
+    for len in offsets.lengths() {
+        indices.extend((1..1 + len).map(T::Native::usize_as));
     }
 
     PrimitiveArray::new(indices.into(), None)

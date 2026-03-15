@@ -24,7 +24,7 @@
 //! * the computation, that must accept each valid signature
 //!
 //! * Signature: see `Signature`
-//! * Return type: a function `(arg_types) -> return_type`. E.g. for sqrt, ([f32]) -> f32, ([f64]) -> f64.
+//! * Return type: a function `(arg_types) -> return_type`. E.g. for array_transform, ([[f32]], v -> v*2) -> [f32], ([[f32]], v -> v > 3.0) -> [bool].
 //!
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
@@ -43,6 +43,7 @@ use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::type_coercion::functions::value_fields_with_lambda_udf;
 use datafusion_expr::{
     expr_vec_fmt, ColumnarValue, LambdaArgument, LambdaFunctionArgs,
     LambdaReturnFieldArgs, LambdaUDF, ValueOrLambda, Volatility,
@@ -71,7 +72,7 @@ impl Debug for LambdaFunctionExpr {
 impl LambdaFunctionExpr {
     /// Create a new Lambda function
     pub fn new(
-        name: &str,
+        name: impl Into<String>,
         fun: Arc<dyn LambdaUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_field: FieldRef,
@@ -79,7 +80,7 @@ impl LambdaFunctionExpr {
     ) -> Self {
         Self {
             fun,
-            name: name.to_owned(),
+            name: name.into(),
             args,
             return_field,
             config_options,
@@ -105,7 +106,8 @@ impl LambdaFunctionExpr {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // TODO: verify that input data types is consistent with function's `TypeSignature`
+        // verify that input data types is consistent with function's `LambdaTypeSignature`
+        value_fields_with_lambda_udf(&arg_fields, func.as_ref())?;
 
         let arguments = args
             .iter()
@@ -328,11 +330,11 @@ impl PhysicalExpr for LambdaFunctionExpr {
                             .map(|(name, param)| Arc::new(param.with_name(name)))
                             .collect();
 
-                        Ok(ValueOrLambda::Lambda(LambdaArgument {
+                        Ok(ValueOrLambda::Lambda(LambdaArgument::new(
                             params,
-                            body: Arc::clone(lambda.body()),
+                            Arc::clone(lambda.body()),
                             captures,
-                        }))
+                        )))
                     }
                     (Some(_lambda), None) => exec_err!(
                         "{} don't reported the parameters of one of it's lambdas",

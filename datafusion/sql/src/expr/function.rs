@@ -277,10 +277,58 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
         }
+        // User-defined function (UDF) should have precedence
+        if let Some(fm) = self.context_provider.get_function_meta(&name) {
+            let (args, arg_names): (Vec<Expr>, Vec<Option<String>>) = args
+                .into_iter()
+                .map(|a| {
+                    self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context)
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .unzip();
+
+            let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+                if let Some(param_names) = &fm.signature().parameter_names {
+                    datafusion_expr::arguments::resolve_function_arguments(
+                        param_names,
+                        args,
+                        arg_names,
+                    )?
+                } else {
+                    return plan_err!(
+                        "Function '{}' does not support named arguments",
+                        fm.name()
+                    );
+                }
+            } else {
+                args
+            };
+
+            // After resolution, all arguments are positional
+            let inner = ScalarFunction::new_udf(fm, resolved_args);
+
+            if name.eq_ignore_ascii_case(inner.name()) {
+                return Ok(Expr::ScalarFunction(inner));
+            } else {
+                // If the function is called by an alias, a verbose string representation is created
+                // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+                // to ensure the output column name matches the user's query.
+                let arg_names = inner
+                    .args
+                    .iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let verbose_alias = format!("{name}({arg_names})");
+
+                return Ok(Expr::ScalarFunction(inner).alias(verbose_alias));
+            }
+        }
 
         if let Some(fm) = self.context_provider.get_lambda_meta(&name) {
             // plan non-lambda arguments first so we can get theirs datatype and call
-            // LambdaUDF::lambdas_parameters to then plan the lambda arguments with 
+            // LambdaUDF::lambdas_parameters to then plan the lambda arguments with
             // resolved lambda variables
             enum ExprOrLambda {
                 Expr((Expr, Option<String>)),
@@ -437,55 +485,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let verbose_alias = format!("{name}({arg_names})");
 
                 return Ok(Expr::LambdaFunction(inner).alias(verbose_alias));
-            }
-        }
-
-        // User-defined function (UDF) should have precedence
-        if let Some(fm) = self.context_provider.get_function_meta(&name) {
-            let (args, arg_names): (Vec<Expr>, Vec<Option<String>>) = args
-                .into_iter()
-                .map(|a| {
-                    self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context)
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .unzip();
-
-            let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
-                if let Some(param_names) = &fm.signature().parameter_names {
-                    datafusion_expr::arguments::resolve_function_arguments(
-                        param_names,
-                        args,
-                        arg_names,
-                    )?
-                } else {
-                    return plan_err!(
-                        "Function '{}' does not support named arguments",
-                        fm.name()
-                    );
-                }
-            } else {
-                args
-            };
-
-            // After resolution, all arguments are positional
-            let inner = ScalarFunction::new_udf(fm, resolved_args);
-
-            if name.eq_ignore_ascii_case(inner.name()) {
-                return Ok(Expr::ScalarFunction(inner));
-            } else {
-                // If the function is called by an alias, a verbose string representation is created
-                // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
-                // to ensure the output column name matches the user's query.
-                let arg_names = inner
-                    .args
-                    .iter()
-                    .map(|arg| arg.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let verbose_alias = format!("{name}({arg_names})");
-
-                return Ok(Expr::ScalarFunction(inner).alias(verbose_alias));
             }
         }
 

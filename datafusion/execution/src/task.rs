@@ -162,6 +162,14 @@ impl FunctionRegistry for TaskContext {
         })
     }
 
+    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
+        let result = self.lambda_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            plan_datafusion_err!("There is no UDLF named \"{name}\" in the TaskContext")
+        })
+    }
+
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         let result = self.aggregate_functions.get(name);
 
@@ -204,39 +212,23 @@ impl FunctionRegistry for TaskContext {
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 
-    fn udlfs(&self) -> HashSet<String> {
-        self.lambda_functions.keys().cloned().collect()
-    }
-
-    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
-        self.lambda_functions
-            .get(name)
-            .cloned()
-            .ok_or_else(|| plan_datafusion_err!("Lambda Function {name} not found"))
-    }
-
     fn register_udlf(
         &mut self,
         udlf: Arc<dyn LambdaUDF>,
     ) -> Result<Option<Arc<dyn LambdaUDF>>> {
+        udlf.aliases().iter().for_each(|alias| {
+            self.lambda_functions
+                .insert(alias.clone(), Arc::clone(&udlf));
+        });
         Ok(self.lambda_functions.insert(udlf.name().into(), udlf))
-    }
-
-    fn deregister_udlf(
-        &mut self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
-        let udlf = self.lambda_functions.remove(name);
-        if let Some(udlf) = &udlf {
-            for alias in udlf.aliases() {
-                self.lambda_functions.remove(alias);
-            }
-        }
-        Ok(udlf)
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
+    }
+
+    fn udlfs(&self) -> HashSet<String> {
+        self.lambda_functions.keys().cloned().collect()
     }
 
     fn udafs(&self) -> HashSet<String> {

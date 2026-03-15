@@ -75,7 +75,7 @@ impl LambdaVariable {
 
 impl std::fmt::Display for LambdaVariable {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}@-1", self.name)
+        write!(f, "{}@", self.name)
     }
 }
 

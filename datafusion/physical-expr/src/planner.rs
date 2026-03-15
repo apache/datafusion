@@ -404,7 +404,7 @@ pub fn create_physical_expr(
             )?))
         }
         Expr::Lambda(Lambda { params, body }) => expressions::lambda(
-            params.clone(),
+            params,
             create_physical_expr(body, input_dfschema, execution_props)?,
         ),
         Expr::LambdaVariable(LambdaVariable {

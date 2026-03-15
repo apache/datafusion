@@ -122,6 +122,59 @@ impl Serializeable for Expr {
                 )))
             }
 
+            fn udlf(&self, name: &str) -> Result<Arc<dyn datafusion_expr::LambdaUDF>> {
+                // if a SimpleLambdaFunction get's added, use it instead of MockLambdaUDF
+                #[derive(Debug, PartialEq, Eq, Hash)]
+                struct MockLambdaUDF {
+                    name: String,
+                    signature: LambdaSignature,
+                }
+
+                impl LambdaUDF for MockLambdaUDF {
+                    fn as_any(&self) -> &dyn std::any::Any {
+                        self
+                    }
+
+                    fn name(&self) -> &str {
+                        &self.name
+                    }
+
+                    fn signature(&self) -> &LambdaSignature {
+                        &self.signature
+                    }
+
+                    fn lambdas_parameters(
+                        &self,
+                        _args: &[datafusion_expr::ValueOrLambda<
+                            arrow::datatypes::FieldRef,
+                            (),
+                        >],
+                    ) -> Result<Vec<Option<Vec<arrow::datatypes::Field>>>>
+                    {
+                        not_impl_err!("mock LambdaUDF")
+                    }
+
+                    fn return_field_from_args(
+                        &self,
+                        _args: datafusion_expr::LambdaReturnFieldArgs,
+                    ) -> Result<arrow::datatypes::FieldRef> {
+                        not_impl_err!("mock LambdaUDF")
+                    }
+
+                    fn invoke_with_args(
+                        &self,
+                        _args: datafusion_expr::LambdaFunctionArgs,
+                    ) -> Result<datafusion_expr::ColumnarValue> {
+                        not_impl_err!("mock LambdaUDF")
+                    }
+                }
+
+                Ok(Arc::new(MockLambdaUDF {
+                    name: name.to_string(),
+                    signature: LambdaSignature::variadic_any(Volatility::Immutable),
+                }))
+            }
+
             fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
                 Ok(Arc::new(create_udaf(
                     name,
@@ -158,6 +211,14 @@ impl Serializeable for Expr {
                     "register_udf called in Placeholder Registry!"
                 )
             }
+            fn register_udlf(
+                &mut self,
+                _udlf: Arc<dyn datafusion_expr::LambdaUDF>,
+            ) -> Result<Option<Arc<dyn datafusion_expr::LambdaUDF>>> {
+                datafusion_common::internal_err!(
+                    "register_udlf called in Placeholder Registry!"
+                )
+            }
             fn register_udwf(
                 &mut self,
                 _udaf: Arc<WindowUDF>,
@@ -167,17 +228,12 @@ impl Serializeable for Expr {
                 )
             }
 
-            fn register_udlf(
-                &mut self,
-                _udlf: Arc<dyn datafusion_expr::LambdaUDF>,
-            ) -> Result<Option<Arc<dyn datafusion_expr::LambdaUDF>>> {
-                datafusion_common::internal_err!(
-                    "register_udlf called in Placeholder Registry!"
-                )
-            }
-
             fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
                 vec![]
+            }
+
+            fn udlfs(&self) -> std::collections::HashSet<String> {
+                std::collections::HashSet::default()
             }
 
             fn udafs(&self) -> std::collections::HashSet<String> {
@@ -186,59 +242,6 @@ impl Serializeable for Expr {
 
             fn udwfs(&self) -> std::collections::HashSet<String> {
                 std::collections::HashSet::default()
-            }
-
-            fn udlfs(&self) -> std::collections::HashSet<String> {
-                std::collections::HashSet::default()
-            }
-
-            fn udlf(&self, name: &str) -> Result<Arc<dyn datafusion_expr::LambdaUDF>> {
-                // if a SimpleLambdaFunction get's added, use it instead of MockLambdaUDF
-                #[derive(Debug, PartialEq, Eq, Hash)]
-                struct MockLambdaUDF {
-                    name: String,
-                    signature: LambdaSignature,
-                }
-
-                impl LambdaUDF for MockLambdaUDF {
-                    fn as_any(&self) -> &dyn std::any::Any {
-                        self
-                    }
-
-                    fn name(&self) -> &str {
-                        &self.name
-                    }
-
-                    fn signature(&self) -> &LambdaSignature {
-                        &self.signature
-                    }
-
-                    fn lambdas_parameters(
-                        &self,
-                        _args: &[datafusion_expr::ValueOrLambda<arrow::datatypes::FieldRef, ()>],
-                    ) -> Result<Vec<Option<Vec<arrow::datatypes::Field>>>> {
-                        not_impl_err!("mock LambdaUDF")
-                    }
-
-                    fn return_field_from_args(
-                        &self,
-                        _args: datafusion_expr::LambdaReturnFieldArgs,
-                    ) -> Result<arrow::datatypes::FieldRef> {
-                        not_impl_err!("mock LambdaUDF")
-                    }
-
-                    fn invoke_with_args(
-                        &self,
-                        _args: datafusion_expr::LambdaFunctionArgs,
-                    ) -> Result<datafusion_expr::ColumnarValue> {
-                        not_impl_err!("mock LambdaUDF")
-                    }
-                }
-
-                Ok(Arc::new(MockLambdaUDF {
-                    name: name.to_string(),
-                    signature: LambdaSignature::variadic_any(Volatility::Immutable),
-                }))
             }
         }
         Expr::from_bytes_with_registry(&bytes, &PlaceHolderRegistry)?;

@@ -2053,6 +2053,9 @@ impl LogicalPlan {
         Wrapper(self)
     }
 
+    /// Return a `LogicalPLan` with all [`LambdaVariable`] resolved
+    /// 
+    /// [`LambdaVariable`]: crate::expr::LambdaVariable
     pub fn resolve_lambdas_variables(self) -> Result<Transformed<LogicalPlan>> {
         self.transform_with_subqueries(|plan| {
             let schema = merge_schema(&plan.inputs());

@@ -1739,6 +1739,10 @@ impl FunctionRegistry for SessionContext {
         self.state.read().udf(name)
     }
 
+    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
+        self.state.read().udlf(name)
+    }
+
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         self.state.read().udaf(name)
     }
@@ -1749,6 +1753,13 @@ impl FunctionRegistry for SessionContext {
 
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         self.state.write().register_udf(udf)
+    }
+
+    fn register_udlf(
+        &mut self,
+        udlf: Arc<dyn LambdaUDF>,
+    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
+        self.state.write().register_udlf(udlf)
     }
 
     fn register_udaf(
@@ -1780,27 +1791,16 @@ impl FunctionRegistry for SessionContext {
         self.state.write().register_expr_planner(expr_planner)
     }
 
+    fn udlfs(&self) -> HashSet<String> {
+        self.state.read().udlfs()
+    }
+
     fn udafs(&self) -> HashSet<String> {
         self.state.read().udafs()
     }
 
     fn udwfs(&self) -> HashSet<String> {
         self.state.read().udwfs()
-    }
-
-    fn udlfs(&self) -> HashSet<String> {
-        self.state.read().udlfs()
-    }
-
-    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
-        self.state.read().udlf(name)
-    }
-
-    fn register_udlf(
-        &mut self,
-        udlf: Arc<dyn LambdaUDF>,
-    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
-        self.state.write().register_udlf(udlf)
     }
 }
 

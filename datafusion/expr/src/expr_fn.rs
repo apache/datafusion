@@ -733,7 +733,7 @@ pub fn lambda(params: impl IntoIterator<Item = impl Into<String>>, body: Expr) -
 
 /// Create an unresolved lambda variable expression
 /// 
-/// The expression tree or LogicalPlan which
+/// The expression tree or [`LogicalPlan`] which
 /// owns this variable must be resolved before usage with either
 /// [`Expr::resolve_lambdas_variables`] or [`LogicalPlan::resolve_lambdas_variables`].
 ///
