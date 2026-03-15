@@ -19,10 +19,16 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrowNativeTypeOp, AsArray, BooleanArray};
-use arrow::datatypes::DataType::{Boolean, Float16, Float32, Float64};
-use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
+use arrow::datatypes::DataType::{
+    Boolean, Decimal32, Decimal64, Decimal128, Decimal256, Float16, Float32, Float64,
+    Int8, Int16, Int32, Int64, Null, UInt8, UInt16, UInt32, UInt64,
+};
+use arrow::datatypes::{
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float16Type,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
+};
 
-use datafusion_common::types::NativeType;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{Coercion, TypeSignatureClass};
@@ -59,14 +65,10 @@ impl Default for IsZeroFunc {
 
 impl IsZeroFunc {
     pub fn new() -> Self {
-        // Accept any numeric type and coerce to float
-        let float = Coercion::new_implicit(
-            TypeSignatureClass::Float,
-            vec![TypeSignatureClass::Numeric],
-            NativeType::Float64,
-        );
+        // Accept any numeric type (ints, uints, floats, decimals) without implicit casts.
+        let numeric = Coercion::new_exact(TypeSignatureClass::Numeric);
         Self {
-            signature: Signature::coercible(vec![float], Volatility::Immutable),
+            signature: Signature::coercible(vec![numeric], Volatility::Immutable),
         }
     }
 }
@@ -107,6 +109,45 @@ impl ScalarUDFImpl for IsZeroFunc {
                     ScalarValue::Float16(Some(v)) => Ok(ColumnarValue::Scalar(
                         ScalarValue::Boolean(Some(v.is_zero())),
                     )),
+
+                    ScalarValue::Int8(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::Int16(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::Int32(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::Int64(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::UInt8(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::UInt16(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::UInt32(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::UInt64(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+
+                    ScalarValue::Decimal32(Some(v), ..) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::Decimal64(Some(v), ..) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::Decimal128(Some(v), ..) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0))))
+                    }
+                    ScalarValue::Decimal256(Some(v), ..) => Ok(ColumnarValue::Scalar(
+                        ScalarValue::Boolean(Some(v.is_zero())),
+                    )),
+
                     _ => {
                         internal_err!(
                             "Unexpected scalar type for iszero: {:?}",
@@ -116,6 +157,10 @@ impl ScalarUDFImpl for IsZeroFunc {
                 }
             }
             ColumnarValue::Array(array) => match array.data_type() {
+                Null => Ok(ColumnarValue::Array(Arc::new(BooleanArray::new_null(
+                    array.len(),
+                )))),
+
                 Float64 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
                     array.as_primitive::<Float64Type>(),
                     |x| x == 0.0,
@@ -128,6 +173,65 @@ impl ScalarUDFImpl for IsZeroFunc {
                     array.as_primitive::<Float16Type>(),
                     |x| x.is_zero(),
                 )))),
+
+                Int8 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<Int8Type>(),
+                    |x| x == 0,
+                )))),
+                Int16 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<Int16Type>(),
+                    |x| x == 0,
+                )))),
+                Int32 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<Int32Type>(),
+                    |x| x == 0,
+                )))),
+                Int64 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<Int64Type>(),
+                    |x| x == 0,
+                )))),
+                UInt8 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<UInt8Type>(),
+                    |x| x == 0,
+                )))),
+                UInt16 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<UInt16Type>(),
+                    |x| x == 0,
+                )))),
+                UInt32 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<UInt32Type>(),
+                    |x| x == 0,
+                )))),
+                UInt64 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<UInt64Type>(),
+                    |x| x == 0,
+                )))),
+
+                Decimal32(_, _) => {
+                    Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                        array.as_primitive::<Decimal32Type>(),
+                        |x| x == 0,
+                    ))))
+                }
+                Decimal64(_, _) => {
+                    Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                        array.as_primitive::<Decimal64Type>(),
+                        |x| x == 0,
+                    ))))
+                }
+                Decimal128(_, _) => {
+                    Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                        array.as_primitive::<Decimal128Type>(),
+                        |x| x == 0,
+                    ))))
+                }
+                Decimal256(_, _) => {
+                    Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                        array.as_primitive::<Decimal256Type>(),
+                        |x| x.is_zero(),
+                    ))))
+                }
+
                 other => {
                     internal_err!("Unexpected data type {other:?} for function iszero")
                 }

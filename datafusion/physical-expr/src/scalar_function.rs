@@ -45,8 +45,8 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, Volatility,
-    expr_vec_fmt,
+    ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    Volatility, expr_vec_fmt,
 };
 
 /// Physical expression of a scalar function
@@ -361,6 +361,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
     fn is_volatile_node(&self) -> bool {
         self.fun.signature().volatility == Volatility::Volatile
+    }
+
+    fn placement(&self) -> ExpressionPlacement {
+        let arg_placements: Vec<_> =
+            self.args.iter().map(|arg| arg.placement()).collect();
+        self.fun.placement(&arg_placements)
     }
 }
 

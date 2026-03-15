@@ -57,9 +57,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
-use datafusion::prelude::{
-    CsvReadOptions, JoinType, NdJsonReadOptions, ParquetReadOptions,
-};
+use datafusion::prelude::{CsvReadOptions, JoinType, ParquetReadOptions};
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
     test_table_with_cache_factory, test_table_with_name,
@@ -94,6 +92,7 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
 
 use datafusion::error::Result as DataFusionResult;
+use datafusion::execution::options::JsonReadOptions;
 use datafusion_functions_window::expr_fn::lag;
 
 // Get string representation of the plan
@@ -2896,7 +2895,7 @@ async fn write_json_with_order() -> Result<()> {
     ctx.register_json(
         "data",
         test_path.to_str().unwrap(),
-        NdJsonReadOptions::default().schema(&schema),
+        JsonReadOptions::default().schema(&schema),
     )
     .await?;
 
@@ -3002,24 +3001,22 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
         @r"
-    +---------------+------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                       |
-    +---------------+------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: t1.b, count(*)                                                                                 |
-    |               |   Sort: count(Int64(1)) AS count(*) AS count(*) ASC NULLS LAST                                             |
-    |               |     Projection: t1.b, count(Int64(1)) AS count(*), count(Int64(1))                                         |
-    |               |       Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                                                |
-    |               |         TableScan: t1 projection=[b]                                                                       |
-    | physical_plan | ProjectionExec: expr=[b@0 as b, count(*)@1 as count(*)]                                                    |
-    |               |   SortPreservingMergeExec: [count(Int64(1))@2 ASC NULLS LAST]                                              |
-    |               |     SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]                               |
-    |               |       ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*), count(Int64(1))@1 as count(Int64(1))] |
-    |               |         AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))]                       |
-    |               |           RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1                                 |
-    |               |             AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]                            |
-    |               |               DataSourceExec: partitions=1, partition_sizes=[1]                                            |
-    |               |                                                                                                            |
-    +---------------+------------------------------------------------------------------------------------------------------------+
+    +---------------+------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                               |
+    +---------------+------------------------------------------------------------------------------------+
+    | logical_plan  | Sort: count(*) ASC NULLS LAST                                                      |
+    |               |   Projection: t1.b, count(Int64(1)) AS count(*)                                    |
+    |               |     Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                          |
+    |               |       TableScan: t1 projection=[b]                                                 |
+    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                               |
+    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]         |
+    |               |     ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*)]                 |
+    |               |       AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))] |
+    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1           |
+    |               |           AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]      |
+    |               |             DataSourceExec: partitions=1, partition_sizes=[1]                      |
+    |               |                                                                                    |
+    +---------------+------------------------------------------------------------------------------------+
     "
     );
 
@@ -3029,7 +3026,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     +---------------+----------------------------------------------------------------------------+
     | plan_type     | plan                                                                       |
     +---------------+----------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) ASC NULLS LAST                                              |
+    | logical_plan  | Sort: count(*) AS count(*) ASC NULLS LAST                                  |
     |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]        |
     |               |     TableScan: t1 projection=[b]                                           |
     | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                       |
@@ -6322,7 +6319,7 @@ async fn register_non_json_file() {
         .register_json(
             "data",
             "tests/data/test_binary.parquet",
-            NdJsonReadOptions::default(),
+            JsonReadOptions::default(),
         )
         .await;
     assert_contains!(
@@ -6535,7 +6532,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
 async fn test_insert_into_casting_support() -> Result<()> {
     // Testing case1:
     // Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Utf8.
-    // And the cast is not supported from Utf8 to Float16.
+    // And the cast is not supported from Binary to Float16.
 
     // Create a new schema with one field called "a" of type Float16, and setting nullable to false
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float16, false)]));
@@ -6546,7 +6543,10 @@ async fn test_insert_into_casting_support() -> Result<()> {
     let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
     session_ctx.register_table("t", initial_table.clone())?;
 
-    let mut write_df = session_ctx.sql("values ('a123'), ('b456')").await.unwrap();
+    let mut write_df = session_ctx
+        .sql("values (x'a123'), (x'b456')")
+        .await
+        .unwrap();
 
     write_df = write_df
         .clone()
@@ -6560,7 +6560,7 @@ async fn test_insert_into_casting_support() -> Result<()> {
 
     assert_contains!(
         e.to_string(),
-        "Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Utf8."
+        "Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Binary."
     );
 
     // Testing case2:

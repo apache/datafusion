@@ -16,20 +16,11 @@
 // under the License.
 
 use std::any::Any;
-use std::cmp::{Ordering, max};
-use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array,
-    OffsetSizeTrait,
-};
+use crate::unicode::common::{RightSlicer, general_left_right};
+use crate::utils::make_scalar_function;
 use arrow::datatypes::DataType;
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::Result;
-use datafusion_common::cast::{
-    as_generic_string_array, as_int64_array, as_string_view_array,
-};
 use datafusion_common::exec_err;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -94,22 +85,26 @@ impl ScalarUDFImpl for RightFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "right")
+        Ok(arg_types[0].clone())
     }
 
+    /// Returns right n characters in the string, or when n is negative, returns all but first |n| characters.
+    /// right('abcde', 2) = 'de'
+    /// right('abcde', -2) = 'cde'
+    /// The implementation uses UTF-8 code points as characters
     fn invoke_with_args(
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {
-            DataType::Utf8 | DataType::Utf8View => {
-                make_scalar_function(right::<i32>, vec![])(args)
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                make_scalar_function(general_left_right::<RightSlicer>, vec![])(args)
             }
-            DataType::LargeUtf8 => make_scalar_function(right::<i64>, vec![])(args),
             other => exec_err!(
-                "Unsupported data type {other:?} for function right,\
-            expected Utf8View, Utf8 or LargeUtf8."
+                "Unsupported data type {other:?} for function {},\
+                expected Utf8View, Utf8 or LargeUtf8.",
+                self.name()
             ),
         }
     }
@@ -119,58 +114,10 @@ impl ScalarUDFImpl for RightFunc {
     }
 }
 
-/// Returns last n characters in the string, or when n is negative, returns all but first |n| characters.
-/// right('abcde', 2) = 'de'
-/// The implementation uses UTF-8 code points as characters
-fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let n_array = as_int64_array(&args[1])?;
-    if args[0].data_type() == &DataType::Utf8View {
-        // string_view_right(args)
-        let string_array = as_string_view_array(&args[0])?;
-        right_impl::<T, _>(&mut string_array.iter(), n_array)
-    } else {
-        // string_right::<T>(args)
-        let string_array = &as_generic_string_array::<T>(&args[0])?;
-        right_impl::<T, _>(&mut string_array.iter(), n_array)
-    }
-}
-
-// Currently the return type can only be Utf8 or LargeUtf8, to reach fully support, we need
-// to edit the `get_optimal_return_type` in utils.rs to make the udfs be able to return Utf8View
-// See https://github.com/apache/datafusion/issues/11790#issuecomment-2283777166
-fn right_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
-    string_array_iter: &mut ArrayIter<V>,
-    n_array: &Int64Array,
-) -> Result<ArrayRef> {
-    let result = string_array_iter
-        .zip(n_array.iter())
-        .map(|(string, n)| match (string, n) {
-            (Some(string), Some(n)) => match n.cmp(&0) {
-                Ordering::Less => Some(
-                    string
-                        .chars()
-                        .skip(n.unsigned_abs() as usize)
-                        .collect::<String>(),
-                ),
-                Ordering::Equal => Some("".to_string()),
-                Ordering::Greater => Some(
-                    string
-                        .chars()
-                        .skip(max(string.chars().count() as i64 - n, 0) as usize)
-                        .collect::<String>(),
-                ),
-            },
-            _ => None,
-        })
-        .collect::<GenericStringArray<T>>();
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -209,6 +156,17 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
             ],
             Ok(Some("cde")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
+                ColumnarValue::Scalar(ScalarValue::from(i64::MIN)),
+            ],
+            Ok(Some("")),
             &str,
             Utf8,
             StringArray
@@ -260,10 +218,10 @@ mod tests {
         test_function!(
             RightFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
+                ColumnarValue::Scalar(ScalarValue::from("joséérend")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
-            Ok(Some("éésoj")),
+            Ok(Some("érend")),
             &str,
             Utf8,
             StringArray
@@ -271,10 +229,10 @@ mod tests {
         test_function!(
             RightFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
+                ColumnarValue::Scalar(ScalarValue::from("joséérend")),
                 ColumnarValue::Scalar(ScalarValue::from(-3i64)),
             ],
-            Ok(Some("éésoj")),
+            Ok(Some("éérend")),
             &str,
             Utf8,
             StringArray
@@ -293,6 +251,71 @@ mod tests {
             Utf8,
             StringArray
         );
+
+        // StringView cases
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("abcde".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+            ],
+            Ok(Some("de")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("abcde".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from(200i64)),
+            ],
+            Ok(Some("abcde")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from(200i64)),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                    "joséérend".to_string()
+                ))),
+                ColumnarValue::Scalar(ScalarValue::from(-3i64)),
+            ],
+            Ok(Some("éérend")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+
+        // Unicode indexing case
+        let input = "joé楽s𐀀so↓j";
+        for n in 1..=input.chars().count() {
+            let expected = input.chars().skip(n).collect::<String>();
+            test_function!(
+                RightFunc::new(),
+                vec![
+                    ColumnarValue::Scalar(ScalarValue::from(input)),
+                    ColumnarValue::Scalar(ScalarValue::from(-(n as i64))),
+                ],
+                Ok(Some(expected.as_str())),
+                &str,
+                Utf8,
+                StringArray
+            );
+        }
 
         Ok(())
     }

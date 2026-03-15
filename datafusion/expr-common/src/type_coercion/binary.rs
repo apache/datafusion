@@ -324,6 +324,9 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             }
         },
+        Colon => {
+            Ok(Signature { lhs: lhs.clone(), rhs: rhs.clone(), ret: lhs.clone() })
+        },
         IntegerDivide | Arrow | LongArrow | HashArrow | HashLongArrow
         | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe => {
             not_impl_err!("Operator {} is not yet supported", self.op)
@@ -350,16 +353,6 @@ impl<'a> BinaryTypeCoercer<'a> {
 }
 
 // TODO Move the rest inside of BinaryTypeCoercer
-
-fn is_decimal(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Decimal32(..)
-            | DataType::Decimal64(..)
-            | DataType::Decimal128(..)
-            | DataType::Decimal256(..)
-    )
-}
 
 /// Returns true if both operands are Date types (Date32 or Date64)
 /// Used to detect Date - Date operations which should return Int64 (days difference)
@@ -402,8 +395,8 @@ fn math_decimal_coercion(
         }
         // Cross-variant decimal coercion - choose larger variant with appropriate precision/scale
         (lhs, rhs)
-            if is_decimal(lhs)
-                && is_decimal(rhs)
+            if lhs.is_decimal()
+                && rhs.is_decimal()
                 && std::mem::discriminant(lhs) != std::mem::discriminant(rhs) =>
         {
             let coerced_type = get_wider_decimal_type_cross_variant(lhs_type, rhs_type)?;
@@ -480,7 +473,9 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         return None;
     }
 
-    if left_type == right_type {
+    let is_integer_dictionary =
+        matches!(left_type, Dictionary(_, value_type) if value_type.is_integer());
+    if left_type == right_type && (left_type.is_integer() || is_integer_dictionary) {
         return Some(left_type.clone());
     }
 
@@ -534,7 +529,7 @@ impl From<&DataType> for TypeCategory {
                     return TypeCategory::Numeric;
                 }
 
-                if matches!(data_type, DataType::Boolean) {
+                if *data_type == DataType::Boolean {
                     return TypeCategory::Boolean;
                 }
 
@@ -761,15 +756,15 @@ fn type_union_resolution_coercion(
 
 /// Handle type union resolution including struct type and others.
 pub fn try_type_union_resolution(data_types: &[DataType]) -> Result<Vec<DataType>> {
-    let err = match try_type_union_resolution_with_struct(data_types) {
+    let struct_err = match try_type_union_resolution_with_struct(data_types) {
         Ok(struct_types) => return Ok(struct_types),
-        Err(e) => Some(e),
+        Err(e) => e,
     };
 
     if let Some(new_type) = type_union_resolution(data_types) {
         Ok(vec![new_type; data_types.len()])
     } else {
-        exec_err!("Fail to find the coerced type, errors: {:?}", err)
+        exec_err!("Fail to find the coerced type, errors: {struct_err}")
     }
 }
 
@@ -1018,8 +1013,8 @@ pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
     match (lhs_type, rhs_type) {
         // Same decimal types
         (lhs_type, rhs_type)
-            if is_decimal(lhs_type)
-                && is_decimal(rhs_type)
+            if lhs_type.is_decimal()
+                && rhs_type.is_decimal()
                 && std::mem::discriminant(lhs_type)
                     == std::mem::discriminant(rhs_type) =>
         {
@@ -1027,8 +1022,8 @@ pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
         }
         // Mismatched decimal types
         (lhs_type, rhs_type)
-            if is_decimal(lhs_type)
-                && is_decimal(rhs_type)
+            if lhs_type.is_decimal()
+                && rhs_type.is_decimal()
                 && std::mem::discriminant(lhs_type)
                     != std::mem::discriminant(rhs_type) =>
         {
@@ -1803,9 +1798,10 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
 /// Coercion rules for like operations.
 /// This is a union of string coercion rules, dictionary coercion rules, and REE coercion rules
+/// Note: list_coercion is intentionally NOT included here because LIKE is a string pattern
+/// matching operation and is not supported for nested types (List, Struct, etc.)
 pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
-        .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| binary_to_string_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| ree_comparison_coercion(lhs_type, rhs_type, false))

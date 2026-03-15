@@ -412,6 +412,15 @@ pub struct CopyToNode {
     #[prost(string, repeated, tag = "7")]
     pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+/// Wraps a serialized FileFormatFactory with its format kind tag,
+/// so the decoder can dispatch to the correct format-specific codec.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FileFormatProto {
+    #[prost(enumeration = "FileFormatKind", tag = "1")]
+    pub kind: i32,
+    #[prost(bytes = "vec", tag = "2")]
+    pub encoded_file_format: ::prost::alloc::vec::Vec<u8>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DmlNode {
     #[prost(enumeration = "dml_node::Type", tag = "1")]
@@ -922,6 +931,13 @@ pub struct CastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(map = "string, string", tag = "3")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    #[prost(bool, optional, tag = "4")]
+    pub nullable: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TryCastNode {
@@ -929,6 +945,13 @@ pub struct TryCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(map = "string, string", tag = "3")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    #[prost(bool, optional, tag = "4")]
+    pub nullable: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExprNode {
@@ -1079,7 +1102,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1159,6 +1182,10 @@ pub mod physical_plan_node {
         MemoryScan(super::MemoryScanExecNode),
         #[prost(message, tag = "36")]
         AsyncFunc(::prost::alloc::boxed::Box<super::AsyncFuncExecNode>),
+        #[prost(message, tag = "37")]
+        Buffer(::prost::alloc::boxed::Box<super::BufferExecNode>),
+        #[prost(message, tag = "38")]
+        ArrowScan(super::ArrowScanExecNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1280,6 +1307,14 @@ pub struct PhysicalExtensionNode {
 /// physical expressions
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalExprNode {
+    /// Unique identifier for this expression to do deduplication during deserialization.
+    /// When serializing, this is set to a unique identifier for each combination of
+    /// expression, process and serialization run.
+    /// When deserializing, if this ID has been seen before, the cached Arc is returned
+    /// instead of creating a new one, enabling reconstruction of referential integrity
+    /// across serde roundtrips.
+    #[prost(uint64, optional, tag = "30")]
+    pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
         tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
@@ -1551,6 +1586,8 @@ pub struct FilterExecNode {
     pub projection: ::prost::alloc::vec::Vec<u32>,
     #[prost(uint32, tag = "10")]
     pub batch_size: u32,
+    #[prost(uint32, optional, tag = "11")]
+    pub fetch: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileGroup {
@@ -1655,6 +1692,11 @@ pub struct JsonScanExecNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub base_conf: ::core::option::Option<FileScanExecConf>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ArrowScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
 }
@@ -1959,6 +2001,8 @@ pub struct RepartitionExecNode {
     /// }
     #[prost(message, optional, tag = "5")]
     pub partitioning: ::core::option::Option<Partitioning>,
+    #[prost(bool, tag = "6")]
+    pub preserve_order: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {
@@ -2146,6 +2190,54 @@ pub struct AsyncFuncExecNode {
     pub async_exprs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(string, repeated, tag = "3")]
     pub async_expr_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BufferExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(uint64, tag = "2")]
+    pub capacity: u64,
+}
+/// Identifies a built-in file format supported by DataFusion.
+/// Used by DefaultLogicalExtensionCodec to serialize/deserialize
+/// FileFormatFactory instances (e.g. in CopyTo plans).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum FileFormatKind {
+    Unspecified = 0,
+    Csv = 1,
+    Json = 2,
+    Parquet = 3,
+    Arrow = 4,
+    Avro = 5,
+}
+impl FileFormatKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "FILE_FORMAT_KIND_UNSPECIFIED",
+            Self::Csv => "FILE_FORMAT_KIND_CSV",
+            Self::Json => "FILE_FORMAT_KIND_JSON",
+            Self::Parquet => "FILE_FORMAT_KIND_PARQUET",
+            Self::Arrow => "FILE_FORMAT_KIND_ARROW",
+            Self::Avro => "FILE_FORMAT_KIND_AVRO",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "FILE_FORMAT_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "FILE_FORMAT_KIND_CSV" => Some(Self::Csv),
+            "FILE_FORMAT_KIND_JSON" => Some(Self::Json),
+            "FILE_FORMAT_KIND_PARQUET" => Some(Self::Parquet),
+            "FILE_FORMAT_KIND_ARROW" => Some(Self::Arrow),
+            "FILE_FORMAT_KIND_AVRO" => Some(Self::Avro),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

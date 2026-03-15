@@ -32,10 +32,12 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::compute::concat_batches;
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::instant::Instant;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::plan_observer::PlanObserver;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExpr;
 
 use futures::StreamExt;
 
@@ -58,6 +60,7 @@ pub struct AnalyzeExec {
     plan_observer: Option<Arc<dyn PlanObserver>>,
     /// Identifier to pass when calling the plan observer.
     plan_id: Option<String>,
+    cache: Arc<PlanProperties>,
 }
 
 impl AnalyzeExec {
@@ -79,6 +82,7 @@ impl AnalyzeExec {
             cache,
             plan_observer: None,
             plan_id: None,
+            cache: Arc::new(cache),
         }
     }
 
@@ -150,7 +154,7 @@ impl ExecutionPlan for AnalyzeExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -160,6 +164,13 @@ impl ExecutionPlan for AnalyzeExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

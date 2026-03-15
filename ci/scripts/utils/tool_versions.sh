@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,4 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-rich
+# This file defines centralized tool versions used by CI and development scripts.
+# It is intended to be sourced by other scripts and should not be executed directly.
+
+PRETTIER_VERSION="2.7.1"

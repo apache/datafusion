@@ -62,7 +62,7 @@ struct AggregateStreamInner {
     mode: AggregateMode,
     input: SendableRecordBatchStream,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
 
     // ==== Runtime States/Buffers ====
     accumulators: Vec<AccumulatorItem>,
@@ -161,6 +161,8 @@ impl AggregateStreamInner {
             return Ok(());
         };
 
+        let mut bounds_changed = false;
+
         for acc_info in &filter_state.supported_accumulators_info {
             let acc =
                 self.accumulators
@@ -176,20 +178,27 @@ impl AggregateStreamInner {
             let current_bound = acc.evaluate()?;
             {
                 let mut bound = acc_info.shared_bound.lock();
-                match acc_info.aggr_type {
+                let new_bound = match acc_info.aggr_type {
                     DynamicFilterAggregateType::Max => {
-                        *bound = scalar_max(&bound, &current_bound)?;
+                        scalar_max(&bound, &current_bound)?
                     }
                     DynamicFilterAggregateType::Min => {
-                        *bound = scalar_min(&bound, &current_bound)?;
+                        scalar_min(&bound, &current_bound)?
                     }
+                };
+                if new_bound != *bound {
+                    *bound = new_bound;
+                    bounds_changed = true;
                 }
             }
         }
 
-        // Step 2: Sync the dynamic filter physical expression with reader
-        let predicate = self.build_dynamic_filter_from_accumulator_bounds()?;
-        filter_state.filter.update(predicate)?;
+        // Step 2: Sync the dynamic filter physical expression with reader,
+        // but only if any bound actually changed.
+        if bounds_changed {
+            let predicate = self.build_dynamic_filter_from_accumulator_bounds()?;
+            filter_state.filter.update(predicate)?;
+        }
 
         Ok(())
     }
@@ -277,7 +286,7 @@ impl AggregateStream {
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_filter_expr = agg.filter_expr.clone();
+        let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -285,7 +294,7 @@ impl AggregateStream {
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode.input_mode() {
             AggregateInputMode::Raw => agg_filter_expr,
-            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()],
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
         };
         let accumulators = create_accumulators(&agg.aggr_expr)?;
 

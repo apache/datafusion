@@ -95,6 +95,7 @@ pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
+pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
     ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature,
     TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,

@@ -75,7 +75,7 @@ mod test {
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::{
         ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility, and, binary_expr, col, lit, preimage::PreimageResult,
+        Signature, Volatility, and, binary_expr, col, lit, or, preimage::PreimageResult,
         simplify::SimplifyContext,
     };
 
@@ -161,6 +161,15 @@ mod test {
                         interval: Box::new(Interval::try_new(
                             ScalarValue::Int32(Some(100)),
                             ScalarValue::Int32(Some(200)),
+                        )?),
+                    })
+                }
+                Expr::Literal(ScalarValue::Int32(Some(600)), _) => {
+                    Ok(PreimageResult::Range {
+                        expr,
+                        interval: Box::new(Interval::try_new(
+                            ScalarValue::Int32(Some(300)),
+                            ScalarValue::Int32(Some(400)),
                         )?),
                     })
                 }
@@ -309,6 +318,38 @@ mod test {
             .or(col("x").is_null());
 
         assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_in_list_rewrite() {
+        let schema = test_schema();
+        let expr = preimage_udf_expr().in_list(vec![lit(500), lit(600)], false);
+        let expected = or(
+            and(col("x").gt_eq(lit(100)), col("x").lt(lit(200))),
+            and(col("x").gt_eq(lit(300)), col("x").lt(lit(400))),
+        );
+
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_not_in_list_rewrite() {
+        let schema = test_schema();
+        let expr = preimage_udf_expr().in_list(vec![lit(500), lit(600)], true);
+        let expected = and(
+            or(col("x").lt(lit(100)), col("x").gt_eq(lit(200))),
+            or(col("x").lt(lit(300)), col("x").gt_eq(lit(400))),
+        );
+
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_in_list_long_list_no_rewrite() {
+        let schema = test_schema();
+        let expr = preimage_udf_expr().in_list((1..100).map(lit).collect(), false);
+
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
     }
 
     #[test]

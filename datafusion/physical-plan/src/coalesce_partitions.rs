@@ -31,10 +31,11 @@ use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -47,7 +48,7 @@ pub struct CoalescePartitionsExec {
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     pub(crate) fetch: Option<usize>,
 }
@@ -59,7 +60,7 @@ impl CoalescePartitionsExec {
         CoalescePartitionsExec {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
             fetch: None,
         }
     }
@@ -100,6 +101,17 @@ impl CoalescePartitionsExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for CoalescePartitionsExec {
@@ -135,7 +147,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -147,11 +159,19 @@ impl ExecutionPlan for CoalescePartitionsExec {
         vec![false]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut plan = CoalescePartitionsExec::new(Arc::clone(&children[0]));
+        check_if_same_properties!(self, children);
+        let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
         plan.fetch = self.fetch;
         Ok(Arc::new(plan))
     }
@@ -224,14 +244,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(None)?
-            .with_fetch(self.fetch, 0, 1)
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -274,7 +289,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
             input: Arc::clone(&self.input),
             fetch: limit,
             metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
         }))
     }
 

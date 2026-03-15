@@ -512,7 +512,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_json("tests/data/unnest.json", NdJsonReadOptions::default()).await?;
+    /// let df = ctx.read_json("tests/data/unnest.json", JsonReadOptions::default()).await?;
     /// // expand into multiple columns if it's json array, flatten field name if it's nested structure
     /// let df = df.unnest_columns(&["b","c","d"])?;
     /// let expected = vec![

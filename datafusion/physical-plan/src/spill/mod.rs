@@ -49,7 +49,7 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::RecordBatchStream;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use futures::{FutureExt as _, Stream};
-use log::warn;
+use log::debug;
 
 /// Stream that reads spill files from disk where each batch is read in a spawned blocking task
 /// It will read one batch at a time and will not do any buffering, to buffer data use [`crate::common::spawn_buffered`]
@@ -154,7 +154,7 @@ impl SpillReaderStream {
                                         > max_record_batch_memory
                                             + SPILL_BATCH_MEMORY_MARGIN
                                     {
-                                        warn!(
+                                        debug!(
                                             "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
                                                 by more than the allowed tolerance ({SPILL_BATCH_MEMORY_MARGIN} bytes).\n\
                                                 This likely indicates a bug in memory accounting during spilling.\n\
@@ -308,6 +308,11 @@ impl IPCStreamWriter {
         let delta_num_bytes: usize = batch.get_array_memory_size();
         self.num_bytes += delta_num_bytes;
         Ok((delta_num_rows, delta_num_bytes))
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        self.writer.flush()?;
+        Ok(())
     }
 
     /// Finish the writer
@@ -472,11 +477,12 @@ mod tests {
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
 
+        let row_batches: Vec<RecordBatch> =
+            (0..batch1.num_rows()).map(|i| batch1.slice(i, 1)).collect();
         let (spill_file, max_batch_mem) = spill_manager
-            .spill_record_batch_by_size_and_return_max_batch_memory(
-                &batch1,
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                row_batches.iter().map(Ok),
                 "Test Spill",
-                1,
             )?
             .unwrap();
         assert!(spill_file.path().exists());
@@ -726,7 +732,7 @@ mod tests {
         let completed_file = spill_manager.spill_record_batch_and_finish(&[], "Test")?;
         assert!(completed_file.is_none());
 
-        // Test write empty batch with interface `spill_record_batch_by_size_and_return_max_batch_memory()`
+        // Test write empty batch with interface `spill_record_batch_iter_and_return_max_batch_memory()`
         let empty_batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -735,10 +741,9 @@ mod tests {
             ],
         )?;
         let completed_file = spill_manager
-            .spill_record_batch_by_size_and_return_max_batch_memory(
-                &empty_batch,
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                std::iter::once(Ok(&empty_batch)),
                 "Test",
-                1,
             )?;
         assert!(completed_file.is_none());
 

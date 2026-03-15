@@ -23,7 +23,9 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
+use log::{Level, debug, log_enabled};
 
+use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -45,6 +47,7 @@ use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::ExpressionPlacement;
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
 /// they are applied as early as possible.
@@ -175,27 +178,9 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     }
 }
 
-/// For a given JOIN type, determine whether each input of the join is preserved
-/// for the join condition (`ON` clause filters).
-///
-/// It is only correct to push filters below a join for preserved inputs.
-///
-/// # Return Value
-/// A tuple of booleans - (left_preserved, right_preserved).
-///
-/// See [`lr_is_preserved`] for a definition of "preserved".
+/// See [`JoinType::on_lr_is_preserved`] for details.
 pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
-    match join_type {
-        JoinType::Inner => (true, true),
-        JoinType::Left => (false, true),
-        JoinType::Right => (true, false),
-        JoinType::Full => (false, false),
-        JoinType::LeftSemi | JoinType::RightSemi => (true, true),
-        JoinType::LeftAnti => (false, true),
-        JoinType::RightAnti => (true, false),
-        JoinType::LeftMark => (false, true),
-        JoinType::RightMark => (true, false),
-    }
+    join_type.on_lr_is_preserved()
 }
 
 /// Evaluates the columns referenced in the given expression to see if they refer
@@ -542,8 +527,19 @@ fn push_down_join(
         .map_or_else(Vec::new, |filter| split_conjunction_owned(filter.clone()));
 
     // Are there any new join predicates that can be inferred from the filter expressions?
-    let inferred_join_predicates =
-        infer_join_predicates(&join, &predicates, &on_filters)?;
+    let inferred_join_predicates = with_debug_timing("infer_join_predicates", || {
+        infer_join_predicates(&join, &predicates, &on_filters)
+    })?;
+
+    if log_enabled!(Level::Debug) {
+        debug!(
+            "push_down_filter: join_type={:?}, parent_predicates={}, on_filters={}, inferred_join_predicates={}",
+            join.join_type,
+            predicates.len(),
+            on_filters.len(),
+            inferred_join_predicates.len()
+        );
+    }
 
     if on_filters.is_empty()
         && predicates.is_empty()
@@ -617,7 +613,7 @@ impl InferredPredicates {
     fn new(join_type: JoinType) -> Self {
         Self {
             predicates: vec![],
-            is_inner_join: matches!(join_type, JoinType::Inner),
+            is_inner_join: join_type == JoinType::Inner,
         }
     }
 
@@ -782,7 +778,15 @@ impl OptimizerRule for PushDownFilter {
 
         let predicate = split_conjunction_owned(filter.predicate.clone());
         let old_predicate_len = predicate.len();
-        let new_predicates = simplify_predicates(predicate)?;
+        let new_predicates =
+            with_debug_timing("simplify_predicates", || simplify_predicates(predicate))?;
+        if log_enabled!(Level::Debug) {
+            debug!(
+                "push_down_filter: simplify_predicates old_count={}, new_count={}",
+                old_predicate_len,
+                new_predicates.len()
+            );
+        }
         if old_predicate_len != new_predicates.len() {
             let Some(new_predicate) = conjunction(new_predicates) else {
                 // new_predicates is empty - remove the filter entirely
@@ -1295,10 +1299,13 @@ fn rewrite_projection(
     predicates: Vec<Expr>,
     mut projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
-    // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
-    // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
-    // collect projection.
-    let (volatile_map, non_volatile_map): (HashMap<_, _>, HashMap<_, _>) = projection
+    // Partition projection expressions into non-pushable vs pushable.
+    // Non-pushable expressions are volatile (must not be duplicated) or
+    // MoveTowardsLeafNodes (cheap expressions like get_field where re-inlining
+    // into a filter causes optimizer instability — ExtractLeafExpressions will
+    // undo the push-down, creating an infinite loop that runs until the
+    // iteration limit is hit).
+    let (non_pushable_map, pushable_map): (HashMap<_, _>, HashMap<_, _>) = projection
         .schema
         .iter()
         .zip(projection.expr.iter())
@@ -1308,12 +1315,15 @@ fn rewrite_projection(
 
             (qualified_name(qualifier, field.name()), expr)
         })
-        .partition(|(_, value)| value.is_volatile());
+        .partition(|(_, value)| {
+            value.is_volatile()
+                || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
+        });
 
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
     for expr in predicates {
-        if contain(&expr, &volatile_map) {
+        if contain(&expr, &non_pushable_map) {
             keep_predicates.push(expr);
         } else {
             push_predicates.push(expr);
@@ -1325,7 +1335,7 @@ fn rewrite_projection(
             // re-write all filters based on this projection
             // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
             let new_filter = LogicalPlan::Filter(Filter::try_new(
-                replace_cols_by_name(expr, &non_volatile_map)?,
+                replace_cols_by_name(expr, &pushable_map)?,
                 std::mem::take(&mut projection.input),
             )?);
 
@@ -1336,7 +1346,10 @@ fn rewrite_projection(
                 conjunction(keep_predicates),
             ))
         }
-        None => Ok((Transformed::no(LogicalPlan::Projection(projection)), None)),
+        None => Ok((
+            Transformed::no(LogicalPlan::Projection(projection)),
+            conjunction(keep_predicates),
+        )),
     }
 }
 
@@ -1383,6 +1396,22 @@ impl PushDownFilter {
     pub fn new() -> Self {
         Self {}
     }
+}
+
+fn with_debug_timing<T, F>(label: &'static str, f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    if !log_enabled!(Level::Debug) {
+        return f();
+    }
+    let start = Instant::now();
+    let result = f();
+    debug!(
+        "push_down_filter_timing: section={label}, elapsed_us={}",
+        start.elapsed().as_micros()
+    );
+    result
 }
 
 /// replaces columns by its name on the projection.
@@ -1446,6 +1475,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
+    use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
     use datafusion_expr::test::function_stub::sum;
     use insta::assert_snapshot;
@@ -4218,6 +4248,70 @@ mod tests {
             @r"
         Filter: Boolean(false)
           TestUserNode
+        "
+        )
+    }
+
+    /// Test that filters are NOT pushed through MoveTowardsLeafNodes projections.
+    /// These are cheap expressions (like get_field) where re-inlining into a filter
+    /// has no benefit and causes optimizer instability — ExtractLeafExpressions will
+    /// undo the push-down, creating an infinite loop that runs until the iteration
+    /// limit is hit.
+    #[test]
+    fn filter_not_pushed_through_move_towards_leaves_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Create a projection with a MoveTowardsLeafNodes expression
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("val"),
+                col("b"),
+                col("c"),
+            ])?
+            .build()?;
+
+        // Put a filter on the MoveTowardsLeafNodes column
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("val").gt(lit(150i64)))?
+            .build()?;
+
+        // Filter should NOT be pushed through — val maps to a MoveTowardsLeafNodes expr
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: val > Int64(150)
+          Projection: leaf_udf(test.a) AS val, test.b, test.c
+            TableScan: test
+        "
+        )
+    }
+
+    /// Test mixed predicates: Column predicate pushed, MoveTowardsLeafNodes kept.
+    #[test]
+    fn filter_mixed_predicates_partial_push() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Create a projection with both MoveTowardsLeafNodes and Column expressions
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("val"),
+                col("b"),
+                col("c"),
+            ])?
+            .build()?;
+
+        // Filter with both: val > 150 (MoveTowardsLeafNodes) AND b > 5 (Column)
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("val").gt(lit(150i64)).and(col("b").gt(lit(5i64))))?
+            .build()?;
+
+        // val > 150 should be kept above, b > 5 should be pushed through
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: val > Int64(150)
+          Projection: leaf_udf(test.a) AS val, test.b, test.c
+            TableScan: test, full_filters=[test.b > Int64(5)]
         "
         )
     }

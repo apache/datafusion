@@ -122,7 +122,7 @@ impl FunctionArgs {
                 null_treatment: null_treatment.map(|v| v.into()),
                 distinct: false,
                 within_group,
-                function_without_parentheses: matches!(args, FunctionArguments::None),
+                function_without_parentheses: args == FunctionArguments::None,
             });
         };
 
@@ -905,6 +905,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             DataType::List(_)
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
             | DataType::Struct(_) => Ok(()),
             DataType::Null => {
                 not_impl_err!("unnest() does not support null yet")

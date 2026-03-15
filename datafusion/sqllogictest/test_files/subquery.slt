@@ -1528,3 +1528,139 @@ logical_plan
 20)--------SubqueryAlias: set_cmp_s
 21)----------Projection: column1 AS v
 22)------------Values: (Int64(5)), (Int64(NULL))
+
+# correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing_level1_relation
+query TT
+explain select c_custkey from customer
+where c_acctbal < (
+    select sum(o_totalprice) from orders
+    where o_custkey = c_custkey
+    and exists (
+        select * from lineitem where l_orderkey = o_orderkey
+        and l_extendedprice < c_acctbal
+    )
+) order by c_custkey;
+----
+logical_plan
+01)Sort: customer.c_custkey ASC NULLS LAST
+02)--Projection: customer.c_custkey
+03)----Inner Join: customer.c_custkey = __scalar_sq_2.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_2.sum(orders.o_totalprice)
+04)------TableScan: customer projection=[c_custkey, c_acctbal]
+05)------SubqueryAlias: __scalar_sq_2
+06)--------Projection: sum(orders.o_totalprice), orders.o_custkey
+07)----------Aggregate: groupBy=[[orders.o_custkey]], aggr=[[sum(orders.o_totalprice)]]
+08)------------Projection: orders.o_custkey, orders.o_totalprice
+09)--------------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey Filter: __correlated_sq_1.l_extendedprice < customer.c_acctbal
+10)----------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
+11)----------------SubqueryAlias: __correlated_sq_1
+12)------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice]
+
+# correlated_recursive_scalar_subquery_with_level_3_in_subquery_referencing_level1_relation
+query TT
+explain select c_custkey from customer
+where c_acctbal < (
+    select sum(o_totalprice) from orders
+    where o_custkey = c_custkey
+    and o_totalprice in (
+        select l_extendedprice as price from lineitem where l_orderkey = o_orderkey
+        and l_extendedprice < c_acctbal
+    )
+) order by c_custkey;
+----
+logical_plan
+01)Sort: customer.c_custkey ASC NULLS LAST
+02)--Projection: customer.c_custkey
+03)----Inner Join: customer.c_custkey = __scalar_sq_2.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_2.sum(orders.o_totalprice)
+04)------TableScan: customer projection=[c_custkey, c_acctbal]
+05)------SubqueryAlias: __scalar_sq_2
+06)--------Projection: sum(orders.o_totalprice), orders.o_custkey
+07)----------Aggregate: groupBy=[[orders.o_custkey]], aggr=[[sum(orders.o_totalprice)]]
+08)------------Projection: orders.o_custkey, orders.o_totalprice
+09)--------------LeftSemi Join: orders.o_totalprice = __correlated_sq_1.price, orders.o_orderkey = __correlated_sq_1.l_orderkey Filter: __correlated_sq_1.l_extendedprice < customer.c_acctbal
+10)----------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
+11)----------------SubqueryAlias: __correlated_sq_1
+12)------------------Projection: lineitem.l_extendedprice AS price, lineitem.l_extendedprice, lineitem.l_orderkey
+13)--------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice]
+
+# Setup tables for recursive correlation tests
+statement ok
+CREATE TABLE employees (
+    employee_id INTEGER,
+    employee_name VARCHAR,
+    dept_id INTEGER,
+    salary DECIMAL
+);
+
+statement ok
+CREATE TABLE project_assignments (
+    project_id INTEGER,
+    employee_id INTEGER,
+    priority INTEGER
+);
+
+# Provided recursive scalar subquery explain case
+query TT
+EXPLAIN SELECT e1.employee_name, e1.salary
+FROM employees e1
+WHERE e1.salary > (
+    SELECT AVG(e2.salary)
+    FROM employees e2
+    WHERE e2.dept_id = e1.dept_id
+    AND e2.salary > (
+        SELECT AVG(e3.salary)
+        FROM employees e3
+        WHERE e3.dept_id = e1.dept_id
+    )
+);
+----
+logical_plan
+01)Projection: e1.employee_name, e1.salary
+02)--Inner Join: e1.dept_id = __scalar_sq_1.dept_id Filter: CAST(e1.salary AS Decimal128(38, 14)) > __scalar_sq_1.avg(e2.salary)
+03)----SubqueryAlias: e1
+04)------TableScan: employees projection=[employee_name, dept_id, salary]
+05)----SubqueryAlias: __scalar_sq_1
+06)------Projection: avg(e2.salary), e2.dept_id
+07)--------Aggregate: groupBy=[[e2.dept_id]], aggr=[[avg(e2.salary)]]
+08)----------Projection: e2.dept_id, e2.salary
+09)------------Inner Join:  Filter: CAST(e2.salary AS Decimal128(38, 14)) > __scalar_sq_2.avg(e3.salary) AND __scalar_sq_2.dept_id = e1.dept_id
+10)--------------SubqueryAlias: e2
+11)----------------TableScan: employees projection=[dept_id, salary]
+12)--------------SubqueryAlias: __scalar_sq_2
+13)----------------Projection: avg(e3.salary), e3.dept_id
+14)------------------Aggregate: groupBy=[[e3.dept_id]], aggr=[[avg(e3.salary)]]
+15)--------------------SubqueryAlias: e3
+16)----------------------TableScan: employees projection=[dept_id, salary]
+
+# Check shadowing: `dept_id` should resolve to the nearest outer relation (`e2`)
+# in the innermost subquery rather than the outermost
+query TT
+EXPLAIN SELECT e1.employee_id
+FROM employees e1
+WHERE EXISTS (
+    SELECT 1
+    FROM employees e2
+    WHERE EXISTS (
+        SELECT 1
+        FROM project_assignments p
+        WHERE p.project_id = dept_id
+    )
+);
+----
+logical_plan
+01)LeftSemi Join:
+02)--SubqueryAlias: e1
+03)----TableScan: employees projection=[employee_id]
+04)--SubqueryAlias: __correlated_sq_2
+05)----Projection:
+06)------LeftSemi Join: e2.dept_id = __correlated_sq_1.project_id
+07)--------SubqueryAlias: e2
+08)----------TableScan: employees projection=[dept_id]
+09)--------SubqueryAlias: __correlated_sq_1
+10)----------SubqueryAlias: p
+11)------------TableScan: project_assignments projection=[project_id]
+
+statement count 0
+drop table employees;
+
+statement count 0
+drop table project_assignments;

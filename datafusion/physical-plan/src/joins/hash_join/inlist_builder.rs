@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{Field, FieldRef, Fields};
-use arrow::downcast_dictionary_array;
 use arrow_schema::DataType;
 use datafusion_common::Result;
 
@@ -31,18 +30,6 @@ pub(super) fn build_struct_fields(data_types: &[DataType]) -> Result<Fields> {
         .enumerate()
         .map(|(i, dt)| Ok(Field::new(format!("c{i}"), dt.clone(), true)))
         .collect()
-}
-
-/// Flattens dictionary-encoded arrays to their underlying value arrays.
-/// Non-dictionary arrays are returned as-is.
-fn flatten_dictionary_array(array: &ArrayRef) -> ArrayRef {
-    downcast_dictionary_array! {
-        array => {
-            // Recursively flatten in case of nested dictionaries
-            flatten_dictionary_array(array.values())
-        }
-        _ => Arc::clone(array)
-    }
 }
 
 /// Builds InList values from join key column arrays.
@@ -64,20 +51,14 @@ fn flatten_dictionary_array(array: &ArrayRef) -> ArrayRef {
 pub(super) fn build_struct_inlist_values(
     join_key_arrays: &[ArrayRef],
 ) -> Result<Option<ArrayRef>> {
-    // Flatten any dictionary-encoded arrays
-    let flattened_arrays: Vec<ArrayRef> = join_key_arrays
-        .iter()
-        .map(flatten_dictionary_array)
-        .collect();
-
     // Build the source array/struct
-    let source_array: ArrayRef = if flattened_arrays.len() == 1 {
+    let source_array: ArrayRef = if join_key_arrays.len() == 1 {
         // Single column: use directly
-        Arc::clone(&flattened_arrays[0])
+        Arc::clone(&join_key_arrays[0])
     } else {
         // Multi-column: build StructArray once from all columns
         let fields = build_struct_fields(
-            &flattened_arrays
+            &join_key_arrays
                 .iter()
                 .map(|arr| arr.data_type().clone())
                 .collect::<Vec<_>>(),
@@ -87,7 +68,7 @@ pub(super) fn build_struct_inlist_values(
         let arrays_with_fields: Vec<(FieldRef, ArrayRef)> = fields
             .iter()
             .cloned()
-            .zip(flattened_arrays.iter().cloned())
+            .zip(join_key_arrays.iter().cloned())
             .collect();
 
         Arc::new(StructArray::from(arrays_with_fields))
@@ -99,7 +80,9 @@ pub(super) fn build_struct_inlist_values(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::{
+        DictionaryArray, Int8Array, Int32Array, StringArray, StringDictionaryBuilder,
+    };
     use arrow_schema::DataType;
     use std::sync::Arc;
 
@@ -129,5 +112,49 @@ mod tests {
                 build_struct_fields(&[DataType::Int32, DataType::Utf8]).unwrap()
             )
         );
+    }
+
+    #[test]
+    fn test_build_multi_column_inlist_with_dictionary() {
+        let mut builder = StringDictionaryBuilder::<arrow::datatypes::Int8Type>::new();
+        builder.append_value("foo");
+        builder.append_value("foo");
+        builder.append_value("foo");
+        let dict_array = Arc::new(builder.finish()) as ArrayRef;
+
+        let int_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+
+        let result = build_struct_inlist_values(&[dict_array, int_array])
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(
+            *result.data_type(),
+            DataType::Struct(
+                build_struct_fields(&[
+                    DataType::Dictionary(
+                        Box::new(DataType::Int8),
+                        Box::new(DataType::Utf8)
+                    ),
+                    DataType::Int32
+                ])
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn test_build_single_column_dictionary_inlist() {
+        let keys = Int8Array::from(vec![0i8, 0, 0]);
+        let values = Arc::new(StringArray::from(vec!["foo"]));
+        let dict_array = Arc::new(DictionaryArray::new(keys, values)) as ArrayRef;
+
+        let result = build_struct_inlist_values(std::slice::from_ref(&dict_array))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.data_type(), dict_array.data_type());
     }
 }

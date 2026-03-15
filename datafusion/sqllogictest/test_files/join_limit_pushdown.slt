@@ -1,0 +1,269 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for limit pushdown into joins
+
+# need to use a single partition for deterministic results
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;
+
+# Create test tables
+statement ok
+CREATE TABLE t1 (a INT, b VARCHAR) AS VALUES
+  (1, 'one'),
+  (2, 'two'),
+  (3, 'three'),
+  (4, 'four'),
+  (5, 'five');
+
+statement ok
+CREATE TABLE t2 (x INT, y VARCHAR) AS VALUES
+  (1, 'alpha'),
+  (2, 'beta'),
+  (3, 'gamma'),
+  (6, 'delta'),
+  (7, 'epsilon');
+
+query TT
+EXPLAIN SELECT t1.a, t2.x FROM t1 INNER JOIN t2 ON t1.a = t2.x LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, x@0)], fetch=2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT t1.a, t2.x FROM t1 INNER JOIN t2 ON t1.a = t2.x LIMIT 2;
+----
+1 1
+2 2
+
+# Right join is converted to Left join with projection - fetch pushdown is supported
+query TT
+EXPLAIN SELECT t1.a, t2.x FROM t1 RIGHT JOIN t2 ON t1.a = t2.x LIMIT 3;
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--Right Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Limit: skip=0, fetch=3
+05)------TableScan: t2 projection=[x], fetch=3
+physical_plan
+01)ProjectionExec: expr=[a@1 as a, x@0 as x]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(x@0, a@0)], fetch=3
+03)----DataSourceExec: partitions=1, partition_sizes=[1], fetch=3
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT t1.a, t2.x FROM t1 RIGHT JOIN t2 ON t1.a = t2.x LIMIT 3;
+----
+1 1
+2 2
+3 3
+
+# Left join supports fetch pushdown
+query TT
+EXPLAIN SELECT t1.a, t2.x FROM t1 LEFT JOIN t2 ON t1.a = t2.x LIMIT 3;
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----Limit: skip=0, fetch=3
+04)------TableScan: t1 projection=[a], fetch=3
+05)----TableScan: t2 projection=[x]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, x@0)], fetch=3
+02)--DataSourceExec: partitions=1, partition_sizes=[1], fetch=3
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT t1.a, t2.x FROM t1 LEFT JOIN t2 ON t1.a = t2.x LIMIT 3;
+----
+1 1
+2 2
+3 3
+
+
+# Full join supports fetch pushdown
+query TT
+EXPLAIN SELECT t1.a, t2.x FROM t1 FULL OUTER JOIN t2 ON t1.a = t2.x LIMIT 4;
+----
+logical_plan
+01)Limit: skip=0, fetch=4
+02)--Full Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Full, on=[(a@0, x@0)], fetch=4
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Note: FULL OUTER JOIN order is not deterministic, so we just check count
+query I
+SELECT COUNT(*) FROM (SELECT t1.a, t2.x FROM t1 FULL OUTER JOIN t2 ON t1.a = t2.x LIMIT 4);
+----
+4
+
+# EXISTS becomes left semi join - fetch pushdown is supported
+query TT
+EXPLAIN SELECT t2.x FROM t2 WHERE EXISTS (SELECT 1 FROM t1 WHERE t1.a = t2.x) LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--LeftSemi Join: t2.x = __correlated_sq_1.a
+03)----TableScan: t2 projection=[x]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: t1 projection=[a]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(x@0, a@0)], fetch=2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT t2.x FROM t2 WHERE EXISTS (SELECT 1 FROM t1 WHERE t1.a = t2.x) LIMIT 2;
+----
+1
+2
+
+# NOT EXISTS becomes LeftAnti - fetch pushdown is supported
+query TT
+EXPLAIN SELECT t2.x FROM t2 WHERE NOT EXISTS (SELECT 1 FROM t1 WHERE t1.a = t2.x) LIMIT 1;
+----
+logical_plan
+01)Limit: skip=0, fetch=1
+02)--LeftAnti Join: t2.x = __correlated_sq_1.a
+03)----TableScan: t2 projection=[x]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: t1 projection=[a]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(x@0, a@0)], fetch=1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT t2.x FROM t2 WHERE NOT EXISTS (SELECT 1 FROM t1 WHERE t1.a = t2.x) LIMIT 1;
+----
+6
+
+# Inner join should push
+query TT
+EXPLAIN SELECT t1.a, t2.x FROM t1 INNER JOIN t2 ON t1.a = t2.x LIMIT 1 OFFSET 1;
+----
+logical_plan
+01)Limit: skip=1, fetch=1
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x]
+physical_plan
+01)GlobalLimitExec: skip=1, fetch=1
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, x@0)], fetch=2
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT t1.a, t2.x FROM t1 INNER JOIN t2 ON t1.a = t2.x LIMIT 1 OFFSET 1;
+----
+2 2
+
+query TT
+EXPLAIN SELECT t1.a, t2.x FROM t1 INNER JOIN t2 ON t1.a = t2.x LIMIT 0;
+----
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
+
+query II
+SELECT t1.a, t2.x FROM t1 INNER JOIN t2 ON t1.a = t2.x LIMIT 0;
+----
+
+statement ok
+CREATE TABLE t3 (p INT, q VARCHAR) AS VALUES
+  (1, 'foo'),
+  (2, 'bar'),
+  (3, 'baz');
+
+query TT
+EXPLAIN SELECT t1.a, t2.x, t3.p 
+FROM t1 
+INNER JOIN t2 ON t1.a = t2.x 
+INNER JOIN t3 ON t2.x = t3.p 
+LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Inner Join: t2.x = t3.p
+03)----Inner Join: t1.a = t2.x
+04)------TableScan: t1 projection=[a]
+05)------TableScan: t2 projection=[x]
+06)----TableScan: t3 projection=[p]
+physical_plan
+01)ProjectionExec: expr=[a@1 as a, x@2 as x, p@0 as p]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(p@0, x@1)], fetch=2
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, x@0)]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query III
+SELECT t1.a, t2.x, t3.p 
+FROM t1 
+INNER JOIN t2 ON t1.a = t2.x 
+INNER JOIN t3 ON t2.x = t3.p 
+LIMIT 2;
+----
+1 1 1
+2 2 2
+
+# Try larger limit
+query TT
+EXPLAIN SELECT t1.a, t2.x FROM t1 INNER JOIN t2 ON t1.a = t2.x LIMIT 100;
+----
+logical_plan
+01)Limit: skip=0, fetch=100
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, x@0)], fetch=100
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT t1.a, t2.x FROM t1 INNER JOIN t2 ON t1.a = t2.x LIMIT 100;
+----
+1 1
+2 2
+3 3
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;

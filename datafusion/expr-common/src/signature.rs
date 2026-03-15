@@ -322,6 +322,43 @@ impl TypeSignature {
     }
 }
 
+impl Display for TypeSignature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeSignature::Variadic(types) => {
+                write!(f, "Variadic({})", types.iter().join(", "))
+            }
+            TypeSignature::UserDefined => write!(f, "UserDefined"),
+            TypeSignature::VariadicAny => write!(f, "VariadicAny"),
+            TypeSignature::Uniform(count, types) => {
+                write!(f, "Uniform({count}, [{}])", types.iter().join(", "))
+            }
+            TypeSignature::Exact(types) => {
+                write!(f, "Exact({})", types.iter().join(", "))
+            }
+            TypeSignature::Coercible(coercions) => {
+                write!(f, "Coercible({})", coercions.iter().join(", "))
+            }
+            TypeSignature::Comparable(count) => write!(f, "Comparable({count})"),
+            TypeSignature::Any(count) => write!(f, "Any({count})"),
+            TypeSignature::OneOf(sigs) => {
+                write!(f, "OneOf(")?;
+                for (i, sig) in sigs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{sig}")?;
+                }
+                write!(f, ")")
+            }
+            TypeSignature::ArraySignature(sig) => write!(f, "ArraySignature({sig})"),
+            TypeSignature::Numeric(count) => write!(f, "Numeric({count})"),
+            TypeSignature::String(count) => write!(f, "String({count})"),
+            TypeSignature::Nullary => write!(f, "Nullary"),
+        }
+    }
+}
+
 /// Represents the class of types that can be used in a function signature.
 ///
 /// This is used to specify what types are valid for function arguments in a more flexible way than
@@ -358,7 +395,19 @@ pub enum TypeSignatureClass {
 
 impl Display for TypeSignatureClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TypeSignatureClass::{self:?}")
+        match self {
+            Self::Any => write!(f, "Any"),
+            Self::Timestamp => write!(f, "Timestamp"),
+            Self::Time => write!(f, "Time"),
+            Self::Interval => write!(f, "Interval"),
+            Self::Duration => write!(f, "Duration"),
+            Self::Native(logical_type) => write!(f, "{logical_type}"),
+            Self::Integer => write!(f, "Integer"),
+            Self::Float => write!(f, "Float"),
+            Self::Decimal => write!(f, "Decimal"),
+            Self::Numeric => write!(f, "Numeric"),
+            Self::Binary => write!(f, "Binary"),
+        }
     }
 }
 
@@ -1062,12 +1111,7 @@ impl Coercion {
 
 impl Display for Coercion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Coercion({}", self.desired_type())?;
-        if let Some(implicit_coercion) = self.implicit_coercion() {
-            write!(f, ", implicit_coercion={implicit_coercion}",)
-        } else {
-            write!(f, ")")
-        }
+        write!(f, "{}", self.desired_type())
     }
 }
 
@@ -1119,11 +1163,14 @@ pub struct ImplicitCoercion {
 
 impl Display for ImplicitCoercion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "ImplicitCoercion({:?}, default_type={:?})",
-            self.allowed_source_types, self.default_casted_type
-        )
+        write!(f, "ImplicitCoercion(")?;
+        for (i, source_type) in self.allowed_source_types.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{source_type}")?;
+        }
+        write!(f, "; default={}", self.default_casted_type)
     }
 }
 
@@ -1416,7 +1463,7 @@ impl Signature {
             Arity::Variable => {
                 // For UserDefined signatures, allow parameter names
                 // The function implementer is responsible for validating the names match the actual arguments
-                if !matches!(self.type_signature, TypeSignature::UserDefined) {
+                if self.type_signature != TypeSignature::UserDefined {
                     return plan_err!(
                         "Cannot specify parameter names for variable arity signature: {:?}",
                         self.type_signature
@@ -1438,7 +1485,9 @@ impl Signature {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::types::{logical_int32, logical_int64, logical_string};
+    use datafusion_common::types::{
+        NativeType, logical_float64, logical_int32, logical_int64, logical_string,
+    };
 
     use super::*;
     use crate::signature::{
@@ -1585,6 +1634,7 @@ mod tests {
                 vec![DataType::UInt16, DataType::UInt16],
                 vec![DataType::UInt32, DataType::UInt32],
                 vec![DataType::UInt64, DataType::UInt64],
+                vec![DataType::Float16, DataType::Float16],
                 vec![DataType::Float32, DataType::Float32],
                 vec![DataType::Float64, DataType::Float64]
             ]
@@ -2032,5 +2082,125 @@ mod tests {
     fn test_type_signature_arity_user_defined() {
         let sig = TypeSignature::UserDefined;
         assert_eq!(sig.arity(), Arity::Variable);
+    }
+
+    #[test]
+    fn test_type_signature_display() {
+        use insta::assert_snapshot;
+
+        assert_snapshot!(TypeSignature::Nullary, @"Nullary");
+        assert_snapshot!(TypeSignature::Any(2), @"Any(2)");
+        assert_snapshot!(TypeSignature::Numeric(3), @"Numeric(3)");
+        assert_snapshot!(TypeSignature::String(1), @"String(1)");
+        assert_snapshot!(TypeSignature::Comparable(2), @"Comparable(2)");
+        assert_snapshot!(TypeSignature::VariadicAny, @"VariadicAny");
+        assert_snapshot!(TypeSignature::UserDefined, @"UserDefined");
+
+        assert_snapshot!(
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]),
+            @"Exact(Int32, Utf8)"
+        );
+        assert_snapshot!(
+            TypeSignature::Variadic(vec![DataType::Utf8, DataType::LargeUtf8]),
+            @"Variadic(Utf8, LargeUtf8)"
+        );
+        assert_snapshot!(
+            TypeSignature::Uniform(2, vec![DataType::Float32, DataType::Float64]),
+            @"Uniform(2, [Float32, Float64])"
+        );
+
+        assert_snapshot!(
+            TypeSignature::Coercible(vec![
+                Coercion::new_exact(TypeSignatureClass::Native(logical_float64())),
+                Coercion::new_exact(TypeSignatureClass::Native(logical_int32())),
+            ]),
+            @"Coercible(Float64, Int32)"
+        );
+
+        assert_snapshot!(
+            TypeSignature::OneOf(vec![
+                TypeSignature::Nullary,
+                TypeSignature::VariadicAny,
+            ]),
+            @"OneOf(Nullary, VariadicAny)"
+        );
+    }
+
+    #[test]
+    fn test_type_signature_class_display() {
+        use insta::assert_snapshot;
+
+        assert_snapshot!(TypeSignatureClass::Any, @"Any");
+        assert_snapshot!(TypeSignatureClass::Numeric, @"Numeric");
+        assert_snapshot!(TypeSignatureClass::Integer, @"Integer");
+        assert_snapshot!(TypeSignatureClass::Float, @"Float");
+        assert_snapshot!(TypeSignatureClass::Decimal, @"Decimal");
+        assert_snapshot!(TypeSignatureClass::Timestamp, @"Timestamp");
+        assert_snapshot!(TypeSignatureClass::Time, @"Time");
+        assert_snapshot!(TypeSignatureClass::Interval, @"Interval");
+        assert_snapshot!(TypeSignatureClass::Duration, @"Duration");
+        assert_snapshot!(TypeSignatureClass::Binary, @"Binary");
+        assert_snapshot!(TypeSignatureClass::Native(logical_int32()), @"Int32");
+        assert_snapshot!(TypeSignatureClass::Native(logical_string()), @"String");
+    }
+
+    #[test]
+    fn test_coercion_display() {
+        use insta::assert_snapshot;
+
+        let exact_int = Coercion::new_exact(TypeSignatureClass::Native(logical_int32()));
+        assert_snapshot!(exact_int, @"Int32");
+
+        let exact_numeric = Coercion::new_exact(TypeSignatureClass::Numeric);
+        assert_snapshot!(exact_numeric, @"Numeric");
+
+        let implicit = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
+        assert_snapshot!(implicit, @"Float64");
+
+        let implicit_with_multiple_sources = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![TypeSignatureClass::Integer, TypeSignatureClass::Numeric],
+            NativeType::Int64,
+        );
+        assert_snapshot!(implicit_with_multiple_sources, @"Int64");
+    }
+
+    #[test]
+    fn test_to_string_repr_coercible() {
+        use insta::assert_snapshot;
+
+        // Simulates a function like round(Float64, Int64) with coercion
+        let sig = TypeSignature::Coercible(vec![
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_float64()),
+                vec![TypeSignatureClass::Numeric],
+                NativeType::Float64,
+            ),
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_int64()),
+                vec![TypeSignatureClass::Integer],
+                NativeType::Int64,
+            ),
+        ]);
+        let repr = sig.to_string_repr();
+        assert_eq!(repr.len(), 1);
+        assert_snapshot!(repr[0], @"Float64, Int64");
+    }
+
+    #[test]
+    fn test_to_string_repr_coercible_exact() {
+        use insta::assert_snapshot;
+
+        let sig = TypeSignature::Coercible(vec![
+            Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int64())),
+        ]);
+        let repr = sig.to_string_repr();
+        assert_eq!(repr.len(), 1);
+        assert_snapshot!(repr[0], @"String, Int64");
     }
 }

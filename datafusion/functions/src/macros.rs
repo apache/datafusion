@@ -332,7 +332,8 @@ macro_rules! make_math_binary_udf {
 
             use arrow::array::{ArrayRef, AsArray};
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
-            use datafusion_common::{Result, exec_err};
+            use datafusion_common::utils::take_function_args;
+            use datafusion_common::{Result, ScalarValue, internal_err};
             use datafusion_expr::TypeSignature;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
@@ -393,37 +394,76 @@ macro_rules! make_math_binary_udf {
                     &self,
                     args: ScalarFunctionArgs,
                 ) -> Result<ColumnarValue> {
-                    let args = ColumnarValue::values_to_arrays(&args.args)?;
-                    let arr: ArrayRef = match args[0].data_type() {
-                        DataType::Float64 => {
-                            let y = args[0].as_primitive::<Float64Type>();
-                            let x = args[1].as_primitive::<Float64Type>();
-                            let result = arrow::compute::binary::<_, _, _, Float64Type>(
-                                y,
-                                x,
-                                |y, x| f64::$BINARY_FUNC(y, x),
-                            )?;
-                            Arc::new(result) as _
-                        }
-                        DataType::Float32 => {
-                            let y = args[0].as_primitive::<Float32Type>();
-                            let x = args[1].as_primitive::<Float32Type>();
-                            let result = arrow::compute::binary::<_, _, _, Float32Type>(
-                                y,
-                                x,
-                                |y, x| f32::$BINARY_FUNC(y, x),
-                            )?;
-                            Arc::new(result) as _
-                        }
-                        other => {
-                            return exec_err!(
-                                "Unsupported data type {other:?} for function {}",
-                                self.name()
-                            );
-                        }
-                    };
+                    let ScalarFunctionArgs {
+                        args, return_field, ..
+                    } = args;
+                    let return_type = return_field.data_type();
+                    let [y, x] = take_function_args(self.name(), args)?;
 
-                    Ok(ColumnarValue::Array(arr))
+                    match (y, x) {
+                        (
+                            ColumnarValue::Scalar(y_scalar),
+                            ColumnarValue::Scalar(x_scalar),
+                        ) => match (&y_scalar, &x_scalar) {
+                            (y, x) if y.is_null() || x.is_null() => {
+                                ColumnarValue::Scalar(ScalarValue::Null)
+                                    .cast_to(return_type, None)
+                            }
+                            (
+                                ScalarValue::Float64(Some(yv)),
+                                ScalarValue::Float64(Some(xv)),
+                            ) => Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
+                                f64::$BINARY_FUNC(*yv, *xv),
+                            )))),
+                            (
+                                ScalarValue::Float32(Some(yv)),
+                                ScalarValue::Float32(Some(xv)),
+                            ) => Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(
+                                f32::$BINARY_FUNC(*yv, *xv),
+                            )))),
+                            _ => internal_err!(
+                                "Unexpected scalar types for function {}: {:?}, {:?}",
+                                self.name(),
+                                y_scalar.data_type(),
+                                x_scalar.data_type()
+                            ),
+                        },
+                        (y, x) => {
+                            let args = ColumnarValue::values_to_arrays(&[y, x])?;
+                            let arr: ArrayRef = match args[0].data_type() {
+                                DataType::Float64 => {
+                                    let y = args[0].as_primitive::<Float64Type>();
+                                    let x = args[1].as_primitive::<Float64Type>();
+                                    let result =
+                                        arrow::compute::binary::<_, _, _, Float64Type>(
+                                            y,
+                                            x,
+                                            |y, x| f64::$BINARY_FUNC(y, x),
+                                        )?;
+                                    Arc::new(result) as _
+                                }
+                                DataType::Float32 => {
+                                    let y = args[0].as_primitive::<Float32Type>();
+                                    let x = args[1].as_primitive::<Float32Type>();
+                                    let result =
+                                        arrow::compute::binary::<_, _, _, Float32Type>(
+                                            y,
+                                            x,
+                                            |y, x| f32::$BINARY_FUNC(y, x),
+                                        )?;
+                                    Arc::new(result) as _
+                                }
+                                other => {
+                                    return internal_err!(
+                                        "Unsupported data type {other:?} for function {}",
+                                        self.name()
+                                    );
+                                }
+                            };
+
+                            Ok(ColumnarValue::Array(arr))
+                        }
+                    }
                 }
 
                 fn documentation(&self) -> Option<&Documentation> {

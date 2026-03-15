@@ -34,18 +34,20 @@ use crate::projection::{
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, handle_state,
+    SendableRecordBatchStream, Statistics, check_if_same_properties, handle_state,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -94,7 +96,7 @@ pub struct CrossJoinExec {
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
     /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CrossJoinExec {
@@ -125,7 +127,7 @@ impl CrossJoinExec {
             schema,
             left_fut: Default::default(),
             metrics: ExecutionPlanMetricsSet::default(),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -192,6 +194,23 @@ impl CrossJoinExec {
             &self.right.schema(),
         )
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            left_fut: Default::default(),
+            cache: Arc::clone(&self.cache),
+            schema: Arc::clone(&self.schema),
+        }
+    }
 }
 
 /// Asynchronously collect the result of the left child
@@ -256,7 +275,7 @@ impl ExecutionPlan for CrossJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -268,10 +287,19 @@ impl ExecutionPlan for CrossJoinExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // CrossJoin has no join conditions or expressions
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(CrossJoinExec::new(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
@@ -285,7 +313,7 @@ impl ExecutionPlan for CrossJoinExec {
             schema: Arc::clone(&self.schema),
             left_fut: Default::default(), // reset the build side!
             metrics: ExecutionPlanMetricsSet::default(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
         };
         Ok(Arc::new(new_exec))
     }
@@ -356,16 +384,13 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // Get the all partitions statistics of the left
-        let left_stats = self.left.partition_statistics(None)?;
-        let right_stats = self.right.partition_statistics(partition)?;
+        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
+        let right_stats =
+            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
 
-        Ok(stats_cartesian_product(left_stats, right_stats))
+        Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,

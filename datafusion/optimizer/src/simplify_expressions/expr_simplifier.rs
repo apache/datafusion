@@ -28,6 +28,7 @@ use std::ops::Not;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::nested_struct::has_one_of_more_common_fields;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
 };
@@ -645,15 +646,19 @@ impl ConstEvaluator {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
-            Expr::Cast(Cast { expr, data_type })
-            | Expr::TryCast(TryCast { expr, data_type }) => {
+            Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => {
                 if let (
                     Ok(DataType::Struct(source_fields)),
                     DataType::Struct(target_fields),
-                ) = (expr.get_type(&DFSchema::empty()), data_type)
+                ) = (expr.get_type(&DFSchema::empty()), field.data_type())
                 {
                     // Don't const-fold struct casts with different field counts
                     if source_fields.len() != target_fields.len() {
+                        return false;
+                    }
+
+                    // Skip const-folding when there is no field name overlap
+                    if !has_one_of_more_common_fields(&source_fields, target_fields) {
                         return false;
                     }
 
@@ -1654,17 +1659,19 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
-            }) => Transformed::yes(simplify_regex_expr(left, op, right)?),
+            }) => simplify_regex_expr(left, op, right)?,
 
             // Rules for Like
             Expr::Like(like) => {
                 // `\` is implicit escape, see https://github.com/apache/datafusion/issues/13291
                 let escape_char = like.escape_char.unwrap_or('\\');
-                match as_string_scalar(&like.pattern) {
-                    Some((data_type, pattern_str)) => {
+
+                match StringScalar::try_from_expr(&like.pattern) {
+                    Some(string_scalar) => {
+                        let pattern_str = string_scalar.as_str();
                         match pattern_str {
                             None => return Ok(Transformed::yes(lit_bool_null())),
-                            Some(pattern_str) if pattern_str == "%" => {
+                            Some("%") => {
                                 // exp LIKE '%' is
                                 //   - when exp is not NULL, it's true
                                 //   - when exp is NULL, it's NULL
@@ -1696,10 +1703,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                                     .replace_all(pattern_str, "%")
                                     .to_string();
                                 Transformed::yes(Expr::Like(Like {
-                                    pattern: Box::new(to_string_scalar(
-                                        &data_type,
-                                        Some(simplified_pattern),
-                                    )),
+                                    pattern: Box::new(
+                                        string_scalar.to_expr(&simplified_pattern),
+                                    ),
                                     ..like
                                 }))
                             }
@@ -2038,6 +2044,53 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
                 }
             }
+            // For case:
+            // date_part('YEAR', expr) IN (literal1, literal2, ...)
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) => {
+                if list.len() > THRESHOLD_INLINE_INLIST || list.iter().any(is_null) {
+                    return Ok(Transformed::no(Expr::InList(InList {
+                        expr,
+                        list,
+                        negated,
+                    })));
+                }
+
+                let (op, combiner): (Operator, fn(Expr, Expr) -> Expr) =
+                    if negated { (NotEq, and) } else { (Eq, or) };
+
+                let mut rewritten: Option<Expr> = None;
+                for item in &list {
+                    let PreimageResult::Range { interval, expr } =
+                        get_preimage(expr.as_ref(), item, info)?
+                    else {
+                        return Ok(Transformed::no(Expr::InList(InList {
+                            expr,
+                            list,
+                            negated,
+                        })));
+                    };
+
+                    let range_expr = rewrite_with_preimage(*interval, op, expr)?.data;
+                    rewritten = Some(match rewritten {
+                        None => range_expr,
+                        Some(acc) => combiner(acc, range_expr),
+                    });
+                }
+
+                if let Some(rewritten) = rewritten {
+                    Transformed::yes(rewritten)
+                } else {
+                    Transformed::no(Expr::InList(InList {
+                        expr,
+                        list,
+                        negated,
+                    }))
+                }
+            }
 
             // no additional rewrites possible
             expr => Transformed::no(expr),
@@ -2073,21 +2126,54 @@ fn is_literal_or_literal_cast(expr: &Expr) -> bool {
     }
 }
 
-fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
-    match expr {
-        Expr::Literal(ScalarValue::Utf8(s), _) => Some((DataType::Utf8, s)),
-        Expr::Literal(ScalarValue::LargeUtf8(s), _) => Some((DataType::LargeUtf8, s)),
-        Expr::Literal(ScalarValue::Utf8View(s), _) => Some((DataType::Utf8View, s)),
-        _ => None,
-    }
+/// Helper for working with string scalar values (Utf8, LargeUtf8, Utf8View)
+pub(crate) enum StringScalar<'a> {
+    Utf8(&'a ScalarValue),
+    LargeUtf8(&'a ScalarValue),
+    Utf8View(&'a ScalarValue),
 }
 
-fn to_string_scalar(data_type: &DataType, value: Option<String>) -> Expr {
-    match data_type {
-        DataType::Utf8 => Expr::Literal(ScalarValue::Utf8(value), None),
-        DataType::LargeUtf8 => Expr::Literal(ScalarValue::LargeUtf8(value), None),
-        DataType::Utf8View => Expr::Literal(ScalarValue::Utf8View(value), None),
-        _ => unreachable!(),
+impl<'a> StringScalar<'a> {
+    /// Create a `StringScalar` view from an `Expr` if it is a supported string literal.
+    /// Returns `None` if the expression is not a string literal.
+    pub(crate) fn try_from_expr(expr: &'a Expr) -> Option<Self> {
+        match expr {
+            Expr::Literal(scalar, _) => Self::try_from_scalar(scalar),
+            _ => None,
+        }
+    }
+
+    /// Create a `StringScalar` view from a `ScalarValue` if it is a supported string type.
+    /// Returns `None` if the scalar value is not a supported string type.
+    fn try_from_scalar(scalar: &'a ScalarValue) -> Option<Self> {
+        match scalar {
+            ScalarValue::Utf8(_) => Some(Self::Utf8(scalar)),
+            ScalarValue::LargeUtf8(_) => Some(Self::LargeUtf8(scalar)),
+            ScalarValue::Utf8View(_) => Some(Self::Utf8View(scalar)),
+            _ => None,
+        }
+    }
+
+    /// Returns the underlying string slice.
+    pub(crate) fn as_str(&self) -> Option<&'a str> {
+        match self {
+            Self::Utf8(scalar) | Self::LargeUtf8(scalar) | Self::Utf8View(scalar) => {
+                scalar.try_as_str().flatten()
+            }
+        }
+    }
+
+    /// Build a new `Expr` of the same string type with the given value.
+    pub(crate) fn to_expr(&self, val: &str) -> Expr {
+        match self {
+            Self::Utf8(_) => Expr::Literal(ScalarValue::Utf8(Some(val.to_owned())), None),
+            Self::LargeUtf8(_) => {
+                Expr::Literal(ScalarValue::LargeUtf8(Some(val.to_owned())), None)
+            }
+            Self::Utf8View(_) => {
+                Expr::Literal(ScalarValue::Utf8View(Some(val.to_owned())), None)
+            }
+        }
     }
 }
 
@@ -5220,7 +5306,7 @@ mod tests {
     #[test]
     fn test_struct_cast_different_names_same_count() {
         // Test struct cast with same field count but different names
-        // Field count matches; simplification should succeed
+        // Field count matches; simplification should be skipped because names do not overlap
 
         let source_fields = Fields::from(vec![
             Arc::new(Field::new("a", DataType::Int32, true)),
@@ -5237,14 +5323,11 @@ mod tests {
         let simplifier =
             ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
 
-        // The cast should be simplified since field counts match
+        // The cast should remain unchanged because there is no name overlap
         let result = simplifier.simplify(expr.clone()).unwrap();
-        // Struct casts with same field count are const-folded to literals
-        assert!(matches!(result, Expr::Literal(_, _)));
-        // Ensure the simplifier made a change (not identical to original)
-        assert_ne!(
+        assert_eq!(
             result, expr,
-            "Struct cast with different names but same field count should be simplified"
+            "Struct cast with different names but same field count should not be simplified"
         );
     }
 

@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Debug;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -31,6 +34,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::{DataSource, DataSourceExec};
+use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
 use datafusion_datasource_csv::file_format::CsvSink;
@@ -38,9 +42,13 @@ use datafusion_datasource_csv::source::CsvSource;
 use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_json::source::JsonSource;
 #[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::CachedParquetFileReaderFactory;
+#[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::source::ParquetSource;
+#[cfg(feature = "parquet")]
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
@@ -54,6 +62,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::analyze::AnalyzeExec;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
+use datafusion_physical_plan::buffer::BufferExec;
 #[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -195,6 +204,9 @@ impl protobuf::PhysicalPlanNode {
             PhysicalPlanType::MemoryScan(scan) => {
                 self.try_into_memory_scan_physical_plan(scan, ctx, codec, proto_converter)
             }
+            PhysicalPlanType::ArrowScan(scan) => {
+                self.try_into_arrow_scan_physical_plan(scan, ctx, codec, proto_converter)
+            }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => self
                 .try_into_coalesce_batches_physical_plan(
                     coalesce_batches,
@@ -305,6 +317,9 @@ impl protobuf::PhysicalPlanNode {
                     codec,
                     proto_converter,
                 ),
+            PhysicalPlanType::Buffer(buffer) => {
+                self.try_into_buffer_physical_plan(buffer, ctx, codec, proto_converter)
+            }
         }
     }
 
@@ -545,6 +560,14 @@ impl protobuf::PhysicalPlanNode {
             );
         }
 
+        if let Some(exec) = plan.downcast_ref::<BufferExec>() {
+            return protobuf::PhysicalPlanNode::try_from_buffer_exec(
+                exec,
+                codec,
+                proto_converter,
+            );
+        }
+
         let mut buf: Vec<u8> = vec![];
         match codec.try_encode(Arc::clone(&plan_clone), &mut buf) {
             Ok(_) => {
@@ -672,6 +695,7 @@ impl protobuf::PhysicalPlanNode {
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
             .with_batch_size(filter.batch_size as usize)
+            .with_fetch(filter.fetch.map(|f| f as usize))
             .build()?;
         match filter_selectivity {
             Ok(filter_selectivity) => Ok(Arc::new(
@@ -759,6 +783,27 @@ impl protobuf::PhysicalPlanNode {
         Ok(DataSourceExec::from_data_source(scan_conf))
     }
 
+    fn try_into_arrow_scan_physical_plan(
+        &self,
+        scan: &protobuf::ArrowScanExecNode,
+        ctx: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("base_conf in ArrowScanExecNode is missing.")
+        })?;
+        let table_schema = parse_table_schema_from_proto(base_conf)?;
+        let scan_conf = parse_protobuf_file_scan_config(
+            base_conf,
+            ctx,
+            codec,
+            proto_converter,
+            Arc::new(ArrowSource::new_file_source(table_schema)),
+        )?;
+        Ok(DataSourceExec::from_data_source(scan_conf))
+    }
+
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
     fn try_into_parquet_scan_physical_plan(
         &self,
@@ -807,9 +852,19 @@ impl protobuf::PhysicalPlanNode {
 
             // Parse table schema with partition columns
             let table_schema = parse_table_schema_from_proto(base_conf)?;
+            let object_store_url = match base_conf.object_store_url.is_empty() {
+                false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
+                true => ObjectStoreUrl::local_filesystem(),
+            };
+            let store = ctx.runtime_env().object_store(object_store_url)?;
+            let metadata_cache =
+                ctx.runtime_env().cache_manager.get_file_metadata_cache();
+            let reader_factory =
+                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
 
-            let mut source =
-                ParquetSource::new(table_schema).with_table_parquet_options(options);
+            let mut source = ParquetSource::new(table_schema)
+                .with_parquet_file_reader_factory(reader_factory)
+                .with_table_parquet_options(options);
 
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
@@ -956,10 +1011,11 @@ impl protobuf::PhysicalPlanNode {
             codec,
             proto_converter,
         )?;
-        Ok(Arc::new(RepartitionExec::try_new(
-            input,
-            partitioning.unwrap(),
-        )?))
+        let mut repart_exec = RepartitionExec::try_new(input, partitioning.unwrap())?;
+        if repart.preserve_order {
+            repart_exec = repart_exec.with_preserve_order();
+        }
+        Ok(Arc::new(repart_exec))
     }
 
     fn try_into_global_limit_physical_plan(
@@ -2170,6 +2226,19 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
     }
 
+    fn try_into_buffer_physical_plan(
+        &self,
+        buffer: &protobuf::BufferExecNode,
+        ctx: &TaskContext,
+        extension_codec: &dyn PhysicalExtensionCodec,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> =
+            into_physical_plan(&buffer.input, ctx, extension_codec, proto_converter)?;
+
+        Ok(Arc::new(BufferExec::new(input, buffer.capacity as usize)))
+    }
+
     fn try_from_explain_exec(
         exec: &ExplainExec,
         _codec: &dyn PhysicalExtensionCodec,
@@ -2267,6 +2336,7 @@ impl protobuf::PhysicalPlanNode {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                     batch_size: exec.batch_size() as u32,
+                    fetch: exec.fetch().map(|f| f as u32),
                 },
             ))),
         })
@@ -2839,6 +2909,23 @@ impl protobuf::PhysicalPlanNode {
             }
         }
 
+        if let Some(scan_conf) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+            let source = scan_conf.file_source();
+            if let Some(_arrow_source) = source.as_any().downcast_ref::<ArrowSource>() {
+                return Ok(Some(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::ArrowScan(
+                        protobuf::ArrowScanExecNode {
+                            base_conf: Some(serialize_file_scan_config(
+                                scan_conf,
+                                codec,
+                                proto_converter,
+                            )?),
+                        },
+                    )),
+                }));
+            }
+        }
+
         #[cfg(feature = "parquet")]
         if let Some((maybe_parquet, conf)) =
             data_source_exec.downcast_to_file_source::<ParquetSource>()
@@ -2970,6 +3057,7 @@ impl protobuf::PhysicalPlanNode {
                 protobuf::RepartitionExecNode {
                     input: Some(Box::new(input)),
                     partitioning: Some(pb_partitioning),
+                    preserve_order: exec.preserve_order(),
                 },
             ))),
         })
@@ -2993,6 +3081,7 @@ impl protobuf::PhysicalPlanNode {
                     nulls_first: expr.options.nulls_first,
                 });
                 Ok(protobuf::PhysicalExprNode {
+                    expr_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3078,6 +3167,7 @@ impl protobuf::PhysicalPlanNode {
                     nulls_first: expr.options.nulls_first,
                 });
                 Ok(protobuf::PhysicalExprNode {
+                    expr_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3143,7 +3233,7 @@ impl protobuf::PhysicalPlanNode {
                     right: Some(Box::new(right)),
                     join_type: join_type.into(),
                     filter,
-                    projection: exec.projection().map_or_else(Vec::new, |v| {
+                    projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                 },
@@ -3516,6 +3606,27 @@ impl protobuf::PhysicalPlanNode {
             ))),
         })
     }
+
+    fn try_from_buffer_exec(
+        exec: &BufferExec,
+        extension_codec: &dyn PhysicalExtensionCodec,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Self> {
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+            Arc::clone(exec.input()),
+            extension_codec,
+            proto_converter,
+        )?;
+
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Buffer(Box::new(
+                protobuf::BufferExecNode {
+                    input: Some(Box::new(input)),
+                    capacity: exec.capacity() as u64,
+                },
+            ))),
+        })
+    }
 }
 
 pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
@@ -3709,6 +3820,217 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
         serialize_physical_expr_with_converter(expr, codec, self)
+    }
+}
+
+/// Internal serializer that adds expr_id to expressions.
+/// Created fresh for each serialization operation.
+struct DeduplicatingSerializer {
+    /// Random salt combined with pointer addresses and process ID to create globally unique expr_ids.
+    session_id: u64,
+}
+
+impl DeduplicatingSerializer {
+    fn new() -> Self {
+        Self {
+            session_id: rand::random(),
+        }
+    }
+}
+
+impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
+    fn proto_to_execution_plan(
+        &self,
+        _ctx: &TaskContext,
+        _codec: &dyn PhysicalExtensionCodec,
+        _proto: &protobuf::PhysicalPlanNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        internal_err!("DeduplicatingSerializer cannot deserialize execution plans")
+    }
+
+    fn execution_plan_to_proto(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalPlanNode>
+    where
+        Self: Sized,
+    {
+        protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+            Arc::clone(plan),
+            codec,
+            self,
+        )
+    }
+
+    fn proto_to_physical_expr(
+        &self,
+        _proto: &protobuf::PhysicalExprNode,
+        _ctx: &TaskContext,
+        _input_schema: &Schema,
+        _codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn PhysicalExpr>>
+    where
+        Self: Sized,
+    {
+        internal_err!("DeduplicatingSerializer cannot deserialize physical expressions")
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
+
+        // Hash session_id, pointer address, and process ID together to create expr_id.
+        // - session_id: random per serializer, prevents collisions when merging serializations
+        // - ptr: unique address per Arc within a process
+        // - pid: prevents collisions if serializer is shared across processes
+        let mut hasher = DefaultHasher::new();
+        self.session_id.hash(&mut hasher);
+        (Arc::as_ptr(expr) as *const () as u64).hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        proto.expr_id = Some(hasher.finish());
+
+        Ok(proto)
+    }
+}
+
+/// Internal deserializer that caches expressions by expr_id.
+/// Created fresh for each deserialization operation.
+#[derive(Default)]
+struct DeduplicatingDeserializer {
+    /// Cache mapping expr_id to deserialized expressions.
+    cache: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+}
+
+impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
+    fn proto_to_execution_plan(
+        &self,
+        ctx: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
+        proto: &protobuf::PhysicalPlanNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        proto.try_into_physical_plan_with_converter(ctx, codec, self)
+    }
+
+    fn execution_plan_to_proto(
+        &self,
+        _plan: &Arc<dyn ExecutionPlan>,
+        _codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalPlanNode>
+    where
+        Self: Sized,
+    {
+        internal_err!("DeduplicatingDeserializer cannot serialize execution plans")
+    }
+
+    fn proto_to_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &Schema,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn PhysicalExpr>>
+    where
+        Self: Sized,
+    {
+        if let Some(expr_id) = proto.expr_id {
+            // Check cache first
+            if let Some(cached) = self.cache.borrow().get(&expr_id) {
+                return Ok(Arc::clone(cached));
+            }
+            // Deserialize and cache
+            let expr = parse_physical_expr_with_converter(
+                proto,
+                ctx,
+                input_schema,
+                codec,
+                self,
+            )?;
+            self.cache.borrow_mut().insert(expr_id, Arc::clone(&expr));
+            Ok(expr)
+        } else {
+            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
+        }
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        _expr: &Arc<dyn PhysicalExpr>,
+        _codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        internal_err!("DeduplicatingDeserializer cannot serialize physical expressions")
+    }
+}
+
+/// A proto converter that adds expression deduplication during serialization
+/// and deserialization.
+///
+/// During serialization, each expression's Arc pointer address is XORed with a
+/// random session_id to create a salted `expr_id`. This prevents cross-process
+/// collisions when serialized plans are merged.
+///
+/// During deserialization, expressions with the same `expr_id` share the same
+/// Arc, reducing memory usage for plans with duplicate expressions (e.g., large
+/// IN lists) and supporting correctly linking [`DynamicFilterPhysicalExpr`] instances.
+///
+/// This converter is stateless - it creates internal serializers/deserializers
+/// on demand for each operation.
+///
+/// [`DynamicFilterPhysicalExpr`]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/expressions/struct.DynamicFilterPhysicalExpr.html
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DeduplicatingProtoConverter {}
+
+impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
+    fn proto_to_execution_plan(
+        &self,
+        ctx: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
+        proto: &protobuf::PhysicalPlanNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let deserializer = DeduplicatingDeserializer::default();
+        proto.try_into_physical_plan_with_converter(ctx, codec, &deserializer)
+    }
+
+    fn execution_plan_to_proto(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalPlanNode>
+    where
+        Self: Sized,
+    {
+        let serializer = DeduplicatingSerializer::new();
+        protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+            Arc::clone(plan),
+            codec,
+            &serializer,
+        )
+    }
+
+    fn proto_to_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &Schema,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn PhysicalExpr>>
+    where
+        Self: Sized,
+    {
+        let deserializer = DeduplicatingDeserializer::default();
+        deserializer.proto_to_physical_expr(proto, ctx, input_schema, codec)
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        let serializer = DeduplicatingSerializer::new();
+        serializer.physical_expr_to_proto(expr, codec)
     }
 }
 

@@ -32,12 +32,15 @@ use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
+use datafusion_common::datatype::DataTypeExt;
+use datafusion_common::metadata::format_type_and_metadata;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
     Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
+use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 #[cfg(feature = "sql")]
 use sqlparser::ast::{
@@ -309,6 +312,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// assert!(rewritten.transformed);
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
+/// ```
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
@@ -596,7 +600,7 @@ impl Alias {
     }
 }
 
-/// Binary expression
+/// Binary expression for [`Expr::BinaryExpr`]
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct BinaryExpr {
     /// Left-hand side of the expression
@@ -798,13 +802,20 @@ pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `DataType` the expression will yield
-    pub data_type: DataType,
+    pub field: FieldRef,
 }
 
 impl Cast {
     /// Create a new Cast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
-        Self { expr, data_type }
+        Self {
+            expr,
+            field: data_type.into_nullable_field_ref(),
+        }
+    }
+
+    pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
+        Self { expr, field }
     }
 }
 
@@ -814,13 +825,20 @@ pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `DataType` the expression will yield
-    pub data_type: DataType,
+    pub field: FieldRef,
 }
 
 impl TryCast {
     /// Create a new TryCast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
-        Self { expr, data_type }
+        Self {
+            expr,
+            field: data_type.into_nullable_field_ref(),
+        }
+    }
+
+    pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
+        Self { expr, field }
     }
 }
 
@@ -992,7 +1010,7 @@ impl WindowFunctionDefinition {
         }
     }
 
-    /// Return the inner window simplification function, if any
+    /// Returns this window function's simplification hook, if any.
     ///
     /// See [`WindowFunctionSimplification`] for more information
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
@@ -1079,7 +1097,7 @@ impl WindowFunction {
         }
     }
 
-    /// Return the inner window simplification function, if any
+    /// Returns this window function's simplification hook, if any.
     ///
     /// See [`WindowFunctionSimplification`] for more information
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
@@ -1533,6 +1551,24 @@ impl Expr {
             }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
+        }
+    }
+
+    /// Returns placement information for this expression.
+    ///
+    /// This is used by optimizers to make decisions about expression placement,
+    /// such as whether to push expressions down through projections.
+    pub fn placement(&self) -> ExpressionPlacement {
+        match self {
+            Expr::Column(_) => ExpressionPlacement::Column,
+            Expr::Literal(_, _) => ExpressionPlacement::Literal,
+            Expr::Alias(inner) => inner.expr.placement(),
+            Expr::ScalarFunction(func) => {
+                let arg_placements: Vec<_> =
+                    func.args.iter().map(|arg| arg.placement()).collect();
+                func.func.placement(&arg_placements)
+            }
+            _ => ExpressionPlacement::KeepInPlace,
         }
     }
 
@@ -2303,23 +2339,23 @@ impl NormalizeEq for Expr {
             (
                 Expr::Cast(Cast {
                     expr: self_expr,
-                    data_type: self_data_type,
+                    field: self_field,
                 }),
                 Expr::Cast(Cast {
                     expr: other_expr,
-                    data_type: other_data_type,
+                    field: other_field,
                 }),
             )
             | (
                 Expr::TryCast(TryCast {
                     expr: self_expr,
-                    data_type: self_data_type,
+                    field: self_field,
                 }),
                 Expr::TryCast(TryCast {
                     expr: other_expr,
-                    data_type: other_data_type,
+                    field: other_field,
                 }),
-            ) => self_data_type == other_data_type && self_expr.normalize_eq(other_expr),
+            ) => self_field == other_field && self_expr.normalize_eq(other_expr),
             (
                 Expr::ScalarFunction(ScalarFunction {
                     func: self_func,
@@ -2635,15 +2671,9 @@ impl HashNode for Expr {
                 when_then_expr: _when_then_expr,
                 else_expr: _else_expr,
             }) => {}
-            Expr::Cast(Cast {
-                expr: _expr,
-                data_type,
-            })
-            | Expr::TryCast(TryCast {
-                expr: _expr,
-                data_type,
-            }) => {
-                data_type.hash(state);
+            Expr::Cast(Cast { expr: _expr, field })
+            | Expr::TryCast(TryCast { expr: _expr, field }) => {
+                field.hash(state);
             }
             Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
                 func.hash(state);
@@ -3349,11 +3379,15 @@ impl Display for Expr {
                 }
                 write!(f, "END")
             }
-            Expr::Cast(Cast { expr, data_type }) => {
-                write!(f, "CAST({expr} AS {data_type})")
+            Expr::Cast(Cast { expr, field }) => {
+                let formatted =
+                    format_type_and_metadata(field.data_type(), Some(field.metadata()));
+                write!(f, "CAST({expr} AS {formatted})")
             }
-            Expr::TryCast(TryCast { expr, data_type }) => {
-                write!(f, "TRY_CAST({expr} AS {data_type})")
+            Expr::TryCast(TryCast { expr, field }) => {
+                let formatted =
+                    format_type_and_metadata(field.data_type(), Some(field.metadata()));
+                write!(f, "TRY_CAST({expr} AS {formatted})")
             }
             Expr::Not(expr) => write!(f, "NOT {expr}"),
             Expr::Negative(expr) => write!(f, "(- {expr})"),
@@ -3745,7 +3779,7 @@ mod test {
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
-            data_type: DataType::Utf8,
+            field: DataType::Utf8.into_nullable_field_ref(),
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, format!("{expr}"));

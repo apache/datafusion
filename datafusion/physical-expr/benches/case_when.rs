@@ -564,7 +564,6 @@ fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
 
         let numerator_col = col("numerator", &batch.schema()).unwrap();
         let divisor_col = col("divisor", &batch.schema()).unwrap();
-        let divisor_copy_col = col("divisor_copy", &batch.schema()).unwrap();
 
         // DivideByZeroProtection: WHEN condition checks `divisor_col > 0` and division
         // uses `divisor_col` as divisor. Since the checked column matches the divisor,
@@ -578,35 +577,7 @@ fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
             |b| {
                 let when = Arc::new(BinaryExpr::new(
                     Arc::clone(&divisor_col),
-                    Operator::Gt,
-                    lit(0i32),
-                ));
-                let then = Arc::new(BinaryExpr::new(
-                    Arc::clone(&numerator_col),
-                    Operator::Divide,
-                    Arc::clone(&divisor_col),
-                ));
-                let else_null: Arc<dyn PhysicalExpr> = lit(ScalarValue::Int32(None));
-                let expr =
-                    Arc::new(case(None, vec![(when, then)], Some(else_null)).unwrap());
-
-                b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
-            },
-        );
-
-        // ExpressionOrExpression: WHEN condition checks `divisor_copy_col > 0` but
-        // division uses `divisor_col` as divisor. Since the checked column does NOT
-        // match the divisor, this falls back to ExpressionOrExpression evaluation.
-        group.bench_function(
-            format!(
-                "{} rows, {}% zeros: ExpressionOrExpression",
-                batch_size,
-                (zero_percentage * 100.0) as i32
-            ),
-            |b| {
-                let when = Arc::new(BinaryExpr::new(
-                    Arc::clone(&divisor_copy_col),
-                    Operator::Gt,
+                    Operator::NotEq,
                     lit(0i32),
                 ));
                 let then = Arc::new(BinaryExpr::new(
