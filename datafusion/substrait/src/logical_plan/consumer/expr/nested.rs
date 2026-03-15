@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{DFSchema, ScalarValue, not_impl_err, substrait_err};
+use datafusion::common::{DFSchema, not_impl_err, substrait_err};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::Expr;
 use substrait::proto::expression::Nested;
@@ -29,10 +28,6 @@ use substrait::proto::expression::nested::NestedType;
 /// where elements are full expressions rather than just literals. This is used by
 /// producers that emit `Nested { list: ... }` for array construction, as opposed to
 /// `Literal { list: ... }` which only supports scalar values.
-///
-/// When all elements are literals, the result is a scalar literal (e.g. `ScalarValue::List`).
-/// When elements include non-literal expressions (e.g. column references), the result uses
-/// the `make_array` / `named_struct` UDFs to construct the value at execution time.
 pub async fn from_nested(
     consumer: &impl SubstraitConsumer,
     nested: &Nested,
@@ -44,40 +39,18 @@ pub async fn from_nested(
 
     match nested_type {
         NestedType::List(list) => {
-            let mut exprs = Vec::with_capacity(list.values.len());
+            let mut args = Vec::with_capacity(list.values.len());
             for value in &list.values {
-                exprs.push(consumer.consume_expression(value, input_schema).await?);
+                args.push(consumer.consume_expression(value, input_schema).await?);
             }
 
-            // Fast path: if all expressions are literals, construct a ScalarValue::List directly
-            let all_literals: Option<Vec<ScalarValue>> = exprs
-                .iter()
-                .map(|e| match e {
-                    Expr::Literal(sv, _) => Some(sv.clone()),
-                    _ => None,
-                })
-                .collect();
-
-            if let Some(literals) = all_literals {
-                // For empty lists, use Null as the element type. A surrounding Cast
-                // in the Substrait plan can refine the type if needed.
-                let element_type = literals
-                    .first()
-                    .map(|l| l.data_type())
-                    .unwrap_or(DataType::Null);
-                let arr = ScalarValue::new_list_nullable(&literals, &element_type);
-                Ok(Expr::Literal(ScalarValue::List(arr), None))
-            } else {
-                // General case: use make_array UDF for non-literal expressions
-                let make_array_udf =
-                    consumer.get_function_registry().udf("make_array")?;
-                Ok(Expr::ScalarFunction(
-                    datafusion::logical_expr::expr::ScalarFunction::new_udf(
-                        make_array_udf,
-                        exprs,
-                    ),
-                ))
-            }
+            let make_array_udf = consumer.get_function_registry().udf("make_array")?;
+            Ok(Expr::ScalarFunction(
+                datafusion::logical_expr::expr::ScalarFunction::new_udf(
+                    make_array_udf,
+                    args,
+                ),
+            ))
         }
         NestedType::Struct(_) => {
             not_impl_err!("Nested struct expressions are not yet supported")
@@ -92,7 +65,6 @@ pub async fn from_nested(
 mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
-    use datafusion::arrow::array::Array;
     use substrait::proto::expression::Literal;
     use substrait::proto::expression::nested::List;
     use substrait::proto::{self, Expression};
@@ -124,14 +96,10 @@ mod tests {
         };
 
         let expr = from_nested(&consumer, &nested, &schema).await?;
-        match &expr {
-            Expr::Literal(ScalarValue::List(arr), _) => {
-                assert_eq!(arr.len(), 1);
-                assert_eq!(arr.value_length(0), 3);
-            }
-            other => panic!("Expected Expr::Literal(List), got: {other:?}"),
-        }
-        assert_eq!(format!("{expr}"), "List([1, 2, 3])");
+        assert_eq!(
+            format!("{expr}"),
+            "make_array(Int64(1), Int64(2), Int64(3))"
+        );
 
         Ok(())
     }
@@ -147,14 +115,7 @@ mod tests {
         };
 
         let expr = from_nested(&consumer, &nested, &schema).await?;
-        match &expr {
-            Expr::Literal(ScalarValue::List(arr), _) => {
-                assert_eq!(arr.len(), 1);
-                assert_eq!(arr.value_length(0), 0);
-            }
-            other => panic!("Expected Expr::Literal(List), got: {other:?}"),
-        }
-        assert_eq!(format!("{expr}"), "List([])");
+        assert_eq!(format!("{expr}"), "make_array()");
 
         Ok(())
     }
@@ -171,7 +132,7 @@ mod tests {
 
         let result = from_nested(&consumer, &nested, &schema).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("nested_type"),);
+        assert!(result.unwrap_err().to_string().contains("nested_type"));
 
         Ok(())
     }
