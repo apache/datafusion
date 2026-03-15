@@ -2259,9 +2259,9 @@ mod tests {
     use arrow::datatypes::{DataType, TimeUnit};
     use arrow_schema::FieldRef;
     use datafusion_common::DataFusionError;
+    use datafusion_common::datatype::DataTypeExt;
     use datafusion_expr::{col, lit};
     use regex::Regex;
-    use datafusion_common::datatype::DataTypeExt;
     use std::error::Error;
     use std::fs;
     use std::io::Write;

@@ -49,6 +49,7 @@ use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr,
 };
 
+use datafusion_physical_expr_common::metrics::MetricsSet;
 use futures::{Future, FutureExt};
 
 pub mod exec;
@@ -181,11 +182,6 @@ impl ExecutionPlan for TestMemoryExec {
         self.open(partition, context)
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
     fn metrics(&self) -> Option<MetricsSet> {
         unimplemented!()
     }

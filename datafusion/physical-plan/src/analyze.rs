@@ -55,12 +55,11 @@ pub struct AnalyzeExec {
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Observer to call when the plan is executed (only set for the auto explain mode).
     plan_observer: Option<Arc<dyn PlanObserver>>,
     /// Identifier to pass when calling the plan observer.
     plan_id: Option<String>,
-    cache: Arc<PlanProperties>,
 }
 
 impl AnalyzeExec {
@@ -79,10 +78,9 @@ impl AnalyzeExec {
             metric_types,
             input,
             schema,
-            cache,
+            cache: Arc::new(cache),
             plan_observer: None,
             plan_id: None,
-            cache: Arc::new(cache),
         }
     }
 
