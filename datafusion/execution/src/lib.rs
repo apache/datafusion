@@ -34,6 +34,7 @@ pub mod memory_pool;
 pub mod object_store;
 #[cfg(feature = "parquet_encryption")]
 pub mod parquet_encryption;
+pub mod plan_observer;
 pub mod runtime_env;
 mod stream;
 mod task;

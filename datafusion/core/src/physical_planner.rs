@@ -27,6 +27,7 @@ use crate::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
+use crate::execution::plan_observer::PlanObserver;
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
@@ -106,6 +107,7 @@ use datafusion_physical_plan::unnest::ListUnnest;
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
+use datafusion_sql::unparser::Unparser;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{Itertools, multiunzip};
 use log::debug;
@@ -202,8 +204,19 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
 
         let mut plan = self.optimize_physical_plan(plan, session_state, |_, _| {})?;
 
-        if session_state.config().options().explain.auto_explain {
-            plan = self.add_auto_explain(plan, session_state);
+        // setup the auto explain mode if necessary
+        if session_state.config().options().explain.auto_explain
+            && let Some(plan_observer) = &session_state.plan_observer()
+        {
+            let id = uuid::Uuid::new_v4().to_string();
+            let sql = if let Ok(stmt) = Unparser::default().plan_to_sql(logical_plan) {
+                Some(stmt.to_string())
+            } else {
+                None
+            };
+            plan_observer.plan_created(id.clone(), sql)?;
+            plan =
+                self.add_auto_explain(plan, session_state, Arc::clone(plan_observer), id);
         }
 
         Ok(plan)
@@ -1737,6 +1750,8 @@ impl DefaultPhysicalPlanner {
         &self,
         plan: Arc<dyn ExecutionPlan>,
         session_state: &SessionState,
+        plan_observer: Arc<dyn PlanObserver>,
+        id: String,
     ) -> Arc<dyn ExecutionPlan> {
         let options = session_state.config().options();
         let show_statistics = options.explain.show_statistics;
@@ -1753,11 +1768,7 @@ impl DefaultPhysicalPlanner {
             plan,
             LogicalPlan::explain_schema(),
         );
-        plan.enable_auto_explain();
-        plan.set_auto_explain_output(options.explain.auto_explain_output.clone());
-        plan.set_auto_explain_min_duration_ms(
-            options.explain.auto_explain_min_duration_ms,
-        );
+        plan.enable_auto_explain(plan_observer, id);
         Arc::new(plan)
     }
 }

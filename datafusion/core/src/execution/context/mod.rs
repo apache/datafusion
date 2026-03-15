@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use super::options::ReadOptions;
 use crate::datasource::dynamic_file::DynamicListTableFactory;
+use crate::execution::plan_observer::PlanObserver;
 use crate::execution::session_state::SessionStateBuilder;
 use crate::{
     catalog::listing_schema::ListingSchemaProvider,
@@ -1884,6 +1885,14 @@ impl SessionContext {
             .write()
             .register_table_options_extension(extension)
     }
+
+    /// Sets a new plan observer, used for the auto_explain feature. Note that the auto explain mode
+    /// needs to be enabled for the methods in [`PlanObserver`] to be called, through the
+    /// `datafusion.explain.auto_explain` config.
+    pub fn with_plan_observer(self, plan_observer: Arc<dyn PlanObserver>) -> Self {
+        self.state.write().set_plan_observer(plan_observer);
+        self
+    }
 }
 
 impl FunctionRegistry for SessionContext {
@@ -2162,7 +2171,11 @@ mod tests {
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::DataFusionError;
+    use datafusion_expr::{col, lit};
+    use regex::Regex;
     use std::error::Error;
+    use std::fs;
+    use std::io::Write;
     use std::path::PathBuf;
 
     use datafusion_common::test_util::batches_to_string;
@@ -2758,5 +2771,170 @@ mod tests {
             let have = SessionContext::parse_duration(duration);
             assert!(have.is_err());
         }
+    }
+
+    #[derive(Debug)]
+    struct TestPlanObserver {
+        output: String,
+    }
+
+    impl TestPlanObserver {
+        pub fn new(output: String) -> Self {
+            Self { output }
+        }
+    }
+
+    impl PlanObserver for TestPlanObserver {
+        fn plan_created(&self, _id: String, sql: Option<String>) -> Result<()> {
+            let Some(sql) = sql else {
+                return Ok(());
+            };
+            let fd = &mut fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.output)?;
+            writeln!(fd, "QUERY: {sql}")?;
+            Ok(())
+        }
+
+        fn plan_executed(
+            &self,
+            _id: String,
+            explain_result: RecordBatch,
+            _duration_nanos: u128,
+        ) -> Result<()> {
+            let analyze = arrow::util::pretty::pretty_format_batches(&[explain_result])?
+                .to_string();
+            // the plan is simplified to become deterministic
+            let re = Regex::new(r"\s+\w+?Exec").unwrap();
+            let plan = re
+                .find_iter(&analyze)
+                .map(|m| m.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let fd = &mut fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.output)?;
+            writeln!(fd, "EXPLAIN:\n{plan}\n")?;
+
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_auto_explain() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let output_path = tmp_dir.path().join("auto_explain_output.txt");
+        let plan_observer =
+            TestPlanObserver::new(output_path.as_os_str().to_str().unwrap().to_owned());
+
+        let ctx = SessionContext::new().with_plan_observer(Arc::new(plan_observer));
+        ctx.sql("create table t (k int, v int)")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("insert into t values (1, 10), (2, 20), (3, 30)")
+            .await?
+            .collect()
+            .await?;
+
+        // without enabling the auto explain mode, the plan is not exported
+        ctx.sql("select * from t where k = 1 or k = 2 order by v desc limit 5")
+            .await?
+            .collect()
+            .await?;
+        assert!(!output_path.exists());
+
+        // enabling the auto explain mode
+        ctx.sql("set datafusion.explain.auto_explain = true")
+            .await?
+            .collect()
+            .await?;
+        let result = ctx
+            .sql("select * from t where k = 1 or k = 2 order by v desc limit 5")
+            .await?
+            .collect()
+            .await?;
+        // query output is not affected
+        assert_snapshot!(
+            batches_to_string(&result),
+            @r"
+        +---+----+
+        | k | v  |
+        +---+----+
+        | 2 | 20 |
+        | 1 | 10 |
+        +---+----+
+        "
+        );
+        // the first output comes from the "set" query
+        assert_snapshot!(fs::read_to_string(&output_path)?,
+        @r"
+        QUERY: SELECT *
+        EXPLAIN:
+         EmptyExec
+
+        QUERY: SELECT t.k, t.v FROM t WHERE ((t.k = 1) OR (t.k = 2)) ORDER BY t.v DESC NULLS FIRST LIMIT 5
+        EXPLAIN:
+         SortExec
+           FilterExec
+             DataSourceExec
+        ");
+
+        // also works with the dataframe API
+        ctx.table("t")
+            .await?
+            .filter(col("v").lt(lit(11)))?
+            .select(vec![col("k")])?
+            .collect()
+            .await?;
+        assert_snapshot!(fs::read_to_string(&output_path)?,
+        @r"
+        QUERY: SELECT *
+        EXPLAIN:
+         EmptyExec
+
+        QUERY: SELECT t.k, t.v FROM t WHERE ((t.k = 1) OR (t.k = 2)) ORDER BY t.v DESC NULLS FIRST LIMIT 5
+        EXPLAIN:
+         SortExec
+           FilterExec
+             DataSourceExec
+
+        QUERY: SELECT t.k FROM t WHERE (t.v < 11)
+        EXPLAIN:
+         FilterExec
+           DataSourceExec
+        ");
+
+        // when disabling the auto explain mode the plan is again not exported
+        ctx.sql("set datafusion.explain.auto_explain = false")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from t where k = 1 or k = 2 order by v desc limit 5")
+            .await?
+            .collect()
+            .await?;
+        assert_snapshot!(fs::read_to_string(&output_path)?,
+        @r"
+        QUERY: SELECT *
+        EXPLAIN:
+         EmptyExec
+
+        QUERY: SELECT t.k, t.v FROM t WHERE ((t.k = 1) OR (t.k = 2)) ORDER BY t.v DESC NULLS FIRST LIMIT 5
+        EXPLAIN:
+         SortExec
+           FilterExec
+             DataSourceExec
+
+        QUERY: SELECT t.k FROM t WHERE (t.v < 11)
+        EXPLAIN:
+         FilterExec
+           DataSourceExec
+        ");
+
+        Ok(())
     }
 }

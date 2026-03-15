@@ -29,6 +29,7 @@ use crate::datasource::file_format::FileFormatFactory;
 use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
+use crate::execution::plan_observer::{DefaultPlanObserver, PlanObserver};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_catalog::MemoryCatalogProviderList;
@@ -189,6 +190,8 @@ pub struct SessionState {
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
+    /// Plan observer used for the auto explain mode (if enabled).
+    plan_observer: Option<Arc<dyn PlanObserver>>,
 }
 
 impl Debug for SessionState {
@@ -963,6 +966,16 @@ impl SessionState {
             None => exec_err!("Prepared statement '{}' does not exist", name),
         }
     }
+
+    /// Set a new plan observer.
+    pub(crate) fn set_plan_observer(&mut self, plan_observer: Arc<dyn PlanObserver>) {
+        self.plan_observer = Some(plan_observer);
+    }
+
+    /// Returns a ref to the current plan observer.
+    pub(crate) fn plan_observer(&self) -> &Option<Arc<dyn PlanObserver>> {
+        &self.plan_observer
+    }
 }
 
 /// A builder to be used for building [`SessionState`]'s. Defaults will
@@ -1502,6 +1515,7 @@ impl SessionStateBuilder {
             function_factory,
             cache_factory,
             prepared_plans: HashMap::new(),
+            plan_observer: Some(Arc::new(DefaultPlanObserver::default())),
         };
 
         if let Some(file_formats) = file_formats {
