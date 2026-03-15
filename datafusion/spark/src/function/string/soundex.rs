@@ -91,48 +91,57 @@ fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
+const US_ENGLISH_MAPPING: [u8; 26] = [
+    b'0', b'1', b'2', b'3', b'0', b'1', b'2', b'7', b'0', b'2', b'2', b'4', b'5', b'5',
+    b'0', b'1', b'2', b'6', b'2', b'3', b'0', b'1', b'7', b'2', b'0', b'2',
+];
+
 fn compute_soundex(s: &str) -> String {
-    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return String::new();
+    }
+
+    let mut b = bytes[0];
+
+    if (b'a'..=b'z').contains(&b) {
+        b -= 32;
+    } else if !(b'A'..=b'Z').contains(&b) {
         return s.to_string();
     }
 
-    let mut chars = s.chars().filter(|c| c.is_ascii_alphabetic());
+    let mut sx = [b'0', b'0', b'0', b'0'];
+    sx[0] = b;
+    let mut sxi = 1;
+    let idx = (b - b'A') as usize;
+    let mut last_code = US_ENGLISH_MAPPING[idx];
 
-    let first_ch = match chars.next() {
-        Some(c) => c.to_ascii_uppercase(),
-        None => return "".to_string(),
-    };
+    for i in bytes.iter().skip(1) {
+        let mut b = *i;
 
-    let mut result = String::with_capacity(4);
-    result.push(first_ch);
-    let mut last_code = classify_char(first_ch);
-
-    for c in chars {
-        if result.len() >= 4 {
-            break;
+        if (b'a'..=b'z').contains(&b) {
+            b -= 32;
+        } else if !(b'A'..=b'Z').contains(&b) {
+            last_code = b'0';
+            continue;
         }
-        let current = classify_char(c);
-        if let Some(digit) = current
-            && current != last_code
-        {
-            result.push(digit);
-        }
-        last_code = current;
-    }
-    while result.len() < 4 {
-        result.push('0');
-    }
-    result
-}
 
-fn classify_char(c: char) -> Option<char> {
-    match c.to_ascii_uppercase() {
-        'B' | 'F' | 'P' | 'V' => Some('1'),
-        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => Some('2'),
-        'D' | 'T' => Some('3'),
-        'L' => Some('4'),
-        'M' | 'N' => Some('5'),
-        'R' => Some('6'),
-        _ => None, // A, E, I, O, U, H, W, Y
+        let idx = (b - b'A') as usize;
+        let code = US_ENGLISH_MAPPING[idx];
+
+        if code == b'7' {
+            continue;
+        } else {
+            if code != b'0' && code != last_code {
+                sx[sxi] = code;
+                sxi += 1;
+                if sxi > 3 {
+                    break;
+                }
+            }
+            last_code = code;
+        }
     }
+
+    String::from_utf8_lossy(&sx).to_string()
 }
