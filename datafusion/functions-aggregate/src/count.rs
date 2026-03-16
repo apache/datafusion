@@ -565,12 +565,10 @@ struct CountGroupsAccumulator {
     counts: BatchedVec<i64>,
 }
 
-const DEFAULT_BATCH_SIZE: usize = 8192;
-
 impl CountGroupsAccumulator {
     pub fn new() -> Self {
         Self {
-            counts: BatchedVec::new(DEFAULT_BATCH_SIZE),
+            counts: BatchedVec::new(),
         }
     }
 }

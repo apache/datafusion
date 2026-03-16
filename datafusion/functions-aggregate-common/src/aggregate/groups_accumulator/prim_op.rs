@@ -28,10 +28,6 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 use super::accumulate::NullState;
 use super::batched_vec::BatchedVec;
 
-/// Default batch size for internal batched storage.
-/// Matches the default DataFusion batch size.
-const DEFAULT_BATCH_SIZE: usize = 8192;
-
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
 /// the input type (such as `Sum`)
@@ -70,7 +66,7 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values: BatchedVec::new(DEFAULT_BATCH_SIZE),
+            values: BatchedVec::new(),
             data_type: data_type.clone(),
             null_state: NullState::new(),
             starting_value: T::default_value(),

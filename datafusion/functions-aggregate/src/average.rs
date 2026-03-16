@@ -787,12 +787,11 @@ where
             std::any::type_name::<T>()
         );
 
-        const DEFAULT_BATCH_SIZE: usize = 8192;
         Self {
             return_data_type: return_data_type.clone(),
             sum_data_type: sum_data_type.clone(),
-            counts: BatchedVec::new(DEFAULT_BATCH_SIZE),
-            sums: BatchedVec::new(DEFAULT_BATCH_SIZE),
+            counts: BatchedVec::new(),
+            sums: BatchedVec::new(),
             null_state: NullState::new(),
             avg_fn,
         }

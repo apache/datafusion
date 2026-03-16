@@ -21,46 +21,39 @@
 use std::fmt::Debug;
 use std::mem::size_of;
 
+/// Fixed batch shift (log2 of batch size). 8192 = 2^13.
+const BATCH_SHIFT: u32 = 13;
+/// Fixed batch size.
+const BATCH_SIZE: usize = 1 << BATCH_SHIFT;
+/// Bitmask for extracting offset within a batch.
+const BATCH_MASK: usize = BATCH_SIZE - 1;
+
 /// A Vec-like container that stores elements in fixed-size batches.
 ///
 /// Indexed by a flat `usize` which is decomposed into
-/// `(batch_index, offset)` via simple division/modulo on `batch_size`.
+/// `(batch_index, offset)` via bit-shift and mask on the compile-time
+/// constant batch size (8192).
 ///
-/// Each inner batch is always exactly `batch_size` elements (except
+/// Each inner batch is always exactly `BATCH_SIZE` elements (except
 /// possibly the last one during growth). Emission of a single batch
 /// is O(1) via [`Self::take_batch`].
 #[derive(Debug)]
 pub struct BatchedVec<T> {
     batches: Vec<Vec<T>>,
-    /// log2(batch_size) — used for bit-shift decomposition
-    batch_shift: u32,
-    /// batch_size - 1 — used as bitmask for offset extraction
-    batch_mask: usize,
     len: usize,
 }
 
 impl<T: Clone> BatchedVec<T> {
-    pub fn new(batch_size: usize) -> Self {
-        assert!(
-            batch_size > 0 && batch_size.is_power_of_two(),
-            "batch_size must be a power of two, got {batch_size}"
-        );
+    pub fn new() -> Self {
         Self {
             batches: Vec::new(),
-            batch_shift: batch_size.trailing_zeros(),
-            batch_mask: batch_size - 1,
             len: 0,
         }
     }
 
-    #[inline]
-    fn batch_size(&self) -> usize {
-        1 << self.batch_shift
-    }
-
-    #[inline]
-    fn decompose(&self, index: usize) -> (usize, usize) {
-        (index >> self.batch_shift, index & self.batch_mask)
+    #[inline(always)]
+    fn decompose(index: usize) -> (usize, usize) {
+        (index >> BATCH_SHIFT, index & BATCH_MASK)
     }
 
     pub fn len(&self) -> usize {
@@ -78,11 +71,9 @@ impl<T: Clone> BatchedVec<T> {
             return;
         }
 
-        let batch_size = self.batch_size();
-
-        // Fill current last batch up to batch_size before adding new ones
+        // Fill current last batch up to BATCH_SIZE before adding new ones
         if let Some(last) = self.batches.last_mut() {
-            let can_add = batch_size - last.len();
+            let can_add = BATCH_SIZE - last.len();
             let need = total - self.len;
             let add = can_add.min(need);
             if add > 0 {
@@ -93,7 +84,7 @@ impl<T: Clone> BatchedVec<T> {
 
         // Add new batches as needed
         while self.len < total {
-            let batch_len = (total - self.len).min(batch_size);
+            let batch_len = (total - self.len).min(BATCH_SIZE);
             let mut batch = Vec::with_capacity(batch_len);
             batch.resize(batch_len, default_value.clone());
             self.batches.push(batch);
@@ -104,12 +95,14 @@ impl<T: Clone> BatchedVec<T> {
     /// # Safety
     ///
     /// `index` must be in bounds (< self.len).
-    #[inline]
+    #[inline(always)]
     pub unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut T {
-        let (batch, offset) = self.decompose(index);
-        unsafe { self.batches
-            .get_unchecked_mut(batch)
-            .get_unchecked_mut(offset) }
+        let (batch, offset) = Self::decompose(index);
+        unsafe {
+            self.batches
+                .get_unchecked_mut(batch)
+                .get_unchecked_mut(offset)
+        }
     }
 
     /// Number of batches (including a possible partial last batch).
@@ -137,13 +130,13 @@ impl<T: Clone> BatchedVec<T> {
 
     /// Take the first `n` elements (for `EmitTo::First(n)`).
     ///
-    /// When `n` equals `batch_size`, this is zero-copy (just `mem::take`
+    /// When `n` equals `BATCH_SIZE`, this is zero-copy (just `mem::take`
     /// on the first batch). Otherwise, full batches are drained via
     /// `mem::take` (O(1) each) and only the split-point batch is copied.
     pub fn take_first(&mut self, n: usize) -> Vec<T> {
         assert!(n <= self.len);
-        let full_batches = n >> self.batch_shift;
-        let remainder = n & self.batch_mask;
+        let full_batches = n >> BATCH_SHIFT;
+        let remainder = n & BATCH_MASK;
 
         // Fast path: exactly one full batch, no remainder — zero copy
         if full_batches == 1 && remainder == 0 {
@@ -186,12 +179,12 @@ mod tests {
 
     #[test]
     fn test_basic_operations() {
-        let mut v = BatchedVec::new(4);
+        let mut v = BatchedVec::new();
         assert_eq!(v.len(), 0);
 
         v.ensure_capacity(10, 0i32);
         assert_eq!(v.len(), 10);
-        assert_eq!(v.num_batches(), 3); // 4 + 4 + 2
+        assert_eq!(v.num_batches(), 1); // all fit in one batch
 
         // Write via composite index
         for i in 0..10 {
@@ -207,50 +200,81 @@ mod tests {
     }
 
     #[test]
+    fn test_multi_batch() {
+        let mut v = BatchedVec::new();
+        // Force multiple batches
+        let n = BATCH_SIZE * 2 + 100;
+        v.ensure_capacity(n, 0i32);
+        assert_eq!(v.len(), n);
+        assert_eq!(v.num_batches(), 3);
+
+        for i in 0..n {
+            unsafe {
+                *v.get_unchecked_mut(i) = i as i32;
+            }
+        }
+
+        let all = v.take_all();
+        assert_eq!(all.len(), n);
+        for i in 0..n {
+            assert_eq!(all[i], i as i32);
+        }
+    }
+
+    #[test]
     fn test_take_batch() {
-        let mut v = BatchedVec::new(4);
-        v.ensure_capacity(10, 0i32);
-        for i in 0..10 {
+        let mut v = BatchedVec::new();
+        let n = BATCH_SIZE * 2 + 5;
+        v.ensure_capacity(n, 0i32);
+        for i in 0..n {
             unsafe {
                 *v.get_unchecked_mut(i) = i as i32;
             }
         }
 
         let b0 = v.take_batch(0).unwrap();
-        assert_eq!(b0, vec![0, 1, 2, 3]);
+        assert_eq!(b0.len(), BATCH_SIZE);
+        assert_eq!(b0[0], 0);
+        assert_eq!(b0[BATCH_SIZE - 1], (BATCH_SIZE - 1) as i32);
 
         let b1 = v.take_batch(1).unwrap();
-        assert_eq!(b1, vec![4, 5, 6, 7]);
+        assert_eq!(b1.len(), BATCH_SIZE);
+        assert_eq!(b1[0], BATCH_SIZE as i32);
 
-        // Last batch has only the 2 remaining elements
         let b2 = v.take_batch(2).unwrap();
-        assert_eq!(b2, vec![8, 9]);
+        assert_eq!(b2.len(), 5);
     }
 
     #[test]
     fn test_take_first() {
-        let mut v = BatchedVec::new(4);
-        v.ensure_capacity(10, 0i32);
-        for i in 0..10 {
+        let mut v = BatchedVec::new();
+        let n = BATCH_SIZE * 2 + 100;
+        v.ensure_capacity(n, 0i32);
+        for i in 0..n {
             unsafe {
                 *v.get_unchecked_mut(i) = i as i32;
             }
         }
 
-        let first = v.take_first(6);
-        assert_eq!(first, vec![0, 1, 2, 3, 4, 5]);
+        let first = v.take_first(BATCH_SIZE + 50);
+        assert_eq!(first.len(), BATCH_SIZE + 50);
+        for i in 0..first.len() {
+            assert_eq!(first[i], i as i32);
+        }
 
         let rest = v.take_all();
-        assert_eq!(&rest[..4], &[6, 7, 8, 9]);
+        assert_eq!(rest.len(), BATCH_SIZE + 50);
+        for i in 0..rest.len() {
+            assert_eq!(rest[i], (BATCH_SIZE + 50 + i) as i32);
+        }
     }
 
     #[test]
     fn test_ensure_capacity_grows() {
-        let mut v = BatchedVec::new(4);
+        let mut v = BatchedVec::new();
         v.ensure_capacity(3, 42i32);
         assert_eq!(v.len(), 3);
         assert_eq!(v.num_batches(), 1);
-        // Batch has exactly the elements needed
         assert_eq!(v.take_batch(0).unwrap().len(), 3);
     }
 }
