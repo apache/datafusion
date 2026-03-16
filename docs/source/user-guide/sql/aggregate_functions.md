@@ -1081,6 +1081,7 @@ _Alias of [stddev](#stddev)._
 - [approx_median](#approx_median)
 - [approx_percentile_cont](#approx_percentile_cont)
 - [approx_percentile_cont_with_weight](#approx_percentile_cont_with_weight)
+- [approx_top_k](#approx_top_k)
 
 ### `approx_distinct`
 
@@ -1218,4 +1219,28 @@ An alternative syntax is also supported:
 +--------------------------------------------------+
 | 78.5                                             |
 +--------------------------------------------------+
+```
+
+### `approx_top_k`
+
+Returns the approximate most frequent (top-k) values and their counts using the Filtered Space-Saving algorithm. Note: for float columns, -0.0 and +0.0 are treated as distinct values, and different NaN representations are tracked separately.
+
+```sql
+approx_top_k(expression, k)
+```
+
+#### Arguments
+
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **k**: The number of top elements to return. Must be a literal integer between 1 and 10,000.
+
+#### Example
+
+```sql
+> SELECT approx_top_k(column_name, 3) FROM table_name;
++-------------------------------------------+
+| approx_top_k(column_name, 3)              |
++-------------------------------------------+
+| [{value: foo, count: 3}, {value: bar, count: 2}, {value: baz, count: 1}] |
++-------------------------------------------+
 ```
