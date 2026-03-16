@@ -30,7 +30,7 @@
 pub mod file_format;
 pub mod source;
 
-use arrow::datatypes::{DataType, Field, Fields, Schema};
+use arrow::datatypes::{DataType, Field, Fields, Schema, UnionFields};
 pub use arrow_avro;
 use arrow_avro::reader::ReaderBuilder;
 pub use file_format::*;
@@ -93,7 +93,7 @@ fn strip_metadata_from_data_type(data_type: &DataType) -> DataType {
             let (type_ids, children): (Vec<_>, Vec<_>) = fields
                 .iter()
                 .map(|(type_id, field)| {
-                    (*type_id, Arc::new(strip_metadata_from_field(field.as_ref())))
+                    (type_id, Arc::new(strip_metadata_from_field(field.as_ref())))
                 })
                 .unzip();
 
