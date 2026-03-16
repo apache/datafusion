@@ -3906,9 +3906,8 @@ mod tests {
     ) -> Result<BooleanArray> {
         let schema = Schema::new(vec![Field::new("a", needle_type, false)]);
         let col_a = col("a", &schema)?;
-        let expr = Arc::new(InListExpr::try_new_from_array(
-            col_a, in_array, false,
-        )?) as Arc<dyn PhysicalExpr>;
+        let expr = Arc::new(InListExpr::try_new_from_array(col_a, in_array, false)?)
+            as Arc<dyn PhysicalExpr>;
         let batch = RecordBatch::try_new(Arc::new(schema), vec![needle])?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         Ok(as_boolean_array(&result).clone())
@@ -3919,8 +3918,7 @@ mod tests {
         use arrow::compute::cast;
 
         // All cases: needle[0] and needle[2] match, needle[1] does not.
-        let expected =
-            BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
+        let expected = BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
 
         // Base arrays cast to each target type
         let base_in = Arc::new(Int64Array::from(vec![1i64, 2, 3])) as ArrayRef;
@@ -3945,49 +3943,61 @@ mod tests {
             let needle = cast(&base_needle, dt)?;
 
             // T in_array, T needle
-            assert_eq!(expected, eval_in_list_from_array(
-                dt.clone(), Arc::clone(&needle), Arc::clone(&in_array),
-            )?, "same-type failed for {dt:?}");
+            assert_eq!(
+                expected,
+                eval_in_list_from_array(
+                    dt.clone(),
+                    Arc::clone(&needle),
+                    Arc::clone(&in_array),
+                )?,
+                "same-type failed for {dt:?}"
+            );
 
             // T in_array, Dict(Int32, T) needle
-            let dict_dt = DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(dt.clone()),
+            let dict_dt =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(dt.clone()));
+            assert_eq!(
+                expected,
+                eval_in_list_from_array(dict_dt, wrap_in_dict(needle), in_array,)?,
+                "dict-needle failed for {dt:?}"
             );
-            assert_eq!(expected, eval_in_list_from_array(
-                dict_dt, wrap_in_dict(needle), in_array,
-            )?, "dict-needle failed for {dt:?}");
         }
 
         // Utf8 (falls through to ArrayStaticFilter)
         let utf8_in = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
-        let utf8_needle =
-            Arc::new(StringArray::from(vec!["a", "d", "b"])) as ArrayRef;
-        let dict_utf8 = DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::Utf8),
-        );
+        let utf8_needle = Arc::new(StringArray::from(vec!["a", "d", "b"])) as ArrayRef;
+        let dict_utf8 =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
 
         // Utf8 in_array, Utf8 needle
-        assert_eq!(expected, eval_in_list_from_array(
-            DataType::Utf8,
-            Arc::clone(&utf8_needle),
-            Arc::clone(&utf8_in),
-        )?);
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                DataType::Utf8,
+                Arc::clone(&utf8_needle),
+                Arc::clone(&utf8_in),
+            )?
+        );
 
         // Utf8 in_array, Dict(Utf8) needle
-        assert_eq!(expected, eval_in_list_from_array(
-            dict_utf8.clone(),
-            wrap_in_dict(Arc::clone(&utf8_needle)),
-            Arc::clone(&utf8_in),
-        )?);
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                dict_utf8.clone(),
+                wrap_in_dict(Arc::clone(&utf8_needle)),
+                Arc::clone(&utf8_in),
+            )?
+        );
 
         // Dict(Utf8) in_array, Dict(Utf8) needle: the #20937 bug
-        assert_eq!(expected, eval_in_list_from_array(
-            dict_utf8,
-            wrap_in_dict(Arc::clone(&utf8_needle)),
-            wrap_in_dict(Arc::clone(&utf8_in)),
-        )?);
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                dict_utf8,
+                wrap_in_dict(Arc::clone(&utf8_needle)),
+                wrap_in_dict(Arc::clone(&utf8_in)),
+            )?
+        );
 
         // Struct in_array, Struct needle: multi-column join
         let struct_fields = Fields::from(vec![
@@ -4000,24 +4010,28 @@ mod tests {
                 struct_fields.iter().cloned().zip([c0, c1]).collect();
             Arc::new(StructArray::from(pairs))
         };
-        assert_eq!(expected, eval_in_list_from_array(
-            struct_type,
-            make_struct(
-                Arc::clone(&utf8_needle),
-                Arc::new(Int64Array::from(vec![1, 4, 2])),
-            ),
-            make_struct(
-                Arc::clone(&utf8_in),
-                Arc::new(Int64Array::from(vec![1, 2, 3])),
-            ),
-        )?);
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                struct_type,
+                make_struct(
+                    Arc::clone(&utf8_needle),
+                    Arc::new(Int64Array::from(vec![1, 4, 2])),
+                ),
+                make_struct(
+                    Arc::clone(&utf8_in),
+                    Arc::new(Int64Array::from(vec![1, 2, 3])),
+                ),
+            )?
+        );
 
         // Struct with Dict fields: multi-column Dict join
         let dict_struct_fields = Fields::from(vec![
-            Field::new("c0", DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Utf8),
-            ), true),
+            Field::new(
+                "c0",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
             Field::new("c1", DataType::Int64, true),
         ]);
         let dict_struct_type = DataType::Struct(dict_struct_fields.clone());
@@ -4026,17 +4040,20 @@ mod tests {
                 dict_struct_fields.iter().cloned().zip([c0, c1]).collect();
             Arc::new(StructArray::from(pairs))
         };
-        assert_eq!(expected, eval_in_list_from_array(
-            dict_struct_type,
-            make_dict_struct(
-                wrap_in_dict(Arc::clone(&utf8_needle)),
-                Arc::new(Int64Array::from(vec![1, 4, 2])),
-            ),
-            make_dict_struct(
-                wrap_in_dict(Arc::clone(&utf8_in)),
-                Arc::new(Int64Array::from(vec![1, 2, 3])),
-            ),
-        )?);
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                dict_struct_type,
+                make_dict_struct(
+                    wrap_in_dict(Arc::clone(&utf8_needle)),
+                    Arc::new(Int64Array::from(vec![1, 4, 2])),
+                ),
+                make_dict_struct(
+                    wrap_in_dict(Arc::clone(&utf8_in)),
+                    Arc::new(Int64Array::from(vec![1, 2, 3])),
+                ),
+            )?
+        );
 
         Ok(())
     }
@@ -4048,32 +4065,38 @@ mod tests {
             DataType::Utf8,
             Arc::new(StringArray::from(vec!["a", "d", "b"])),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
-        ).unwrap_err().to_string();
-        assert!(err.contains("Can't compare arrays of different types"), "{err}");
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("Can't compare arrays of different types"),
+            "{err}"
+        );
 
         // Dict(Utf8) needle, Int64 in_array: specialized Int64StaticFilter
         // rejects the Utf8 dictionary values at construction time
         let err = eval_in_list_from_array(
-            DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Utf8),
-            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "d", "b"]))),
             Arc::new(Int64Array::from(vec![1, 2, 3])),
-        ).unwrap_err().to_string();
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("Failed to downcast"), "{err}");
 
         // Dict(Int64) needle, Dict(Utf8) in_array: both Dict but different
         // value types, make_comparator rejects the comparison
         let err = eval_in_list_from_array(
-            DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Int64),
-            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64)),
             wrap_in_dict(Arc::new(Int64Array::from(vec![1, 4, 2]))),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
-        ).unwrap_err().to_string();
-        assert!(err.contains("Can't compare arrays of different types"), "{err}");
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("Can't compare arrays of different types"),
+            "{err}"
+        );
 
         Ok(())
     }
