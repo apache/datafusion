@@ -146,13 +146,14 @@ fn try_array_position_scalar(args: &[ColumnarValue]) -> Result<Option<ColumnarVa
         return exec_err!("array_position expects two or three arguments");
     }
 
+    // Fallback to the generic code path if the needle is an array
     let scalar_needle = match &args[1] {
         ColumnarValue::Scalar(s) => s,
         ColumnarValue::Array(_) => return Ok(None),
     };
 
     // `not_distinct` doesn't support nested types (List, Struct, etc.),
-    // so fall back to the per-row path for those.
+    // so fall back to the generic code path for those.
     if scalar_needle.data_type().is_nested() {
         return Ok(None);
     }
