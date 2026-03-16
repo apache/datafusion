@@ -39,8 +39,8 @@ use datafusion_common::{
 };
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
-use datafusion_common::hash_utils::RandomState;
 use datafusion_common::HashMap;
+use datafusion_common::hash_utils::RandomState;
 use hashbrown::hash_map::RawEntryMut;
 
 /// Trait for InList static filters
