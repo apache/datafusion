@@ -8064,7 +8064,7 @@ group0 -1073741774
 group1 100
 
 # group median i64 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_i64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -4611686018427387854
@@ -8078,7 +8078,7 @@ group0 50
 group1 100
 
 # group median u16 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_u16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
@@ -8127,7 +8127,7 @@ group0 0.0002
 group1 0.0003
 
 # group median decimal256 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_decimal256) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 0.0002
