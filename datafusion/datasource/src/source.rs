@@ -37,6 +37,7 @@ use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
@@ -156,7 +157,7 @@ pub trait DataSource: Send + Sync + Debug {
 
     /// Returns statistics for a specific partition, or aggregate statistics
     /// across all partitions if `partition` is `None`.
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>>;
 
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
@@ -211,6 +212,38 @@ pub trait DataSource: Send + Sync + Debug {
     fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
         None
     }
+
+    /// Apply a closure to each expression used by this data source.
+    ///
+    /// This includes filter predicates (which may contain dynamic filters) and any
+    /// other expressions used during data scanning.
+    ///
+    /// Implementations must override this method. If the data source has no expressions,
+    /// return `Ok(TreeNodeRecursion::Continue)` immediately.
+    ///
+    /// See [`ExecutionPlan::apply_expressions`] for more details and implementation examples.
+    ///
+    /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion>;
+
+    /// Injects arbitrary run-time state into this DataSource, returning a new instance
+    /// that incorporates that state *if* it is relevant to the concrete DataSource implementation.
+    ///
+    /// This is a generic entry point: the `state` can be any type wrapped in
+    /// `Arc<dyn Any + Send + Sync>`.  A data source that cares about the state should
+    /// down-cast it to the concrete type it expects and, if successful, return a
+    /// modified copy of itself that captures the provided value.  If the state is
+    /// not applicable, the default behaviour is to return `None` so that parent
+    /// nodes can continue propagating the attempt further down the plan tree.
+    fn with_new_state(
+        &self,
+        _state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn DataSource>> {
+        None
+    }
 }
 
 /// [`ExecutionPlan`] that reads one or more files
@@ -260,6 +293,14 @@ impl ExecutionPlan for DataSourceExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the underlying data source
+        self.data_source.apply_expressions(f)
     }
 
     fn with_new_children(
@@ -318,7 +359,7 @@ impl ExecutionPlan for DataSourceExec {
         Some(self.data_source.metrics().clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.data_source.partition_statistics(partition)
     }
 
@@ -402,6 +443,18 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Option<Arc<dyn ExecutionPlan>> {
         self.data_source
             .with_preserve_order(preserve_order)
+            .map(|new_data_source| {
+                Arc::new(self.clone().with_data_source(new_data_source))
+                    as Arc<dyn ExecutionPlan>
+            })
+    }
+
+    fn with_new_state(
+        &self,
+        state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.data_source
+            .with_new_state(state)
             .map(|new_data_source| {
                 Arc::new(self.clone().with_data_source(new_data_source))
                     as Arc<dyn ExecutionPlan>

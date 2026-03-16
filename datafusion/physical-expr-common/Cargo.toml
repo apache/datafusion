@@ -50,3 +50,11 @@ hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 parking_lot = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+rand = { workspace = true }
+
+[[bench]]
+harness = false
+name = "compare_nested"

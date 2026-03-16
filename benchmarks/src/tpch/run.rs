@@ -105,6 +105,10 @@ pub struct RunOpt {
     /// The tables should have been created with the `--sort` option for this to have any effect.
     #[arg(short = 't', long = "sorted")]
     sorted: bool,
+
+    /// How many bytes to buffer on the probe side of hash joins.
+    #[arg(long, default_value = "0")]
+    hash_join_buffering_capacity: usize,
 }
 
 impl RunOpt {
@@ -123,8 +127,10 @@ impl RunOpt {
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
         config.options_mut().optimizer.enable_piecewise_merge_join =
             self.enable_piecewise_merge_join;
-        let rt_builder = self.common.runtime_env_builder()?;
-        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+        config.options_mut().execution.hash_join_buffering_capacity =
+            self.hash_join_buffering_capacity;
+        let rt = self.common.build_runtime()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt);
         // register tables
         self.register_tables(&ctx).await?;
 
@@ -380,6 +386,7 @@ mod tests {
             memory_limit: None,
             sort_spill_reservation_bytes: None,
             debug: false,
+            simulate_latency: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -392,6 +399,7 @@ mod tests {
             prefer_hash_join: true,
             enable_piecewise_merge_join: false,
             sorted: false,
+            hash_join_buffering_capacity: 0,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
@@ -418,6 +426,7 @@ mod tests {
             memory_limit: None,
             sort_spill_reservation_bytes: None,
             debug: false,
+            simulate_latency: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -430,6 +439,7 @@ mod tests {
             prefer_hash_join: true,
             enable_piecewise_merge_join: false,
             sorted: false,
+            hash_join_buffering_capacity: 0,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;

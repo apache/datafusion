@@ -125,7 +125,7 @@ impl ScalarUDFImpl for ArraysZip {
                     return exec_err!("arrays_zip expects array arguments, got {dt}");
                 }
             };
-            fields.push(Field::new(format!("c{i}"), element_type, true));
+            fields.push(Field::new(format!("{}", i + 1), element_type, true));
         }
 
         Ok(List(Arc::new(Field::new_list_field(
@@ -227,7 +227,7 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let struct_fields: Fields = element_types
         .iter()
         .enumerate()
-        .map(|(i, dt)| Field::new(format!("c{i}"), dt.clone(), true))
+        .map(|(i, dt)| Field::new(format!("{}", i + 1), dt.clone(), true))
         .collect::<Vec<_>>()
         .into();
 

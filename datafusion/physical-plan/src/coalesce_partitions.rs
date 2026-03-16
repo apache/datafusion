@@ -35,6 +35,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_proper
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -158,6 +159,13 @@ impl ExecutionPlan for CoalescePartitionsExec {
         vec![false]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -236,10 +244,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(None)?
-            .with_fetch(self.fetch, 0, 1)
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     fn supports_limit_pushdown(&self) -> bool {

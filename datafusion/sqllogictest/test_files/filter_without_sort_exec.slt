@@ -145,3 +145,47 @@ physical_plan
 02)--FilterExec: date@0 = 2006-01-02
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+
+# schema adaptation cast should preserve ordering (regression test for cast properties)
+statement ok
+COPY (
+  SELECT arrow_cast(column1, 'Int32') AS b
+  FROM (VALUES (1), (2), (3), (4))
+) TO 'test_files/scratch/filter_without_sort_exec/cast_ordering.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cast_ordered (
+    b BIGINT
+)
+STORED AS PARQUET
+WITH ORDER (b)
+LOCATION 'test_files/scratch/filter_without_sort_exec/';
+
+statement ok
+CREATE EXTERNAL TABLE cast_physical
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_without_sort_exec/';
+
+query T
+SELECT DISTINCT arrow_typeof(b) FROM cast_physical;
+----
+Int32
+
+query T
+SELECT DISTINCT arrow_typeof(b) FROM cast_ordered;
+----
+Int64
+
+query TT
+EXPLAIN SELECT b FROM cast_ordered WHERE b > 1 ORDER BY b;
+----
+logical_plan
+01)Sort: cast_ordered.b ASC NULLS LAST
+02)--Filter: cast_ordered.b > Int64(1)
+03)----TableScan: cast_ordered projection=[b], partial_filters=[cast_ordered.b > Int64(1)]
+physical_plan
+01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
+02)--FilterExec: b@0 > 1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_without_sort_exec/cast_ordering.parquet]]}, projection=[b], output_ordering=[b@0 ASC NULLS LAST], file_type=parquet, predicate=b@0 > 1, pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 > 1, required_guarantees=[]

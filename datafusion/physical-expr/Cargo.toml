@@ -55,7 +55,6 @@ hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 parking_lot = { workspace = true }
-paste = { workspace = true }
 petgraph = "0.8.3"
 recursive = { workspace = true, optional = true }
 tokio = { workspace = true }
