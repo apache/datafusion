@@ -31,6 +31,7 @@ make_udf_function!(spark_array::SparkArray, array);
 make_udf_function!(shuffle::SparkShuffle, shuffle);
 make_udf_function!(repeat::SparkArrayRepeat, array_repeat);
 make_udf_function!(slice::SparkSlice, slice);
+make_udf_function!(arrays_zip::SparkArraysZip, arrays_zip);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -56,6 +57,11 @@ pub mod expr_fn {
         "Returns a slice of the array from the start index with the given length.",
         array start length
     ));
+    export_functions!((
+        arrays_zip,
+        "Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.",
+        args
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -65,5 +71,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         shuffle(),
         array_repeat(),
         slice(),
+        arrays_zip(),
     ]
 }
