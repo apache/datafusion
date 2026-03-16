@@ -43,7 +43,6 @@ use datafusion::common::Result;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::Column;
 use datafusion_expr::Expr;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_sql::unparser::Unparser;
 use datafusion_sql::unparser::dialect::DefaultDialect;
 use itertools::Itertools;
