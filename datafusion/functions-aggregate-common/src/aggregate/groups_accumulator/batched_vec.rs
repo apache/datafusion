@@ -41,8 +41,10 @@ pub struct BatchedVec<T> {
 
 impl<T: Clone> BatchedVec<T> {
     pub fn new(batch_size: usize) -> Self {
-        assert!(batch_size > 0 && batch_size.is_power_of_two(),
-            "batch_size must be a power of two, got {batch_size}");
+        assert!(
+            batch_size > 0 && batch_size.is_power_of_two(),
+            "batch_size must be a power of two, got {batch_size}"
+        );
         Self {
             batches: Vec::new(),
             batch_shift: batch_size.trailing_zeros(),
@@ -105,9 +107,9 @@ impl<T: Clone> BatchedVec<T> {
     #[inline]
     pub unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut T {
         let (batch, offset) = self.decompose(index);
-        self.batches
+        unsafe { self.batches
             .get_unchecked_mut(batch)
-            .get_unchecked_mut(offset)
+            .get_unchecked_mut(offset) }
     }
 
     /// Number of batches (including a possible partial last batch).
