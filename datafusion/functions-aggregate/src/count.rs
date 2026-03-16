@@ -48,6 +48,7 @@ use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::FloatDistinctCountAccumulator,
     count_distinct::PrimitiveDistinctCountAccumulator,
     groups_accumulator::accumulate::accumulate_indices,
+    groups_accumulator::batched_vec::BatchedVec,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
@@ -555,18 +556,22 @@ impl Accumulator for CountAccumulator {
 /// accumulator has no additional null or seen filter tracking.
 #[derive(Debug)]
 struct CountGroupsAccumulator {
-    /// Count per group.
+    /// Count per group, stored in batch_size chunks.
     ///
     /// Note this is an i64 and not a u64 (or usize) because the
     /// output type of count is `DataType::Int64`. Thus by using `i64`
     /// for the counts, the output [`Int64Array`] can be created
     /// without copy.
-    counts: Vec<i64>,
+    counts: BatchedVec<i64>,
 }
+
+const DEFAULT_BATCH_SIZE: usize = 8192;
 
 impl CountGroupsAccumulator {
     pub fn new() -> Self {
-        Self { counts: vec![] }
+        Self {
+            counts: BatchedVec::new(DEFAULT_BATCH_SIZE),
+        }
     }
 }
 
@@ -583,7 +588,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         // Add one to each group's counter for each non null, non
         // filtered value
-        self.counts.resize(total_num_groups, 0);
+        self.counts.ensure_capacity(total_num_groups, 0);
         accumulate_indices(
             group_indices,
             values.logical_nulls().as_ref(),
@@ -615,10 +620,12 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         let partial_counts = partial_counts.values();
 
         // Adds the counts with the partial counts
-        self.counts.resize(total_num_groups, 0);
+        self.counts.ensure_capacity(total_num_groups, 0);
         group_indices.iter().zip(partial_counts.iter()).for_each(
             |(&group_index, partial_count)| {
-                self.counts[group_index] += partial_count;
+                // SAFETY: group_index is guaranteed to be in bounds
+                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
+                *count += partial_count;
             },
         );
 
@@ -626,7 +633,10 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = match emit_to {
+            EmitTo::All => self.counts.take_all(),
+            EmitTo::First(n) => self.counts.take_first(n),
+        };
 
         // Count is always non null (null inputs just don't contribute to the overall values)
         let nulls = None;
@@ -637,7 +647,10 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = match emit_to {
+            EmitTo::All => self.counts.take_all(),
+            EmitTo::First(n) => self.counts.take_first(n),
+        };
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
@@ -708,7 +721,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<usize>()
+        self.counts.size()
     }
 }
 

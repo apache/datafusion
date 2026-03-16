@@ -44,6 +44,7 @@ use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
     DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::batched_vec::BatchedVec;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
 };
@@ -52,7 +53,7 @@ use datafusion_macros::user_doc;
 use log::debug;
 use std::any::Any;
 use std::fmt::Debug;
-use std::mem::{size_of, size_of_val};
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 make_udaf_expr_and_func!(
@@ -763,10 +764,10 @@ where
     return_data_type: DataType,
 
     /// Count per group (use u64 to make UInt64Array)
-    counts: Vec<u64>,
+    counts: BatchedVec<u64>,
 
     /// Sums per group, stored as the native type
-    sums: Vec<T::Native>,
+    sums: BatchedVec<T::Native>,
 
     /// Track nulls in the input / filters
     null_state: NullState,
@@ -786,11 +787,12 @@ where
             std::any::type_name::<T>()
         );
 
+        const DEFAULT_BATCH_SIZE: usize = 8192;
         Self {
             return_data_type: return_data_type.clone(),
             sum_data_type: sum_data_type.clone(),
-            counts: vec![],
-            sums: vec![],
+            counts: BatchedVec::new(DEFAULT_BATCH_SIZE),
+            sums: BatchedVec::new(DEFAULT_BATCH_SIZE),
             null_state: NullState::new(),
             avg_fn,
         }
@@ -813,8 +815,9 @@ where
         let values = values[0].as_primitive::<T>();
 
         // increment counts, update sums
-        self.counts.resize(total_num_groups, 0);
-        self.sums.resize(total_num_groups, T::default_value());
+        self.counts.ensure_capacity(total_num_groups, 0);
+        self.sums
+            .ensure_capacity(total_num_groups, T::default_value());
         self.null_state.accumulate(
             group_indices,
             values,
@@ -825,7 +828,8 @@ where
                 let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
                 *sum = sum.add_wrapping(new_value);
 
-                self.counts[group_index] += 1;
+                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
+                *count += 1;
             },
         );
 
@@ -833,8 +837,14 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
-        let sums = emit_to.take_needed(&mut self.sums);
+        let counts = match emit_to {
+            EmitTo::All => self.counts.take_all(),
+            EmitTo::First(n) => self.counts.take_first(n),
+        };
+        let sums = match emit_to {
+            EmitTo::All => self.sums.take_all(),
+            EmitTo::First(n) => self.sums.take_first(n),
+        };
         let nulls = self.null_state.build(emit_to);
 
         if let Some(nulls) = &nulls {
@@ -876,10 +886,16 @@ where
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let nulls = self.null_state.build(emit_to);
 
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = match emit_to {
+            EmitTo::All => self.counts.take_all(),
+            EmitTo::First(n) => self.counts.take_first(n),
+        };
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
 
-        let sums = emit_to.take_needed(&mut self.sums);
+        let sums = match emit_to {
+            EmitTo::All => self.sums.take_all(),
+            EmitTo::First(n) => self.sums.take_first(n),
+        };
         let sums = PrimitiveArray::<T>::new(sums.into(), nulls) // zero copy
             .with_data_type(self.sum_data_type.clone());
 
@@ -901,7 +917,7 @@ where
         let partial_counts = values[0].as_primitive::<UInt64Type>();
         let partial_sums = values[1].as_primitive::<T>();
         // update counts with partial counts
-        self.counts.resize(total_num_groups, 0);
+        self.counts.ensure_capacity(total_num_groups, 0);
         self.null_state.accumulate(
             group_indices,
             partial_counts,
@@ -915,7 +931,8 @@ where
         );
 
         // update sums
-        self.sums.resize(total_num_groups, T::default_value());
+        self.sums
+            .ensure_capacity(total_num_groups, T::default_value());
         self.null_state.accumulate(
             group_indices,
             partial_sums,
@@ -956,6 +973,6 @@ where
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<u64>() + self.sums.capacity() * size_of::<T>()
+        self.counts.size() + self.sums.size()
     }
 }
