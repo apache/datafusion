@@ -1246,10 +1246,6 @@ mod tests {
         assert_eq!(stats, make_stats(vec![20, 30, 20, 20, 10, 30]));
     }
 
-    fn single_col_schema(dt: DataType) -> Schema {
-        Schema::new(vec![Field::new("a", dt, true)])
-    }
-
     // Make a Statistics structure with the specified null counts for each column
     fn make_stats(counts: impl IntoIterator<Item = usize>) -> Statistics {
         Statistics {
@@ -1494,7 +1490,7 @@ mod tests {
             );
 
         // Merge statistics
-        let schema = single_col_schema(DataType::Int32);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let merged_stats =
             Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
 
@@ -1538,9 +1534,8 @@ mod tests {
                     .with_distinct_count(Precision::Exact(8)),
             );
 
-        let schema = single_col_schema(DataType::Int32);
-        let merged =
-            Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
         // No overlap -> sum of NDVs
         assert_eq!(
             merged.column_statistics[0].distinct_count,
@@ -1567,9 +1562,8 @@ mod tests {
                     .with_distinct_count(Precision::Exact(30)),
             );
 
-        let schema = single_col_schema(DataType::Int32);
-        let merged =
-            Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
         // Full overlap -> max(50, 30) = 50
         assert_eq!(
             merged.column_statistics[0].distinct_count,
@@ -1596,9 +1590,8 @@ mod tests {
                     .with_distinct_count(Precision::Exact(60)),
             );
 
-        let schema = single_col_schema(DataType::Int32);
-        let merged =
-            Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
         // overlap=[50,100], range_left=100, range_right=100, overlap_range=50
         // overlap_left=80*(50/100)=40, overlap_right=60*(50/100)=30
         // result = max(40,30) + (80-40) + (60-30) = 40 + 40 + 30 = 110
@@ -1613,19 +1606,16 @@ mod tests {
         let stats1 = Statistics::default()
             .with_num_rows(Precision::Exact(10))
             .add_column_statistics(
-                ColumnStatistics::new_unknown()
-                    .with_distinct_count(Precision::Exact(5)),
+                ColumnStatistics::new_unknown().with_distinct_count(Precision::Exact(5)),
             );
         let stats2 = Statistics::default()
             .with_num_rows(Precision::Exact(10))
             .add_column_statistics(
-                ColumnStatistics::new_unknown()
-                    .with_distinct_count(Precision::Exact(8)),
+                ColumnStatistics::new_unknown().with_distinct_count(Precision::Exact(8)),
             );
 
-        let schema = single_col_schema(DataType::Int32);
-        let merged =
-            Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
         // No min/max -> fallback to max(5, 8)
         assert_eq!(
             merged.column_statistics[0].distinct_count,
@@ -1660,9 +1650,8 @@ mod tests {
                     .with_distinct_count(Precision::Exact(8)),
             );
 
-        let schema = single_col_schema(DataType::Utf8);
-        let merged =
-            Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
         // distance() unsupported for strings -> fallback to max
         assert_eq!(
             merged.column_statistics[0].distinct_count,
@@ -1690,9 +1679,8 @@ mod tests {
                     .with_distinct_count(Precision::Exact(1)),
             );
 
-        let schema = single_col_schema(DataType::Int32);
-        let merged =
-            Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
         assert_eq!(
             merged.column_statistics[0].distinct_count,
             Precision::Inexact(1)
@@ -1716,8 +1704,7 @@ mod tests {
                     .with_distinct_count(Precision::Exact(1)),
             );
 
-        let merged =
-            Statistics::try_merge_iter([&stats3, &stats4], &schema).unwrap();
+        let merged = Statistics::try_merge_iter([&stats3, &stats4], &schema).unwrap();
         assert_eq!(
             merged.column_statistics[0].distinct_count,
             Precision::Inexact(2)

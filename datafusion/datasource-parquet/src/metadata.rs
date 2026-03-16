@@ -560,8 +560,7 @@ fn summarize_column_statistics(
                 })
                 .collect();
 
-            let coverage =
-                distinct_counts.len() as f64 / num_row_groups.max(1) as f64;
+            let coverage = distinct_counts.len() as f64 / num_row_groups.max(1) as f64;
 
             if coverage < PARTIAL_NDV_THRESHOLD {
                 Precision::Absent
@@ -1045,13 +1044,8 @@ mod tests {
 
             let stats1 =
                 ParquetStatistics::int32(Some(1), Some(50), Some(15), Some(0), false);
-            let stats2 = ParquetStatistics::int32(
-                Some(51),
-                Some(100),
-                None,
-                Some(0),
-                false,
-            );
+            let stats2 =
+                ParquetStatistics::int32(Some(51), Some(100), None, Some(0), false);
 
             let row_group1 =
                 create_row_group_with_stats(&schema_descr, vec![Some(stats1)], 500);
@@ -1078,15 +1072,32 @@ mod tests {
             let schema_descr = create_schema_descr(1);
             let arrow_schema = create_arrow_schema(1);
 
-            let stats_with =
-                |ndv| ParquetStatistics::int32(Some(1), Some(100), Some(ndv), Some(0), false);
+            let stats_with = |ndv| {
+                ParquetStatistics::int32(Some(1), Some(100), Some(ndv), Some(0), false)
+            };
             let stats_without =
                 ParquetStatistics::int32(Some(1), Some(100), None, Some(0), false);
 
-            let rg1 = create_row_group_with_stats(&schema_descr, vec![Some(stats_with(10))], 250);
-            let rg2 = create_row_group_with_stats(&schema_descr, vec![Some(stats_with(20))], 250);
-            let rg3 = create_row_group_with_stats(&schema_descr, vec![Some(stats_with(15))], 250);
-            let rg4 = create_row_group_with_stats(&schema_descr, vec![Some(stats_without)], 250);
+            let rg1 = create_row_group_with_stats(
+                &schema_descr,
+                vec![Some(stats_with(10))],
+                250,
+            );
+            let rg2 = create_row_group_with_stats(
+                &schema_descr,
+                vec![Some(stats_with(20))],
+                250,
+            );
+            let rg3 = create_row_group_with_stats(
+                &schema_descr,
+                vec![Some(stats_with(15))],
+                250,
+            );
+            let rg4 = create_row_group_with_stats(
+                &schema_descr,
+                vec![Some(stats_without)],
+                250,
+            );
             let metadata =
                 create_parquet_metadata(schema_descr, vec![rg1, rg2, rg3, rg4]);
 
