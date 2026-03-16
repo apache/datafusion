@@ -673,10 +673,6 @@ mod tests {
             self.inner.name()
         }
 
-        fn origin(&self) -> UDFOrigin {
-            unimplemented!()
-        }
-
         fn signature(&self) -> &Signature {
             self.inner.signature()
         }

@@ -459,13 +459,15 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
 
     /// Returns the function's implementation origin.
     ///
-    /// If you're implementing your own custom function, you must return
-    /// [`UDFOrigin::UserDefined`].
+    /// If you're implementing your own custom function, you should rely on the
+    /// default implementation which returns [`UDFOrigin::UserDefined`].
     ///
     /// This information is useful to know within certain optimization rules to
     /// be sure that the given function has a specific semantics and hasn't been
     /// overwritten by a user defined function which could have a different semantics.
-    fn origin(&self) -> UDFOrigin;
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::UserDefined
+    }
 
     /// Returns any aliases (alternate names) for this function.
     ///
@@ -1464,9 +1466,6 @@ mod test {
         fn name(&self) -> &str {
             "a"
         }
-        fn origin(&self) -> UDFOrigin {
-            unimplemented!()
-        }
         fn signature(&self) -> &Signature {
             &self.signature
         }
@@ -1506,9 +1505,6 @@ mod test {
         }
         fn name(&self) -> &str {
             "b"
-        }
-        fn origin(&self) -> UDFOrigin {
-            unimplemented!()
         }
         fn signature(&self) -> &Signature {
             &self.signature

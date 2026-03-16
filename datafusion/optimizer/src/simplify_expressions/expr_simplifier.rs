@@ -4957,10 +4957,6 @@ mod tests {
             "mock_simplify"
         }
 
-        fn origin(&self) -> UDFOrigin {
-            unimplemented!()
-        }
-
         fn signature(&self) -> &Signature {
             unimplemented!()
         }
@@ -5040,10 +5036,6 @@ mod tests {
 
         fn name(&self) -> &str {
             "mock_simplify"
-        }
-
-        fn origin(&self) -> UDFOrigin {
-            unimplemented!()
         }
 
         fn signature(&self) -> &Signature {

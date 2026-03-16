@@ -33,8 +33,7 @@ use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
 };
 use crate::{
-    AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, UDFOrigin, WindowFrame, WindowUDF,
-    WindowUDFImpl,
+    AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
 };
 use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
@@ -601,10 +600,6 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         &self.name
     }
 
-    fn origin(&self) -> UDFOrigin {
-        UDFOrigin::UserDefined
-    }
-
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -696,10 +691,6 @@ impl WindowUDFImpl for SimpleWindowUDF {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn origin(&self) -> UDFOrigin {
-        UDFOrigin::UserDefined
     }
 
     fn signature(&self) -> &Signature {
