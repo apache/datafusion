@@ -17,17 +17,14 @@
 
 //! [`ScalarUDFImpl`] definitions for arrays_zip function.
 
-use crate::utils::make_scalar_function;
-use arrow::array::{
-    Array, ArrayRef, Capacities, ListArray, MutableArrayData, StructArray, new_null_array,
-};
+use arrow::array::{Array, ArrayRef, Capacities, ListArray, MutableArrayData, StringArray, StructArray, new_null_array, Int32Array};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -138,7 +135,33 @@ impl ScalarUDFImpl for ArraysZip {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(arrays_zip_inner)(&args.args)
+        let args = &args.args;
+        let strings_vec: Vec<String> = (1..args.len() + 1)
+            .into_iter()
+            .map(|i| i.to_string())
+            .collect();
+        let names = vec![Arc::new(StringArray::from(strings_vec)) as ArrayRef];
+
+        let len = args
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            });
+
+        let is_scalar = len.is_none();
+
+        let args = ColumnarValue::values_to_arrays(args)?;
+
+        let result = (arrays_zip_inner)(&args, &names);
+
+        if is_scalar {
+            // If all inputs are scalar, keeps output as scalar
+            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            result.map(ColumnarValue::Scalar)
+        } else {
+            result.map(ColumnarValue::Array)
+        }
     }
 
     fn aliases(&self) -> &[String] {
@@ -156,10 +179,18 @@ impl ScalarUDFImpl for ArraysZip {
 /// has one field per input array. If arrays within a row have different
 /// lengths, shorter arrays are padded with NULLs.
 /// Supports List, LargeList, and Null input types.
-pub fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn arrays_zip_inner(args: &[ArrayRef], names: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 {
         return exec_err!("arrays_zip requires at least two arguments");
     }
+
+    // if args.len() != names.len() {
+    //     return exec_err!(
+    //         "The numbers of zipped arrays: {} and field names: {} should be the same",
+    //         args.len(),
+    //         names.len()
+    //     );
+    // }
 
     let num_rows = args[0].len();
 
@@ -224,10 +255,20 @@ pub fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|v| v.as_ref().map(|view| view.values.to_data()))
         .collect();
 
+    let n: Vec<Vec<&str>>  = names.iter().map(|child| {
+        let values = child.as_any().downcast_ref::<StringArray>().unwrap();
+        values.iter().map(|v: Option<&str>| v.unwrap()).collect()
+    }).collect();
+
+    // dbg!("{}", &n[0]);
+
     let struct_fields: Fields = element_types
         .iter()
         .enumerate()
-        .map(|(i, dt)| Field::new(format!("{}", i + 1), dt.clone(), true))
+        .map(|(i, dt)| {
+            println!("{}", &n[0][i]);
+            Field::new(format!("{}", &n[0][i]), dt.clone(), true)
+        })
         .collect::<Vec<_>>()
         .into();
 

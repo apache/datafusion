@@ -18,15 +18,13 @@
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, Fields};
 
-use datafusion_common::{Result, exec_err};
-use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_common::{Result, exec_err, ScalarValue};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 use datafusion_functions_nested::arrays_zip::arrays_zip_inner;
-use datafusion_functions_nested::utils::make_scalar_function;
 use std::any::Any;
 use std::sync::Arc;
+use arrow::array::{ArrayRef, StringArray};
 
 /// Spark-compatible `arrays_zip` function.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -92,7 +90,33 @@ impl ScalarUDFImpl for SparkArraysZip {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(arrays_zip_inner)(&args.args)
+        let args = &args.args;
+        let strings_vec: Vec<String> = (0..args.len())
+            .into_iter()
+            .map(|i| i.to_string())
+            .collect();
+        let names = vec![Arc::new(StringArray::from(strings_vec)) as ArrayRef];
+
+        let len = args
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            });
+
+        let is_scalar = len.is_none();
+
+        let args = ColumnarValue::values_to_arrays(args)?;
+
+        let result = arrays_zip_inner(&args, &names);
+
+        if is_scalar {
+            // If all inputs are scalar, keeps output as scalar
+            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            result.map(ColumnarValue::Scalar)
+        } else {
+            result.map(ColumnarValue::Array)
+        }
     }
 
     fn aliases(&self) -> &[String] {
