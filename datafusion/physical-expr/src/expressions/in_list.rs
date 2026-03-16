@@ -39,7 +39,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::HashMap;
 use hashbrown::hash_map::RawEntryMut;
 
@@ -189,12 +189,12 @@ impl ArrayStaticFilter {
         if in_array.data_type() == &DataType::Null {
             return Ok(ArrayStaticFilter {
                 in_array,
-                state: RandomState::new(),
+                state: RandomState::default(),
                 map: HashMap::with_hasher(()),
             });
         }
 
-        let state = RandomState::new();
+        let state = RandomState::default();
         let mut map: HashMap<usize, (), ()> = HashMap::with_hasher(());
 
         with_hashes([&in_array], &state, |hashes| -> Result<()> {
