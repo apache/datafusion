@@ -1119,6 +1119,17 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 }
 
+/// Origin of a function’s implementation.
+#[derive(PartialEq, Eq, Debug)]
+pub enum UDFOrigin {
+    /// Built into DataFusion.
+    BuiltIn,
+    /// Spark compatiblity function.
+    SparkCompat,
+    /// Implemented externally by a third-party.
+    UserDefined,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -20,7 +20,7 @@ use crate::logical_plan::consumer::{
 };
 use datafusion::common::{DFSchema, ScalarValue, not_impl_datafusion_err, plan_err};
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{Expr, SortExpr, expr};
+use datafusion::logical_expr::{Expr, SortExpr, UDFOrigin, expr};
 use std::sync::Arc;
 use substrait::proto::AggregateFunction;
 
@@ -59,7 +59,10 @@ pub async fn from_substrait_agg_func(
     // Datafusion does not support aggregate functions with no arguments, so
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
-    let args = if udaf.name() == "count" && udaf.is_builtin() && args.is_empty() {
+    let args = if udaf.name() == "count"
+        && udaf.origin() == UDFOrigin::BuiltIn
+        && args.is_empty()
+    {
         vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {
         args

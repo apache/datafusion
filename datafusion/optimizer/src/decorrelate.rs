@@ -34,7 +34,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan, LogicalPlanBuilder,
-    Operator, expr, lit,
+    Operator, UDFOrigin, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -492,7 +492,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .transform_up(|expr| {
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
-                        if func.name() == "count" && func.is_builtin() {
+                        if func.name() == "count" && func.origin() == UDFOrigin::BuiltIn {
                             Transformed::yes(Expr::Literal(
                                 ScalarValue::Int64(Some(0)),
                                 None,

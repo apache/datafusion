@@ -25,6 +25,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{
     DataFusionError, HashSet, Result, assert_eq_or_internal_err, tree_node::Transformed,
 };
+use datafusion_expr::UDFOrigin;
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
@@ -86,7 +87,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
                 for e in args {
                     fields_set.insert(e);
                 }
-            } else if !func.is_builtin()
+            } else if func.origin() != UDFOrigin::BuiltIn
                 || (func.name() != "sum"
                     && func.name().to_lowercase() != "min"
                     && func.name().to_lowercase() != "max")

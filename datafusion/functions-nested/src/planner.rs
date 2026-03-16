@@ -19,11 +19,11 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, Result, plan_err, utils::list_ndims};
-use datafusion_expr::AggregateUDF;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 #[cfg(feature = "sql")]
 use datafusion_expr::sqlparser::ast::BinaryOperator;
+use datafusion_expr::{AggregateUDF, UDFOrigin};
 use datafusion_expr::{
     Expr, ExprSchemable, GetFieldAccess,
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
@@ -192,5 +192,5 @@ impl ExprPlanner for FieldAccessPlanner {
 }
 
 fn is_array_agg(func: &Arc<AggregateUDF>) -> bool {
-    func.name() == "array_agg" && func.is_builtin()
+    func.name() == "array_agg" && func.origin() == UDFOrigin::BuiltIn
 }

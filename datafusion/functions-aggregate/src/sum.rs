@@ -40,7 +40,7 @@ use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
     Operator, ReversedUDAF, SetMonotonicity, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    TypeSignatureClass, UDFOrigin, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
@@ -209,8 +209,8 @@ impl AggregateUDFImpl for Sum {
         "sum"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

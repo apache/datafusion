@@ -36,7 +36,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, GroupsAccumulator,
-    ReversedUDAF, Signature, TypeSignatureClass, Volatility,
+    ReversedUDAF, Signature, TypeSignatureClass, UDFOrigin, Volatility,
 };
 
 use datafusion_doc::aggregate_doc_sections::DOC_SECTION_GENERAL;
@@ -248,8 +248,8 @@ impl AggregateUDFImpl for BitwiseOperation {
         self.func_name
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

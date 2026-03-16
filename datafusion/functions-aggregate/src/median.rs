@@ -48,7 +48,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::AccumulatorArgs, utils::format_state_name,
 };
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{EmitTo, GroupsAccumulator, UDFOrigin};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
@@ -113,8 +113,8 @@ impl AggregateUDFImpl for Median {
         "median"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

@@ -30,6 +30,7 @@ use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{downcast_value, not_impl_err};
+use datafusion_expr::UDFOrigin;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
@@ -134,8 +135,8 @@ impl AggregateUDFImpl for BoolAnd {
         "bool_and"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
@@ -271,8 +272,8 @@ impl AggregateUDFImpl for BoolOr {
         "bool_or"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

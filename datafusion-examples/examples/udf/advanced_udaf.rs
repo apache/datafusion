@@ -20,6 +20,7 @@
 use arrow::datatypes::{Field, Schema};
 use datafusion::physical_expr::NullState;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
+use datafusion_expr::UDFOrigin;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::{
@@ -74,8 +75,8 @@ impl AggregateUDFImpl for GeoMeanUdaf {
         "geo_mean"
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::UserDefined
     }
 
     /// Return the "signature" of this function -- namely that types of arguments it will take
@@ -399,8 +400,8 @@ impl AggregateUDFImpl for SimplifiedGeoMeanUdaf {
         "simplified_geo_mean"
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::UserDefined
     }
 
     fn signature(&self) -> &Signature {

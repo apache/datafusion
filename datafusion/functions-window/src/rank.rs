@@ -28,7 +28,8 @@ use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_doc::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
-    Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, PartitionEvaluator, Signature, UDFOrigin, Volatility,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -202,8 +203,8 @@ impl WindowUDFImpl for Rank {
         &self.name
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

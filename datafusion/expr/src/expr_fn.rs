@@ -33,7 +33,8 @@ use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
 };
 use crate::{
-    AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
+    AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, UDFOrigin, WindowFrame, WindowUDF,
+    WindowUDFImpl,
 };
 use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
@@ -600,8 +601,8 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         &self.name
     }
 
-    fn is_builtin(&self) -> bool {
-        false // Not 100% sure about this but it looks like that all built-in functions aren't build with SimpleAggregateUDF.
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::UserDefined
     }
 
     fn signature(&self) -> &Signature {
@@ -697,8 +698,8 @@ impl WindowUDFImpl for SimpleWindowUDF {
         &self.name
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::UserDefined
     }
 
     fn signature(&self) -> &Signature {

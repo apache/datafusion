@@ -34,7 +34,8 @@ use datafusion_common::{
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, UDFOrigin,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
 use datafusion_macros::user_doc;
@@ -136,8 +137,8 @@ impl AggregateUDFImpl for StringAgg {
         "string_agg"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

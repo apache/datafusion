@@ -30,7 +30,7 @@ use datafusion_common::{DataFusionError, Result, ffi_datafusion_err};
 use datafusion_expr::function::AggregateFunctionSimplification;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
-    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
+    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature, UDFOrigin,
 };
 use datafusion_functions_aggregate_common::accumulator::{
     AccumulatorArgs, StateFieldsArgs,
@@ -461,8 +461,10 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         self.udaf.name.as_str()
     }
 
-    fn is_builtin(&self) -> bool {
-        false // Not 100% sure about this, but my guess is that foreign UDF cannot be builtin (unless we want to load built-in functions at runtime in the future)
+    fn origin(&self) -> UDFOrigin {
+        // Foreign UDFs are necessarily user-defined (unless we want to load built-in
+        // functions at runtime in the future, which seems unlikely).
+        UDFOrigin::UserDefined
     }
 
     fn signature(&self) -> &Signature {
@@ -671,7 +673,7 @@ mod tests {
             self.inner.name()
         }
 
-        fn is_builtin(&self) -> bool {
+        fn origin(&self) -> UDFOrigin {
             unimplemented!()
         }
 

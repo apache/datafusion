@@ -43,7 +43,7 @@ use crate::groups_accumulator::GroupsAccumulator;
 use crate::udf_eq::UdfEq;
 use crate::utils::AggregateOrderSensitivity;
 use crate::utils::format_state_name;
-use crate::{Accumulator, Expr, expr_vec_fmt};
+use crate::{Accumulator, Expr, UDFOrigin, expr_vec_fmt};
 use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
@@ -140,12 +140,11 @@ impl AggregateUDF {
         &self.inner
     }
 
-    /// Returns whether this function is built into DataFusion or else it's
-    /// assumed to be user defined.
+    /// Returns the function's implementation origin.
     ///
-    /// See [`AggregateUDFImpl::is_builtin`] for more details.
-    pub fn is_builtin(&self) -> bool {
-        self.inner.is_builtin()
+    /// See [`AggregateUDFImpl::origin`] for more details.
+    pub fn origin(&self) -> UDFOrigin {
+        self.inner.origin()
     }
 
     /// Adds additional names that can be used to invoke this function, in
@@ -458,13 +457,15 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this function's name
     fn name(&self) -> &str;
 
-    /// Returns whether this function is built into DataFusion or else it's
-    /// assumed to be user defined.
+    /// Returns the function's implementation origin.
     ///
-    /// This is mostly useful to know within certain optimization rules to be
-    /// sure that the given function has a specific semantics and hasn't been
+    /// If you're implementing your own custom function, you must return
+    /// [`UDFOrigin::UserDefined`].
+    ///
+    /// This information is useful to know within certain optimization rules to
+    /// be sure that the given function has a specific semantics and hasn't been
     /// overwritten by a user defined function which could have a different semantics.
-    fn is_builtin(&self) -> bool;
+    fn origin(&self) -> UDFOrigin;
 
     /// Returns any aliases (alternate names) for this function.
     ///
@@ -1255,8 +1256,8 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.name()
     }
 
-    fn is_builtin(&self) -> bool {
-        self.inner.is_builtin()
+    fn origin(&self) -> UDFOrigin {
+        self.inner.origin()
     }
 
     fn signature(&self) -> &Signature {
@@ -1427,7 +1428,7 @@ pub enum SetMonotonicity {
 
 #[cfg(test)]
 mod test {
-    use crate::{AggregateUDF, AggregateUDFImpl};
+    use crate::{AggregateUDF, AggregateUDFImpl, UDFOrigin};
     use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::accumulator::Accumulator;
@@ -1463,7 +1464,7 @@ mod test {
         fn name(&self) -> &str {
             "a"
         }
-        fn is_builtin(&self) -> bool {
+        fn origin(&self) -> UDFOrigin {
             unimplemented!()
         }
         fn signature(&self) -> &Signature {
@@ -1506,7 +1507,7 @@ mod test {
         fn name(&self) -> &str {
             "b"
         }
-        fn is_builtin(&self) -> bool {
+        fn origin(&self) -> UDFOrigin {
             unimplemented!()
         }
         fn signature(&self) -> &Signature {

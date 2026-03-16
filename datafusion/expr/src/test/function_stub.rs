@@ -30,6 +30,7 @@ use arrow::datatypes::{
 use datafusion_common::plan_err;
 use datafusion_common::{Result, exec_err, not_impl_err, utils::take_function_args};
 
+use crate::UDFOrigin;
 use crate::Volatility::Immutable;
 use crate::type_coercion::aggregates::NUMERICS;
 use crate::{
@@ -123,8 +124,8 @@ impl AggregateUDFImpl for Sum {
         "sum"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
@@ -259,8 +260,8 @@ impl AggregateUDFImpl for Count {
         "COUNT" // TODO: change to lowercase
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
@@ -350,8 +351,8 @@ impl AggregateUDFImpl for Min {
         "min"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
@@ -436,8 +437,8 @@ impl AggregateUDFImpl for Max {
         "max"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
@@ -502,8 +503,8 @@ impl AggregateUDFImpl for Avg {
         "avg"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

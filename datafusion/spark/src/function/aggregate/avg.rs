@@ -25,11 +25,14 @@ use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, ScalarValue, not_impl_err};
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
     Signature, TypeSignatureClass, Volatility,
+};
+use datafusion_expr::{
+    UDFOrigin,
+    function::{AccumulatorArgs, StateFieldsArgs},
 };
 use std::{any::Any, sync::Arc};
 
@@ -72,8 +75,8 @@ impl AggregateUDFImpl for SparkAvg {
         self
     }
 
-    fn is_builtin(&self) -> bool {
-        false // Maybe we should have an enum instead of a bool to be able to distinguish more precisely? Something like `enum UDFOrigin { DataFusion, Spark, User }`
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::SparkCompat
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {

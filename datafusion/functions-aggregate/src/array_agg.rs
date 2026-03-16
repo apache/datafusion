@@ -39,7 +39,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, Signature,
-    Volatility,
+    UDFOrigin, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filter_to_nulls;
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
@@ -104,8 +104,8 @@ impl AggregateUDFImpl for ArrayAgg {
         "array_agg"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

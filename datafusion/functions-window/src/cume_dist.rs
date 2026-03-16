@@ -23,7 +23,8 @@ use datafusion_common::arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_expr::{
-    Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, PartitionEvaluator, Signature, UDFOrigin, Volatility,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -93,8 +94,8 @@ impl WindowUDFImpl for CumeDist {
         "cume_dist"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

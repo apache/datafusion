@@ -82,7 +82,7 @@ use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable,
     LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder, Operator, PartitionEvaluator,
-    ScalarUDF, Signature, TryCast, Volatility, WindowFrame, WindowFrameBound,
+    ScalarUDF, Signature, TryCast, UDFOrigin, Volatility, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
@@ -2785,7 +2785,7 @@ fn roundtrip_window() {
             "dummy_udwf"
         }
 
-        fn is_builtin(&self) -> bool {
+        fn origin(&self) -> UDFOrigin {
             unimplemented!()
         }
 

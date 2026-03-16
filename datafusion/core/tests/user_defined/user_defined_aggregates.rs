@@ -54,6 +54,7 @@ use datafusion::{
 use datafusion_common::{assert_contains, exec_datafusion_err};
 use datafusion_common::{cast::as_primitive_array, exec_err};
 
+use datafusion_expr::UDFOrigin;
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{
     AggregateUDFImpl, Expr, GroupsAccumulator, LogicalPlanBuilder, SimpleAggregateUDF,
@@ -801,8 +802,8 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         "geo_mean"
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::UserDefined
     }
 
     fn signature(&self) -> &Signature {
@@ -948,8 +949,8 @@ impl AggregateUDFImpl for MetadataBasedAggregateUdf {
         &self.name
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        unimplemented!()
     }
 
     fn signature(&self) -> &Signature {

@@ -38,7 +38,7 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, EmitTo, Expr,
     GroupsAccumulator, ReversedUDAF, Signature, TypeSignature, TypeSignatureClass,
-    Volatility,
+    UDFOrigin, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
     DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
@@ -135,8 +135,8 @@ impl AggregateUDFImpl for Avg {
         "avg"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

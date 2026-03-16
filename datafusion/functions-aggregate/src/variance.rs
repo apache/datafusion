@@ -26,6 +26,7 @@ use arrow::{
 };
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::UDFOrigin;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
     Volatility,
@@ -92,8 +93,8 @@ impl AggregateUDFImpl for VarianceSample {
         "var"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
@@ -196,8 +197,8 @@ impl AggregateUDFImpl for VariancePopulation {
         "var_pop"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

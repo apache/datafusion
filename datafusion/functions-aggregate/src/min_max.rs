@@ -49,7 +49,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
     function::AccumulatorArgs,
 };
-use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
+use datafusion_expr::{GroupsAccumulator, StatisticsArgs, UDFOrigin};
 use datafusion_macros::user_doc;
 use half::f16;
 use std::mem::size_of_val;
@@ -211,8 +211,8 @@ impl AggregateUDFImpl for Max {
         "max"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
@@ -502,8 +502,8 @@ impl AggregateUDFImpl for Min {
         "min"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

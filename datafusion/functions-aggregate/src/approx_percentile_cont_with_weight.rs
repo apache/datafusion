@@ -32,6 +32,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
+    UDFOrigin,
 };
 use datafusion_functions_aggregate_common::tdigest::{Centroid, TDigest};
 use datafusion_macros::user_doc;
@@ -160,8 +161,8 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
         "approx_percentile_cont_with_weight"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

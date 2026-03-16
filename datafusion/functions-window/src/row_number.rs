@@ -24,6 +24,7 @@ use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::UDFOrigin;
 use datafusion_expr::{
     Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
@@ -98,8 +99,8 @@ impl WindowUDFImpl for RowNumber {
         "row_number"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

@@ -28,7 +28,7 @@ use datafusion_common::{Result, ffi_err};
 use datafusion_expr::function::WindowUDFFieldArgs;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
-    LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
+    LimitEffect, PartitionEvaluator, Signature, UDFOrigin, WindowUDF, WindowUDFImpl,
 };
 use datafusion_physical_expr::PhysicalExpr;
 use partition_evaluator::FFI_PartitionEvaluator;
@@ -310,8 +310,10 @@ impl WindowUDFImpl for ForeignWindowUDF {
         &self.name
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        // Foreign UDFs are necessarily user-defined (unless we want to load built-in
+        // functions at runtime in the future, which seems unlikely).
+        UDFOrigin::UserDefined
     }
 
     fn signature(&self) -> &Signature {

@@ -28,7 +28,7 @@ use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
     Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,
-    TypeSignature, Volatility, WindowUDFImpl,
+    TypeSignature, UDFOrigin, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -256,8 +256,8 @@ impl WindowUDFImpl for NthValue {
         self.kind.name()
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

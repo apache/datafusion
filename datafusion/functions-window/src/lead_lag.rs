@@ -24,6 +24,7 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result, ScalarValue, arrow_datafusion_err};
 use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
+use datafusion_expr::UDFOrigin;
 use datafusion_expr::{
     Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,
     TypeSignature, Volatility, WindowUDFImpl,
@@ -243,8 +244,8 @@ impl WindowUDFImpl for WindowShift {
         self.kind.name()
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

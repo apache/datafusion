@@ -35,8 +35,8 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
-    ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
-    WindowFunctionDefinition,
+    ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, UDFOrigin,
+    Volatility, WindowFunctionDefinition,
     expr::WindowFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
@@ -279,8 +279,8 @@ impl AggregateUDFImpl for Count {
         "count"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

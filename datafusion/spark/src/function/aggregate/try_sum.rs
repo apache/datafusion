@@ -23,7 +23,7 @@ use arrow::datatypes::{
 use datafusion_common::{Result, ScalarValue, downcast_value, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, UDFOrigin, Volatility};
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::mem::size_of_val;
@@ -256,8 +256,8 @@ impl AggregateUDFImpl for SparkTrySum {
         "try_sum"
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::SparkCompat
     }
 
     fn signature(&self) -> &Signature {

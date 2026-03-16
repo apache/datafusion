@@ -34,7 +34,7 @@ use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
-    Aggregate, Expr, Projection, bitwise_and, bitwise_or, bitwise_shift_left,
+    Aggregate, Expr, Projection, UDFOrigin, bitwise_and, bitwise_or, bitwise_shift_left,
     bitwise_shift_right, cast,
 };
 use itertools::Itertools;
@@ -151,7 +151,7 @@ fn is_grouping_function(expr: &Expr) -> bool {
     matches!(
         expr,
         Expr::AggregateFunction(AggregateFunction { func, .. })
-        if func.name() == "grouping" && func.is_builtin()
+        if func.name() == "grouping" && func.origin() == UDFOrigin::BuiltIn
     )
 }
 

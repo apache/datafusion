@@ -28,6 +28,7 @@ use std::{
 
 use arrow::datatypes::{DataType, FieldRef};
 
+use crate::UDFOrigin;
 use crate::expr::WindowFunction;
 use crate::udf_eq::UdfEq;
 use crate::{
@@ -145,12 +146,11 @@ impl WindowUDF {
         self.inner.name()
     }
 
-    /// Returns whether this function is built into DataFusion or else it's
-    /// assumed to be user defined.
+    /// Returns the function's implementation origin.
     ///
-    /// See [`WindowUDFImpl::is_builtin`] for more details.
-    pub fn is_builtin(&self) -> bool {
-        self.inner.is_builtin()
+    /// See [`WindowUDFImpl::origin`] for more details.
+    pub fn origin(&self) -> UDFOrigin {
+        self.inner.origin()
     }
 
     /// Returns the aliases for this function.
@@ -329,13 +329,15 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this function's name
     fn name(&self) -> &str;
 
-    /// Returns whether this function is built into DataFusion or else it's
-    /// assumed to be user defined.
+    /// Returns the function's implementation origin.
     ///
-    /// This is mostly useful to know within certain optimization rules to be
-    /// sure that the given function has a specific semantics and hasn't been
+    /// If you're implementing your own custom function, you must return
+    /// [`UDFOrigin::UserDefined`].
+    ///
+    /// This information is useful to know within certain optimization rules to
+    /// be sure that the given function has a specific semantics and hasn't been
     /// overwritten by a user defined function which could have a different semantics.
-    fn is_builtin(&self) -> bool;
+    fn origin(&self) -> UDFOrigin;
 
     /// Returns any aliases (alternate names) for this function.
     ///
@@ -526,8 +528,8 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.name()
     }
 
-    fn is_builtin(&self) -> bool {
-        self.inner.is_builtin()
+    fn origin(&self) -> UDFOrigin {
+        self.inner.origin()
     }
 
     fn signature(&self) -> &Signature {
@@ -583,7 +585,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 
 #[cfg(test)]
 mod test {
-    use crate::{LimitEffect, PartitionEvaluator, WindowUDF, WindowUDFImpl};
+    use crate::{LimitEffect, PartitionEvaluator, UDFOrigin, WindowUDF, WindowUDFImpl};
     use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
@@ -620,7 +622,7 @@ mod test {
         fn name(&self) -> &str {
             "a"
         }
-        fn is_builtin(&self) -> bool {
+        fn origin(&self) -> UDFOrigin {
             unimplemented!()
         }
         fn signature(&self) -> &Signature {
@@ -666,7 +668,7 @@ mod test {
         fn name(&self) -> &str {
             "b"
         }
-        fn is_builtin(&self) -> bool {
+        fn origin(&self) -> UDFOrigin {
             unimplemented!()
         }
         fn signature(&self) -> &Signature {

@@ -21,7 +21,7 @@ use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, UDFOrigin, Volatility};
 use datafusion_functions_aggregate::array_agg::{
     ArrayAggAccumulator, DistinctArrayAggAccumulator,
 };
@@ -62,8 +62,8 @@ impl AggregateUDFImpl for SparkCollectList {
         "collect_list"
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::SparkCompat
     }
 
     fn signature(&self) -> &Signature {
@@ -128,8 +128,8 @@ impl AggregateUDFImpl for SparkCollectSet {
         "collect_set"
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::SparkCompat
     }
 
     fn signature(&self) -> &Signature {

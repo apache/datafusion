@@ -25,7 +25,7 @@ use datafusion::common::{
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::WindowFunctionParams;
 use datafusion::logical_expr::{
-    Expr, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, expr,
+    Expr, UDFOrigin, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, expr,
 };
 use substrait::proto::expression::WindowFunction;
 use substrait::proto::expression::window_function::{Bound, BoundsType};
@@ -93,7 +93,9 @@ pub async fn from_window_function(
     // Datafusion does not support aggregate functions with no arguments, so
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
-    let args = if fun.name() == "count" && fun.is_builtin() && window.arguments.is_empty()
+    let args = if fun.name() == "count"
+        && fun.origin() == UDFOrigin::BuiltIn
+        && window.arguments.is_empty()
     {
         vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {

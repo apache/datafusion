@@ -21,6 +21,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::UDFOrigin;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -96,8 +97,8 @@ impl AggregateUDFImpl for CovarianceSample {
         "covar_samp"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
@@ -184,8 +185,8 @@ impl AggregateUDFImpl for CovariancePopulation {
         "covar_pop"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

@@ -47,7 +47,8 @@ use crate::utils::{
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable,
     LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown, TableSource,
-    WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
+    UDFOrigin, WindowFunctionDefinition, build_join_schema, expr_vec_fmt,
+    requalify_sides_if_needed,
 };
 
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
@@ -2581,7 +2582,7 @@ impl Window {
                 // When there is no PARTITION BY, row number will be unique
                 // across the entire table.
                 if udwf.name() == "row_number"
-                    && udwf.is_builtin()
+                    && udwf.origin() == UDFOrigin::BuiltIn
                     && partition_by.is_empty()
                 {
                     Some(idx + input_len)

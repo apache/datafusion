@@ -4957,8 +4957,8 @@ mod tests {
             "mock_simplify"
         }
 
-        fn is_builtin(&self) -> bool {
-            false
+        fn origin(&self) -> UDFOrigin {
+            unimplemented!()
         }
 
         fn signature(&self) -> &Signature {
@@ -5042,7 +5042,7 @@ mod tests {
             "mock_simplify"
         }
 
-        fn is_builtin(&self) -> bool {
+        fn origin(&self) -> UDFOrigin {
             unimplemented!()
         }
 

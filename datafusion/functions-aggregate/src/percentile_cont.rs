@@ -43,7 +43,7 @@ use datafusion_common::{
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, Signature,
-    TypeSignatureClass, Volatility,
+    TypeSignatureClass, UDFOrigin, Volatility,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_expr::{
@@ -171,8 +171,8 @@ impl AggregateUDFImpl for PercentileCont {
         "percentile_cont"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn aliases(&self) -> &[String] {

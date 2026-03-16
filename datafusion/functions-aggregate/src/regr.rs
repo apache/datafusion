@@ -25,7 +25,7 @@ use datafusion_doc::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, UDFOrigin, Volatility,
 };
 use std::any::Any;
 use std::fmt::Debug;
@@ -450,8 +450,8 @@ impl AggregateUDFImpl for Regr {
         self.func_name
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

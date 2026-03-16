@@ -27,7 +27,7 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
-use crate::{AggregateUDF, Volatility};
+use crate::{AggregateUDF, UDFOrigin, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -1020,14 +1020,13 @@ impl WindowFunctionDefinition {
         }
     }
 
-    /// Returns whether this function is built into DataFusion or else it's
-    /// assumed to be user defined.
+    /// Returns the function's implementation origin.
     ///
-    /// See [`crate::udaf::AggregateUDFImpl::is_builtin`] and [`crate::udwf::WindowUDFImpl::is_builtin`] for more details.
-    pub fn is_builtin(&self) -> bool {
+    /// See [`crate::udaf::AggregateUDFImpl::origin`] and [`crate::udwf::WindowUDFImpl::origin`] for more details.
+    pub fn origin(&self) -> UDFOrigin {
         match self {
-            WindowFunctionDefinition::AggregateUDF(fun) => fun.is_builtin(),
-            WindowFunctionDefinition::WindowUDF(fun) => fun.is_builtin(),
+            WindowFunctionDefinition::AggregateUDF(fun) => fun.origin(),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.origin(),
         }
     }
 }
@@ -2409,7 +2408,7 @@ impl NormalizeEq for Expr {
                 }),
             ) => {
                 self_func.name() == other_func.name()
-                    && self_func.is_builtin() == other_func.is_builtin() // Not sure if this is needed because there is at most one function with a given name in the registry
+                    && self_func.origin() == other_func.origin()
                     && self_distinct == other_distinct
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
@@ -2463,7 +2462,7 @@ impl NormalizeEq for Expr {
                 } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
-                    && self_fun.is_builtin() == other_fun.is_builtin() // Is this really required?
+                    && self_fun.origin() == other_fun.origin()
                     && self_window_frame == other_window_frame
                     && match (self_filter, other_filter) {
                         (Some(a), Some(b)) => a.normalize_eq(b),

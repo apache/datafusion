@@ -22,7 +22,7 @@ use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, LimitEffect, PartitionEvaluator, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, Volatility, WindowUDFImpl,
+    ScalarUDFImpl, Signature, UDFOrigin, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -111,8 +111,8 @@ impl AggregateUDFImpl for MyAggregateUDF {
     fn name(&self) -> &str {
         "aggregate_udf"
     }
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        unimplemented!()
     }
     fn signature(&self) -> &Signature {
         &self.signature
@@ -161,8 +161,8 @@ impl WindowUDFImpl for CustomUDWF {
         "custom_udwf"
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        unimplemented!()
     }
 
     fn signature(&self) -> &Signature {

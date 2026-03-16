@@ -30,7 +30,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    TypeSignatureClass, UDFOrigin, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -133,8 +133,8 @@ impl AggregateUDFImpl for ApproxMedian {
         &self.signature
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {

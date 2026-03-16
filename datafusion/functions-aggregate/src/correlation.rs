@@ -32,7 +32,7 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
 };
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{EmitTo, GroupsAccumulator, UDFOrigin};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_multiple;
 use log::debug;
 
@@ -105,8 +105,8 @@ impl AggregateUDFImpl for Correlation {
         "corr"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

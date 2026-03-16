@@ -26,7 +26,7 @@ use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, UDFOrigin, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -88,8 +88,8 @@ impl AggregateUDFImpl for Grouping {
         "grouping"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

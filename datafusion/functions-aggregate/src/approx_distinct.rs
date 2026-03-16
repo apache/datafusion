@@ -38,7 +38,7 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, UDFOrigin, Volatility,
 };
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
@@ -318,8 +318,8 @@ impl AggregateUDFImpl for ApproxDistinct {
         "approx_distinct"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

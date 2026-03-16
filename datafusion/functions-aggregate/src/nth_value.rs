@@ -34,7 +34,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF,
-    Signature, SortExpr, Volatility, lit,
+    Signature, SortExpr, UDFOrigin, Volatility, lit,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
@@ -120,8 +120,8 @@ impl AggregateUDFImpl for NthValueAgg {
         "nth_value"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

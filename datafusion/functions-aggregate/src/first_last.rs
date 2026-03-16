@@ -47,7 +47,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
-    GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
+    GroupsAccumulator, ReversedUDAF, Signature, SortExpr, UDFOrigin, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_macros::user_doc;
@@ -120,8 +120,8 @@ impl AggregateUDFImpl for FirstValue {
         "first_value"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
@@ -1064,8 +1064,8 @@ impl AggregateUDFImpl for LastValue {
         "last_value"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {

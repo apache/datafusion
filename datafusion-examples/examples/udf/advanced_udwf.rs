@@ -41,6 +41,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use datafusion_examples::utils::datasets::ExampleDataset;
+use datafusion_expr::UDFOrigin;
 
 /// This example shows how to use the full WindowUDFImpl API to implement a user
 /// defined window function. As in the `simple_udwf.rs` example, this struct implements
@@ -78,8 +79,8 @@ impl WindowUDFImpl for SmoothItUdf {
         "smooth_it"
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::UserDefined
     }
 
     /// Return the "signature" of this function -- namely that types of arguments it will take
@@ -188,8 +189,8 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         "simplify_smooth_it"
     }
 
-    fn is_builtin(&self) -> bool {
-        false
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::UserDefined
     }
 
     fn signature(&self) -> &Signature {

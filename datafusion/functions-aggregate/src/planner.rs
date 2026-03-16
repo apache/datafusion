@@ -19,7 +19,7 @@
 
 use datafusion_common::Result;
 use datafusion_expr::{
-    Expr,
+    Expr, UDFOrigin,
     expr::{AggregateFunction, AggregateFunctionParams},
     expr_rewriter::NamePreserver,
     planner::{ExprPlanner, PlannerResult, RawAggregateExpr},
@@ -85,7 +85,7 @@ impl ExprPlanner for AggregateFunctionPlanner {
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         if raw_expr.func.name() == "count"
-            && raw_expr.func.is_builtin()
+            && raw_expr.func.origin() == UDFOrigin::BuiltIn
             && (raw_expr.args.len() == 1
                 && matches!(raw_expr.args[0], Expr::Wildcard { .. })
                 || raw_expr.args.is_empty())

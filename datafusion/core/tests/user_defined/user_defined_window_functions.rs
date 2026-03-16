@@ -30,8 +30,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::exec_datafusion_err;
 use datafusion_expr::ptr_eq::PtrEq;
 use datafusion_expr::{
-    LimitEffect, PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF,
-    WindowUDFImpl,
+    LimitEffect, PartitionEvaluator, Signature, TypeSignature, UDFOrigin, Volatility,
+    WindowUDF, WindowUDFImpl,
 };
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_functions_window_common::{
@@ -554,7 +554,7 @@ impl OddCounter {
                 "odd_counter"
             }
 
-            fn is_builtin(&self) -> bool {
+            fn origin(&self) -> UDFOrigin {
                 unimplemented!()
             }
 
@@ -687,7 +687,7 @@ impl WindowUDFImpl for VariadicWindowUDF {
         "variadic_window_udf"
     }
 
-    fn is_builtin(&self) -> bool {
+    fn origin(&self) -> UDFOrigin {
         unimplemented!()
     }
 
@@ -835,7 +835,7 @@ impl WindowUDFImpl for MetadataBasedWindowUdf {
         &self.name
     }
 
-    fn is_builtin(&self) -> bool {
+    fn origin(&self) -> UDFOrigin {
         unimplemented!()
     }
 

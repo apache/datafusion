@@ -40,7 +40,7 @@ use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
-    Volatility,
+    UDFOrigin, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{DEFAULT_MAX_SIZE, TDigest};
 use datafusion_macros::user_doc;
@@ -287,8 +287,8 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         "approx_percentile_cont"
     }
 
-    fn is_builtin(&self) -> bool {
-        true
+    fn origin(&self) -> UDFOrigin {
+        UDFOrigin::BuiltIn
     }
 
     fn signature(&self) -> &Signature {
