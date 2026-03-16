@@ -37,14 +37,20 @@ use object_store::{
 
 /// GET latency distribution, inspired by S3 latencies.
 /// Deterministic but shuffled to avoid artificial patterns.
-/// Distribution: P50 ~30ms, P75-P90 ~100ms, P99 ~200ms.
-const GET_LATENCIES_MS: &[u64] =
-    &[30, 150, 28, 100, 35, 200, 30, 85, 120, 25, 110, 32, 180, 70];
+/// 20 values: 11x P50 (~25-35ms), 5x P75-P90 (~70-110ms), 2x P95 (~120-150ms), 2x P99 (~180-200ms)
+/// Sorted: 25,25,28,28,30,30,30,30,32,32,35, 70,85,100,100,110, 130,150, 180,200
+/// P50≈32ms, P90≈110ms, P99≈200ms
+const GET_LATENCIES_MS: &[u64] = &[
+    30, 100, 25, 85, 32, 200, 28, 130, 35, 70, 30, 150, 30, 110, 28, 180, 32, 25, 100, 30,
+];
 
 /// LIST latency distribution, generally higher than GET.
-/// Distribution: P50 ~55ms, P75-P90 ~150ms, P99 ~400ms.
+/// 20 values: 11x P50 (~40-70ms), 5x P75-P90 (~120-180ms), 2x P95 (~200-250ms), 2x P99 (~300-400ms)
+/// Sorted: 40,40,50,50,55,55,60,60,65,65,70, 120,140,160,160,180, 210,250, 300,400
+/// P50≈65ms, P90≈180ms, P99≈400ms
 const LIST_LATENCIES_MS: &[u64] = &[
-    55, 250, 40, 160, 70, 400, 50, 140, 200, 60, 180, 65, 300, 120,
+    55, 160, 40, 140, 65, 400, 50, 210, 70, 120, 60, 250, 55, 180, 50, 300, 65, 40, 160,
+    60,
 ];
 
 /// An ObjectStore wrapper that injects simulated latency on get and list calls.
