@@ -39,7 +39,6 @@ Then, run the `sqllogictest` suite, which is the main regression suite for SQL
 behavior and covers most DataFusion features.
 
 ```shell
-# run sqllogictests
 cargo test --profile=ci --test sqllogictests
 ```
 
