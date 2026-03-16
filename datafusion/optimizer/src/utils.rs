@@ -79,10 +79,27 @@ pub fn is_restrict_null_predicate<'a>(
         return Ok(true);
     }
 
+    // Collect join columns so they can be used in both the fast-path check and the
+    // fallback evaluation path below.
+    let join_cols: HashSet<&Column> = join_cols_of_predicate.into_iter().collect();
+
+    // Fast path: if the predicate references columns outside the join key set,
+    // `evaluate_expr_with_null_column` would fail because the null schema only
+    // contains a placeholder for the join key columns. Callers treat such errors as
+    // non-restricting (false) via `matches!(_, Ok(true))`, so we return false early
+    // and avoid the expensive physical-expression compilation pipeline entirely.
+    if predicate
+        .column_refs()
+        .iter()
+        .any(|c| !join_cols.contains(*c))
+    {
+        return Ok(false);
+    }
+
     // If result is single `true`, return false;
     // If result is single `NULL` or `false`, return true;
     Ok(
-        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
+        match evaluate_expr_with_null_column(predicate, join_cols.into_iter())? {
             ColumnarValue::Array(array) => {
                 if array.len() == 1 {
                     let boolean_array = as_boolean_array(&array)?;
