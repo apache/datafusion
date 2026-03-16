@@ -89,6 +89,20 @@ fn strip_metadata_from_data_type(data_type: &DataType) -> DataType {
         DataType::Map(field, sorted) => {
             DataType::Map(Arc::new(strip_metadata_from_field(field.as_ref())), *sorted)
         }
+        DataType::Union(fields, mode) => {
+            let (type_ids, children): (Vec<_>, Vec<_>) = fields
+                .iter()
+                .map(|(type_id, field)| {
+                    (*type_id, Arc::new(strip_metadata_from_field(field.as_ref())))
+                })
+                .unzip();
+
+            DataType::Union(
+                UnionFields::try_new(type_ids, children)
+                    .expect("existing union fields should remain valid"),
+                *mode,
+            )
+        }
         _ => data_type.clone(),
     }
 }
