@@ -195,6 +195,8 @@ mod tests {
             (binary_expr(col("a"), Operator::Gt, lit(8i64)), true),
             // a <= 8
             (binary_expr(col("a"), Operator::LtEq, lit(8i32)), true),
+            // a > b (b is outside join key set)
+            (binary_expr(col("a"), Operator::Gt, col("b")), false),
             // CASE a WHEN 1 THEN true WHEN 0 THEN false ELSE NULL END
             (
                 case(col("a"))
