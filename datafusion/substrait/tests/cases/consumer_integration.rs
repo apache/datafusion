@@ -77,7 +77,7 @@ mod tests {
                 Subquery:
                   Aggregate: groupBy=[[]], aggr=[[min(PARTSUPP.PS_SUPPLYCOST)]]
                     Projection: PARTSUPP.PS_SUPPLYCOST
-                      Filter: PARTSUPP.PS_PARTKEY = PARTSUPP.PS_PARTKEY AND SUPPLIER.S_SUPPKEY = PARTSUPP.PS_SUPPKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_REGIONKEY = REGION.R_REGIONKEY AND REGION.R_NAME = Utf8("EUROPE")
+                      Filter: outer_ref(PART.P_PARTKEY) = PARTSUPP.PS_PARTKEY AND SUPPLIER.S_SUPPKEY = PARTSUPP.PS_SUPPKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_REGIONKEY = REGION.R_REGIONKEY AND REGION.R_NAME = Utf8("EUROPE")
                         Cross Join:
                           Cross Join:
                             Cross Join:
@@ -134,7 +134,7 @@ mod tests {
               Projection: ORDERS.O_ORDERPRIORITY
                 Filter: ORDERS.O_ORDERDATE >= CAST(Utf8("1993-07-01") AS Date32) AND ORDERS.O_ORDERDATE < CAST(Utf8("1993-10-01") AS Date32) AND EXISTS (<subquery>)
                   Subquery:
-                    Filter: LINEITEM.L_ORDERKEY = LINEITEM.L_ORDERKEY AND LINEITEM.L_COMMITDATE < LINEITEM.L_RECEIPTDATE
+                    Filter: LINEITEM.L_ORDERKEY = outer_ref(ORDERS.O_ORDERKEY) AND LINEITEM.L_COMMITDATE < LINEITEM.L_RECEIPTDATE
                       TableScan: LINEITEM
                   TableScan: ORDERS
         "#
@@ -353,11 +353,27 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
     #[tokio::test]
     async fn tpch_test_17() -> Result<()> {
         let plan_str = tpch_plan_to_string(17).await?;
-        assert_snapshot!(plan_str, "panics due to out of bounds field access");
+        assert_snapshot!(
+        plan_str,
+        @r#"
+        Projection: sum(LINEITEM.L_EXTENDEDPRICE) / Decimal128(Some(70),2,1) AS AVG_YEARLY
+          Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE)]]
+            Projection: LINEITEM.L_EXTENDEDPRICE
+              Filter: PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#23") AND PART.P_CONTAINER = Utf8("MED BOX") AND LINEITEM.L_QUANTITY < (<subquery>)
+                Subquery:
+                  Projection: Decimal128(Some(2),2,1) * avg(LINEITEM.L_QUANTITY)
+                    Aggregate: groupBy=[[]], aggr=[[avg(LINEITEM.L_QUANTITY)]]
+                      Projection: LINEITEM.L_QUANTITY
+                        Filter: LINEITEM.L_PARTKEY = outer_ref(PART.P_PARTKEY)
+                          TableScan: LINEITEM
+                Cross Join:
+                  TableScan: LINEITEM
+                  TableScan: PART
+        "#
+                );
         Ok(())
     }
 
@@ -425,7 +441,7 @@ mod tests {
                       Projection: Decimal128(Some(5),2,1) * sum(LINEITEM.L_QUANTITY)
                         Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_QUANTITY)]]
                           Projection: LINEITEM.L_QUANTITY
-                            Filter: LINEITEM.L_PARTKEY = LINEITEM.L_ORDERKEY AND LINEITEM.L_SUPPKEY = LINEITEM.L_PARTKEY AND LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32)
+                            Filter: LINEITEM.L_PARTKEY = outer_ref(PARTSUPP.PS_PARTKEY) AND LINEITEM.L_SUPPKEY = outer_ref(PARTSUPP.PS_SUPPKEY) AND LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32)
                               TableScan: LINEITEM
                     TableScan: PARTSUPP
               Cross Join:
@@ -449,10 +465,10 @@ mod tests {
                 Projection: SUPPLIER.S_NAME
                   Filter: SUPPLIER.S_SUPPKEY = LINEITEM.L_SUPPKEY AND ORDERS.O_ORDERKEY = LINEITEM.L_ORDERKEY AND ORDERS.O_ORDERSTATUS = Utf8("F") AND LINEITEM.L_RECEIPTDATE > LINEITEM.L_COMMITDATE AND EXISTS (<subquery>) AND NOT EXISTS (<subquery>) AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_NAME = Utf8("SAUDI ARABIA")
                     Subquery:
-                      Filter: LINEITEM.L_ORDERKEY = LINEITEM.L_TAX AND LINEITEM.L_SUPPKEY != LINEITEM.L_LINESTATUS
+                      Filter: LINEITEM.L_ORDERKEY = outer_ref(LINEITEM.L_ORDERKEY) AND LINEITEM.L_SUPPKEY != outer_ref(LINEITEM.L_SUPPKEY)
                         TableScan: LINEITEM
                     Subquery:
-                      Filter: LINEITEM.L_ORDERKEY = LINEITEM.L_TAX AND LINEITEM.L_SUPPKEY != LINEITEM.L_LINESTATUS AND LINEITEM.L_RECEIPTDATE > LINEITEM.L_COMMITDATE
+                      Filter: LINEITEM.L_ORDERKEY = outer_ref(LINEITEM.L_ORDERKEY) AND LINEITEM.L_SUPPKEY != outer_ref(LINEITEM.L_SUPPKEY) AND LINEITEM.L_RECEIPTDATE > LINEITEM.L_COMMITDATE
                         TableScan: LINEITEM
                     Cross Join:
                       Cross Join:
@@ -483,11 +499,57 @@ mod tests {
                         Filter: CUSTOMER.C_ACCTBAL > Decimal128(Some(0),3,2) AND (substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("13") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("31") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("23") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("29") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("30") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("18") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("17") AS Utf8))
                           TableScan: CUSTOMER
                   Subquery:
-                    Filter: ORDERS.O_CUSTKEY = ORDERS.O_ORDERKEY
+                    Filter: ORDERS.O_CUSTKEY = outer_ref(CUSTOMER.C_CUSTKEY)
                       TableScan: ORDERS
                   TableScan: CUSTOMER
         "#
                         );
+        Ok(())
+    }
+
+    /// Tests nested correlated subqueries where the innermost subquery
+    /// references the outermost query (steps_out=2).
+    ///
+    /// This tests the outer schema stack with depth > 1.
+    /// The plan represents:
+    /// ```sql
+    /// SELECT * FROM A
+    /// WHERE EXISTS (
+    ///     SELECT * FROM B
+    ///     WHERE B.b1 = A.a1              -- steps_out=1 (references immediate parent)
+    ///       AND EXISTS (
+    ///         SELECT * FROM C
+    ///         WHERE C.c1 = A.a1          -- steps_out=2 (references grandparent)
+    ///           AND C.c2 = B.b2          -- steps_out=1 (references immediate parent)
+    ///     )
+    /// )
+    /// ```
+    ///
+    #[tokio::test]
+    async fn test_nested_correlated_subquery() -> Result<()> {
+        let path = "tests/testdata/test_plans/nested_correlated_subquery.substrait.json";
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        let plan_str = format!("{plan}");
+
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            Filter: B.b1 = outer_ref(A.a1) AND EXISTS (<subquery>)
+              Subquery:
+                Filter: C.c1 = outer_ref(A.a1) AND C.c2 = outer_ref(B.b2)
+                  TableScan: C
+              TableScan: B
+          TableScan: A
+        "#
+        );
         Ok(())
     }
 

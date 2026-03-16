@@ -233,7 +233,7 @@ impl TableProvider for ParquetMetadataTable {
         self
     }
 
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
+    fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
 
@@ -482,7 +482,7 @@ impl TableProvider for MetadataCacheTable {
         self
     }
 
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
+    fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
 
@@ -600,7 +600,7 @@ impl TableProvider for StatisticsCacheTable {
         self
     }
 
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
+    fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
 
@@ -735,7 +735,7 @@ impl TableProvider for ListFilesCacheTable {
         self
     }
 
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
+    fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
 

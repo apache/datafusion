@@ -45,6 +45,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
@@ -1382,6 +1383,36 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to group by expressions
+        let mut tnr = TreeNodeRecursion::Continue;
+        for expr in self.group_by.input_exprs() {
+            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+        }
+
+        // Apply to aggregate expressions
+        for aggr in self.aggr_expr.iter() {
+            for expr in aggr.expressions() {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+        }
+
+        // Apply to filter expressions (FILTER WHERE clauses)
+        for filter in self.filter_expr.iter().flatten() {
+            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
+        }
+
+        // Apply to dynamic filter expression if present
+        if let Some(dyn_filter) = &self.dynamic_filter {
+            tnr = tnr.visit_sibling(|| f(dyn_filter.filter.as_ref()))?;
+        }
+
+        Ok(tnr)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -1398,7 +1429,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.schema),
         )?;
         me.limit_options = self.limit_options;
-        me.dynamic_filter = self.dynamic_filter.clone();
+        me.dynamic_filter.clone_from(&self.dynamic_filter);
 
         Ok(Arc::new(me))
     }
@@ -1416,9 +1447,9 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let child_statistics = self.input().partition_statistics(partition)?;
-        self.statistics_inner(&child_statistics)
+        Ok(Arc::new(self.statistics_inner(&child_statistics)?))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -2479,6 +2510,13 @@ mod tests {
             vec![]
         }
 
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
         fn with_new_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
@@ -2500,16 +2538,19 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             if partition.is_some() {
-                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+                return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             let (_, batches) = some_data();
-            Ok(common::compute_record_batch_statistics(
+            Ok(Arc::new(common::compute_record_batch_statistics(
                 &[batches],
                 &self.schema(),
                 None,
-            ))
+            )))
         }
     }
 
@@ -3834,6 +3875,142 @@ mod tests {
             +---+---+--------+
         ");
         }
+        Ok(())
+    }
+
+    /// Tests that when the memory pool is too small to accommodate the sort
+    /// reservation during spill, the error is properly propagated as
+    /// ResourcesExhausted rather than silently exceeding memory limits.
+    #[tokio::test]
+    async fn test_sort_reservation_fails_during_spill() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Int64, false),
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+            Field::new("c", DataType::Float64, false),
+            Field::new("d", DataType::Float64, false),
+            Field::new("e", DataType::Float64, false),
+        ]));
+
+        let batches = vec![vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(Float64Array::from(vec![10.0])),
+                    Arc::new(Float64Array::from(vec![20.0])),
+                    Arc::new(Float64Array::from(vec![30.0])),
+                    Arc::new(Float64Array::from(vec![40.0])),
+                    Arc::new(Float64Array::from(vec![50.0])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![2])),
+                    Arc::new(Float64Array::from(vec![11.0])),
+                    Arc::new(Float64Array::from(vec![21.0])),
+                    Arc::new(Float64Array::from(vec![31.0])),
+                    Arc::new(Float64Array::from(vec![41.0])),
+                    Arc::new(Float64Array::from(vec![51.0])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![3])),
+                    Arc::new(Float64Array::from(vec![12.0])),
+                    Arc::new(Float64Array::from(vec![22.0])),
+                    Arc::new(Float64Array::from(vec![32.0])),
+                    Arc::new(Float64Array::from(vec![42.0])),
+                    Arc::new(Float64Array::from(vec![52.0])),
+                ],
+            )?,
+        ]];
+
+        let scan = TestMemoryExec::try_new(&batches, Arc::clone(&schema), None)?;
+
+        let aggr = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new(
+                vec![(col("g", schema.as_ref())?, "g".to_string())],
+                vec![],
+                vec![vec![false]],
+                false,
+            ),
+            vec![
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("a", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(a)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("b", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(b)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("c", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(c)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("d", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(d)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("e", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(e)")
+                    .build()?,
+                ),
+            ],
+            vec![None, None, None, None, None],
+            Arc::new(scan) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&schema),
+        )?);
+
+        // Pool must be large enough for accumulation to start but too small for
+        // sort_memory after clearing.
+        let task_ctx = new_spill_ctx(1, 500);
+        let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await;
+
+        match &result {
+            Ok(_) => panic!("Expected ResourcesExhausted error but query succeeded"),
+            Err(e) => {
+                let root = e.find_root();
+                assert!(
+                    matches!(root, DataFusionError::ResourcesExhausted(_)),
+                    "Expected ResourcesExhausted, got: {root}",
+                );
+                let msg = root.to_string();
+                assert!(
+                    msg.contains("Failed to reserve memory for sort during spill"),
+                    "Expected sort reservation error, got: {msg}",
+                );
+            }
+        }
+
         Ok(())
     }
 

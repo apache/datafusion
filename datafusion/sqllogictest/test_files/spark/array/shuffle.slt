@@ -107,6 +107,16 @@ SELECT shuffle([1, 2, 3, 4], CAST('2' AS INT));
 ----
 [1, 4, 2, 3]
 
+query ?
+SELECT shuffle(['ab'], NULL);
+----
+[ab]
+
+query ?
+SELECT shuffle(shuffle([3, 3], NULL), NULL);
+----
+[3, 3]
+
 # Clean up
 statement ok
 DROP TABLE test_shuffle_list_types;

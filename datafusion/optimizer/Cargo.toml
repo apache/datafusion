@@ -43,6 +43,14 @@ name = "datafusion_optimizer"
 [features]
 recursive_protection = ["dep:recursive"]
 
+# Note -- please DO NOT add a dependency here to any of the datafusion-functions
+# crates. While it is tempting to try and add an optimizer pass that uses
+# datafusion-functions Doing so makes it harder for downstream crates to
+# provide their own function library and smaller install footprint.
+#
+# If you want to add special handling for a specific function, use the methods
+# on the ScalarUDFImpl or AggregateUDFImpl traits (or add a new method to those
+# traits).
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }

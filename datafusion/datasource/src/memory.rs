@@ -29,6 +29,7 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, ScalarValue, assert_or_internal_err, plan_err, project_schema,
 };
@@ -196,26 +197,26 @@ impl DataSource for MemorySourceConfig {
         SchedulingType::Cooperative
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             // Compute statistics for a specific partition
             if let Some(batches) = self.partitions.get(partition) {
-                Ok(common::compute_record_batch_statistics(
+                Ok(Arc::new(common::compute_record_batch_statistics(
                     from_ref(batches),
                     &self.schema,
                     self.projection.clone(),
-                ))
+                )))
             } else {
                 // Invalid partition index
-                Ok(Statistics::new_unknown(&self.projected_schema))
+                Ok(Arc::new(Statistics::new_unknown(&self.projected_schema)))
             }
         } else {
             // Compute statistics across all partitions
-            Ok(common::compute_record_batch_statistics(
+            Ok(Arc::new(common::compute_record_batch_statistics(
                 &self.partitions,
                 &self.schema,
                 self.projection.clone(),
-            ))
+            )))
         }
     }
 
@@ -251,6 +252,20 @@ impl DataSource for MemorySourceConfig {
                 .map(|s| Arc::new(s) as Arc<dyn DataSource>)
             })
             .transpose()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in sort_information
+        let mut tnr = TreeNodeRecursion::Continue;
+        for ordering in &self.sort_information {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 
@@ -953,7 +968,7 @@ mod tests {
         let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
-            values.partition_statistics(None)?,
+            *values.partition_statistics(None)?,
             Statistics {
                 num_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important

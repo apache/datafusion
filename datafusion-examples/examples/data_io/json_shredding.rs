@@ -47,7 +47,7 @@ use datafusion_physical_expr_adapter::{
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStoreExt, PutPayload};
 
 // Example showing how to implement custom filter rewriting for JSON shredding.
 //
@@ -76,7 +76,7 @@ pub async fn json_shredding() -> Result<()> {
         let mut buf = vec![];
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
 
         let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props))

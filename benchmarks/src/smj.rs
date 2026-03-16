@@ -433,8 +433,8 @@ impl RunOpt {
         let mut config = self.common.config()?;
         // Disable hash joins to force SMJ
         config = config.set_bool("datafusion.optimizer.prefer_hash_join", false);
-        let rt_builder = self.common.runtime_env_builder()?;
-        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+        let rt = self.common.build_runtime()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt);
 
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {

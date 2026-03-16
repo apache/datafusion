@@ -30,7 +30,7 @@ use itertools::Itertools;
 use log::debug;
 use object_store::path::DELIMITER;
 use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
@@ -521,8 +521,8 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
     use object_store::{
-        GetOptions, GetResult, ListResult, MultipartUpload, PutMultipartOptions,
-        PutPayload,
+        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload,
+        PutMultipartOptions, PutPayload,
     };
     use std::any::Any;
     use std::collections::HashMap;
@@ -1108,7 +1108,14 @@ mod tests {
             location: &Path,
             options: GetOptions,
         ) -> object_store::Result<GetResult> {
-            self.in_mem.get_opts(location, options).await
+            if options.head && self.forbidden_paths.contains(location) {
+                Err(object_store::Error::PermissionDenied {
+                    path: location.to_string(),
+                    source: "forbidden".into(),
+                })
+            } else {
+                self.in_mem.get_opts(location, options).await
+            }
         }
 
         async fn get_ranges(
@@ -1119,19 +1126,11 @@ mod tests {
             self.in_mem.get_ranges(location, ranges).await
         }
 
-        async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-            if self.forbidden_paths.contains(location) {
-                Err(object_store::Error::PermissionDenied {
-                    path: location.to_string(),
-                    source: "forbidden".into(),
-                })
-            } else {
-                self.in_mem.head(location).await
-            }
-        }
-
-        async fn delete(&self, location: &Path) -> object_store::Result<()> {
-            self.in_mem.delete(location).await
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.in_mem.delete_stream(locations)
         }
 
         fn list(
@@ -1148,16 +1147,13 @@ mod tests {
             self.in_mem.list_with_delimiter(prefix).await
         }
 
-        async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.in_mem.copy(from, to).await
-        }
-
-        async fn copy_if_not_exists(
+        async fn copy_opts(
             &self,
             from: &Path,
             to: &Path,
+            options: CopyOptions,
         ) -> object_store::Result<()> {
-            self.in_mem.copy_if_not_exists(from, to).await
+            self.in_mem.copy_opts(from, to, options).await
         }
     }
 

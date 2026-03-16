@@ -618,7 +618,7 @@ select repeat('-1.2', arrow_cast(3, 'Int32'));
 ----
 -1.2-1.2-1.2
 
-query error DataFusion error: Error during planning: Function 'repeat' requires TypeSignatureClass::Native\(LogicalType\(Native\(Int64\), Int64\)\), but received Float64 \(DataType: Float64\)
+query error DataFusion error: Error during planning: Function 'repeat' requires Int64, but received Float64 \(DataType: Float64\)
 select repeat('-1.2', 3.2);
 
 query T
@@ -698,6 +698,26 @@ ghi
 
 query T
 SELECT split_part('abc~@~def~@~ghi', '~@~', -100)
+----
+(empty)
+
+query T
+SELECT split_part('a,b', '', 1)
+----
+a,b
+
+query T
+SELECT split_part('a,b', '', -1)
+----
+a,b
+
+query T
+SELECT split_part('a,b', '', 2)
+----
+(empty)
+
+query T
+SELECT split_part('a,b', '', -2)
 ----
 (empty)
 

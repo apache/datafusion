@@ -69,6 +69,9 @@ rustyline = "17.0"
 tokio = { workspace = true, features = ["macros", "parking_lot", "rt", "rt-multi-thread", "signal", "sync"] }
 url = { workspace = true }
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 ctor = { workspace = true }
 insta = { workspace = true }

@@ -40,6 +40,7 @@ use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
 use datafusion_common::error::Result;
 use datafusion_common::exec_datafusion_err;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -52,7 +53,7 @@ use datafusion_datasource::file_stream::FileOpenFuture;
 use datafusion_datasource::file_stream::FileOpener;
 use futures::StreamExt;
 use itertools::Itertools;
-use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
+use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
 /// Enum indicating which Arrow IPC format to use
 #[derive(Clone, Copy, Debug)]
@@ -395,6 +396,20 @@ impl FileSource for ArrowSource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit projection expressions
+        let mut tnr = TreeNodeRecursion::Continue;
+        for proj_expr in &self.projection.source {
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
+        }
+        Ok(tnr)
     }
 }
 
