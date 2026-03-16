@@ -323,16 +323,6 @@ async fn collect_results(ctx: &SessionContext, original: &str) -> TestCaseResult
         }
     };
 
-    let is_sorted = match ctx.state().create_physical_plan(df.logical_plan()).await {
-        Ok(plan) => plan.equivalence_properties().output_ordering().is_some(),
-        Err(e) => {
-            return TestCaseResult::ExecutionError {
-                original: original.to_string(),
-                error: e.to_string(),
-            };
-        }
-    };
-
     // Collect results from original query
     let mut expected = match df.collect().await {
         Ok(batches) => batches,
@@ -368,8 +358,9 @@ async fn collect_results(ctx: &SessionContext, original: &str) -> TestCaseResult
         }
     };
 
-    // Sort if needed for comparison
-    if !is_sorted {
+    // Always sort for deterministic comparison — even "sorted" results can have
+    // tied rows in different order between original and unparsed SQL.
+    {
         expected = match sort_batches(ctx, expected).await {
             Ok(batches) => batches,
             Err(e) => {
