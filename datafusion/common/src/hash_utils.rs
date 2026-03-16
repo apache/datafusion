@@ -19,15 +19,12 @@
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
-#[cfg(not(feature = "force_hash_collisions"))]
 use arrow::compute::take;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use foldhash::fast::FixedState;
-#[cfg(not(feature = "force_hash_collisions"))]
 use itertools::Itertools;
-#[cfg(not(feature = "force_hash_collisions"))]
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher};
 
