@@ -52,7 +52,6 @@ use datafusion_physical_plan::metrics::{
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
-use crate::sort::reverse_row_selection;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
@@ -67,7 +66,7 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -123,53 +122,6 @@ pub(super) struct ParquetOpener {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
-}
-
-/// Represents a prepared access plan with optional row selection
-pub(crate) struct PreparedAccessPlan {
-    /// Row group indexes to read
-    pub(crate) row_group_indexes: Vec<usize>,
-    /// Optional row selection for filtering within row groups
-    pub(crate) row_selection: Option<parquet::arrow::arrow_reader::RowSelection>,
-}
-
-impl PreparedAccessPlan {
-    /// Create a new prepared access plan from a ParquetAccessPlan
-    pub(crate) fn from_access_plan(
-        access_plan: ParquetAccessPlan,
-        rg_metadata: &[RowGroupMetaData],
-    ) -> Result<Self> {
-        let row_group_indexes = access_plan.row_group_indexes();
-        let row_selection = access_plan.into_overall_row_selection(rg_metadata)?;
-
-        Ok(Self {
-            row_group_indexes,
-            row_selection,
-        })
-    }
-
-    /// Reverse the access plan for reverse scanning
-    pub(crate) fn reverse(
-        mut self,
-        file_metadata: &parquet::file::metadata::ParquetMetaData,
-    ) -> Result<Self> {
-        // Get the row group indexes before reversing
-        let row_groups_to_scan = self.row_group_indexes.clone();
-
-        // Reverse the row group indexes
-        self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
-
-        // If we have a row selection, reverse it to match the new row group order
-        if let Some(row_selection) = self.row_selection {
-            self.row_selection = Some(reverse_row_selection(
-                &row_selection,
-                file_metadata,
-                &row_groups_to_scan, // Pass the original (non-reversed) row group indexes
-            )?);
-        }
-
-        Ok(self)
-    }
 }
 
 impl FileOpener for ParquetOpener {
@@ -545,8 +497,7 @@ impl FileOpener for ParquetOpener {
             }
 
             // Prepare the access plan (extract row groups and row selection)
-            let mut prepared_plan =
-                PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)?;
+            let mut prepared_plan = access_plan.prepare(rg_metadata)?;
 
             // ----------------------------------------------------------
             // Step: potentially reverse the access plan for performance.
