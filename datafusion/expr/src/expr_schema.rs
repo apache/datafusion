@@ -141,7 +141,9 @@ impl ExprSchemable for Expr {
                 match arg_data_type {
                     DataType::List(field)
                     | DataType::LargeList(field)
-                    | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
+                    | DataType::FixedSizeList(field, _)
+                    | DataType::ListView(field)
+                    | DataType::LargeListView(field) => Ok(field.data_type().clone()),
                     DataType::Struct(_) => Ok(arg_data_type),
                     DataType::Null => {
                         not_impl_err!("unnest() does not support null yet")

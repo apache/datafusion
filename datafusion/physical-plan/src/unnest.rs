@@ -33,7 +33,8 @@ use crate::{
 
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray, Int64Array,
-    LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray, new_null_array,
+    LargeListArray, LargeListViewArray, ListArray, ListViewArray, PrimitiveArray, Scalar,
+    StructArray, new_null_array,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -845,6 +846,30 @@ impl ListArrayType for FixedSizeListArray {
     }
 }
 
+impl ListArrayType for ListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row] as i64;
+        let size = self.value_sizes()[row] as i64;
+        (offset, offset + size)
+    }
+}
+
+impl ListArrayType for LargeListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row];
+        let size = self.value_sizes()[row];
+        (offset, offset + size)
+    }
+}
+
 /// Unnest multiple list arrays according to the length array.
 fn unnest_list_arrays(
     list_arrays: &[ArrayRef],
@@ -860,6 +885,12 @@ fn unnest_list_arrays(
             }
             DataType::FixedSizeList(_, _) => {
                 Ok(list_array.as_fixed_size_list() as &dyn ListArrayType)
+            }
+            DataType::ListView(_) => {
+                Ok(list_array.as_list_view::<i32>() as &dyn ListArrayType)
+            }
+            DataType::LargeListView(_) => {
+                Ok(list_array.as_list_view::<i64>() as &dyn ListArrayType)
             }
             other => exec_err!("Invalid unnest datatype {other }"),
         })

@@ -655,10 +655,10 @@ impl HashJoinStream {
                 self.join_type,
             )?;
             timer.done();
-
+            self.output_buffer.push_batch(result)?;
             self.state = HashJoinStreamState::FetchProbeBatch;
 
-            return Ok(StatefulStreamResult::Ready(Some(result)));
+            return Ok(StatefulStreamResult::Continue);
         }
 
         // get the matched by join keys indices

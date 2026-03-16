@@ -61,6 +61,10 @@ name = "with_hashes"
 harness = false
 name = "scalar_to_array"
 
+[[bench]]
+harness = false
+name = "stats_merge"
+
 [dependencies]
 ahash = { workspace = true }
 apache-avro = { workspace = true, features = [
