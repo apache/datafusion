@@ -41,8 +41,10 @@ pub struct BatchedVec<T> {
 
 impl<T: Clone> BatchedVec<T> {
     pub fn new(batch_size: usize) -> Self {
-        assert!(batch_size > 0 && batch_size.is_power_of_two(),
-            "batch_size must be a power of two, got {batch_size}");
+        assert!(
+            batch_size > 0 && batch_size.is_power_of_two(),
+            "batch_size must be a power of two, got {batch_size}"
+        );
         Self {
             batches: Vec::new(),
             batch_shift: batch_size.trailing_zeros(),
