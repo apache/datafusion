@@ -235,6 +235,20 @@ impl ExecutionPlan for WorkTableExec {
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
+    fn with_node_id(
+        self: Arc<Self>,
+        node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = WorkTableExec::new(
+            self.name.clone(),
+            Arc::clone(&self.schema),
+            self.projection.clone(),
+        )?;
+        let new_props = new_plan.cache.clone().with_node_id(node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
+
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }

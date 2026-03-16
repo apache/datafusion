@@ -106,6 +106,8 @@
 //! # use datafusion::prelude::*;
 //! # use datafusion_common::Result;
 //! # use datafusion_proto::bytes::{physical_plan_from_bytes,physical_plan_to_bytes};
+//! # use datafusion_physical_plan::node_id::annotate_node_id_for_execution_plan;
+//! # use datafusion_physical_plan::node_id::NodeIdAnnotator;
 //! # #[tokio::main]
 //! # async fn main() -> Result<()>{
 //!  // Create a plan that scans table 't'
@@ -118,6 +120,11 @@
 //!
 //!  // Decode bytes from somewhere (over network, etc.) back to ExecutionPlan
 //!  let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+//!
+//!  // Workaround for `node_id` not being serializable:
+//!  let mut annotator = NodeIdAnnotator::new();
+//!  let physical_round_trip = annotate_node_id_for_execution_plan(&physical_round_trip, &mut annotator)?;
+//!
 //!  assert_eq!(format!("{:?}", physical_plan), format!("{:?}", physical_round_trip));
 //! # Ok(())
 //! # }

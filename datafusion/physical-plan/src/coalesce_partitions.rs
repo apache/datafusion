@@ -241,6 +241,16 @@ impl ExecutionPlan for CoalescePartitionsExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }
+    fn with_node_id(
+        self: Arc<Self>,
+        node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = CoalescePartitionsExec::new(Arc::clone(self.input()));
+        new_plan.fetch = self.fetch;
+        let new_props = new_plan.cache.clone().with_node_id(node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 
     /// Tries to swap `projection` with its input, which is known to be a
     /// [`CoalescePartitionsExec`]. If possible, performs the swap and returns
@@ -276,6 +286,19 @@ impl ExecutionPlan for CoalescePartitionsExec {
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
         }))
+    }
+
+    fn with_preserve_order(
+        &self,
+        preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.input
+            .with_preserve_order(preserve_order)
+            .and_then(|new_input| {
+                Arc::new(self.clone())
+                    .with_new_children(vec![new_input])
+                    .ok()
+            })
     }
 
     fn gather_filters_for_pushdown(

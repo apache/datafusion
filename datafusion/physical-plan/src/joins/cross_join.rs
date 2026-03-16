@@ -368,6 +368,16 @@ impl ExecutionPlan for CrossJoinExec {
         Ok(stats_cartesian_product(left_stats, right_stats))
     }
 
+    fn with_node_id(
+        self: Arc<Self>,
+        node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan =
+            CrossJoinExec::new(Arc::clone(&self.left), Arc::clone(&self.right));
+        let new_props = new_plan.cache.clone().with_node_id(node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
     /// it returns the new swapped version having the [`CrossJoinExec`] as the top plan.
     /// Otherwise, it returns None.

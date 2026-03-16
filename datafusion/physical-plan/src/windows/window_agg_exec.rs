@@ -293,6 +293,20 @@ impl ExecutionPlan for WindowAggExec {
             total_byte_size: Precision::Absent,
         })
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = WindowAggExec::try_new(
+            self.window_expr.clone(),
+            Arc::clone(self.input()),
+            self.can_repartition,
+        )?;
+        let new_props = new_plan.cache.clone().with_node_id(node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 /// Compute the window aggregate columns

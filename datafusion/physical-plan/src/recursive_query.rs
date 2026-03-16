@@ -212,6 +212,21 @@ impl ExecutionPlan for RecursiveQueryExec {
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = RecursiveQueryExec::try_new(
+            self.name.clone(),
+            Arc::clone(&self.static_term),
+            Arc::clone(&self.recursive_term),
+            self.is_distinct,
+        )?;
+        let new_props = new_plan.cache.clone().with_node_id(node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 impl DisplayAs for RecursiveQueryExec {

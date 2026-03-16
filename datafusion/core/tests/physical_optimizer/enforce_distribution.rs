@@ -3657,10 +3657,11 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     );
 
     // Apply the function
-    let result = replace_order_preserving_variants(dist_context)?;
+    let result = replace_order_preserving_variants(dist_context, false)?;
 
     // Verify the plan was transformed to CoalescePartitionsExec
     result
+        .0
         .plan
         .as_any()
         .downcast_ref::<CoalescePartitionsExec>()
@@ -3668,7 +3669,7 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
 
     // Verify fetch was preserved
     assert_eq!(
-        result.plan.fetch(),
+        result.0.plan.fetch(),
         Some(5),
         "Fetch value was not preserved after transformation"
     );

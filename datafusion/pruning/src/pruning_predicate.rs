@@ -492,7 +492,6 @@ impl PruningPredicate {
         // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
         let predicate_expr =
             PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
-
         let literal_guarantees = LiteralGuarantee::analyze(&expr);
 
         Ok(Self {

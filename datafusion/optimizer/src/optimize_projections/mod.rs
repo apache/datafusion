@@ -268,15 +268,10 @@ fn optimize_projections(
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            return TableScan::try_new(
-                table_name,
-                source,
-                Some(projection),
-                filters,
-                fetch,
-            )
-            .map(LogicalPlan::TableScan)
-            .map(Transformed::yes);
+            let new_scan =
+                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+
+            return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
         }
         // Other node types are handled below
         _ => {}

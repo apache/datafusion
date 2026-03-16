@@ -416,6 +416,12 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         plan.fmt_as(self.t, self.f)?;
+
+        // MAX: disable this for now since we don't need it displayed + it fails many DF tests
+        //if let Some(node_id) = plan.properties().node_id() {
+        //   write!(self.f, ", node_id={}", node_id)?;
+        //}
+
         match self.show_metrics {
             ShowMetrics::None => {}
             ShowMetrics::Aggregated => {

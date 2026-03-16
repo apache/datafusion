@@ -326,6 +326,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             return value.to_array_of_size(record_batch.num_rows());
         }
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+
         let most_recent_row_order_bys = most_recent_row
             .map(|batch| self.order_by_columns(batch))
             .transpose()?

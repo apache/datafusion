@@ -341,6 +341,16 @@ impl ExecutionPlan for UnionExec {
         true
     }
 
+    #[expect(deprecated)]
+    fn with_node_id(
+        self: Arc<Self>,
+        node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = UnionExec::new(self.inputs.clone());
+        let new_props = new_plan.cache.clone().with_node_id(node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
     /// Tries to push `projection` down through `union`. If possible, performs the
     /// pushdown and returns a new [`UnionExec`] as the top plan which has projections
     /// as its children. Otherwise, returns `None`.

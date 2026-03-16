@@ -32,7 +32,7 @@ use datafusion_common::{
     internal_err, plan_err, qualified_name,
 };
 use datafusion_expr::expr::WindowFunction;
-use datafusion_expr::expr_rewriter::replace_col;
+use datafusion_expr::expr_rewriter::{replace_col, replace_col_with_expr};
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
@@ -42,9 +42,8 @@ use datafusion_expr::{
 };
 
 use crate::optimizer::ApplyOrder;
-use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
-use crate::{OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerRule, simplify_expressions::simplify_predicates};
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
 /// they are applied as early as possible.
@@ -454,11 +453,11 @@ fn push_down_all_join(
         }
     }
 
-    // For infer predicates, if they can not push through join, just drop them
+    // Push predicates inferred from the join expression
     for predicate in inferred_join_predicates {
-        if left_preserved && checker.is_left_only(&predicate) {
+        if checker.is_left_only(&predicate) {
             left_push.push(predicate);
-        } else if right_preserved && checker.is_right_only(&predicate) {
+        } else if checker.is_right_only(&predicate) {
             right_push.push(predicate);
         }
     }
@@ -797,13 +796,15 @@ impl OptimizerRule for PushDownFilter {
 
                 // remove duplicated filters
                 let child_predicates = split_conjunction_owned(child_filter.predicate);
-                let new_predicates = parents_predicates
+                let mut new_predicates = parents_predicates
                     .into_iter()
                     .chain(child_predicates)
                     // use IndexSet to remove dupes while preserving predicate order
                     .collect::<IndexSet<_>>()
                     .into_iter()
                     .collect::<Vec<_>>();
+
+                new_predicates = infer_predicates_from_equalities(new_predicates)?;
 
                 let Some(new_predicate) = conjunction(new_predicates) else {
                     return plan_err!("at least one expression exists");
@@ -1420,6 +1421,73 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     })
     .unwrap();
     is_contain
+}
+
+/// Infers new predicates by substituting equalities.
+/// For example, with predicates `t2.b = 3` and `t1.b > t2.b`,
+/// we can infer `t1.b > 3`.
+fn infer_predicates_from_equalities(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
+    // Map from column names to their literal values (from equality predicates)
+    let mut equality_map: HashMap<Column, Expr> =
+        HashMap::with_capacity(predicates.len());
+    let mut final_predicates = Vec::with_capacity(predicates.len());
+    // First pass: collect column=literal equalities
+    for predicate in predicates.iter() {
+        if let Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        }) = predicate
+        {
+            if let Expr::Column(col) = left.as_ref() {
+                // Only add to map if right side is a literal
+                if matches!(right.as_ref(), Expr::Literal(_, _)) {
+                    equality_map.insert(col.clone(), *right.clone());
+                    final_predicates.push(predicate.clone());
+                }
+            } else if let Expr::Column(col) = right.as_ref() {
+                // Only add to map if left side is a literal
+                if matches!(left.as_ref(), Expr::Literal(_, _)) {
+                    equality_map.insert(col.clone(), *left.clone());
+                    final_predicates.push(predicate.clone());
+                }
+            }
+        }
+    }
+
+    // If no equality mappings found, nothing to infer
+    if equality_map.is_empty() {
+        return Ok(predicates);
+    }
+
+    // Second pass: apply substitutions to create new predicates
+    for predicate in predicates {
+        // Skip equality predicates we already used for mapping
+        if final_predicates.contains(&predicate) {
+            continue;
+        }
+
+        // Try to replace columns with their literal values
+        let mut columns_in_expr = HashSet::new();
+        expr_to_columns(&predicate, &mut columns_in_expr)?;
+
+        // Create a combined replacement map for all columns in this predicate
+        let replace_map: HashMap<_, _> = columns_in_expr
+            .into_iter()
+            .filter_map(|col| equality_map.get(&col).map(|lit| (col, lit)))
+            .collect();
+
+        if replace_map.is_empty() {
+            final_predicates.push(predicate);
+            continue;
+        }
+        // Apply all substitutions at once to get the fully substituted predicate
+        let new_pred = replace_col_with_expr(predicate, &replace_map)?;
+
+        final_predicates.push(new_pred);
+    }
+
+    Ok(final_predicates)
 }
 
 #[cfg(test)]
@@ -2720,8 +2788,7 @@ mod tests {
         )
     }
 
-    /// post-left-join predicate on a column common to both sides is only pushed to the left side
-    /// i.e. - not duplicated to the right side
+    /// post-left-join predicate on a column common to both sides is pushed to both sides
     #[test]
     fn filter_using_left_join_on_common() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -2749,20 +2816,19 @@ mod tests {
               TableScan: test2
         ",
         );
-        // filter sent to left side of the join, not the right
+        // filter sent to left side of the join and to the right
         assert_optimized_plan_equal!(
             plan,
             @r"
         Left Join: Using test.a = test2.a
           TableScan: test, full_filters=[test.a <= Int64(1)]
           Projection: test2.a
-            TableScan: test2
+            TableScan: test2, full_filters=[test2.a <= Int64(1)]
         "
         )
     }
 
-    /// post-right-join predicate on a column common to both sides is only pushed to the right side
-    /// i.e. - not duplicated to the left side.
+    /// post-right-join predicate on a column common to both sides is pushed to both sides
     #[test]
     fn filter_using_right_join_on_common() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -2790,12 +2856,12 @@ mod tests {
               TableScan: test2
         ",
         );
-        // filter sent to right side of join, not duplicated to the left
+        // filter sent to right side of join, sent to the left as well
         assert_optimized_plan_equal!(
             plan,
             @r"
         Right Join: Using test.a = test2.a
-          TableScan: test
+          TableScan: test, full_filters=[test.a <= Int64(1)]
           Projection: test2.a
             TableScan: test2, full_filters=[test2.a <= Int64(1)]
         "
@@ -2977,7 +3043,7 @@ mod tests {
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
-            TableScan: test2, full_filters=[test2.c > UInt32(4)]
+            TableScan: test2, full_filters=[test2.a > UInt32(1), test2.c > UInt32(4)]
         "
         )
     }
@@ -4220,6 +4286,36 @@ mod tests {
         Filter: Boolean(false)
           TestUserNode
         "
+        )
+    }
+
+    #[test]
+    fn infer_predicate_from_literal_eq_column() -> Result<()> {
+        // Test that `3 = col_b` (literal on left) correctly maps col_b → 3
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(lit(1i64).eq(col("a")))?
+            .filter(col("b").gt(col("a")))?
+            .build()?;
+        // The two filters merge and infer_predicates_from_equalities should
+        // substitute col("a") with lit(1) in `b > a`, producing `b > 1`.
+        assert_optimized_plan_equal!(
+            plan,
+            @"TableScan: test, full_filters=[Int64(1) = test.a, test.b > Int64(1)]"
+        )
+    }
+
+    #[test]
+    fn infer_predicate_from_column_eq_literal() -> Result<()> {
+        // Test that `col_a = 3` (column on left) correctly maps col_a → 3
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").eq(lit(1i64)))?
+            .filter(col("b").gt(col("a")))?
+            .build()?;
+        assert_optimized_plan_equal!(
+            plan,
+            @"TableScan: test, full_filters=[test.a = Int64(1), test.b > Int64(1)]"
         )
     }
 }

@@ -1373,6 +1373,22 @@ impl ExecutionPlan for SortExec {
             CardinalityEffect::LowerEqual
         }
     }
+    fn with_node_id(
+        self: Arc<Self>,
+        node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let new_plan = SortExec {
+            input: Arc::clone(self.input()),
+            expr: self.expr.clone(),
+            fetch: self.fetch,
+            metrics_set: self.metrics_set.clone(),
+            preserve_partitioning: self.preserve_partitioning,
+            cache: self.cache.clone().with_node_id(node_id),
+            common_sort_prefix: self.common_sort_prefix.clone(),
+            filter: self.filter.clone(),
+        };
+        Ok(Some(Arc::new(new_plan)))
+    }
 
     /// Tries to swap the projection with its input [`SortExec`]. If it can be done,
     /// it returns the new swapped version having the [`SortExec`] as the top plan.

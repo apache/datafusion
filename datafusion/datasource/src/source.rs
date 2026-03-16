@@ -74,8 +74,8 @@ use datafusion_physical_plan::filter_pushdown::{
 /// ```text
 ///                       ┌─────────────────────┐                              -----► execute path
 ///                       │                     │                              ┄┄┄┄┄► init path
-///                       │   DataSourceExec    │  
-///                       │                     │    
+///                       │   DataSourceExec    │
+///                       │                     │
 ///                       └───────▲─────────────┘
 ///                               ┊  │
 ///                               ┊  │
@@ -347,6 +347,15 @@ impl ExecutionPlan for DataSourceExec {
         }
     }
 
+    fn with_node_id(
+        self: Arc<Self>,
+        node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = DataSourceExec::new(Arc::clone(&self.data_source));
+        let new_props = new_plan.cache.clone().with_node_id(node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
     fn handle_child_pushdown_result(
         &self,
         _phase: FilterPushdownPhase,

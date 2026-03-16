@@ -70,6 +70,9 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::node_id::{
+    NodeIdAnnotator, annotate_node_id_for_execution_plan,
+};
 use datafusion_session::Session;
 #[cfg(feature = "sql")]
 use datafusion_sql::{
@@ -720,9 +723,12 @@ impl SessionState {
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.optimize(logical_plan)?;
-        self.query_planner
+        let physical_plan = self
+            .query_planner
             .create_physical_plan(&logical_plan, self)
-            .await
+            .await?;
+        let mut id_annotator = NodeIdAnnotator::new();
+        annotate_node_id_for_execution_plan(&physical_plan, &mut id_annotator)
     }
 
     /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type

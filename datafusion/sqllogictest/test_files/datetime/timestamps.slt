@@ -4353,6 +4353,7 @@ FROM ts_data_micros_kolkata
 2020-09-08T17:12:29.190+05:30
 
 
+
 ##########
 ## Casting between timestamp with and without timezone
 ##########
