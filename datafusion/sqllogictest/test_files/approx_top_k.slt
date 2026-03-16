@@ -1,0 +1,87 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+###########
+# approx_top_k tests
+###########
+
+# approx_top_k basic usage with string column
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES ('apple'), ('banana'), ('apple'), ('cherry'), ('apple'), ('banana')) AS t(column1);
+----
+[{value: apple, count: 3}, {value: banana, count: 2}]
+
+# approx_top_k with integer column
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES (1), (2), (1), (3), (1), (2)) AS t(column1);
+----
+[{value: 1, count: 3}, {value: 2, count: 2}]
+
+# approx_top_k with GROUP BY
+query T?
+SELECT column2, approx_top_k(column1, 2) FROM (VALUES ('a', 'x'), ('b', 'x'), ('a', 'x'), ('c', 'y'), ('c', 'y'), ('d', 'y')) AS t(column1, column2) GROUP BY column2 ORDER BY column2;
+----
+x [{value: a, count: 2}, {value: b, count: 1}]
+y [{value: c, count: 2}, {value: d, count: 1}]
+
+# approx_top_k with k=1
+query ?
+SELECT approx_top_k(column1, 1) FROM (VALUES ('red'), ('blue'), ('red'), ('green'), ('red')) AS t(column1);
+----
+[{value: red, count: 3}]
+
+# approx_top_k with NULLs (should be skipped)
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES ('a'), (NULL), ('a'), ('b'), (NULL), ('b'), ('b')) AS t(column1);
+----
+[{value: b, count: 3}, {value: a, count: 2}]
+
+# approx_top_k error: missing k argument
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_top_k' function
+SELECT approx_top_k(column1) FROM (VALUES ('a')) AS t(column1);
+
+# approx_top_k error: k must be positive
+statement error DataFusion error: Error during planning: approx_top_k requires k to be between 1 and 10000
+SELECT approx_top_k(column1, 0) FROM (VALUES ('a')) AS t(column1);
+
+# approx_top_k error: negative k
+statement error DataFusion error: Error during planning: approx_top_k requires k to be a positive literal integer
+SELECT approx_top_k(column1, -1) FROM (VALUES ('a')) AS t(column1);
+
+# approx_top_k with WHERE clause
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES ('a', 1), ('b', 2), ('a', 3), ('c', 4), ('a', 5), ('b', 6)) AS t(column1, column2) WHERE column2 > 2;
+----
+[{value: a, count: 2}, {value: c, count: 1}]
+
+# approx_top_k on empty input (should return an empty list)
+query ?
+SELECT approx_top_k(column1, 3) FROM (VALUES ('a')) AS t(column1) WHERE false;
+----
+[]
+
+# approx_top_k with all NULLs (should return an empty list)
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES (NULL), (NULL), (NULL)) AS t(column1);
+----
+[]
+
+# approx_top_k where k > number of distinct values (should return all distinct values)
+query ?
+SELECT approx_top_k(column1, 100) FROM (VALUES ('x'), ('y'), ('x')) AS t(column1);
+----
+[{value: x, count: 2}, {value: y, count: 1}]
