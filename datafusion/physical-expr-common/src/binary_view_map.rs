@@ -18,7 +18,7 @@
 //! [`ArrowBytesViewMap`] and [`ArrowBytesViewSet`] for storing maps/sets of values from
 //! `StringViewArray`/`BinaryViewArray`.
 use crate::binary_map::OutputType;
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use arrow::array::NullBufferBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
@@ -163,7 +163,7 @@ where
             in_progress: Vec::new(),
             completed: Vec::new(),
             nulls: NullBufferBuilder::new(0),
-            random_state: RandomState::new(),
+            random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
         }

@@ -18,7 +18,7 @@
 //! [`ArrowBytesMap`] and [`ArrowBytesSet`] for storing maps/sets of values from
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use arrow::array::{
     Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
     NullBufferBuilder, OffsetSizeTrait,
@@ -250,7 +250,7 @@ where
             map_size: 0,
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()], // first offset is always 0
-            random_state: RandomState::new(),
+            random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
         }
