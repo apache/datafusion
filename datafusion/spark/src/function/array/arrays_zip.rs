@@ -77,7 +77,7 @@ impl ScalarUDFImpl for SparkArraysZip {
                     return exec_err!("arrays_zip expects array arguments, got {dt}");
                 }
             };
-            fields.push(Field::new(format!("{}", i + 1), element_type, true));
+            fields.push(Field::new(format!("{}", i), element_type, true));
         }
 
         Ok(List(Arc::new(Field::new_list_field(
@@ -91,6 +91,9 @@ impl ScalarUDFImpl for SparkArraysZip {
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let args = &args.args;
+
+        // TODO: make configurable: zero-based, one-based
+        // &args.config_options.execution.enable_ansi_mode;
         let strings_vec: Vec<String> = (0..args.len())
             .into_iter()
             .map(|i| i.to_string())
