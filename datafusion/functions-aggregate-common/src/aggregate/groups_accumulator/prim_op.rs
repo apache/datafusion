@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
@@ -27,6 +26,11 @@ use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use super::accumulate::NullState;
+use super::batched_vec::BatchedVec;
+
+/// Default batch size for internal batched storage.
+/// Matches the default DataFusion batch size.
+const DEFAULT_BATCH_SIZE: usize = 8192;
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -43,8 +47,8 @@ where
     T: ArrowPrimitiveType + Send,
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
-    /// values per group, stored as the native type
-    values: Vec<T::Native>,
+    /// values per group, stored in batch_size chunks
+    values: BatchedVec<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -66,7 +70,7 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values: vec![],
+            values: BatchedVec::new(DEFAULT_BATCH_SIZE),
             data_type: data_type.clone(),
             null_state: NullState::new(),
             starting_value: T::default_value(),
@@ -96,8 +100,9 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // update values
-        self.values.resize(total_num_groups, self.starting_value);
+        // ensure storage covers all group indices
+        self.values
+            .ensure_capacity(total_num_groups, self.starting_value);
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(
@@ -116,7 +121,10 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = emit_to.take_needed(&mut self.values);
+        let values = match emit_to {
+            EmitTo::All => self.values.take_all(),
+            EmitTo::First(n) => self.values.take_first(n),
+        };
         let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), nulls) // no copy
             .with_data_type(self.data_type.clone());
@@ -196,6 +204,6 @@ where
     }
 
     fn size(&self) -> usize {
-        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
+        self.values.size() + self.null_state.size()
     }
 }
