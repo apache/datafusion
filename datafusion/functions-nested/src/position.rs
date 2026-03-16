@@ -197,7 +197,7 @@ fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         List(_) => general_position_dispatch::<i32>(args),
         LargeList(_) => general_position_dispatch::<i64>(args),
-        t => exec_err!("array_position does not support type '{t}'"),
+        dt => exec_err!("array_position does not support type '{dt}'"),
     }
 }
 
@@ -485,7 +485,7 @@ fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &haystack.data_type() {
         List(_) => general_positions::<i32>(as_list_array(&haystack)?, needle),
         LargeList(_) => general_positions::<i64>(as_large_list_array(&haystack)?, needle),
-        t => exec_err!("array_positions does not support type '{t}'"),
+        dt => exec_err!("array_positions does not support type '{dt}'"),
     }
 }
 
