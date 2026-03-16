@@ -2559,7 +2559,7 @@ fn roundtrip_hash_expr() -> Result<()> {
 
     // Confirm that the debug string contains the random state seeds
     assert!(
-        format!("{filter:?}").contains("test_hash(a@0, b@1, [0,1,2,3])"),
+        format!("{filter:?}").contains("test_hash(a@0, b@1, [0])"),
         "Debug string missing seeds: {filter:?}"
     );
     roundtrip_test(filter)
