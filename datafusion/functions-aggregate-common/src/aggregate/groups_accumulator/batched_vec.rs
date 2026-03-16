@@ -130,9 +130,9 @@ impl<T: Clone> BatchedVec<T> {
 
     /// Take the first `n` elements (for `EmitTo::First(n)`).
     ///
-    /// When `n` equals `BATCH_SIZE`, this is zero-copy (just `mem::take`
-    /// on the first batch). Otherwise, full batches are drained via
-    /// `mem::take` (O(1) each) and only the split-point batch is copied.
+    /// When `n` equals `BATCH_SIZE`, this is zero-copy (just returns
+    /// the first batch's Vec). Otherwise elements are copied into a
+    /// new Vec.
     pub fn take_first(&mut self, n: usize) -> Vec<T> {
         assert!(n <= self.len);
         let full_batches = n >> BATCH_SHIFT;
@@ -146,7 +146,7 @@ impl<T: Clone> BatchedVec<T> {
 
         let mut result = Vec::with_capacity(n);
 
-        // Take full batches — O(1) each
+        // Copy full batches into result
         for batch in self.batches.drain(..full_batches) {
             result.extend(batch);
         }
@@ -165,11 +165,7 @@ impl<T: Clone> BatchedVec<T> {
 
     /// Total heap memory used by this structure.
     pub fn size(&self) -> usize {
-        self.batches
-            .iter()
-            .map(|b| b.capacity() * size_of::<T>())
-            .sum::<usize>()
-            + self.batches.capacity() * size_of::<Vec<T>>()
+        self.len * size_of::<T>() + self.batches.capacity() * size_of::<Vec<T>>()
     }
 }
 
