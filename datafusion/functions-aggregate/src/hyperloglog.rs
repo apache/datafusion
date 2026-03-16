@@ -34,7 +34,6 @@
 //!
 //! This module also borrows some code structure from [pdatastructs.rs](https://github.com/crepererum/pdatastructs.rs/blob/3997ed50f6b6871c9e53c4c5e0f48f431405fc63/src/hyperloglog.rs).
 
-use datafusion_common::hash_utils::RandomState;
 use std::hash::BuildHasher;
 use std::hash::Hash;
 use std::marker::PhantomData;
