@@ -622,6 +622,8 @@ impl InferredPredicates {
         predicate: Expr,
         replace_map: &HashMap<&Column, &Column>,
     ) -> Result<()> {
+        // Contract: only `Ok(true)` is considered null-restricting for non-inner joins.
+        // `Ok(false)` and `Err(_)` are both treated as non-restricting and skipped.
         if self.is_inner_join
             || matches!(
                 is_restrict_null_predicate(
