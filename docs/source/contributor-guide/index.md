@@ -32,8 +32,10 @@ community as well as get more familiar with Rust and the relevant codebases.
 
 ## Development Environment
 
-Setup your development environment [here](development_environment.md), and learn
-how to test the code [here](testing.md).
+Start with the [Development Environment Quick Start](development_environment.md#quick-start).
+
+For more detail, see the full [development environment guide](development_environment.md)
+and the [testing guide](testing.md).
 
 ## Finding and Creating Issues to Work On
 
@@ -98,6 +100,19 @@ When possible, we recommend splitting your contributions into multiple smaller f
 If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.
 
 Note all commits in a PR are squashed when merged to the `main` branch so there is one commit per PR after merge.
+
+## Before Submitting a PR
+
+Before submitting a PR, run the standard formatting and lint checks and fix any
+issues they report:
+
+```bash
+./ci/scripts/rust_fmt.sh
+./ci/scripts/rust_clippy.sh
+```
+
+These scripts are the same checks run in CI for Rust formatting and clippy.
+You should also run any relevant commands from the [testing quick start](testing.md#testing-quick-start).
 
 ## Conventional Commits & Labeling PRs
 

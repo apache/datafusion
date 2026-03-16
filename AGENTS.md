@@ -2,33 +2,18 @@
 
 ## Developer Documentation
 
+- [Quick Start Setup](docs/source/contributor-guide/development_environment.md#quick-start)
+- [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
+- [Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
 - [Contributor Guide](docs/source/contributor-guide/index.md)
 - [Architecture Guide](docs/source/contributor-guide/architecture.md)
 
 ## Before Committing
 
-Before committing any changes, you **must** run the following checks and fix any issues:
-
-```bash
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-```
-
-- `cargo fmt` ensures consistent code formatting across the project.
-- `cargo clippy` catches common mistakes and enforces idiomatic Rust patterns. All warnings must be resolved (treated as errors via `-D warnings`).
-
-Do not commit code that fails either of these checks.
+See [Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
+for the required formatting and lint checks.
 
 ## Testing
 
-Run relevant tests before submitting changes:
-
-```bash
-cargo test --all-features
-```
-
-For SQL logic tests:
-
-```bash
-cargo test -p datafusion-sqllogictest
-```
+See the [Testing quick start](docs/source/contributor-guide/testing.md#testing-quick-start)
+for the recommended pre-PR test commands.
