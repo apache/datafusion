@@ -1892,12 +1892,12 @@ dependencies = [
 name = "datafusion-common"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "apache-avro",
  "arrow",
  "arrow-ipc",
  "chrono",
  "criterion",
+ "foldhash 0.2.0",
  "half",
  "hashbrown 0.16.1",
  "hex",

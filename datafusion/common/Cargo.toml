@@ -66,7 +66,7 @@ harness = false
 name = "stats_merge"
 
 [dependencies]
-ahash = { workspace = true }
+foldhash = "0.2"
 apache-avro = { workspace = true, features = [
     "bzip",
     "snappy",
