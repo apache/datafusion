@@ -4043,20 +4043,38 @@ mod tests {
 
     #[test]
     fn test_in_list_from_array_type_mismatch_errors() -> Result<()> {
-        // Utf8 needle with Dict(Utf8) in_array: make_comparator does not
-        // support cross-type comparison.
-        let result = eval_in_list_from_array(
+        // Utf8 needle, Dict(Utf8) in_array
+        let err = eval_in_list_from_array(
             DataType::Utf8,
             Arc::new(StringArray::from(vec!["a", "d", "b"])),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
-        );
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Can't compare arrays of different types")
-        );
+        ).unwrap_err().to_string();
+        assert!(err.contains("Can't compare arrays of different types"), "{err}");
+
+        // Dict(Utf8) needle, Int64 in_array: specialized Int64StaticFilter
+        // rejects the Utf8 dictionary values at construction time
+        let err = eval_in_list_from_array(
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8),
+            ),
+            wrap_in_dict(Arc::new(StringArray::from(vec!["a", "d", "b"]))),
+            Arc::new(Int64Array::from(vec![1, 2, 3])),
+        ).unwrap_err().to_string();
+        assert!(err.contains("Failed to downcast"), "{err}");
+
+        // Dict(Int64) needle, Dict(Utf8) in_array: both Dict but different
+        // value types, make_comparator rejects the comparison
+        let err = eval_in_list_from_array(
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Int64),
+            ),
+            wrap_in_dict(Arc::new(Int64Array::from(vec![1, 4, 2]))),
+            wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
+        ).unwrap_err().to_string();
+        assert!(err.contains("Can't compare arrays of different types"), "{err}");
+
         Ok(())
     }
 }
