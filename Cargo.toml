@@ -87,9 +87,6 @@ version = "52.3.0"
 # for the inherited dependency but cannot do the reverse (override from true to false).
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
 apache-avro = { version = "0.21", default-features = false }
 arrow = { version = "58.0.0", features = [
     "prettyprint",
