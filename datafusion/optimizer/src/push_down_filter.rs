@@ -623,11 +623,8 @@ impl InferredPredicates {
         replace_map: &HashMap<&Column, &Column>,
     ) -> Result<()> {
         if self.is_inner_join
-            || is_restrict_null_predicate(
-                predicate.clone(),
-                replace_map.keys().cloned(),
-            )
-            .unwrap_or(false)
+            || is_restrict_null_predicate(predicate.clone(), replace_map.keys().cloned())
+                .unwrap_or(false)
         {
             self.predicates.push(replace_col(predicate, replace_map)?);
         }
