@@ -88,7 +88,11 @@ pub fn is_restrict_null_predicate<'a>(
     // contains a placeholder for the join key columns. Callers treat such errors as
     // non-restricting (false) via `matches!(_, Ok(true))`, so we return false early
     // and avoid the expensive physical-expression compilation pipeline entirely.
-    if !predicate_uses_only_columns(&predicate, &join_cols) {
+    if !predicate
+        .column_refs()
+        .iter()
+        .all(|column| join_cols.contains(*column))
+    {
         return Ok(false);
     }
 
@@ -110,16 +114,6 @@ pub fn is_restrict_null_predicate<'a>(
             ),
         },
     )
-}
-
-fn predicate_uses_only_columns(
-    predicate: &Expr,
-    allowed_columns: &HashSet<&Column>,
-) -> bool {
-    predicate
-        .column_refs()
-        .iter()
-        .all(|column| allowed_columns.contains(*column))
 }
 
 /// Determines if an expression will always evaluate to null.
