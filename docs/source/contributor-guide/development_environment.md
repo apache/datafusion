@@ -27,7 +27,7 @@ For the fastest path to a working local environment, follow these steps
 from the repository root:
 
 ```shell
-# 1. Install Rust (https://rust-lang.org/tools/install/) and verify version with
+# 1. Install Rust (https://rust-lang.org/tools/install/) and verify the active toolchain with
 rustup show
 
 # 2. Install protoc 3.15+ (see details below)
@@ -77,7 +77,7 @@ For specific details on IDE support for dev containers see the documentation for
 
 Compiling DataFusion from sources requires an installed version of the protobuf compiler, `protoc`.
 
-On most platforms this can be installed from your system's package manager. For example
+On most platforms this can be installed from your system's package manager. For example:
 
 ```
 # Ubuntu

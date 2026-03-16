@@ -28,7 +28,7 @@ should have test coverage and the entire test suite is run as part of CI.
 While developing a feature or bug fix, best practice is to run the smallest set
 of tests that gives confidence for your change, then expand as needed.
 
-Initially, run the tests in the crates you changed. For example if you made changes
+Initially, run the tests in the crates you changed. For example, if you made changes
 to files in `datafusion-optimizer/src`, run the corresponding crate tests:
 
 ```shell
@@ -44,7 +44,7 @@ cargo test --profile=ci --test sqllogictests
 ```
 
 Finally, before submitting a PR, run the tests for the core `datafusion` and
-`datafusion-cli` crates
+`datafusion-cli` crates:
 
 ```shell
 cargo test -p datafusion

@@ -15,5 +15,5 @@ for the required formatting and lint checks.
 
 ## Testing
 
-See the [Testing quick start](docs/source/contributor-guide/testing.md#testing-quick-start)
+See the [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
 for the recommended pre-PR test commands.
