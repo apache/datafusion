@@ -19,13 +19,13 @@
 
 use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
 
-use ahash::RandomState;
 use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::Result;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::{create_hashes, with_hashes};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
@@ -36,7 +36,7 @@ use crate::joins::Map;
 
 /// RandomState wrapper that preserves the seeds used to create it.
 ///
-/// This is needed because ahash's `RandomState` doesn't expose its seeds after creation,
+/// This is needed because `RandomState` doesn't expose its seeds after creation,
 /// but we need them for serialization (e.g., protobuf serde).
 #[derive(Clone, Debug)]
 pub struct SeededRandomState {
@@ -47,8 +47,16 @@ pub struct SeededRandomState {
 impl SeededRandomState {
     /// Create a new SeededRandomState with the given seeds.
     pub const fn with_seeds(k0: u64, k1: u64, k2: u64, k3: u64) -> Self {
+        // Combine 4 seeds into one for foldhash's single-seed API
+        let combined = k0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(k1)
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(k2)
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(k3);
         Self {
-            random_state: RandomState::with_seeds(k0, k1, k2, k3),
+            random_state: RandomState::with_seed(combined),
             seeds: (k0, k1, k2, k3),
         }
     }

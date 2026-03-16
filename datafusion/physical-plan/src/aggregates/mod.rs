@@ -87,8 +87,16 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
 }
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
-const AGGREGATION_HASH_SEED: ahash::RandomState =
-    ahash::RandomState::with_seeds('A' as u64, 'G' as u64, 'G' as u64, 'R' as u64);
+const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
+    datafusion_common::hash_utils::RandomState::with_seed(
+        ('A' as u64)
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add('G' as u64)
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add('G' as u64)
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add('R' as u64),
+    );
 
 /// Whether an aggregate stage consumes raw input data or intermediate
 /// accumulator state from a previous aggregation stage.

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use ahash::RandomState;
 use arrow::{
     array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
     buffer::BooleanBuffer,
@@ -29,6 +28,7 @@ use arrow::{
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
 };
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,

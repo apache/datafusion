@@ -54,7 +54,7 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
 
