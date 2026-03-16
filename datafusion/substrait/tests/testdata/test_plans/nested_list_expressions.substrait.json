@@ -1,19 +1,4 @@
 {
-  "extensionUris": [
-    {
-      "extensionUriAnchor": 1,
-      "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_arithmetic.yaml"
-    }
-  ],
-  "extensions": [
-    {
-      "extensionFunction": {
-        "extensionUriReference": 1,
-        "functionAnchor": 0,
-        "name": "add:i32_i32"
-      }
-    }
-  ],
   "relations": [
     {
       "root": {

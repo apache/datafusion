@@ -39,6 +39,12 @@ pub async fn from_nested(
 
     match nested_type {
         NestedType::List(list) => {
+            if list.values.is_empty() {
+                return substrait_err!(
+                    "Empty Nested lists are not supported; use Literal.empty_list instead"
+                );
+            }
+
             let mut args = Vec::with_capacity(list.values.len());
             for value in &list.values {
                 args.push(consumer.consume_expression(value, input_schema).await?);
@@ -105,7 +111,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nested_list_empty() -> datafusion::common::Result<()> {
+    async fn nested_list_empty_rejected() -> datafusion::common::Result<()> {
         let consumer = test_consumer();
         let schema = DFSchema::empty();
         let nested = Nested {
@@ -114,14 +120,20 @@ mod tests {
             nested_type: Some(NestedType::List(List { values: vec![] })),
         };
 
-        let expr = from_nested(&consumer, &nested, &schema).await?;
-        assert_eq!(format!("{expr}"), "make_array()");
+        let result = from_nested(&consumer, &nested, &schema).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Empty Nested lists are not supported")
+        );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn nested_list_missing_type() -> datafusion::common::Result<()> {
+    async fn nested_missing_type() -> datafusion::common::Result<()> {
         let consumer = test_consumer();
         let schema = DFSchema::empty();
         let nested = Nested {
