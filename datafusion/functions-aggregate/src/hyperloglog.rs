@@ -92,7 +92,7 @@ where
         }
     }
 
-    /// choice of hash function: ahash is already an dependency
+    /// choice of hash function: foldhash is already an dependency
     /// and it fits the requirements of being a 64bit hash with
     /// reasonable performance.
     #[inline]

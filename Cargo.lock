@@ -2278,7 +2278,6 @@ dependencies = [
 name = "datafusion-functions-aggregate-common"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "criterion",
  "datafusion-common",
@@ -2391,7 +2390,6 @@ dependencies = [
 name = "datafusion-physical-expr"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "criterion",
  "datafusion-common",
@@ -2431,7 +2429,6 @@ dependencies = [
 name = "datafusion-physical-expr-common"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "chrono",
  "datafusion-common",
@@ -2467,7 +2464,6 @@ dependencies = [
 name = "datafusion-physical-plan"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "arrow-ord",
  "arrow-schema",
