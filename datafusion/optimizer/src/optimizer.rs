@@ -109,7 +109,7 @@ pub trait OptimizerRule: Debug {
     /// Specifically, the rule should not check function names as functions can
     /// be overridden, and may not have the same semantics as the functions built
     /// into DataFusion. If you absolutely need to check against function names,
-    /// then you should call `func.is_builtin()` to verify the function is built-in
+    /// then you should call `func.origin()` to verify the function is built-in
     /// and therefore have a well defined semantics.
     ///
     /// [`WindowUDFImpl`]: datafusion_expr::WindowUDFImpl
