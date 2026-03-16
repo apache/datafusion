@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc};
 
 use clap::Args;
 use datafusion::{
@@ -28,10 +28,9 @@ use datafusion::{
     prelude::SessionConfig,
 };
 use datafusion_common::{DataFusionError, Result};
-use object_store::{
-    local::LocalFileSystem,
-    throttle::{ThrottleConfig, ThrottledStore},
-};
+use object_store::local::LocalFileSystem;
+
+use super::latency_object_store::LatencyObjectStore;
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
@@ -130,17 +129,13 @@ impl CommonOpt {
     pub fn build_runtime(&self) -> Result<Arc<RuntimeEnv>> {
         let rt = self.runtime_env_builder()?.build_arc()?;
         if self.simulate_latency {
-            let config = ThrottleConfig {
-                wait_get_per_call: Duration::from_millis(100),
-                wait_list_per_call: Duration::from_millis(200),
-                wait_list_with_delimiter_per_call: Duration::from_millis(200),
-                ..Default::default()
-            };
-            let throttled: Arc<dyn object_store::ObjectStore> =
-                Arc::new(ThrottledStore::new(LocalFileSystem::new(), config));
+            let store: Arc<dyn object_store::ObjectStore> =
+                Arc::new(LatencyObjectStore::new(LocalFileSystem::new()));
             let url = ObjectStoreUrl::parse("file:///")?;
-            rt.register_object_store(url.as_ref(), throttled);
-            println!("Simulating object store latency (get: 100ms, list: 200ms)");
+            rt.register_object_store(url.as_ref(), store);
+            println!(
+                "Simulating S3-like object store latency (get: 25-200ms, list: 40-400ms)"
+            );
         }
         Ok(rt)
     }
