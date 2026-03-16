@@ -8099,7 +8099,7 @@ group0 50
 group1 100
 
 # group median f32 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 2.75
