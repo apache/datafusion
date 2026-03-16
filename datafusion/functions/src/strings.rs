@@ -182,8 +182,16 @@ impl StringViewArrayBuilder {
         self.block.clear();
     }
 
-    pub fn finish(mut self) -> StringViewArray {
-        self.builder.finish()
+    pub fn finish(mut self, null_buffer: Option<NullBuffer>) -> StringViewArray {
+        let array = self.builder.finish();
+        match null_buffer {
+            Some(nulls) => {
+                let array_data = array.into_data().into_builder().nulls(Some(nulls));
+                // SAFETY: the underlying data is valid; we are only adding a null buffer
+                StringViewArray::from(unsafe { array_data.build_unchecked() })
+            }
+            None => array,
+        }
     }
 }
 

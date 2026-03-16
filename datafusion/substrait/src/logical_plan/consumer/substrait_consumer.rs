@@ -141,7 +141,15 @@ use substrait::proto::{
 ///
 ///     // and user-defined literals
 ///     fn consume_user_defined_literal(&self, literal: &proto::expression::literal::UserDefined) -> Result<ScalarValue> {
-///         let type_string = self.extensions.types.get(&literal.type_reference).unwrap();
+///         // extract type_reference from the new TypeAnchorType oneof
+///         let type_ref = match literal.type_anchor_type {
+///             Some(proto::expression::literal::user_defined::TypeAnchorType::TypeReference(r)) => r,
+///             Some(proto::expression::literal::user_defined::TypeAnchorType::TypeAliasReference(_)) => {
+///                 return not_impl_err!("Type alias references are not yet supported")
+///             }
+///             None => 0,
+///         };
+///         let type_string = self.extensions.types.get(&type_ref).unwrap();
 ///         match type_string.as_str() {
 ///             "u!foo" => not_impl_err!("handle foo conversion"),
 ///             "u!bar" => not_impl_err!("handle bar conversion"),
@@ -444,10 +452,22 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         user_defined_literal: &proto::expression::literal::UserDefined,
     ) -> datafusion::common::Result<ScalarValue> {
-        substrait_err!(
-            "Missing handler for user-defined literals {}",
-            user_defined_literal.type_reference
-        )
+        let type_ref = match user_defined_literal.type_anchor_type {
+            Some(
+                proto::expression::literal::user_defined::TypeAnchorType::TypeReference(
+                    ref_val,
+                ),
+            ) => ref_val,
+            Some(
+                proto::expression::literal::user_defined::TypeAnchorType::TypeAliasReference(_),
+            ) => {
+                return not_impl_err!(
+                    "Type alias references in user-defined literals are not yet supported"
+                )
+            }
+            None => 0,
+        };
+        substrait_err!("Missing handler for user-defined literals {}", type_ref)
     }
 }
 

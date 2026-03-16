@@ -144,6 +144,10 @@ pub struct RunOpt {
     /// The tables should have been created with the `--sort` option for this to have any effect.
     #[arg(short = 't', long = "sorted")]
     sorted: bool,
+
+    /// How many bytes to buffer on the probe side of hash joins.
+    #[arg(long, default_value = "0")]
+    hash_join_buffering_capacity: usize,
 }
 
 impl RunOpt {
@@ -162,8 +166,10 @@ impl RunOpt {
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
         config.options_mut().optimizer.enable_piecewise_merge_join =
             self.enable_piecewise_merge_join;
-        let rt_builder = self.common.runtime_env_builder()?;
-        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+        config.options_mut().execution.hash_join_buffering_capacity =
+            self.hash_join_buffering_capacity;
+        let rt = self.common.build_runtime()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt);
         // register tables
         self.register_tables(&ctx).await?;
 

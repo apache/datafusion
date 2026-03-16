@@ -5056,6 +5056,49 @@ LEFT ANTI JOIN t2 ON k1 = k2
 WHERE k1 < 0
 ----
 
+# Also check that the reported number of output rows/batches are correct in the "empty build side"
+# optimization.
+# Issue: https://github.com/apache/datafusion/issues/20809
+query TT
+EXPLAIN ANALYZE
+WITH t1 (k) AS (
+    VALUES (1), (2)
+), t2 (k) AS (
+    VALUES (1)
+)
+SELECT *
+FROM t1
+LEFT ANTI JOIN (
+    SELECT *
+    FROM t2
+    WHERE k <> 1
+) t2 ON t1.k = t2.k;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, array_map_created_count=0, build_input_batches=0, build_input_rows=0, input_batches=1, input_rows=2, build_mem_used=<slt:ignore>, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=N/A (0/0), probe_hit_rate=0% (0/2)]     
+02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, expr_0_eval_time=<slt:ignore>]
+03)----FilterExec: column1@0 != 1, metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, selectivity=0% (0/1)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+05)--ProjectionExec: expr=[column1@0 as k], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, expr_0_eval_time=<slt:ignore>]
+06)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+query I
+WITH t1 (k) AS (
+    VALUES (1), (2)
+), t2 (k) AS (
+    VALUES (1)
+)
+SELECT *
+FROM t1
+LEFT ANTI JOIN (
+    SELECT *
+    FROM t2
+    WHERE k <> 1
+) t2 ON t1.k = t2.k;
+----
+1
+2
+
 # Mark testing
 statement ok
 CREATE OR REPLACE TABLE t1(b INT, c INT, d INT);
@@ -5318,3 +5361,46 @@ DROP TABLE issue_20437_small;
 
 statement count 0
 DROP TABLE issue_20437_large;
+
+# Test count(*) with right semi/anti joins returns correct row counts
+# issue: https://github.com/apache/datafusion/issues/20669 
+
+statement ok
+CREATE TABLE t1 (k INT, v INT);
+
+statement ok
+CREATE TABLE t2 (k INT, v INT);
+
+statement ok
+INSERT INTO t1 SELECT i AS k, i AS v FROM generate_series(1, 100) t(i);
+
+statement ok
+INSERT INTO t2 VALUES (1, 1);
+
+query I
+WITH t AS (
+    SELECT *
+    FROM t1
+    LEFT ANTI JOIN t2 ON t1.k = t2.k
+)
+SELECT count(*)
+FROM t;
+----
+99
+
+query I
+WITH t AS (
+    SELECT *
+    FROM t1
+    LEFT SEMI JOIN t2 ON t1.k = t2.k
+)
+SELECT count(*)
+FROM t;
+----
+1
+
+statement count 0
+DROP TABLE t1;
+
+statement count 0
+DROP TABLE t2;

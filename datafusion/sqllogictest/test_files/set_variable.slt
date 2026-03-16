@@ -450,3 +450,33 @@ datafusion.runtime.temp_directory
 
 statement error DataFusion error: Error during planning: Unsupported value Null
 SET datafusion.runtime.memory_limit = NULL
+
+statement error DataFusion error: Error during planning: Unsupported value Null
+SET datafusion.runtime.list_files_cache_ttl = NULL
+
+statement error DataFusion error: Error during planning: Duration should not be empty or blank for 'datafusion.runtime.list_files_cache_ttl'
+SET datafusion.runtime.list_files_cache_ttl = ' '
+
+statement ok
+SET datafusion.runtime.list_files_cache_ttl = '18446744073709551615s'
+
+statement error DataFusion error: Error during planning: Failed to parse number from duration '18446744073709551616s' for 'datafusion.runtime.list_files_cache_ttl'
+SET datafusion.runtime.list_files_cache_ttl = '18446744073709551616s'
+
+statement ok
+SET datafusion.runtime.list_files_cache_ttl = '307445734561825860m'
+
+statement ok
+SET datafusion.runtime.list_files_cache_ttl = '307445734561825860m10s'
+
+statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60' when setting 'datafusion\.runtime\.list_files_cache_ttl'
+SET datafusion.runtime.list_files_cache_ttl = '307445734561825861m'
+
+statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60 \+ secs' when setting 'datafusion\.runtime\.list_files_cache_ttl'
+SET datafusion.runtime.list_files_cache_ttl = '307445734561825860m60s'
+
+statement ok
+SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551555s'
+
+statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60 \+ secs' when setting 'datafusion\.runtime\.list_files_cache_ttl'
+SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
