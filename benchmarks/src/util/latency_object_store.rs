@@ -35,21 +35,16 @@ use object_store::{
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
 
-/// Latency distribution to cycle through, inspired by S3 GET/LIST latencies.
-/// Sorted so that most calls hit low latencies (simulating P50),
-/// with occasional spikes (P90/P99).
-const GET_LATENCIES_MS: &[u64] = &[
-    25, 28, 30, 30, 32, 35, // ~P50 range
-    70, 85, 100, 110, // ~P75-P90
-    120, 150, // ~P95
-    180, 200, // ~P99
-];
+/// GET latency distribution, inspired by S3 latencies.
+/// Deterministic but shuffled to avoid artificial patterns.
+/// Distribution: P50 ~30ms, P75-P90 ~100ms, P99 ~200ms.
+const GET_LATENCIES_MS: &[u64] =
+    &[30, 150, 28, 100, 35, 200, 30, 85, 120, 25, 110, 32, 180, 70];
 
+/// LIST latency distribution, generally higher than GET.
+/// Distribution: P50 ~55ms, P75-P90 ~150ms, P99 ~400ms.
 const LIST_LATENCIES_MS: &[u64] = &[
-    40, 50, 55, 60, 65, 70, // ~P50 range
-    120, 140, 160, 180, // ~P75-P90
-    200, 250, // ~P95
-    300, 400, // ~P99
+    55, 250, 40, 160, 70, 400, 50, 140, 200, 60, 180, 65, 300, 120,
 ];
 
 /// An ObjectStore wrapper that injects simulated latency on get and list calls.
