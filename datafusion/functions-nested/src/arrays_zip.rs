@@ -114,24 +114,7 @@ impl ScalarUDFImpl for ArraysZip {
             return exec_err!("arrays_zip requires at least two arguments");
         }
 
-        let mut fields = Vec::with_capacity(arg_types.len());
-        for (i, arg_type) in arg_types.iter().enumerate() {
-            let element_type = match arg_type {
-                List(field) | LargeList(field) | FixedSizeList(field, _) => {
-                    field.data_type().clone()
-                }
-                Null => Null,
-                dt => {
-                    return exec_err!("arrays_zip expects array arguments, got {dt}");
-                }
-            };
-            fields.push(Field::new(format!("{}", i + 1), element_type, true));
-        }
-
-        Ok(List(Arc::new(Field::new_list_field(
-            DataType::Struct(Fields::from(fields)),
-            true,
-        ))))
+        build_return_type(arg_types, StructOrdinal::OneBased)
     }
 
     fn invoke_with_args(
@@ -159,6 +142,38 @@ pub enum StructOrdinal {
     OneBased,
 }
 
+pub fn build_return_type(
+    arg_types: &[DataType],
+    struct_ordinal: StructOrdinal,
+) -> Result<DataType> {
+    let (start_ordinal, end_ordinal) = match struct_ordinal {
+        StructOrdinal::ZeroBased => (0, arg_types.len()),
+        StructOrdinal::OneBased => (1, arg_types.len() + 1),
+    };
+    let names: Vec<String> = (start_ordinal..end_ordinal)
+        .map(|i| i.to_string())
+        .collect();
+
+    let mut fields = Vec::with_capacity(arg_types.len());
+    for (name, arg_type) in names.iter().zip(arg_types) {
+        let element_type = match arg_type {
+            List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                field.data_type().clone()
+            }
+            Null => Null,
+            dt => {
+                return exec_err!("arrays_zip expects array arguments, got {dt}");
+            }
+        };
+        fields.push(Field::new(name, element_type, true));
+    }
+
+    Ok(List(Arc::new(Field::new_list_field(
+        DataType::Struct(Fields::from(fields)),
+        true,
+    ))))
+}
+
 /// Core implementation for arrays_zip.
 ///
 /// Takes N list arrays and produces a list of structs where each struct
@@ -178,7 +193,6 @@ pub fn arrays_zip_inner(
         StructOrdinal::OneBased => (1, args.len() + 1),
     };
     let names: Vec<String> = (start_ordinal..end_ordinal)
-        .into_iter()
         .map(|i| i.to_string())
         .collect();
 
@@ -248,7 +262,7 @@ pub fn arrays_zip_inner(
     let struct_fields: Fields = element_types
         .iter()
         .enumerate()
-        .map(|(i, dt)| Field::new(format!("{}", &names[i]), dt.clone(), true))
+        .map(|(i, dt)| Field::new(names[i].to_string(), dt.clone(), true))
         .collect::<Vec<_>>()
         .into();
 

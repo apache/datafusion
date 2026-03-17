@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::DataType;
 
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use datafusion_functions_nested::arrays_zip::{StructOrdinal, arrays_zip_inner};
+use datafusion_functions_nested::arrays_zip::{
+    StructOrdinal, arrays_zip_inner, build_return_type,
+};
 use datafusion_functions_nested::utils::make_scalar_function;
 use std::any::Any;
-use std::sync::Arc;
 
 /// Spark-compatible `arrays_zip` function.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -66,24 +66,7 @@ impl ScalarUDFImpl for SparkArraysZip {
             return exec_err!("arrays_zip requires at least two arguments");
         }
 
-        let mut fields = Vec::with_capacity(arg_types.len());
-        for (i, arg_type) in arg_types.iter().enumerate() {
-            let element_type = match arg_type {
-                List(field) | LargeList(field) | FixedSizeList(field, _) => {
-                    field.data_type().clone()
-                }
-                Null => Null,
-                dt => {
-                    return exec_err!("arrays_zip expects array arguments, got {dt}");
-                }
-            };
-            fields.push(Field::new(format!("{}", i), element_type, true));
-        }
-
-        Ok(List(Arc::new(Field::new_list_field(
-            DataType::Struct(Fields::from(fields)),
-            true,
-        ))))
+        build_return_type(arg_types, StructOrdinal::ZeroBased)
     }
 
     fn invoke_with_args(
