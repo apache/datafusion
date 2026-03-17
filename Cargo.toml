@@ -261,6 +261,12 @@ overflow-checks = false
 rpath = false
 strip = false            # Retain debug info for flamegraphs
 
+[profile.ci-optimized]
+inherits = "release"
+codegen-units = 16
+lto = "thin"
+strip = true
+
 [profile.ci]
 debug = false
 inherits = "dev"

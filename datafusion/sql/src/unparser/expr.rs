@@ -1294,18 +1294,17 @@ impl Unparser<'_> {
                 Ok(ast::Expr::value(ast::Value::Number(ui.to_string(), false)))
             }
             ScalarValue::UInt64(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Utf8(Some(str)) => {
+            ScalarValue::Utf8(Some(str))
+            | ScalarValue::Utf8View(Some(str))
+            | ScalarValue::LargeUtf8(Some(str)) => {
+                if let Some(expr) = self.dialect.string_literal_to_sql(str) {
+                    return Ok(expr);
+                }
                 Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
             }
-            ScalarValue::Utf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Utf8View(Some(str)) => {
-                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
-            }
-            ScalarValue::Utf8View(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::LargeUtf8(Some(str)) => {
-                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
-            }
-            ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Utf8(None)
+            | ScalarValue::Utf8View(None)
+            | ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Binary(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::BinaryView(Some(_)) => {
@@ -2397,7 +2396,6 @@ mod tests {
 
         let expected = r#"('a' > 4)"#;
         assert_eq!(actual, expected);
-
         Ok(())
     }
 
@@ -2956,6 +2954,70 @@ mod tests {
             let expected = expected.to_string();
 
             assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_mssql_dialect_national_literal() -> Result<()> {
+        struct MsSqlDialect;
+
+        impl Dialect for MsSqlDialect {
+            fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+                Some('[')
+            }
+
+            fn string_literal_to_sql(&self, s: &str) -> Option<ast::Expr> {
+                if !s.is_ascii() {
+                    Some(ast::Expr::value(ast::Value::NationalStringLiteral(
+                        s.to_string(),
+                    )))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let dialect = MsSqlDialect;
+        let unparser = Unparser::new(&dialect);
+
+        // Get nation string literal for the custom mssql dialect
+        for (s, expected) in [
+            ("national string", "'national string'"),
+            ("datafusion資料融合", "N'datafusion資料融合'"),
+        ] {
+            let expr = Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::Utf8View(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::LargeUtf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+        }
+
+        let dialect = DefaultDialect {};
+        let unparser = Unparser::new(&dialect);
+
+        // Get normal string literal for default dialect
+        for (s, expected) in [
+            ("national string", "'national string'"),
+            ("datafusion資料融合", "'datafusion資料融合'"),
+        ] {
+            let expr = Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::Utf8View(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::LargeUtf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
         }
         Ok(())
     }
