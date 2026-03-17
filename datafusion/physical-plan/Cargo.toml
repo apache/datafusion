@@ -47,7 +47,6 @@ tokio_coop_fallback = []
 name = "datafusion_physical_plan"
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }

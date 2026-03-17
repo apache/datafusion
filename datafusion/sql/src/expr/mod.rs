@@ -1333,46 +1333,42 @@ mod tests {
     }
 
     macro_rules! test_stack_overflow {
-        ($num_expr:expr) => {
-            paste::item! {
-                #[test]
-                fn [<test_stack_overflow_ $num_expr>]() {
-                    let schema = DFSchema::empty();
-                    let mut planner_context = PlannerContext::default();
+        ($name:ident, $num_expr:expr) => {
+            #[test]
+            fn $name() {
+                let schema = DFSchema::empty();
+                let mut planner_context = PlannerContext::default();
 
-                    let expr_str = (0..$num_expr)
-                        .map(|i| format!("column1 = 'value{:?}'", i))
-                        .collect::<Vec<String>>()
-                        .join(" OR ");
+                let expr_str = (0..$num_expr)
+                    .map(|i| format!("column1 = 'value{:?}'", i))
+                    .collect::<Vec<String>>()
+                    .join(" OR ");
 
-                    let dialect = GenericDialect{};
-                    let mut parser = Parser::new(&dialect)
-                        .try_with_sql(expr_str.as_str())
-                        .unwrap();
-                    let sql_expr = parser.parse_expr().unwrap();
+                let dialect = GenericDialect {};
+                let mut parser = Parser::new(&dialect)
+                    .try_with_sql(expr_str.as_str())
+                    .unwrap();
+                let sql_expr = parser.parse_expr().unwrap();
 
-                    let context_provider = TestContextProvider::new();
-                    let sql_to_rel = SqlToRel::new(&context_provider);
+                let context_provider = TestContextProvider::new();
+                let sql_to_rel = SqlToRel::new(&context_provider);
 
-                    // Should not stack overflow
-                    sql_to_rel.sql_expr_to_logical_expr(
-                        sql_expr,
-                        &schema,
-                        &mut planner_context,
-                    ).unwrap();
-                }
+                // Should not stack overflow
+                sql_to_rel
+                    .sql_expr_to_logical_expr(sql_expr, &schema, &mut planner_context)
+                    .unwrap();
             }
         };
     }
 
-    test_stack_overflow!(64);
-    test_stack_overflow!(128);
-    test_stack_overflow!(256);
-    test_stack_overflow!(512);
-    test_stack_overflow!(1024);
-    test_stack_overflow!(2048);
-    test_stack_overflow!(4096);
-    test_stack_overflow!(8192);
+    test_stack_overflow!(test_stack_overflow_64, 64);
+    test_stack_overflow!(test_stack_overflow_128, 128);
+    test_stack_overflow!(test_stack_overflow_256, 256);
+    test_stack_overflow!(test_stack_overflow_512, 512);
+    test_stack_overflow!(test_stack_overflow_1024, 1024);
+    test_stack_overflow!(test_stack_overflow_2048, 2048);
+    test_stack_overflow!(test_stack_overflow_4096, 4096);
+    test_stack_overflow!(test_stack_overflow_8192, 8192);
     #[test]
     fn test_sql_to_expr_with_alias() {
         let schema = DFSchema::empty();

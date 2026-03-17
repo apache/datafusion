@@ -1768,7 +1768,6 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
- "paste",
  "pretty_assertions",
  "rand 0.9.2",
  "rand_distr",
@@ -1894,12 +1893,12 @@ dependencies = [
 name = "datafusion-common"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "apache-avro",
  "arrow",
  "arrow-ipc",
  "chrono",
  "criterion",
+ "foldhash 0.2.0",
  "half",
  "hashbrown 0.16.1",
  "hex",
@@ -1910,7 +1909,6 @@ dependencies = [
  "log",
  "object_store",
  "parquet",
- "paste",
  "rand 0.9.2",
  "recursive",
  "sqlparser",
@@ -2166,7 +2164,6 @@ dependencies = [
  "indexmap 2.13.0",
  "insta",
  "itertools 0.14.0",
- "paste",
  "recursive",
  "serde_json",
  "sqlparser",
@@ -2181,7 +2178,6 @@ dependencies = [
  "indexmap 2.13.0",
  "insta",
  "itertools 0.14.0",
- "paste",
 ]
 
 [[package]]
@@ -2256,7 +2252,6 @@ dependencies = [
 name = "datafusion-functions-aggregate"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "criterion",
  "datafusion-common",
@@ -2267,10 +2262,10 @@ dependencies = [
  "datafusion-macros",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
+ "foldhash 0.2.0",
  "half",
  "log",
  "num-traits",
- "paste",
  "rand 0.9.2",
 ]
 
@@ -2278,7 +2273,6 @@ dependencies = [
 name = "datafusion-functions-aggregate-common"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "criterion",
  "datafusion-common",
@@ -2308,7 +2302,6 @@ dependencies = [
  "itertools 0.14.0",
  "itoa",
  "log",
- "paste",
  "rand 0.9.2",
 ]
 
@@ -2323,7 +2316,6 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-plan",
  "parking_lot",
- "paste",
 ]
 
 [[package]]
@@ -2340,7 +2332,6 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "log",
- "paste",
 ]
 
 [[package]]
@@ -2391,7 +2382,6 @@ dependencies = [
 name = "datafusion-physical-expr"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "criterion",
  "datafusion-common",
@@ -2406,7 +2396,6 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "parking_lot",
- "paste",
  "petgraph",
  "rand 0.9.2",
  "recursive",
@@ -2431,15 +2420,16 @@ dependencies = [
 name = "datafusion-physical-expr-common"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "chrono",
+ "criterion",
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.16.1",
  "indexmap 2.13.0",
  "itertools 0.14.0",
  "parking_lot",
+ "rand 0.9.2",
 ]
 
 [[package]]
@@ -2467,7 +2457,6 @@ dependencies = [
 name = "datafusion-physical-plan"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "arrow-ord",
  "arrow-schema",
@@ -2625,7 +2614,6 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "log",
- "paste",
  "recursive",
  "regex",
  "rstest",
@@ -4019,9 +4007,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lz4_flex"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab6473172471198271ff72e9379150e9dfd70d8e533e0752a27e515b48dd375e"
+checksum = "98c23545df7ecf1b16c303910a69b079e8e251d60f7dd2cc9b4177f2afaf1746"
 dependencies = [
  "twox-hash",
 ]

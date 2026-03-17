@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use ahash::RandomState;
 use arrow::{
     array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
     buffer::BooleanBuffer,
@@ -29,6 +28,7 @@ use arrow::{
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
 };
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
@@ -365,31 +365,40 @@ impl AggregateUDFImpl for Count {
     }
 
     fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        let [expr] = statistics_args.exprs else {
+            return None;
+        };
+        let col_stats = &statistics_args.statistics.column_statistics;
+
         if statistics_args.is_distinct {
+            // Only column references can be resolved from statistics;
+            // expressions like casts or literals are not supported.
+            let col_expr = expr.as_any().downcast_ref::<expressions::Column>()?;
+            if let Precision::Exact(dc) = col_stats[col_expr.index()].distinct_count {
+                let dc = i64::try_from(dc).ok()?;
+                return Some(ScalarValue::Int64(Some(dc)));
+            }
             return None;
         }
-        if let Precision::Exact(num_rows) = statistics_args.statistics.num_rows
-            && statistics_args.exprs.len() == 1
-        {
-            // TODO optimize with exprs other than Column
-            if let Some(col_expr) = statistics_args.exprs[0]
-                .as_any()
-                .downcast_ref::<expressions::Column>()
-            {
-                let current_val = &statistics_args.statistics.column_statistics
-                    [col_expr.index()]
-                .null_count;
-                if let &Precision::Exact(val) = current_val {
-                    return Some(ScalarValue::Int64(Some((num_rows - val) as i64)));
-                }
-            } else if let Some(lit_expr) = statistics_args.exprs[0]
-                .as_any()
-                .downcast_ref::<expressions::Literal>()
-                && lit_expr.value() == &COUNT_STAR_EXPANSION
-            {
-                return Some(ScalarValue::Int64(Some(num_rows as i64)));
+
+        let Precision::Exact(num_rows) = statistics_args.statistics.num_rows else {
+            return None;
+        };
+
+        // TODO optimize with exprs other than Column
+        if let Some(col_expr) = expr.as_any().downcast_ref::<expressions::Column>() {
+            if let Precision::Exact(val) = col_stats[col_expr.index()].null_count {
+                let count = i64::try_from(num_rows - val).ok()?;
+                return Some(ScalarValue::Int64(Some(count)));
             }
+        } else if let Some(lit_expr) =
+            expr.as_any().downcast_ref::<expressions::Literal>()
+            && lit_expr.value() == &COUNT_STAR_EXPANSION
+        {
+            let num_rows = i64::try_from(num_rows).ok()?;
+            return Some(ScalarValue::Int64(Some(num_rows)));
         }
+
         None
     }
 
