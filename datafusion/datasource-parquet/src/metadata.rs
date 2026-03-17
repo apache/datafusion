@@ -314,7 +314,6 @@ impl<'a> DFParquetMetadata<'a> {
                 column_avg_byte_sizes: &mut column_avg_byte_sizes,
                 distinct_counts_array: &mut distinct_counts_array,
             };
-
             for (idx, field) in logical_file_schema.fields().iter().enumerate() {
                 match StatisticsConverter::try_new(
                     field.name(),
@@ -415,7 +414,6 @@ fn create_max_min_accs(
         .collect();
     (max_values, min_values)
 }
-
 /// Holds the accumulator state for collecting statistics from row groups
 struct StatisticsAccumulators<'a> {
     min_accs: &'a mut [Option<MinAccumulator>],

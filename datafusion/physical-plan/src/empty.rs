@@ -188,6 +188,7 @@ impl ExecutionPlan for EmptyExec {
                 max_value: Precision::<ScalarValue>::Absent,
                 sum_value: Precision::<ScalarValue>::Absent,
                 byte_size: Precision::Exact(0),
+                avg_byte_size: Precision::Absent,
             });
         }
 
