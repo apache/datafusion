@@ -1899,12 +1899,15 @@ pub(super) fn equal_rows_arr(
                 null_equality,
             )
         } else {
+            let left_arrays_for_key: Vec<&ArrayRef> = left_arrays_per_batch
+                .iter()
+                .map(|batch_keys| &batch_keys[key_idx])
+                .collect();
             compare_rows_elementwise_multi(
                 &mut equal_bits,
                 left_indices,
                 right_indices,
-                left_arrays_per_batch,
-                key_idx,
+                &left_arrays_for_key,
                 right_array,
                 null_equality,
             )
@@ -1975,6 +1978,54 @@ fn and_bitmap_with_boolean_buffer(
     }
 }
 
+/// Dispatch a macro call by Arrow DataType for element-wise comparison.
+/// The `$action` macro is invoked with the concrete array type for each supported type.
+/// Returns `false` for unsupported/nested types (caller should use fallback).
+macro_rules! dispatch_elementwise {
+    ($data_type:expr, $equal_bits:expr, $left_indices:expr, $null_equality:expr, $action:ident) => {
+        match $data_type {
+            DataType::Null => {
+                match $null_equality {
+                    NullEquality::NullEqualsNothing => {
+                        for i in 0..$left_indices.len() {
+                            $equal_bits.set_bit(i, false);
+                        }
+                    }
+                    NullEquality::NullEqualsNull => {}
+                }
+            }
+            DataType::Boolean => $action!(BooleanArray),
+            DataType::Int8 => $action!(Int8Array),
+            DataType::Int16 => $action!(Int16Array),
+            DataType::Int32 => $action!(Int32Array),
+            DataType::Int64 => $action!(Int64Array),
+            DataType::UInt8 => $action!(UInt8Array),
+            DataType::UInt16 => $action!(UInt16Array),
+            DataType::UInt32 => $action!(UInt32Array),
+            DataType::UInt64 => $action!(UInt64Array),
+            DataType::Float32 => $action!(Float32Array),
+            DataType::Float64 => $action!(Float64Array),
+            DataType::Binary => $action!(BinaryArray),
+            DataType::BinaryView => $action!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => $action!(FixedSizeBinaryArray),
+            DataType::LargeBinary => $action!(LargeBinaryArray),
+            DataType::Utf8 => $action!(StringArray),
+            DataType::Utf8View => $action!(StringViewArray),
+            DataType::LargeUtf8 => $action!(LargeStringArray),
+            DataType::Decimal128(..) => $action!(Decimal128Array),
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => $action!(TimestampSecondArray),
+                TimeUnit::Millisecond => $action!(TimestampMillisecondArray),
+                TimeUnit::Microsecond => $action!(TimestampMicrosecondArray),
+                TimeUnit::Nanosecond => $action!(TimestampNanosecondArray),
+            },
+            DataType::Date32 => $action!(Date32Array),
+            DataType::Date64 => $action!(Date64Array),
+            _ => return false,
+        }
+    };
+}
+
 /// Compare rows element-wise without materializing intermediate arrays.
 /// Returns `true` if the comparison was handled, `false` if fallback is needed.
 ///
@@ -1989,7 +2040,6 @@ fn compare_rows_elementwise(
     right_array: &ArrayRef,
     null_equality: NullEquality,
 ) -> bool {
-    // Nested types need special comparison logic, fall back
     if left_array.data_type().is_nested() {
         return false;
     }
@@ -2009,47 +2059,7 @@ fn compare_rows_elementwise(
         }};
     }
 
-    match left_array.data_type() {
-        DataType::Null => {
-            match null_equality {
-                NullEquality::NullEqualsNothing => {
-                    // null != null, clear all bits
-                    for i in 0..left_indices.len() {
-                        equal_bits.set_bit(i, false);
-                    }
-                }
-                NullEquality::NullEqualsNull => {} // null == null, keep bits
-            }
-        }
-        DataType::Boolean => compare_elementwise!(BooleanArray),
-        DataType::Int8 => compare_elementwise!(Int8Array),
-        DataType::Int16 => compare_elementwise!(Int16Array),
-        DataType::Int32 => compare_elementwise!(Int32Array),
-        DataType::Int64 => compare_elementwise!(Int64Array),
-        DataType::UInt8 => compare_elementwise!(UInt8Array),
-        DataType::UInt16 => compare_elementwise!(UInt16Array),
-        DataType::UInt32 => compare_elementwise!(UInt32Array),
-        DataType::UInt64 => compare_elementwise!(UInt64Array),
-        DataType::Float32 => compare_elementwise!(Float32Array),
-        DataType::Float64 => compare_elementwise!(Float64Array),
-        DataType::Binary => compare_elementwise!(BinaryArray),
-        DataType::BinaryView => compare_elementwise!(BinaryViewArray),
-        DataType::FixedSizeBinary(_) => compare_elementwise!(FixedSizeBinaryArray),
-        DataType::LargeBinary => compare_elementwise!(LargeBinaryArray),
-        DataType::Utf8 => compare_elementwise!(StringArray),
-        DataType::Utf8View => compare_elementwise!(StringViewArray),
-        DataType::LargeUtf8 => compare_elementwise!(LargeStringArray),
-        DataType::Decimal128(..) => compare_elementwise!(Decimal128Array),
-        DataType::Timestamp(time_unit, None) => match time_unit {
-            TimeUnit::Second => compare_elementwise!(TimestampSecondArray),
-            TimeUnit::Millisecond => compare_elementwise!(TimestampMillisecondArray),
-            TimeUnit::Microsecond => compare_elementwise!(TimestampMicrosecondArray),
-            TimeUnit::Nanosecond => compare_elementwise!(TimestampNanosecondArray),
-        },
-        DataType::Date32 => compare_elementwise!(Date32Array),
-        DataType::Date64 => compare_elementwise!(Date64Array),
-        _ => return false, // Unsupported type, use fallback
-    }
+    dispatch_elementwise!(left_array.data_type(), equal_bits, left_indices, null_equality, compare_elementwise);
     true
 }
 
@@ -2116,8 +2126,7 @@ fn compare_rows_elementwise_multi(
     equal_bits: &mut BooleanBufferBuilder,
     left_indices: &[u64],
     right_indices: &[u32],
-    left_arrays_per_batch: &[Vec<ArrayRef>],
-    key_idx: usize,
+    left_arrays: &[&ArrayRef],
     right_array: &ArrayRef,
     null_equality: NullEquality,
 ) -> bool {
@@ -2127,9 +2136,9 @@ fn compare_rows_elementwise_multi(
 
     macro_rules! compare_multi {
         ($array_type:ty) => {{
-            let left_typed: Vec<&$array_type> = left_arrays_per_batch
+            let left_typed: Vec<&$array_type> = left_arrays
                 .iter()
-                .map(|keys| keys[key_idx].as_any().downcast_ref::<$array_type>().unwrap())
+                .map(|a| a.as_any().downcast_ref::<$array_type>().unwrap())
                 .collect();
             let right = right_array.as_any().downcast_ref::<$array_type>().unwrap();
             do_compare_elementwise_multi(
@@ -2143,46 +2152,7 @@ fn compare_rows_elementwise_multi(
         }};
     }
 
-    match right_array.data_type() {
-        DataType::Null => {
-            match null_equality {
-                NullEquality::NullEqualsNothing => {
-                    for i in 0..left_indices.len() {
-                        equal_bits.set_bit(i, false);
-                    }
-                }
-                NullEquality::NullEqualsNull => {}
-            }
-        }
-        DataType::Boolean => compare_multi!(BooleanArray),
-        DataType::Int8 => compare_multi!(Int8Array),
-        DataType::Int16 => compare_multi!(Int16Array),
-        DataType::Int32 => compare_multi!(Int32Array),
-        DataType::Int64 => compare_multi!(Int64Array),
-        DataType::UInt8 => compare_multi!(UInt8Array),
-        DataType::UInt16 => compare_multi!(UInt16Array),
-        DataType::UInt32 => compare_multi!(UInt32Array),
-        DataType::UInt64 => compare_multi!(UInt64Array),
-        DataType::Float32 => compare_multi!(Float32Array),
-        DataType::Float64 => compare_multi!(Float64Array),
-        DataType::Binary => compare_multi!(BinaryArray),
-        DataType::BinaryView => compare_multi!(BinaryViewArray),
-        DataType::FixedSizeBinary(_) => compare_multi!(FixedSizeBinaryArray),
-        DataType::LargeBinary => compare_multi!(LargeBinaryArray),
-        DataType::Utf8 => compare_multi!(StringArray),
-        DataType::Utf8View => compare_multi!(StringViewArray),
-        DataType::LargeUtf8 => compare_multi!(LargeStringArray),
-        DataType::Decimal128(..) => compare_multi!(Decimal128Array),
-        DataType::Timestamp(time_unit, None) => match time_unit {
-            TimeUnit::Second => compare_multi!(TimestampSecondArray),
-            TimeUnit::Millisecond => compare_multi!(TimestampMillisecondArray),
-            TimeUnit::Microsecond => compare_multi!(TimestampMicrosecondArray),
-            TimeUnit::Nanosecond => compare_multi!(TimestampNanosecondArray),
-        },
-        DataType::Date32 => compare_multi!(Date32Array),
-        DataType::Date64 => compare_multi!(Date64Array),
-        _ => return false,
-    }
+    dispatch_elementwise!(right_array.data_type(), equal_bits, left_indices, null_equality, compare_multi);
     true
 }
 
@@ -2222,6 +2192,10 @@ fn do_compare_elementwise_multi<A: ArrayAccessor>(
             }
         }
     } else {
+        // Pre-compute null buffers per batch to avoid repeated method calls in the loop
+        let left_nulls_per_batch: Vec<Option<&NullBuffer>> =
+            left_arrays.iter().map(|a| a.nulls()).collect();
+
         for i in 0..num_rows {
             if !equal_bits.get_bit(i) {
                 continue;
@@ -2230,14 +2204,16 @@ fn do_compare_elementwise_multi<A: ArrayAccessor>(
             let batch_idx = (packed >> 32) as usize;
             let row_idx = (packed & 0xFFFFFFFF) as usize;
             let r_idx = right_indices[i] as usize;
-            let left = &left_arrays[batch_idx];
-            let l_null = left.nulls().is_some_and(|n| !n.is_valid(row_idx));
+            let l_null = left_nulls_per_batch[batch_idx]
+                .is_some_and(|n| !n.is_valid(row_idx));
             let r_null = right_nulls.is_some_and(|n| !n.is_valid(r_idx));
 
             let is_equal = match (l_null, r_null) {
                 (true, true) => null_equality == NullEquality::NullEqualsNull,
                 (true, false) | (false, true) => false,
-                (false, false) => left.value(row_idx) == right.value(r_idx),
+                (false, false) => {
+                    left_arrays[batch_idx].value(row_idx) == right.value(r_idx)
+                }
             };
             if !is_equal {
                 equal_bits.set_bit(i, false);
