@@ -30,7 +30,6 @@ use std::any::Any;
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArraysZip {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for SparkArraysZip {
@@ -43,7 +42,6 @@ impl SparkArraysZip {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![String::from("list_zip")],
         }
     }
 }
@@ -76,9 +74,5 @@ impl ScalarUDFImpl for SparkArraysZip {
         make_scalar_function(|arr| arrays_zip_inner(arr, StructOrdinal::ZeroBased))(
             &args.args,
         )
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 }

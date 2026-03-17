@@ -86,7 +86,7 @@ SELECT array(arrow_cast(array(1,2), 'LargeList(Int64)'), array(3));
 ----
 [[1, 2], [3]]
 
-## arrays_zip (aliases: `list_zip`)
+## arrays_zip
 
 # Spark example: arrays_zip(array(1, 2, 3), array(2, 3, 4))
 query ?
@@ -205,12 +205,6 @@ select arrays_zip(a, b) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 
 [{0: 1, 1: 10}, {0: 2, 1: 20}]
 [{0: NULL, 1: 30}, {0: NULL, 1: 40}]
 [{0: 5, 1: NULL}, {0: 6, 1: NULL}]
-
-# alias: list_zip
-query ?
-select list_zip([1, 2], [3, 4]);
-----
-[{0: 1, 1: 3}, {0: 2, 1: 4}]
 
 # column test: total values equal (3 each) but per-row lengths differ
 # a: [1]     b: [10, 20]   → row 0: a has 1, b has 2
