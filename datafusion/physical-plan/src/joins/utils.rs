@@ -992,6 +992,26 @@ fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBat
     )?)
 }
 
+/// Apply null mask from build_indices onto a result array.
+/// Used for outer joins where unmatched rows are represented as null indices.
+fn apply_null_mask(result: ArrayRef, build_indices: &UInt64Array) -> Result<ArrayRef> {
+    if let Some(idx_nulls) = build_indices.nulls() {
+        let data = result.to_data();
+        let combined_nulls = if let Some(existing) = data.nulls() {
+            NullBuffer::new(existing.inner() & idx_nulls.inner())
+        } else {
+            idx_nulls.clone()
+        };
+        Ok(arrow::array::make_array(
+            data.into_builder()
+                .null_bit_buffer(Some(combined_nulls.into_inner().into_inner()))
+                .build()?,
+        ))
+    } else {
+        Ok(result)
+    }
+}
+
 /// Decode packed composite indices into (batch_index, row_index) pairs.
 ///
 /// Each u64 value encodes `(batch_idx << 32) | row_idx`.
@@ -1033,13 +1053,31 @@ pub(crate) fn build_batch_from_indices(
         return new_empty_schema_batch(schema, row_count);
     }
 
-    // Pre-compute interleave indices for build-side columns (shared across all build columns)
-    let interleave_indices = if build_batches.is_empty()
+    // Determine build-side gathering strategy:
+    // - Single batch: use `take` directly (packed value == row index since batch_idx is 0)
+    // - Multiple batches: use `interleave` with decoded (batch_idx, row_idx) pairs
+    // - No batches or all-null indices: emit null arrays
+    enum BuildGather {
+        /// Single build batch — use `take` with row indices cast to u32
+        SingleBatch(UInt32Array),
+        /// Multiple build batches — use `interleave` with (batch_idx, row_idx) pairs
+        MultiBatch(Vec<(usize, usize)>),
+        /// All build indices are null (outer join with no matches)
+        AllNull,
+    }
+
+    let build_gather = if build_batches.is_empty()
         || build_indices.null_count() == build_indices.len()
     {
-        None
+        BuildGather::AllNull
+    } else if build_batches.len() == 1 {
+        // Single batch: packed value == row index (batch_idx is 0), use take directly
+        // Preserve the null buffer from build_indices for outer joins
+        let values: Vec<u32> = build_indices.values().iter().map(|&v| v as u32).collect();
+        let row_indices = UInt32Array::new(values.into(), build_indices.nulls().cloned());
+        BuildGather::SingleBatch(row_indices)
     } else {
-        Some(packed_indices_to_interleave(build_indices))
+        BuildGather::MultiBatch(packed_indices_to_interleave(build_indices))
     };
 
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
@@ -1048,48 +1086,44 @@ pub(crate) fn build_batch_from_indices(
         let array = if column_index.side == JoinSide::None {
             Arc::new(compute::is_not_null(probe_indices)?)
         } else if column_index.side == build_side {
-            if let Some(ref il_indices) = interleave_indices {
-                // Gather column arrays from all build batches
-                let arrays: Vec<&dyn Array> = build_batches
-                    .iter()
-                    .map(|b| b.column(column_index.index).as_ref())
-                    .collect();
-                let result = compute::interleave(&arrays, il_indices)?;
-                // Apply null mask from build_indices (for outer joins where
-                // unmatched rows are represented as null indices)
-                if build_indices.null_count() > 0 {
-                    if let Some(idx_nulls) = build_indices.nulls() {
-                        let data = result.to_data();
-                        let combined_nulls = if let Some(existing) = data.nulls() {
-                            NullBuffer::new(existing.inner() & idx_nulls.inner())
-                        } else {
-                            idx_nulls.clone()
-                        };
-                        arrow::array::make_array(
-                            data.into_builder()
-                                .null_bit_buffer(Some(
-                                    combined_nulls.into_inner().into_inner(),
-                                ))
-                                .build()?,
-                        )
+            match &build_gather {
+                BuildGather::SingleBatch(row_indices) => {
+                    // take() already handles null indices (produces null output),
+                    // so no extra null mask needed
+                    take(
+                        build_batches[0].column(column_index.index).as_ref(),
+                        row_indices,
+                        None,
+                    )?
+                }
+                BuildGather::MultiBatch(il_indices) => {
+                    // Gather column arrays from all build batches
+                    let arrays: Vec<&dyn Array> = build_batches
+                        .iter()
+                        .map(|b| b.column(column_index.index).as_ref())
+                        .collect();
+                    let result = compute::interleave(&arrays, il_indices)?;
+                    // Apply null mask from build_indices (for outer joins where
+                    // unmatched rows are represented as null indices)
+                    if build_indices.null_count() > 0 {
+                        apply_null_mask(result, build_indices)?
                     } else {
                         result
                     }
-                } else {
-                    result
                 }
-            } else {
-                // All build indices are null (outer join with no matches)
-                // Use the build batch schema to get the correct data type
-                // (column_index.index refers to the build batch columns, not the output schema)
-                let data_type = if let Some(b) = build_batches.first() {
-                    b.column(column_index.index).data_type().clone()
-                } else {
-                    // No build batches available (empty build side in CollectLeft mode).
-                    // Use the output schema field at the current column position.
-                    schema.field(columns.len()).data_type().clone()
-                };
-                new_null_array(&data_type, build_indices.len())
+                BuildGather::AllNull => {
+                    // All build indices are null (outer join with no matches)
+                    // Use the build batch schema to get the correct data type
+                    // (column_index.index refers to the build batch columns, not the output schema)
+                    let data_type = if let Some(b) = build_batches.first() {
+                        b.column(column_index.index).data_type().clone()
+                    } else {
+                        // No build batches available (empty build side in CollectLeft mode).
+                        // Use the output schema field at the current column position.
+                        schema.field(columns.len()).data_type().clone()
+                    };
+                    new_null_array(&data_type, build_indices.len())
+                }
             }
         } else {
             let array = probe_batch.column(column_index.index);
@@ -1879,7 +1913,9 @@ pub(super) fn equal_rows_arr(
 
     let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
 
-    for (key_idx, right_key_array) in right_arrays.iter().enumerate().take(num_keys).skip(1) {
+    for (key_idx, right_key_array) in
+        right_arrays.iter().enumerate().take(num_keys).skip(1)
+    {
         let arr_left = gather_left_key(key_idx)?;
         let arr_right = take(right_key_array.as_ref(), indices_right, None)?;
         let eq_result =
