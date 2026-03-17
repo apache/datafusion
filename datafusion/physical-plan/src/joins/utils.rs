@@ -41,9 +41,9 @@ pub use crate::joins::{JoinOn, JoinOnRef};
 
 use ahash::RandomState;
 use arrow::array::{
-    Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
-    RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
-    builder::UInt64Builder, downcast_array, new_null_array,
+    Array, ArrayAccessor, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter,
+    PrimitiveArray, RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder,
+    UInt64Array, builder::UInt64Builder, downcast_array, new_null_array,
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -54,7 +54,7 @@ use arrow::array::{
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{self, FilterBuilder, and, take};
+use arrow::compute::{self, FilterBuilder, take};
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
@@ -1866,54 +1866,77 @@ pub(super) fn equal_rows_arr(
         return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
     }
 
+    let num_rows = indices_left.len();
     let num_keys = right_arrays.len();
+    let left_indices = indices_left.values();
+    let right_indices = indices_right.values();
 
-    // Gather left-side key values using packed indices
-    let gather_left_key = |key_idx: usize| -> Result<ArrayRef> {
-        if left_arrays_per_batch.len() == 1 {
-            // Single batch: packed value == row index (batch_idx is 0),
-            // so we can use take directly with UInt32 indices.
-            let row_indices: UInt32Array =
-                indices_left.values().iter().map(|&v| v as u32).collect();
-            Ok(take(
-                left_arrays_per_batch[0][key_idx].as_ref(),
-                &row_indices,
-                None,
-            )?)
-        } else {
-            // Multiple batches: decode packed indices and use interleave
-            let arrays: Vec<&dyn Array> = left_arrays_per_batch
-                .iter()
-                .map(|batch_keys| batch_keys[key_idx].as_ref())
-                .collect();
-            let il_indices: Vec<(usize, usize)> = indices_left
-                .values()
-                .iter()
-                .map(|&packed| {
-                    let batch_idx = (packed >> 32) as usize;
-                    let row_idx = (packed & 0xFFFFFFFF) as usize;
-                    (batch_idx, row_idx)
-                })
-                .collect();
-            Ok(compute::interleave(&arrays, &il_indices)?)
+    // Build a mutable bitmap: start all-true, clear bits where keys don't match.
+    // This avoids allocating intermediate arrays via take+eq+and per key column.
+    let mut equal_bits = BooleanBufferBuilder::new(num_rows);
+    equal_bits.append_n(num_rows, true);
+
+    let single_batch = left_arrays_per_batch.len() == 1;
+
+    for key_idx in 0..num_keys {
+        let right_array = &right_arrays[key_idx];
+
+        // For single-batch builds, try element-wise comparison which avoids
+        // allocating intermediate arrays via take+eq per key column.
+        // Falls back to take+eq for nested/unsupported types or multi-batch.
+        let handled = single_batch
+            && compare_rows_elementwise(
+                &mut equal_bits,
+                left_indices,
+                right_indices,
+                &left_arrays_per_batch[0][key_idx],
+                right_array,
+                null_equality,
+                |packed| packed as usize,
+            );
+
+        if !handled {
+            // Fallback: materialize via take/interleave, then eq
+            let arr_left = if single_batch {
+                let row_indices: UInt32Array =
+                    left_indices.iter().map(|&v| v as u32).collect();
+                take(
+                    left_arrays_per_batch[0][key_idx].as_ref(),
+                    &row_indices,
+                    None,
+                )?
+            } else {
+                let arrays: Vec<&dyn Array> = left_arrays_per_batch
+                    .iter()
+                    .map(|batch_keys| batch_keys[key_idx].as_ref())
+                    .collect();
+                let il_indices: Vec<(usize, usize)> = left_indices
+                    .iter()
+                    .map(|&packed| {
+                        let batch_idx = (packed >> 32) as usize;
+                        let row_idx = (packed & 0xFFFFFFFF) as usize;
+                        (batch_idx, row_idx)
+                    })
+                    .collect();
+                compute::interleave(&arrays, &il_indices)?
+            };
+            let arr_right = take(right_array.as_ref(), indices_right, None)?;
+            let eq_result = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
+            // AND the result into our mutable bitmap.
+            // Null positions in eq_result are treated as "not equal".
+            let eq_values = eq_result.values();
+            let eq_nulls = eq_result.nulls();
+            for i in 0..num_rows {
+                if equal_bits.get_bit(i)
+                    && (!eq_values.value(i) || eq_nulls.is_some_and(|n| !n.is_valid(i)))
+                {
+                    equal_bits.set_bit(i, false);
+                }
+            }
         }
-    };
-
-    let arr_left = gather_left_key(0)?;
-    let arr_right = take(right_arrays[0].as_ref(), indices_right, None)?;
-
-    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
-
-    for (key_idx, right_key_array) in
-        right_arrays.iter().enumerate().take(num_keys).skip(1)
-    {
-        let arr_left = gather_left_key(key_idx)?;
-        let arr_right = take(right_key_array.as_ref(), indices_right, None)?;
-        let eq_result =
-            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equality)?;
-        equal = and(&equal, &eq_result)?;
     }
 
+    let equal = BooleanArray::new(equal_bits.finish(), None);
     let filter_builder = FilterBuilder::new(&equal).optimize().build();
 
     let left_filtered = filter_builder.filter(indices_left)?;
@@ -1923,6 +1946,139 @@ pub(super) fn equal_rows_arr(
         downcast_array(left_filtered.as_ref()),
         downcast_array(right_filtered.as_ref()),
     ))
+}
+
+/// Compare rows element-wise without materializing intermediate arrays.
+/// Returns `true` if the comparison was handled, `false` if fallback is needed.
+///
+/// Clears bits in `equal_bits` where the left and right values at the
+/// indexed positions are not equal (respecting `null_equality`).
+fn compare_rows_elementwise(
+    equal_bits: &mut BooleanBufferBuilder,
+    left_indices: &[u64],
+    right_indices: &[u32],
+    left_array: &ArrayRef,
+    right_array: &ArrayRef,
+    null_equality: NullEquality,
+    left_index_to_row: impl Fn(u64) -> usize,
+) -> bool {
+    // Nested types need special comparison logic, fall back
+    if left_array.data_type().is_nested() {
+        return false;
+    }
+
+    macro_rules! compare_elementwise {
+        ($array_type:ty) => {{
+            let left = left_array.as_any().downcast_ref::<$array_type>().unwrap();
+            let right = right_array.as_any().downcast_ref::<$array_type>().unwrap();
+            do_compare_elementwise(
+                equal_bits,
+                left_indices,
+                right_indices,
+                &left,
+                &right,
+                null_equality,
+                &left_index_to_row,
+            );
+        }};
+    }
+
+    match left_array.data_type() {
+        DataType::Null => {
+            match null_equality {
+                NullEquality::NullEqualsNothing => {
+                    // null != null, clear all bits
+                    for i in 0..left_indices.len() {
+                        equal_bits.set_bit(i, false);
+                    }
+                }
+                NullEquality::NullEqualsNull => {} // null == null, keep bits
+            }
+        }
+        DataType::Boolean => compare_elementwise!(BooleanArray),
+        DataType::Int8 => compare_elementwise!(Int8Array),
+        DataType::Int16 => compare_elementwise!(Int16Array),
+        DataType::Int32 => compare_elementwise!(Int32Array),
+        DataType::Int64 => compare_elementwise!(Int64Array),
+        DataType::UInt8 => compare_elementwise!(UInt8Array),
+        DataType::UInt16 => compare_elementwise!(UInt16Array),
+        DataType::UInt32 => compare_elementwise!(UInt32Array),
+        DataType::UInt64 => compare_elementwise!(UInt64Array),
+        DataType::Float32 => compare_elementwise!(Float32Array),
+        DataType::Float64 => compare_elementwise!(Float64Array),
+        DataType::Binary => compare_elementwise!(BinaryArray),
+        DataType::BinaryView => compare_elementwise!(BinaryViewArray),
+        DataType::FixedSizeBinary(_) => compare_elementwise!(FixedSizeBinaryArray),
+        DataType::LargeBinary => compare_elementwise!(LargeBinaryArray),
+        DataType::Utf8 => compare_elementwise!(StringArray),
+        DataType::Utf8View => compare_elementwise!(StringViewArray),
+        DataType::LargeUtf8 => compare_elementwise!(LargeStringArray),
+        DataType::Decimal128(..) => compare_elementwise!(Decimal128Array),
+        DataType::Timestamp(time_unit, None) => match time_unit {
+            TimeUnit::Second => compare_elementwise!(TimestampSecondArray),
+            TimeUnit::Millisecond => compare_elementwise!(TimestampMillisecondArray),
+            TimeUnit::Microsecond => compare_elementwise!(TimestampMicrosecondArray),
+            TimeUnit::Nanosecond => compare_elementwise!(TimestampNanosecondArray),
+        },
+        DataType::Date32 => compare_elementwise!(Date32Array),
+        DataType::Date64 => compare_elementwise!(Date64Array),
+        _ => return false, // Unsupported type, use fallback
+    }
+    true
+}
+
+/// Inner loop for element-wise comparison. Generic over array type via `ArrayAccessor`.
+/// Compares `left.value(left_index_to_row(left_indices[i]))` against
+/// `right.value(right_indices[i])` for each row, clearing bits that don't match.
+fn do_compare_elementwise<A: ArrayAccessor>(
+    equal_bits: &mut BooleanBufferBuilder,
+    left_indices: &[u64],
+    right_indices: &[u32],
+    left: &A,
+    right: &A,
+    null_equality: NullEquality,
+    left_index_to_row: &dyn Fn(u64) -> usize,
+) where
+    A::Item: PartialEq,
+{
+    let left_nulls = left.nulls();
+    let right_nulls = right.nulls();
+    let has_nulls = left.null_count() > 0 || right.null_count() > 0;
+
+    let num_rows = left_indices.len();
+
+    if !has_nulls {
+        // Fast path: no nulls, just compare values directly
+        for i in 0..num_rows {
+            if !equal_bits.get_bit(i) {
+                continue;
+            }
+            let l_idx = left_index_to_row(left_indices[i]);
+            let r_idx = right_indices[i] as usize;
+            if left.value(l_idx) != right.value(r_idx) {
+                equal_bits.set_bit(i, false);
+            }
+        }
+    } else {
+        for i in 0..num_rows {
+            if !equal_bits.get_bit(i) {
+                continue;
+            }
+            let l_idx = left_index_to_row(left_indices[i]);
+            let r_idx = right_indices[i] as usize;
+            let l_null = left_nulls.is_some_and(|nulls| !nulls.is_valid(l_idx));
+            let r_null = right_nulls.is_some_and(|nulls| !nulls.is_valid(r_idx));
+
+            let is_equal = match (l_null, r_null) {
+                (true, true) => null_equality == NullEquality::NullEqualsNull,
+                (true, false) | (false, true) => false,
+                (false, false) => left.value(l_idx) == right.value(r_idx),
+            };
+            if !is_equal {
+                equal_bits.set_bit(i, false);
+            }
+        }
+    }
 }
 
 // version of eq_dyn supporting equality on null arrays
