@@ -238,11 +238,11 @@ macro_rules! width_bucket_kernel_impl {
                         continue;
                     }
                 };
-                if matches!(ord, std::cmp::Ordering::Equal) {
+                if ord == std::cmp::Ordering::Equal {
                     b.append_null();
                     continue;
                 }
-                let asc = matches!(ord, std::cmp::Ordering::Less);
+                let asc = ord == std::cmp::Ordering::Less;
 
                 if asc {
                     if x < l {

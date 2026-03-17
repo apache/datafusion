@@ -46,6 +46,7 @@ use crate::projection::{
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    check_if_same_properties,
 };
 
 use arrow::array::{
@@ -60,6 +61,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, Result, ScalarValue, Statistics, arrow_err, assert_eq_or_internal_err,
     internal_datafusion_err, internal_err, project_schema, unwrap_or_internal_err,
@@ -198,7 +200,7 @@ pub struct NestedLoopJoinExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 /// Helps to build [`NestedLoopJoinExec`].
@@ -276,7 +278,7 @@ impl NestedLoopJoinExecBuilder {
             column_indices,
             projection,
             metrics: Default::default(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 }
@@ -462,6 +464,27 @@ impl NestedLoopJoinExec {
 
         Ok(plan)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            build_side_data: Default::default(),
+            cache: Arc::clone(&self.cache),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            column_indices: self.column_indices.clone(),
+            projection: self.projection.clone(),
+        }
+    }
 }
 
 impl DisplayAs for NestedLoopJoinExec {
@@ -516,7 +539,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -535,10 +558,22 @@ impl ExecutionPlan for NestedLoopJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join filter expressions if present
+        if let Some(filter) = &self.filter {
+            f(filter.expression().as_ref())?;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(
             NestedLoopJoinExecBuilder::new(
                 Arc::clone(&children[0]),
@@ -611,7 +646,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // NestedLoopJoinExec is designed for joins without equijoin keys in the
         // ON clause (e.g., `t1 JOIN t2 ON (t1.v1 + t2.v1) % 2 = 0`). Any join
         // predicates are stored in `self.filter`, but `estimate_join_statistics`
@@ -625,11 +660,11 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // so we always request overall stats with `None`. Right side can have
         // multiple partitions, so we forward the partition parameter to get
         // partition-specific statistics when requested.
-        let left_stats = self.left.partition_statistics(None)?;
-        let right_stats = match partition {
+        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
+        let right_stats = Arc::unwrap_or_clone(match partition {
             Some(partition) => self.right.partition_statistics(Some(partition))?,
             None => self.right.partition_statistics(None)?,
-        };
+        });
 
         let stats = estimate_join_statistics(
             left_stats,
@@ -639,7 +674,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             &self.join_schema,
         )?;
 
-        Ok(stats.project(self.projection.as_ref()))
+        Ok(Arc::new(stats.project(self.projection.as_ref())))
     }
 
     /// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
@@ -2011,9 +2046,10 @@ fn build_row_join_batch(
             // Broadcast the single build-side row to match the filtered
             // probe-side batch length
             let original_left_array = build_side_batch.column(column_index.index);
-            // Avoid using `ScalarValue::to_array_of_size()` for `List(Utf8View)` to avoid
-            // deep copies for buffers inside `Utf8View` array. See below for details.
-            // https://github.com/apache/datafusion/issues/18159
+
+            // Use `arrow::compute::take` directly for `List(Utf8View)` rather
+            // than going through `ScalarValue::to_array_of_size()`, which
+            // avoids some intermediate allocations.
             //
             // In other cases, `to_array_of_size()` is faster.
             match original_left_array.data_type() {

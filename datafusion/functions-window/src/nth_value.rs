@@ -45,6 +45,7 @@ define_udwf_and_expr!(
     First,
     first_value,
     [arg],
+    first_value_udwf,
     "Returns the first value in the window frame",
     NthValue::first
 );
@@ -52,12 +53,14 @@ define_udwf_and_expr!(
     Last,
     last_value,
     [arg],
+    last_value_udwf,
     "Returns the last value in the window frame",
     NthValue::last
 );
 get_or_init_udwf!(
     NthValue,
     nth_value,
+    nth_value_udwf,
     "Returns the nth value in the window frame",
     NthValue::nth
 );
@@ -269,7 +272,7 @@ impl WindowUDFImpl for NthValue {
             kind: self.kind,
         };
 
-        if !matches!(self.kind, NthValueKind::Nth) {
+        if self.kind != NthValueKind::Nth {
             return Ok(Box::new(NthValueEvaluator {
                 state,
                 ignore_nulls: partition_evaluator_args.ignore_nulls(),

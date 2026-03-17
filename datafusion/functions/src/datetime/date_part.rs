@@ -20,7 +20,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
-use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
+use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{
@@ -28,10 +28,11 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Field, FieldRef, IntervalUnit as ArrowIntervalUnit,
-    TimeUnit,
+    ArrowTimestampType, DataType, Date32Type, Date64Type, Field, FieldRef,
+    IntervalUnit as ArrowIntervalUnit, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, NaiveDate};
 use datafusion_common::types::{NativeType, logical_date};
 
 use datafusion_common::{
@@ -167,6 +168,9 @@ impl ScalarUDFImpl for DatePartFunc {
                     .map(|part| {
                         if is_epoch(part) {
                             Field::new(self.name(), DataType::Float64, nullable)
+                        } else if is_nanosecond(part) {
+                            // See notes on [seconds_ns] for rationale
+                            Field::new(self.name(), DataType::Int64, nullable)
                         } else {
                             Field::new(self.name(), DataType::Int32, nullable)
                         }
@@ -218,7 +222,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 IntervalUnit::Second => seconds_as_i32(array.as_ref(), Second)?,
                 IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
                 IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
-                IntervalUnit::Nanosecond => seconds_as_i32(array.as_ref(), Nanosecond)?,
+                IntervalUnit::Nanosecond => seconds_ns(array.as_ref())?,
                 // century and decade are not supported by `DatePart`, although they are supported in postgres
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
@@ -321,6 +325,12 @@ fn is_epoch(part: &str) -> bool {
     matches!(part.to_lowercase().as_str(), "epoch")
 }
 
+fn is_nanosecond(part: &str) -> bool {
+    IntervalUnit::from_str(part_normalization(part))
+        .map(|p| matches!(p, IntervalUnit::Nanosecond))
+        .unwrap_or(false)
+}
+
 fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
     Some(match target_type {
         Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
@@ -328,37 +338,32 @@ fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue
 
         Timestamp(unit, tz_opt) => {
             let naive_midnight = date.and_hms_opt(0, 0, 0)?;
-
-            let utc_dt = if let Some(tz_str) = tz_opt {
-                let tz: Tz = tz_str.parse().ok()?;
-
-                let local = tz.from_local_datetime(&naive_midnight);
-
-                let local_dt = match local {
-                    chrono::offset::LocalResult::Single(dt) => dt,
-                    chrono::offset::LocalResult::Ambiguous(dt1, _dt2) => dt1,
-                    chrono::offset::LocalResult::None => local.earliest()?,
-                };
-
-                local_dt.with_timezone(&Utc)
-            } else {
-                Utc.from_utc_datetime(&naive_midnight)
-            };
+            let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
 
             match unit {
-                Second => {
-                    ScalarValue::TimestampSecond(Some(utc_dt.timestamp()), tz_opt.clone())
-                }
+                Second => ScalarValue::TimestampSecond(
+                    TimestampSecondType::from_naive_datetime(naive_midnight, tz.as_ref()),
+                    tz_opt.clone(),
+                ),
                 Millisecond => ScalarValue::TimestampMillisecond(
-                    Some(utc_dt.timestamp_millis()),
+                    TimestampMillisecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
                     tz_opt.clone(),
                 ),
                 Microsecond => ScalarValue::TimestampMicrosecond(
-                    Some(utc_dt.timestamp_micros()),
+                    TimestampMicrosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
                     tz_opt.clone(),
                 ),
                 Nanosecond => ScalarValue::TimestampNanosecond(
-                    Some(utc_dt.timestamp_nanos_opt()?),
+                    TimestampNanosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
                     tz_opt.clone(),
                 ),
             }
@@ -516,4 +521,40 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
+}
+
+/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
+/// result to a total number of nanoseconds as an Int64 array.
+///
+/// This returns an Int64 rather than Int32 because  there 1 billion
+/// `nanosecond`s in each second, so representing up to 60 seconds as
+/// nanoseconds can be values up to 60 billion, which does not fit in Int32.
+fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
+    let secs = date_part(array, DatePart::Second)?;
+    // This assumes array is primitive and not a dictionary
+    let secs = as_int32_array(secs.as_ref())?;
+    let subsecs = date_part(array, DatePart::Nanosecond)?;
+    let subsecs = as_int32_array(subsecs.as_ref())?;
+
+    // Special case where there are no nulls.
+    if subsecs.null_count() == 0 {
+        let r: Int64Array = binary(secs, subsecs, |secs, subsecs| {
+            (secs as i64) * 1_000_000_000 + (subsecs as i64)
+        })?;
+        Ok(Arc::new(r))
+    } else {
+        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
+        // where the number of nanoseconds overflows.
+        let r: Int64Array = secs
+            .iter()
+            .zip(subsecs)
+            .map(|(secs, subsecs)| {
+                secs.map(|secs| {
+                    let subsecs = subsecs.unwrap_or(0);
+                    (secs as i64) * 1_000_000_000 + (subsecs as i64)
+                })
+            })
+            .collect();
+        Ok(Arc::new(r))
+    }
 }

@@ -40,7 +40,7 @@ const NUM_BATCHES: usize = 128;
 /// The number of rows in each record batch to write
 const WRITE_RECORD_BATCH_SIZE: usize = 4096;
 /// The number of rows in a row group
-const ROW_GROUP_SIZE: usize = 65536;
+const ROW_GROUP_ROW_COUNT: usize = 65536;
 /// The number of row groups expected
 const EXPECTED_ROW_GROUPS: usize = 8;
 /// The range for random string lengths
@@ -114,7 +114,7 @@ fn generate_file() -> NamedTempFile {
 
     let properties = WriterProperties::builder()
         .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_max_row_group_size(ROW_GROUP_SIZE)
+        .set_max_row_group_row_count(Some(ROW_GROUP_ROW_COUNT))
         .build();
 
     let mut writer =

@@ -34,7 +34,7 @@ use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::logical_expr::expr::{SetComparison, SetQuantifier};
+use datafusion::logical_expr::expr::{Exists, SetComparison, SetQuantifier};
 use datafusion::logical_expr::{
     EmptyRelation, Extension, InvariantLevel, LogicalPlan, Operator, PartitionEvaluator,
     Repartition, Subquery, UserDefinedLogicalNode, Values, Volatility,
@@ -714,6 +714,37 @@ async fn roundtrip_set_comparison_all_substrait() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_scalar_subquery_substrait() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = build_scalar_subquery_projection_plan(&ctx).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_root_project_has_scalar_subquery(proto.as_ref());
+    let roundtrip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_projection_contains_scalar_subquery(&roundtrip_plan);
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_exists_substrait() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = build_exists_filter_plan(&ctx, false).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let roundtrip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_exists_predicate(&roundtrip_plan, false);
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_not_exists_substrait() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = build_exists_filter_plan(&ctx, true).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let roundtrip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_exists_predicate(&roundtrip_plan, true);
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_not_exists_filter_left_anti_join() -> Result<()> {
     let plan = generate_plan_from_sql(
         "SELECT ba.isbn, ba.author FROM book_author ba WHERE NOT EXISTS (SELECT 1 FROM book b WHERE b.isbn = ba.isbn)",
@@ -813,17 +844,50 @@ async fn roundtrip_outer_join() -> Result<()> {
 async fn roundtrip_self_join() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
-    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
-    roundtrip("SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.a = right.a").await?;
-    roundtrip("SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.b = right.b").await
+    // The improved NameTracker now adds __temp__0 suffix to handle naming conflicts.
+    // We verify semantic equivalence rather than exact string match.
+    let ctx = create_context().await?;
+    let sql = "SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.a = right.a";
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+
+    // Verify schemas are equivalent
+    assert_eq!(plan.schema(), plan2.schema());
+
+    // Execute to ensure plan validity
+    DataFrame::new(ctx.state(), plan2).show().await?;
+
+    // Test second variant
+    let sql2 = "SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.b = right.b";
+    let df2 = ctx.sql(sql2).await?;
+    let plan3 = df2.into_optimized_plan()?;
+    let plan4 = substrait_roundtrip(&plan3, &ctx).await?;
+    assert_eq!(plan3.schema(), plan4.schema());
+    DataFrame::new(ctx.state(), plan4).show().await?;
+
+    Ok(())
 }
 
 #[tokio::test]
 async fn roundtrip_self_implicit_cross_join() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
-    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
-    roundtrip("SELECT left.a left_a, left.b, right.a right_a, right.c FROM data AS left, data AS right").await
+    // The improved NameTracker now adds __temp__0 suffix to handle naming conflicts.
+    // We verify semantic equivalence rather than exact string match.
+    let ctx = create_context().await?;
+    let sql = "SELECT left.a left_a, left.b, right.a right_a, right.c FROM data AS left, data AS right";
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+
+    // Verify schemas are equivalent
+    assert_eq!(plan.schema(), plan2.schema());
+
+    // Execute to ensure plan validity
+    DataFrame::new(ctx.state(), plan2).show().await?;
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -1480,16 +1544,26 @@ async fn roundtrip_values_empty_relation() -> Result<()> {
 async fn roundtrip_values_duplicate_column_join() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
-    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
-    roundtrip(
-        "SELECT left.column1 as c1, right.column1 as c2 \
+    // The improved NameTracker now adds __temp__0 suffix to handle naming conflicts.
+    // We verify semantic equivalence rather than exact string match.
+    let ctx = create_context().await?;
+    let sql = "SELECT left.column1 as c1, right.column1 as c2 \
     FROM \
         (VALUES (1)) AS left \
     JOIN \
         (VALUES (2)) AS right \
-    ON left.column1 == right.column1",
-    )
-    .await
+    ON left.column1 == right.column1";
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+
+    // Verify schemas are equivalent
+    assert_eq!(plan.schema(), plan2.schema());
+
+    // Execute to ensure plan validity
+    DataFrame::new(ctx.state(), plan2).show().await?;
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -1916,6 +1990,56 @@ async fn build_set_comparison_plan(
         .build()
 }
 
+async fn build_scalar_subquery_projection_plan(
+    ctx: &SessionContext,
+) -> Result<LogicalPlan> {
+    let subquery_scan = ctx.table("data2").await?.into_unoptimized_plan();
+    let subquery_plan = LogicalPlanBuilder::from(subquery_scan)
+        .project(vec![col("a")])?
+        .limit(0, Some(1))?
+        .build()?;
+
+    let scalar_subquery = Expr::ScalarSubquery(Subquery {
+        subquery: Arc::new(subquery_plan),
+        outer_ref_columns: vec![],
+        spans: Spans::new(),
+    });
+
+    let outer_empty_relation = LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: true,
+        schema: DFSchemaRef::new(DFSchema::empty()),
+    });
+
+    LogicalPlanBuilder::from(outer_empty_relation)
+        .project(vec![scalar_subquery.alias("sq")])?
+        .build()
+}
+
+async fn build_exists_filter_plan(
+    ctx: &SessionContext,
+    negated: bool,
+) -> Result<LogicalPlan> {
+    let base_scan = ctx.table("data").await?.into_unoptimized_plan();
+    let subquery_scan = ctx.table("data2").await?.into_unoptimized_plan();
+    let subquery_plan = LogicalPlanBuilder::from(subquery_scan)
+        .project(vec![col("data2.a")])?
+        .build()?;
+
+    let predicate = Expr::Exists(Exists::new(
+        Subquery {
+            subquery: Arc::new(subquery_plan),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        },
+        negated,
+    ));
+
+    LogicalPlanBuilder::from(base_scan)
+        .filter(predicate)?
+        .project(vec![col("data.a")])?
+        .build()
+}
+
 fn assert_set_comparison_predicate(
     plan: &LogicalPlan,
     expected_op: Operator,
@@ -1936,6 +2060,88 @@ fn assert_set_comparison_predicate(
             assert_eq!(set_comparison.quantifier, expected_quantifier);
         }
         other => panic!("expected SetComparison predicate, got {other:?}"),
+    }
+}
+
+fn assert_root_project_has_scalar_subquery(proto: &Plan) {
+    let relation = proto
+        .relations
+        .first()
+        .expect("expected Substrait plan to have at least one relation");
+
+    let root = match relation.rel_type.as_ref() {
+        Some(plan_rel::RelType::Root(root)) => root,
+        other => panic!("expected root relation, got {other:?}"),
+    };
+
+    let input = root.input.as_ref().expect("expected root input relation");
+    let project = match input.rel_type.as_ref() {
+        Some(RelType::Project(project)) => project,
+        other => panic!("expected Project relation at root input, got {other:?}"),
+    };
+
+    let expr = project
+        .expressions
+        .first()
+        .expect("expected at least one project expression");
+    let subquery = match expr.rex_type.as_ref() {
+        Some(substrait::proto::expression::RexType::Subquery(subquery)) => subquery,
+        other => panic!("expected Subquery expression, got {other:?}"),
+    };
+
+    assert!(
+        matches!(
+            subquery.subquery_type.as_ref(),
+            Some(substrait::proto::expression::subquery::SubqueryType::Scalar(_))
+        ),
+        "expected scalar subquery type"
+    );
+}
+
+fn assert_projection_contains_scalar_subquery(plan: &LogicalPlan) {
+    let projection = match plan {
+        LogicalPlan::Projection(projection) => projection,
+        other => panic!("expected Projection plan, got {other:?}"),
+    };
+
+    let found_scalar_subquery = projection.expr.iter().any(expr_contains_scalar_subquery);
+    assert!(
+        found_scalar_subquery,
+        "expected Projection to contain ScalarSubquery expression"
+    );
+}
+
+fn expr_contains_scalar_subquery(expr: &Expr) -> bool {
+    match expr {
+        Expr::ScalarSubquery(_) => true,
+        Expr::Alias(alias) => expr_contains_scalar_subquery(alias.expr.as_ref()),
+        _ => false,
+    }
+}
+
+fn assert_exists_predicate(plan: &LogicalPlan, expected_negated: bool) {
+    let predicate = match plan {
+        LogicalPlan::Projection(projection) => match projection.input.as_ref() {
+            LogicalPlan::Filter(filter) => &filter.predicate,
+            other => panic!("expected Filter inside Projection, got {other:?}"),
+        },
+        LogicalPlan::Filter(filter) => &filter.predicate,
+        other => panic!("expected Filter plan, got {other:?}"),
+    };
+
+    if expected_negated {
+        match predicate {
+            Expr::Not(inner) => match inner.as_ref() {
+                Expr::Exists(exists) => assert!(!exists.negated),
+                other => panic!("expected Exists inside NOT, got {other:?}"),
+            },
+            other => panic!("expected NOT EXISTS predicate, got {other:?}"),
+        }
+    } else {
+        match predicate {
+            Expr::Exists(exists) => assert!(!exists.negated),
+            other => panic!("expected EXISTS predicate, got {other:?}"),
+        }
     }
 }
 

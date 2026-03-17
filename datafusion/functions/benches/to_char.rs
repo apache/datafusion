@@ -18,13 +18,12 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Date32Array, StringArray};
+use arrow::array::{ArrayRef, Date32Array, Date64Array, StringArray};
 use arrow::datatypes::{DataType, Field};
 use chrono::TimeDelta;
 use chrono::prelude::*;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
-use datafusion_common::ScalarValue::TimestampNanosecond;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_char;
@@ -61,6 +60,26 @@ fn generate_date32_array(rng: &mut ThreadRng) -> Date32Array {
     }
 
     Date32Array::from(data)
+}
+
+fn generate_date64_array(rng: &mut ThreadRng) -> Date64Array {
+    let start_date = "1970-01-01"
+        .parse::<NaiveDate>()
+        .expect("Date should parse");
+    let end_date = "2050-12-31"
+        .parse::<NaiveDate>()
+        .expect("Date should parse");
+    let mut data: Vec<i64> = Vec::with_capacity(1000);
+    for _ in 0..1000 {
+        let date = pick_date_in_range(rng, start_date, end_date);
+        let millis = date
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        data.push(millis);
+    }
+    Date64Array::from(data)
 }
 
 const DATE_PATTERNS: [&str; 5] =
@@ -155,7 +174,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_char_array_datetime_patterns_1000", |b| {
         let mut rng = rand::rng();
-        let data_arr = generate_date32_array(&mut rng);
+        let data_arr = generate_date64_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns = ColumnarValue::Array(Arc::new(generate_datetime_pattern_array(
@@ -182,7 +201,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_char_array_mixed_patterns_1000", |b| {
         let mut rng = rand::rng();
-        let data_arr = generate_date32_array(&mut rng);
+        let data_arr = generate_date64_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns = ColumnarValue::Array(Arc::new(generate_mixed_pattern_array(
@@ -235,7 +254,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_char_scalar_datetime_pattern_1000", |b| {
         let mut rng = rand::rng();
-        let data_arr = generate_date32_array(&mut rng);
+        let data_arr = generate_date64_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns = ColumnarValue::Scalar(ScalarValue::Utf8(Some(
@@ -252,38 +271,6 @@ fn criterion_benchmark(c: &mut Criterion) {
                             Field::new("b", patterns.data_type(), true).into(),
                         ],
                         number_rows: batch_len,
-                        return_field: Field::new("f", DataType::Utf8, true).into(),
-                        config_options: Arc::clone(&config_options),
-                    })
-                    .expect("to_char should work on valid values"),
-            )
-        })
-    });
-
-    c.bench_function("to_char_scalar_1000", |b| {
-        let mut rng = rand::rng();
-        let timestamp = "2026-07-08T09:10:11"
-            .parse::<NaiveDateTime>()
-            .unwrap()
-            .with_nanosecond(56789)
-            .unwrap()
-            .and_utc()
-            .timestamp_nanos_opt()
-            .unwrap();
-        let data = ColumnarValue::Scalar(TimestampNanosecond(Some(timestamp), None));
-        let pattern =
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(pick_date_pattern(&mut rng))));
-
-        b.iter(|| {
-            black_box(
-                to_char()
-                    .invoke_with_args(ScalarFunctionArgs {
-                        args: vec![data.clone(), pattern.clone()],
-                        arg_fields: vec![
-                            Field::new("a", data.data_type(), true).into(),
-                            Field::new("b", pattern.data_type(), true).into(),
-                        ],
-                        number_rows: 1,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
                         config_options: Arc::clone(&config_options),
                     })

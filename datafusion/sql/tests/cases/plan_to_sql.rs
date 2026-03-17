@@ -1984,7 +1984,7 @@ fn test_complex_order_by_with_grouping() -> Result<()> {
     }, {
         assert_snapshot!(
             sql,
-            @r#"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string)) ORDER BY lochierarchy DESC NULLS FIRST, CASE WHEN (("grouping(j1.j1_id)" + "grouping(j1.j1_string)") = 0) THEN j1.j1_id END ASC NULLS LAST LIMIT 100"#
+            @"SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY lochierarchy DESC NULLS FIRST, CASE WHEN (lochierarchy = 0) THEN j1.j1_id END ASC NULLS LAST LIMIT 100"
         );
     });
 
@@ -2819,5 +2819,41 @@ fn test_struct_expr3() {
     assert_snapshot!(
         statement,
         @r#"SELECT test.c1."metadata".product."name" FROM (SELECT {"metadata": {product: {"name": 'Product Name'}}} AS c1) AS test"#
+    );
+}
+
+#[test]
+fn test_json_access_1() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT j1_string:field FROM j1"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT (j1.j1_string : 'field') FROM j1"#
+    );
+}
+
+#[test]
+fn test_json_access_2() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT j1_string:field[0] FROM j1"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT (j1.j1_string : 'field[0]') FROM j1"#
+    );
+}
+
+#[test]
+fn test_json_access_3() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT j1_string:field.inner1['inner2'] FROM j1"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT (j1.j1_string : 'field.inner1[''inner2'']') FROM j1"#
     );
 }

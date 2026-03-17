@@ -51,6 +51,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_array_has_strings(c);
     bench_array_has_all_strings(c);
     bench_array_has_any_strings(c);
+
+    // Benchmark for array_has_any with one scalar arg
+    bench_array_has_any_scalar(c);
 }
 
 fn bench_array_has(c: &mut Criterion, array_size: usize) {
@@ -183,22 +186,24 @@ fn bench_array_has_all(c: &mut Criterion, array_size: usize) {
     group.finish();
 }
 
+const SMALL_ARRAY_SIZE: usize = NEEDLE_SIZE;
+
 fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
     let mut group = c.benchmark_group("array_has_any");
-    let haystack = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
-    let list_type = haystack.data_type().clone();
+    let first_arr = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
+    let list_type = first_arr.data_type().clone();
     let config_options = Arc::new(ConfigOptions::default());
     let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
     let arg_fields: Vec<Arc<Field>> = vec![
-        Field::new("haystack", list_type.clone(), false).into(),
-        Field::new("needle", list_type.clone(), false).into(),
+        Field::new("first", list_type.clone(), false).into(),
+        Field::new("second", list_type.clone(), false).into(),
     ];
 
     // Benchmark: some elements match
-    let needle_match = create_int64_list_array(NUM_ROWS, NEEDLE_SIZE, 0.0);
+    let second_match = create_int64_list_array(NUM_ROWS, SMALL_ARRAY_SIZE, 0.0);
     let args_match = vec![
-        ColumnarValue::Array(haystack.clone()),
-        ColumnarValue::Array(needle_match),
+        ColumnarValue::Array(first_arr.clone()),
+        ColumnarValue::Array(second_match),
     ];
     group.bench_with_input(
         BenchmarkId::new("some_match", array_size),
@@ -221,11 +226,14 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
     );
 
     // Benchmark: no match
-    let needle_no_match =
-        create_int64_list_array_with_offset(NUM_ROWS, NEEDLE_SIZE, array_size as i64);
+    let second_no_match = create_int64_list_array_with_offset(
+        NUM_ROWS,
+        SMALL_ARRAY_SIZE,
+        array_size as i64,
+    );
     let args_no_match = vec![
-        ColumnarValue::Array(haystack.clone()),
-        ColumnarValue::Array(needle_no_match),
+        ColumnarValue::Array(first_arr.clone()),
+        ColumnarValue::Array(second_no_match),
     ];
     group.bench_with_input(
         BenchmarkId::new("no_match", array_size),
@@ -236,6 +244,59 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
                 black_box(
                     udf.invoke_with_args(ScalarFunctionArgs {
                         args: args_no_match.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        },
+    );
+
+    // Benchmark: scalar second arg, some match
+    let scalar_second_match = create_int64_scalar_list(SMALL_ARRAY_SIZE, 0);
+    let args_scalar_match = vec![
+        ColumnarValue::Array(first_arr.clone()),
+        ColumnarValue::Scalar(scalar_second_match),
+    ];
+    group.bench_with_input(
+        BenchmarkId::new("scalar_some_match", array_size),
+        &array_size,
+        |b, _| {
+            let udf = ArrayHasAny::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_scalar_match.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: NUM_ROWS,
+                        return_field: return_field.clone(),
+                        config_options: config_options.clone(),
+                    })
+                    .unwrap(),
+                )
+            })
+        },
+    );
+
+    // Benchmark: scalar second arg, no match
+    let scalar_second_no_match =
+        create_int64_scalar_list(SMALL_ARRAY_SIZE, array_size as i64);
+    let args_scalar_no_match = vec![
+        ColumnarValue::Array(first_arr.clone()),
+        ColumnarValue::Scalar(scalar_second_no_match),
+    ];
+    group.bench_with_input(
+        BenchmarkId::new("scalar_no_match", array_size),
+        &array_size,
+        |b, _| {
+            let udf = ArrayHasAny::new();
+            b.iter(|| {
+                black_box(
+                    udf.invoke_with_args(ScalarFunctionArgs {
+                        args: args_scalar_no_match.clone(),
                         arg_fields: arg_fields.clone(),
                         number_rows: NUM_ROWS,
                         return_field: return_field.clone(),
@@ -378,17 +439,17 @@ fn bench_array_has_any_strings(c: &mut Criterion) {
     let sizes = vec![10, 100, 500];
 
     for &size in &sizes {
-        let haystack = create_string_list_array(NUM_ROWS, size, NULL_DENSITY);
-        let list_type = haystack.data_type().clone();
+        let first_arr = create_string_list_array(NUM_ROWS, size, NULL_DENSITY);
+        let list_type = first_arr.data_type().clone();
         let arg_fields: Vec<Arc<Field>> = vec![
-            Field::new("haystack", list_type.clone(), false).into(),
-            Field::new("needle", list_type.clone(), false).into(),
+            Field::new("first", list_type.clone(), false).into(),
+            Field::new("second", list_type.clone(), false).into(),
         ];
 
-        let needle_match = create_string_list_array(NUM_ROWS, NEEDLE_SIZE, 0.0);
+        let second_match = create_string_list_array(NUM_ROWS, SMALL_ARRAY_SIZE, 0.0);
         let args_match = vec![
-            ColumnarValue::Array(haystack.clone()),
-            ColumnarValue::Array(needle_match),
+            ColumnarValue::Array(first_arr.clone()),
+            ColumnarValue::Array(second_match),
         ];
         group.bench_with_input(BenchmarkId::new("some_match", size), &size, |b, _| {
             let udf = ArrayHasAny::new();
@@ -406,11 +467,11 @@ fn bench_array_has_any_strings(c: &mut Criterion) {
             })
         });
 
-        let needle_no_match =
-            create_string_list_array_with_prefix(NUM_ROWS, NEEDLE_SIZE, "missing_");
+        let second_no_match =
+            create_string_list_array_with_prefix(NUM_ROWS, SMALL_ARRAY_SIZE, "missing_");
         let args_no_match = vec![
-            ColumnarValue::Array(haystack.clone()),
-            ColumnarValue::Array(needle_no_match),
+            ColumnarValue::Array(first_arr.clone()),
+            ColumnarValue::Array(second_no_match),
         ];
         group.bench_with_input(BenchmarkId::new("no_match", size), &size, |b, _| {
             let udf = ArrayHasAny::new();
@@ -427,6 +488,142 @@ fn bench_array_has_any_strings(c: &mut Criterion) {
                 )
             })
         });
+
+        // Benchmark: scalar second arg, some match
+        let scalar_second_match = create_string_scalar_list(SMALL_ARRAY_SIZE, "value_");
+        let args_scalar_match = vec![
+            ColumnarValue::Array(first_arr.clone()),
+            ColumnarValue::Scalar(scalar_second_match),
+        ];
+        group.bench_with_input(
+            BenchmarkId::new("scalar_some_match", size),
+            &size,
+            |b, _| {
+                let udf = ArrayHasAny::new();
+                b.iter(|| {
+                    black_box(
+                        udf.invoke_with_args(ScalarFunctionArgs {
+                            args: args_scalar_match.clone(),
+                            arg_fields: arg_fields.clone(),
+                            number_rows: NUM_ROWS,
+                            return_field: return_field.clone(),
+                            config_options: config_options.clone(),
+                        })
+                        .unwrap(),
+                    )
+                })
+            },
+        );
+
+        // Benchmark: scalar second arg, no match
+        let scalar_second_no_match =
+            create_string_scalar_list(SMALL_ARRAY_SIZE, "missing_");
+        let args_scalar_no_match = vec![
+            ColumnarValue::Array(first_arr.clone()),
+            ColumnarValue::Scalar(scalar_second_no_match),
+        ];
+        group.bench_with_input(
+            BenchmarkId::new("scalar_no_match", size),
+            &size,
+            |b, _| {
+                let udf = ArrayHasAny::new();
+                b.iter(|| {
+                    black_box(
+                        udf.invoke_with_args(ScalarFunctionArgs {
+                            args: args_scalar_no_match.clone(),
+                            arg_fields: arg_fields.clone(),
+                            number_rows: NUM_ROWS,
+                            return_field: return_field.clone(),
+                            config_options: config_options.clone(),
+                        })
+                        .unwrap(),
+                    )
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmarks array_has_any with one scalar arg.  Varies the scalar argument
+/// size while keeping the columnar array small (3 elements per row).
+fn bench_array_has_any_scalar(c: &mut Criterion) {
+    let mut group = c.benchmark_group("array_has_any_scalar");
+    let config_options = Arc::new(ConfigOptions::default());
+    let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
+
+    let array_size = 3;
+    let scalar_sizes = vec![1, 10, 100, 1000];
+
+    // i64 benchmarks
+    let first_arr_i64 = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
+    let list_type_i64 = first_arr_i64.data_type().clone();
+    let arg_fields_i64: Vec<Arc<Field>> = vec![
+        Field::new("first", list_type_i64.clone(), false).into(),
+        Field::new("second", list_type_i64.clone(), false).into(),
+    ];
+
+    for &scalar_size in &scalar_sizes {
+        let scalar_arg = create_int64_scalar_list(scalar_size, array_size as i64);
+        let args = vec![
+            ColumnarValue::Array(first_arr_i64.clone()),
+            ColumnarValue::Scalar(scalar_arg),
+        ];
+        group.bench_with_input(
+            BenchmarkId::new("i64_no_match", scalar_size),
+            &scalar_size,
+            |b, _| {
+                let udf = ArrayHasAny::new();
+                b.iter(|| {
+                    black_box(
+                        udf.invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            arg_fields: arg_fields_i64.clone(),
+                            number_rows: NUM_ROWS,
+                            return_field: return_field.clone(),
+                            config_options: config_options.clone(),
+                        })
+                        .unwrap(),
+                    )
+                })
+            },
+        );
+    }
+
+    // String benchmarks
+    let first_arr_str = create_string_list_array(NUM_ROWS, array_size, NULL_DENSITY);
+    let list_type_str = first_arr_str.data_type().clone();
+    let arg_fields_str: Vec<Arc<Field>> = vec![
+        Field::new("first", list_type_str.clone(), false).into(),
+        Field::new("second", list_type_str.clone(), false).into(),
+    ];
+
+    for &scalar_size in &scalar_sizes {
+        let scalar_arg = create_string_scalar_list(scalar_size, "missing_");
+        let args = vec![
+            ColumnarValue::Array(first_arr_str.clone()),
+            ColumnarValue::Scalar(scalar_arg),
+        ];
+        group.bench_with_input(
+            BenchmarkId::new("string_no_match", scalar_size),
+            &scalar_size,
+            |b, _| {
+                let udf = ArrayHasAny::new();
+                b.iter(|| {
+                    black_box(
+                        udf.invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            arg_fields: arg_fields_str.clone(),
+                            number_rows: NUM_ROWS,
+                            return_field: return_field.clone(),
+                            config_options: config_options.clone(),
+                        })
+                        .unwrap(),
+                    )
+                })
+            },
+        );
     }
 
     group.finish();
@@ -546,6 +743,38 @@ fn create_string_list_array_with_prefix(
         )
         .unwrap(),
     )
+}
+
+/// Create a `ScalarValue::List` containing a single list of `size` i64 elements,
+/// with values starting at `offset`.
+fn create_int64_scalar_list(size: usize, offset: i64) -> ScalarValue {
+    let values = (0..size as i64)
+        .map(|i| Some(i + offset))
+        .collect::<Int64Array>();
+    let list = ListArray::try_new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        OffsetBuffer::new(vec![0, size as i32].into()),
+        Arc::new(values),
+        None,
+    )
+    .unwrap();
+    ScalarValue::List(Arc::new(list))
+}
+
+/// Create a `ScalarValue::List` containing a single list of `size` string elements,
+/// with values like "{prefix}0", "{prefix}1", etc.
+fn create_string_scalar_list(size: usize, prefix: &str) -> ScalarValue {
+    let values = (0..size)
+        .map(|i| Some(format!("{prefix}{i}")))
+        .collect::<StringArray>();
+    let list = ListArray::try_new(
+        Arc::new(Field::new("item", DataType::Utf8, true)),
+        OffsetBuffer::new(vec![0, size as i32].into()),
+        Arc::new(values),
+        None,
+    )
+    .unwrap();
+    ScalarValue::List(Arc::new(list))
 }
 
 criterion_group!(benches, criterion_benchmark);

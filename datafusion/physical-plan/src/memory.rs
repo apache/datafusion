@@ -32,10 +32,11 @@ use crate::{
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::Stream;
@@ -161,7 +162,7 @@ pub struct LazyMemoryExec {
     /// Functions to generate batches for each partition
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -200,7 +201,8 @@ impl LazyMemoryExec {
             EmissionType::Incremental,
             boundedness,
         )
-        .with_scheduling_type(SchedulingType::Cooperative);
+        .with_scheduling_type(SchedulingType::Cooperative)
+        .into();
 
         Ok(Self {
             schema,
@@ -215,9 +217,9 @@ impl LazyMemoryExec {
         match projection.as_ref() {
             Some(columns) => {
                 let projected = Arc::new(self.schema.project(columns).unwrap());
-                self.cache = self.cache.with_eq_properties(EquivalenceProperties::new(
-                    Arc::clone(&projected),
-                ));
+                Arc::make_mut(&mut self.cache).set_eq_properties(
+                    EquivalenceProperties::new(Arc::clone(&projected)),
+                );
                 self.schema = projected;
                 self.projection = projection;
                 self
@@ -236,12 +238,12 @@ impl LazyMemoryExec {
             partition_count,
             generator_count
         );
-        self.cache.partitioning = partitioning;
+        Arc::make_mut(&mut self.cache).partitioning = partitioning;
         Ok(())
     }
 
     pub fn add_ordering(&mut self, ordering: impl IntoIterator<Item = PhysicalSortExpr>) {
-        self.cache
+        Arc::make_mut(&mut self.cache)
             .eq_properties
             .add_orderings(std::iter::once(ordering));
     }
@@ -306,12 +308,19 @@ impl ExecutionPlan for LazyMemoryExec {
         Arc::clone(&self.schema)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -361,7 +370,7 @@ impl ExecutionPlan for LazyMemoryExec {
         Ok(Arc::new(LazyMemoryExec {
             schema: Arc::clone(&self.schema),
             batch_generators: generators,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             metrics: ExecutionPlanMetricsSet::new(),
             projection: self.projection.clone(),
         }))

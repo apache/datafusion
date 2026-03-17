@@ -598,7 +598,7 @@ impl ConversionType {
     pub fn validate(&self, arg_type: &DataType) -> Result<()> {
         match self {
             ConversionType::BooleanLower | ConversionType::BooleanUpper => {
-                if !matches!(arg_type, DataType::Boolean) {
+                if *arg_type != DataType::Boolean {
                     return exec_err!(
                         "Invalid argument type for boolean conversion: {:?}",
                         arg_type

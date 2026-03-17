@@ -217,7 +217,7 @@ impl ScalarUDF {
         self.inner.return_field_from_args(args)
     }
 
-    /// Do the function rewrite
+    /// Returns this scalar function's simplification result.
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
     pub fn simplify(
@@ -261,7 +261,7 @@ impl ScalarUDF {
             let expected_type = return_field.data_type();
             assert_or_internal_err!(
                 result_data_type == *expected_type,
-                "Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
+                "Function '{}' returned value of type '{}' while the following type was promised at planning time and expected: '{}'",
                 self.name(),
                 result_data_type,
                 expected_type

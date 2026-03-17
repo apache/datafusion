@@ -517,7 +517,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         let all_keys_are_literals = args
             .iter()
             .skip(1)
-            .all(|p| matches!(p, ExpressionPlacement::Literal));
+            .all(|p| *p == ExpressionPlacement::Literal);
 
         if base_is_pushable && all_keys_are_literals {
             ExpressionPlacement::MoveTowardsLeafNodes

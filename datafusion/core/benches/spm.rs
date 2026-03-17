@@ -66,10 +66,9 @@ fn generate_spm_for_round_robin_tie_breaker(
         RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap()
     };
 
-    let rbs = (0..batch_count).map(|_| rb.clone()).collect::<Vec<_>>();
-    let partitions = vec![rbs.clone(); partition_count];
-
     let schema = rb.schema();
+    let rbs = std::iter::repeat_n(rb, batch_count).collect::<Vec<_>>();
+    let partitions = vec![rbs.clone(); partition_count];
     let sort = [
         PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),

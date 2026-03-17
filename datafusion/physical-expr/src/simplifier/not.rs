@@ -43,6 +43,10 @@ use crate::expressions::{BinaryExpr, InListExpr, Literal, NotExpr, in_list, lit}
 /// This function applies a single simplification rule and returns. When used with
 /// TreeNodeRewriter, multiple passes will automatically be applied until no more
 /// transformations are possible.
+#[deprecated(
+    since = "53.0.0",
+    note = "This function will be made private in a future release, please file an issue if you have a reason for keeping it public."
+)]
 pub fn simplify_not_expr(
     expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,

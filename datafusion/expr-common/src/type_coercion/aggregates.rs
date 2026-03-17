@@ -61,8 +61,7 @@ pub fn check_arg_count(
         TypeSignature::Uniform(agg_count, _) | TypeSignature::Any(agg_count) => {
             if input_fields.len() != *agg_count {
                 return plan_err!(
-                    "The function {func_name} expects {:?} arguments, but {:?} were provided",
-                    agg_count,
+                    "The function {func_name} expects {agg_count} arguments, but {} were provided",
                     input_fields.len()
                 );
             }
@@ -70,7 +69,7 @@ pub fn check_arg_count(
         TypeSignature::Exact(types) => {
             if types.len() != input_fields.len() {
                 return plan_err!(
-                    "The function {func_name} expects {:?} arguments, but {:?} were provided",
+                    "The function {func_name} expects {} arguments, but {} were provided",
                     types.len(),
                     input_fields.len()
                 );
@@ -82,7 +81,7 @@ pub fn check_arg_count(
                 .any(|v| check_arg_count(func_name, input_fields, v).is_ok());
             if !ok {
                 return plan_err!(
-                    "The function {func_name} does not accept {:?} function arguments.",
+                    "The function {func_name} does not accept {} function arguments.",
                     input_fields.len()
                 );
             }
@@ -101,9 +100,7 @@ pub fn check_arg_count(
             // Numeric and Coercible signature is validated in `get_valid_types`
         }
         _ => {
-            return internal_err!(
-                "Aggregate functions do not support this {signature:?}"
-            );
+            return internal_err!("Aggregate functions do not support this {signature}");
         }
     }
     Ok(())

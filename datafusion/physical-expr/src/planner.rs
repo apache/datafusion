@@ -25,7 +25,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err, plan_err,
 };
@@ -34,7 +34,7 @@ use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
-    Between, BinaryExpr, Expr, Like, Operator, TryCast, binary_expr, lit,
+    Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, TryCast, binary_expr, lit,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -288,16 +288,44 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast(Cast { expr, data_type }) => expressions::cast(
-            create_physical_expr(expr, input_dfschema, execution_props)?,
-            input_schema,
-            data_type.clone(),
-        ),
-        Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
-            create_physical_expr(expr, input_dfschema, execution_props)?,
-            input_schema,
-            data_type.clone(),
-        ),
+        Expr::Cast(Cast { expr, field }) => {
+            if !field.metadata().is_empty() {
+                let (_, src_field) = expr.to_field(input_dfschema)?;
+                return plan_err!(
+                    "Cast from {} to {} is not supported",
+                    format_type_and_metadata(
+                        src_field.data_type(),
+                        Some(src_field.metadata()),
+                    ),
+                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
+                );
+            }
+
+            expressions::cast(
+                create_physical_expr(expr, input_dfschema, execution_props)?,
+                input_schema,
+                field.data_type().clone(),
+            )
+        }
+        Expr::TryCast(TryCast { expr, field }) => {
+            if !field.metadata().is_empty() {
+                let (_, src_field) = expr.to_field(input_dfschema)?;
+                return plan_err!(
+                    "TryCast from {} to {} is not supported",
+                    format_type_and_metadata(
+                        src_field.data_type(),
+                        Some(src_field.metadata()),
+                    ),
+                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
+                );
+            }
+
+            expressions::try_cast(
+                create_physical_expr(expr, input_dfschema, execution_props)?,
+                input_schema,
+                field.data_type().clone(),
+            )
+        }
         Expr::Not(expr) => {
             expressions::not(create_physical_expr(expr, input_dfschema, execution_props)?)
         }
@@ -417,7 +445,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
-
+    use datafusion_common::datatype::DataTypeExt;
     use datafusion_expr::{Operator, col, lit};
 
     use super::*;
@@ -443,6 +471,41 @@ mod tests {
             &result,
             &(Arc::new(BooleanArray::from(vec![true, false, false, false,])) as ArrayRef)
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_to_extension_type() -> Result<()> {
+        let extension_field_type = Arc::new(
+            DataType::FixedSizeBinary(16)
+                .into_nullable_field()
+                .with_metadata(
+                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
+                        .into(),
+                ),
+        );
+        let expr = lit("3230e5d4-888e-408b-b09b-831f44aa0c58");
+        let cast_expr = Expr::Cast(Cast::new_from_field(
+            Box::new(expr.clone()),
+            Arc::clone(&extension_field_type),
+        ));
+        let err =
+            create_physical_expr(&cast_expr, &DFSchema::empty(), &ExecutionProps::new())
+                .unwrap_err();
+        assert!(err.message().contains("arrow.uuid"));
+
+        let try_cast_expr = Expr::TryCast(TryCast::new_from_field(
+            Box::new(expr.clone()),
+            Arc::clone(&extension_field_type),
+        ));
+        let err = create_physical_expr(
+            &try_cast_expr,
+            &DFSchema::empty(),
+            &ExecutionProps::new(),
+        )
+        .unwrap_err();
+        assert!(err.message().contains("arrow.uuid"));
 
         Ok(())
     }

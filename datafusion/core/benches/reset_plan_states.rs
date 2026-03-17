@@ -166,6 +166,8 @@ fn run_reset_states(b: &mut criterion::Bencher, plan: &Arc<dyn ExecutionPlan>) {
 /// making an independent instance of the execution plan to re-execute it, avoiding
 /// re-planning stage.
 fn bench_reset_plan_states(c: &mut Criterion) {
+    env_logger::init();
+
     let rt = Runtime::new().unwrap();
     let ctx = SessionContext::new();
     ctx.register_table(

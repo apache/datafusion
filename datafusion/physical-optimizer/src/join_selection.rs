@@ -34,7 +34,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -87,16 +87,18 @@ fn supports_collect_by_thresholds(
     threshold_byte_size: usize,
     threshold_num_rows: usize,
 ) -> bool {
-    // Currently we do not trust the 0 value from stats, due to stats collection might have bug
-    // TODO check the logic in datasource::get_statistics_with_limit()
     let Ok(stats) = plan.partition_statistics(None) else {
         return false;
     };
 
+    // Stats use `Precision<T>` to represent stats, where `Absent` means unknown.
+    // `Exact(0)` and `Inexact(0)` are both valid stats, and we should not treat
+    // them as unknown, `Absent` will return None (this is in regards to why
+    // `!=0` is not checked)
     if let Some(byte_size) = stats.total_byte_size.get_value() {
-        *byte_size != 0 && *byte_size < threshold_byte_size
+        *byte_size < threshold_byte_size
     } else if let Some(num_rows) = stats.num_rows.get_value() {
-        *num_rows != 0 && *num_rows < threshold_num_rows
+        *num_rows < threshold_num_rows
     } else {
         false
     }
@@ -192,14 +194,16 @@ pub(crate) fn try_collect_left(
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
             } else {
                 Ok(Some(Arc::new(
-                    HashJoinExecBuilder::from(hash_join)
+                    hash_join
+                        .builder()
                         .with_partition_mode(PartitionMode::CollectLeft)
                         .build()?,
                 )))
             }
         }
         (true, false) => Ok(Some(Arc::new(
-            HashJoinExecBuilder::from(hash_join)
+            hash_join
+                .builder()
                 .with_partition_mode(PartitionMode::CollectLeft)
                 .build()?,
         ))),
@@ -243,7 +247,8 @@ pub(crate) fn partitioned_hash_join(
         };
 
         Ok(Arc::new(
-            HashJoinExecBuilder::from(hash_join)
+            hash_join
+                .builder()
                 .with_partition_mode(partition_mode)
                 .build()?,
         ))

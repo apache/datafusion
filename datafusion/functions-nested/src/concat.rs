@@ -24,9 +24,9 @@ use crate::make_array::make_array_inner;
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
 use arrow::array::{
     Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData,
-    NullBufferBuilder, OffsetSizeTrait,
+    OffsetSizeTrait,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_common::utils::{
@@ -352,7 +352,7 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 }
 
-fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("array_concat expects at least one argument");
     }
@@ -396,58 +396,65 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .map(|arg| as_generic_list_array::<O>(arg))
         .collect::<Result<Vec<_>>>()?;
-    // Assume number of rows is the same for all arrays
     let row_count = list_arrays[0].len();
 
-    let mut array_lengths = vec![];
-    let mut arrays = vec![];
-    let mut valid = NullBufferBuilder::new(row_count);
-    for i in 0..row_count {
-        let nulls = list_arrays
-            .iter()
-            .map(|arr| arr.is_null(i))
-            .collect::<Vec<_>>();
+    // Extract underlying values ArrayData from each list array for MutableArrayData.
+    let values_data: Vec<ArrayData> =
+        list_arrays.iter().map(|la| la.values().to_data()).collect();
+    let values_data_refs: Vec<&ArrayData> = values_data.iter().collect();
 
-        // If all the arrays are null, the concatenated array is null
-        let is_null = nulls.iter().all(|&x| x);
-        if is_null {
-            array_lengths.push(0);
-            valid.append_null();
-        } else {
-            // Get all the arrays on i-th row
-            let values = list_arrays
-                .iter()
-                .map(|arr| arr.value(i))
-                .collect::<Vec<_>>();
+    // Estimate capacity as the sum of all values arrays' lengths.
+    let total_capacity: usize = values_data.iter().map(|d| d.len()).sum();
 
-            let elements = values
-                .iter()
-                .map(|a| a.as_ref())
-                .collect::<Vec<&dyn Array>>();
-
-            // Concatenated array on i-th row
-            let concatenated_array = arrow::compute::concat(elements.as_slice())?;
-            array_lengths.push(concatenated_array.len());
-            arrays.push(concatenated_array);
-            valid.append_non_null();
-        }
-    }
-    // Assume all arrays have the same data type
-    let data_type = list_arrays[0].value_type();
-
-    let elements = arrays
-        .iter()
-        .map(|a| a.as_ref())
-        .collect::<Vec<&dyn Array>>();
-
-    let list_arr = GenericListArray::<O>::new(
-        Arc::new(Field::new_list_field(data_type, true)),
-        OffsetBuffer::from_lengths(array_lengths),
-        Arc::new(arrow::compute::concat(elements.as_slice())?),
-        valid.finish(),
+    let mut mutable = MutableArrayData::with_capacities(
+        values_data_refs,
+        false,
+        Capacities::Array(total_capacity),
     );
+    let mut offsets: Vec<O> = Vec::with_capacity(row_count + 1);
+    offsets.push(O::zero());
 
-    Ok(Arc::new(list_arr))
+    // Compute the output null buffer: a row is null only if null in ALL input
+    // arrays. This is the bitwise OR of validity bits (valid if valid in ANY
+    // input). If any array has no null buffer (all valid), no output row can be
+    // null.
+    let nulls = list_arrays
+        .iter()
+        .filter_map(|la| la.nulls())
+        .collect::<Vec<_>>();
+    let valid = if nulls.len() == list_arrays.len() {
+        nulls
+            .iter()
+            .map(|n| n.inner().clone())
+            .reduce(|a, b| &a | &b)
+            .map(NullBuffer::new)
+    } else {
+        None
+    };
+
+    for row_idx in 0..row_count {
+        for (arr_idx, list_array) in list_arrays.iter().enumerate() {
+            if list_array.is_null(row_idx) {
+                continue;
+            }
+            let start = list_array.offsets()[row_idx].to_usize().unwrap();
+            let end = list_array.offsets()[row_idx + 1].to_usize().unwrap();
+            if start < end {
+                mutable.extend(arr_idx, start, end);
+            }
+        }
+        offsets.push(O::usize_as(mutable.len()));
+    }
+
+    let data_type = list_arrays[0].value_type();
+    let data = mutable.freeze();
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        Arc::new(Field::new_list_field(data_type, true)),
+        OffsetBuffer::new(offsets.into()),
+        arrow::array::make_array(data),
+        valid,
+    )?))
 }
 
 // Kernel functions
