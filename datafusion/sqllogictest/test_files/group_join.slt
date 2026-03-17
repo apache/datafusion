@@ -1,0 +1,122 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for GroupJoin optimization
+# (fusing GROUP BY + aggregation with INNER JOIN)
+
+# Setup test tables
+statement ok
+CREATE TABLE orders (order_id INT, customer_id INT) AS VALUES
+  (1, 10),
+  (2, 10),
+  (3, 20),
+  (4, 20);
+
+statement ok
+CREATE TABLE line_items (order_id INT, amount BIGINT) AS VALUES
+  (1, 100),
+  (1, 200),
+  (2, 300),
+  (3, 400),
+  (3, 500),
+  (3, 600),
+  (4, 700);
+
+# Verify GroupJoinExec appears in the physical plan
+query TT
+EXPLAIN SELECT o.customer_id, SUM(li.amount)
+FROM orders o
+JOIN line_items li ON o.order_id = li.order_id
+GROUP BY o.customer_id;
+----
+logical_plan
+01)Aggregate: groupBy=[[o.customer_id]], aggr=[[sum(li.amount)]]
+02)--Projection: o.customer_id, li.amount
+03)----Inner Join: o.order_id = li.order_id
+04)------SubqueryAlias: o
+05)--------TableScan: orders projection=[order_id, customer_id]
+06)------SubqueryAlias: li
+07)--------TableScan: line_items projection=[order_id, amount]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[customer_id@0 as customer_id], aggr=[sum(li.amount)]
+02)--RepartitionExec: partitioning=Hash([customer_id@0], 4), input_partitions=1
+03)----GroupJoinExec: mode=Partial, on=[(order_id@0, order_id@0)], group_by=[customer_id@1 as customer_id], aggr=[sum(li.amount)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Verify correctness: customer 10 = 100+200+300 = 600, customer 20 = 400+500+600+700 = 2200
+query II rowsort
+SELECT o.customer_id, SUM(li.amount)
+FROM orders o
+JOIN line_items li ON o.order_id = li.order_id
+GROUP BY o.customer_id;
+----
+10 600
+20 2200
+
+# GroupJoin with COUNT
+query II rowsort
+SELECT o.customer_id, COUNT(li.amount)
+FROM orders o
+JOIN line_items li ON o.order_id = li.order_id
+GROUP BY o.customer_id;
+----
+10 3
+20 4
+
+# GroupJoin with multiple aggregates
+query IIRI rowsort
+SELECT o.customer_id, SUM(li.amount), AVG(li.amount), COUNT(*)
+FROM orders o
+JOIN line_items li ON o.order_id = li.order_id
+GROUP BY o.customer_id;
+----
+10 600 200 3
+20 2200 550 4
+
+# GroupJoin with GROUP BY = join key (simplest case)
+query II rowsort
+SELECT o.order_id, SUM(li.amount)
+FROM orders o
+JOIN line_items li ON o.order_id = li.order_id
+GROUP BY o.order_id;
+----
+1 300
+2 300
+3 1500
+4 700
+
+# No matching rows scenario
+statement ok
+CREATE TABLE empty_items (order_id INT, amount BIGINT) AS VALUES (99, 0);
+
+query II rowsort
+SELECT o.customer_id, SUM(ei.amount)
+FROM orders o
+JOIN empty_items ei ON o.order_id = ei.order_id
+GROUP BY o.customer_id;
+----
+
+# Cleanup
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE line_items;
+
+statement ok
+DROP TABLE empty_items;

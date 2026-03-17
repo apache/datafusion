@@ -31,6 +31,7 @@ pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
 pub mod chain;
 mod cross_join;
+pub mod group_join;
 mod hash_join;
 mod nested_loop_join;
 mod piecewise_merge_join;

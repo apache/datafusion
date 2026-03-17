@@ -283,7 +283,7 @@ impl RecordBatchStream for HashJoinStream {
 /// Probe indices: 3, 3, 4, 5
 /// ```
 #[expect(clippy::too_many_arguments)]
-pub(super) fn lookup_join_hashmap(
+pub(crate) fn lookup_join_hashmap(
     build_hashmap: &dyn JoinHashMapType,
     build_side_values: &[ArrayRef],
     probe_side_values: &[ArrayRef],
