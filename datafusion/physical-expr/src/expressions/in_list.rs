@@ -100,10 +100,12 @@ impl StaticFilter for ArrayStaticFilter {
         }
 
         // Unwrap dictionary-encoded needles when the value type matches
-        // in_array, evaluating against distinct values and mapping back
-        // via keys.
+        // in_array, evaluating against the dictionary values and mapping
+        // back via keys.
         downcast_dictionary_array! {
             v => {
+                // Only unwrap when the haystack (in_array) type matches
+                // the dictionary value type
                 if v.values().data_type() == self.in_array.data_type() {
                     let values_contains = self.contains(v.values().as_ref(), negated)?;
                     let result = take(&values_contains, v.keys(), None)?;
@@ -3885,13 +3887,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Tests for try_new_from_array covering all (in_array, needle) type
-    // combinations that occur in HashJoin dynamic filter pushdown.
+    // Tests for try_new_from_array: evaluates `needle IN in_array`.
     //
-    // try_new (used by SQL IN expressions) always produces a non-Dictionary
-    // in_array because evaluate_list() flattens Dictionary scalars to their
-    // value type. try_new_from_array passes the array directly, so it is
-    // the only path that can produce a Dictionary in_array.
+    // This exercises the code path used by HashJoin dynamic filter pushdown,
+    // where in_array is built directly from the join's build-side arrays.
+    // Unlike try_new (used by SQL IN expressions), which always produces a
+    // non-Dictionary in_array because evaluate_list() flattens Dictionary
+    // scalars, try_new_from_array passes the array directly and can produce
+    // a Dictionary in_array.
     // -----------------------------------------------------------------------
 
     fn wrap_in_dict(array: ArrayRef) -> ArrayRef {
@@ -3899,12 +3902,15 @@ mod tests {
         Arc::new(DictionaryArray::new(keys, array))
     }
 
+    /// Evaluates `needle IN in_array` via try_new_from_array, the same
+    /// path used by HashJoin dynamic filter pushdown (not the SQL literal
+    /// IN path which goes through try_new).
     fn eval_in_list_from_array(
-        needle_type: DataType,
         needle: ArrayRef,
         in_array: ArrayRef,
     ) -> Result<BooleanArray> {
-        let schema = Schema::new(vec![Field::new("a", needle_type, false)]);
+        let schema =
+            Schema::new(vec![Field::new("a", needle.data_type().clone(), false)]);
         let col_a = col("a", &schema)?;
         let expr = Arc::new(InListExpr::try_new_from_array(col_a, in_array, false)?)
             as Arc<dyn PhysicalExpr>;
@@ -3945,20 +3951,14 @@ mod tests {
             // T in_array, T needle
             assert_eq!(
                 expected,
-                eval_in_list_from_array(
-                    dt.clone(),
-                    Arc::clone(&needle),
-                    Arc::clone(&in_array),
-                )?,
+                eval_in_list_from_array(Arc::clone(&needle), Arc::clone(&in_array))?,
                 "same-type failed for {dt:?}"
             );
 
             // T in_array, Dict(Int32, T) needle
-            let dict_dt =
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(dt.clone()));
             assert_eq!(
                 expected,
-                eval_in_list_from_array(dict_dt, wrap_in_dict(needle), in_array,)?,
+                eval_in_list_from_array(wrap_in_dict(needle), in_array)?,
                 "dict-needle failed for {dt:?}"
             );
         }
@@ -3966,24 +3966,17 @@ mod tests {
         // Utf8 (falls through to ArrayStaticFilter)
         let utf8_in = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
         let utf8_needle = Arc::new(StringArray::from(vec!["a", "d", "b"])) as ArrayRef;
-        let dict_utf8 =
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
 
         // Utf8 in_array, Utf8 needle
         assert_eq!(
             expected,
-            eval_in_list_from_array(
-                DataType::Utf8,
-                Arc::clone(&utf8_needle),
-                Arc::clone(&utf8_in),
-            )?
+            eval_in_list_from_array(Arc::clone(&utf8_needle), Arc::clone(&utf8_in),)?
         );
 
         // Utf8 in_array, Dict(Utf8) needle
         assert_eq!(
             expected,
             eval_in_list_from_array(
-                dict_utf8.clone(),
                 wrap_in_dict(Arc::clone(&utf8_needle)),
                 Arc::clone(&utf8_in),
             )?
@@ -3993,7 +3986,6 @@ mod tests {
         assert_eq!(
             expected,
             eval_in_list_from_array(
-                dict_utf8,
                 wrap_in_dict(Arc::clone(&utf8_needle)),
                 wrap_in_dict(Arc::clone(&utf8_in)),
             )?
@@ -4004,7 +3996,6 @@ mod tests {
             Field::new("c0", DataType::Utf8, true),
             Field::new("c1", DataType::Int64, true),
         ]);
-        let struct_type = DataType::Struct(struct_fields.clone());
         let make_struct = |c0: ArrayRef, c1: ArrayRef| -> ArrayRef {
             let pairs: Vec<(FieldRef, ArrayRef)> =
                 struct_fields.iter().cloned().zip([c0, c1]).collect();
@@ -4013,7 +4004,6 @@ mod tests {
         assert_eq!(
             expected,
             eval_in_list_from_array(
-                struct_type,
                 make_struct(
                     Arc::clone(&utf8_needle),
                     Arc::new(Int64Array::from(vec![1, 4, 2])),
@@ -4034,7 +4024,6 @@ mod tests {
             ),
             Field::new("c1", DataType::Int64, true),
         ]);
-        let dict_struct_type = DataType::Struct(dict_struct_fields.clone());
         let make_dict_struct = |c0: ArrayRef, c1: ArrayRef| -> ArrayRef {
             let pairs: Vec<(FieldRef, ArrayRef)> =
                 dict_struct_fields.iter().cloned().zip([c0, c1]).collect();
@@ -4043,7 +4032,6 @@ mod tests {
         assert_eq!(
             expected,
             eval_in_list_from_array(
-                dict_struct_type,
                 make_dict_struct(
                     wrap_in_dict(Arc::clone(&utf8_needle)),
                     Arc::new(Int64Array::from(vec![1, 4, 2])),
@@ -4062,7 +4050,6 @@ mod tests {
     fn test_in_list_from_array_type_mismatch_errors() -> Result<()> {
         // Utf8 needle, Dict(Utf8) in_array
         let err = eval_in_list_from_array(
-            DataType::Utf8,
             Arc::new(StringArray::from(vec!["a", "d", "b"])),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
         )
@@ -4076,7 +4063,6 @@ mod tests {
         // Dict(Utf8) needle, Int64 in_array: specialized Int64StaticFilter
         // rejects the Utf8 dictionary values at construction time
         let err = eval_in_list_from_array(
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "d", "b"]))),
             Arc::new(Int64Array::from(vec![1, 2, 3])),
         )
@@ -4087,7 +4073,6 @@ mod tests {
         // Dict(Int64) needle, Dict(Utf8) in_array: both Dict but different
         // value types, make_comparator rejects the comparison
         let err = eval_in_list_from_array(
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64)),
             wrap_in_dict(Arc::new(Int64Array::from(vec![1, 4, 2]))),
             wrap_in_dict(Arc::new(StringArray::from(vec!["a", "b", "c"]))),
         )
