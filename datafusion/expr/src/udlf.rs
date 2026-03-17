@@ -19,14 +19,12 @@
 
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyContext};
-use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{ColumnarValue, Documentation, Expr};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
-use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::signature::Volatility;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
@@ -600,83 +598,6 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
         } else {
             None
         }
-    }
-
-    /// Computes the output [`Interval`] for a [`LambdaUDF`], given the input
-    /// intervals.
-    ///
-    /// # Parameters
-    ///
-    /// * `children` are the intervals for the children (inputs) of this function.
-    ///
-    /// # Example
-    ///
-    /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
-    /// then the output interval would be `[0, 3]`.
-    fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
-        // We cannot assume the input datatype is the same of output type.
-        Interval::make_unbounded(&DataType::Null)
-    }
-
-    /// Updates bounds for child expressions, given a known [`Interval`]s for this
-    /// function.
-    ///
-    /// This function is used to propagate constraints down through an
-    /// expression tree.
-    ///
-    /// # Parameters
-    ///
-    /// * `interval` is the currently known interval for this function.
-    /// * `inputs` are the current intervals for the inputs (children) of this function.
-    ///
-    /// # Returns
-    ///
-    /// A `Vec` of new intervals for the children, in order.
-    ///
-    /// If constraint propagation reveals an infeasibility for any child, returns
-    /// [`None`]. If none of the children intervals change as a result of
-    /// propagation, may return an empty vector instead of cloning `children`.
-    /// This is the default (and conservative) return value.
-    ///
-    /// # Example
-    ///
-    /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
-    /// input `a` is given as `[-7, 3]`, then propagation would return `[-5, 3]`.
-    fn propagate_constraints(
-        &self,
-        _interval: &Interval,
-        _inputs: &[&Interval],
-    ) -> Result<Option<Vec<Interval>>> {
-        Ok(Some(vec![]))
-    }
-
-    /// Calculates the [`SortProperties`] of this function based on its children's properties.
-    fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
-        if !self.preserves_lex_ordering(inputs)? {
-            return Ok(SortProperties::Unordered);
-        }
-
-        let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
-            return Ok(SortProperties::Singleton);
-        };
-
-        if inputs
-            .iter()
-            .skip(1)
-            .all(|input| &input.sort_properties == first_order)
-        {
-            Ok(*first_order)
-        } else {
-            Ok(SortProperties::Unordered)
-        }
-    }
-
-    /// Returns true if the function preserves lexicographical ordering based on
-    /// the input ordering.
-    ///
-    /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
-    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        Ok(false)
     }
 
     /// Coerce arguments of a function call to types that the function can evaluate.

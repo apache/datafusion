@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::expr::{AggregateFunctionParams, LambdaFunction, WindowFunctionParams};
-use datafusion_expr::expr::{Lambda, Unnest};
 use datafusion_common::datatype::DataTypeExt;
+use datafusion_expr::expr::{
+    AggregateFunctionParams, LambdaFunction, WindowFunctionParams,
+};
+use datafusion_expr::expr::{Lambda, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval,
-    ObjectName, Subscript, TimezoneInfo, UnaryOperator,
+    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
+    Subscript, TimezoneInfo, UnaryOperator,
 };
 use sqlparser::ast::{CaseWhen, DuplicateTreatment, OrderByOptions, ValueWithSpan};
 use std::sync::Arc;
@@ -1869,10 +1871,11 @@ mod tests {
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col, cube, exists,
-        grouping_set, interval_datetime_lit, interval_year_month_lit, lit, not,
-        not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast, when,
+        ColumnarValue, LambdaUDF, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+        Signature, Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col,
+        cube, exists, grouping_set, interval_datetime_lit, interval_year_month_lit,
+        lambda, lambda_var, lit, not, not_exists, out_ref_col, placeholder, rollup,
+        table_scan, try_cast, when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
@@ -1928,6 +1931,44 @@ mod tests {
         }
     }
     // See sql::tests for E2E tests.
+
+    #[derive(Debug, Hash, Eq, PartialEq)]
+    struct DummyLambdaUDF;
+
+    impl LambdaUDF for DummyLambdaUDF {
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+
+        fn name(&self) -> &str {
+            "dummy_udlf"
+        }
+
+        fn signature(&self) -> &datafusion_expr::LambdaSignature {
+            unimplemented!()
+        }
+
+        fn lambdas_parameters(
+            &self,
+            _args: &[datafusion_expr::ValueOrLambda<FieldRef, ()>],
+        ) -> Result<Vec<Option<Vec<Field>>>> {
+            unimplemented!()
+        }
+
+        fn return_field_from_args(
+            &self,
+            _args: datafusion_expr::LambdaReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            unimplemented!()
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: datafusion_expr::LambdaFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
 
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
@@ -2012,6 +2053,13 @@ mod tests {
                     .call(vec![col("a"), col("b")])
                     .is_not_null(),
                 r#"dummy_udf(a, b) IS NOT NULL"#,
+            ),
+            (
+                Expr::LambdaFunction(LambdaFunction::new(
+                    Arc::new(DummyLambdaUDF),
+                    vec![col("a"), lambda(["v"], -lambda_var("v"))],
+                )),
+                r#"dummy_udlf(a, (v) -> -v)"#,
             ),
             (
                 Expr::Like(Like {

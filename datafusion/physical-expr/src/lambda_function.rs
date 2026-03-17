@@ -41,8 +41,6 @@ use arrow::array::{Array, NullArray, RecordBatch};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::value_fields_with_lambda_udf;
 use datafusion_expr::{
     ColumnarValue, LambdaArgument, LambdaFunctionArgs, LambdaReturnFieldArgs, LambdaUDF,
@@ -243,7 +241,6 @@ fn sorted_config_entries(config_options: &ConfigOptions) -> Vec<ConfigEntry> {
 }
 
 impl PhysicalExpr for LambdaFunctionExpr {
-    /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -402,34 +399,6 @@ impl PhysicalExpr for LambdaFunctionExpr {
             Arc::clone(&self.return_field),
             Arc::clone(&self.config_options),
         )))
-    }
-
-    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        self.fun.evaluate_bounds(children)
-    }
-
-    fn propagate_constraints(
-        &self,
-        interval: &Interval,
-        children: &[&Interval],
-    ) -> Result<Option<Vec<Interval>>> {
-        self.fun.propagate_constraints(interval, children)
-    }
-
-    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
-        let sort_properties = self.fun.output_ordering(children)?;
-        let preserves_lex_ordering = self.fun.preserves_lex_ordering(children)?;
-        let children_range = children
-            .iter()
-            .map(|props| &props.range)
-            .collect::<Vec<_>>();
-        let range = self.fun().evaluate_bounds(&children_range)?;
-
-        Ok(ExprProperties {
-            sort_properties,
-            range,
-            preserves_lex_ordering,
-        })
     }
 
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result {

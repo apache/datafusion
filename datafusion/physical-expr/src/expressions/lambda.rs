@@ -27,13 +27,13 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{internal_err, tree_node::TreeNodeVisitor, HashSet, Result};
+use datafusion_common::{HashSet, Result, internal_err, tree_node::TreeNodeVisitor};
 use datafusion_common::{
     plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::ColumnarValue;
-use hashbrown::{hash_map::EntryRef, HashMap};
+use hashbrown::{HashMap, hash_map::EntryRef};
 
 /// Represents a lambda with the given parameters names and body
 #[derive(Debug, Eq, Clone)]
@@ -100,6 +100,14 @@ impl LambdaExpr {
         &self.captured_columns
     }
 
+    /// Returns lambdas variables names that aren't of this lambda nor any other lambda down tree.
+    /// Example:
+    ///
+    /// `array_transform([[[1, 2, 3]]], a -> array_transform(a, b -> array_transform(b, c -> length(a) + length(b) + c)))`
+    ///
+    /// For the outermost lambda, this would return an empty hash set
+    /// For the middle one, `HashSet("a")`
+    /// And for the innermost, `HashSet("a", "b")`
     pub(crate) fn captured_variables(&self) -> &HashSet<String> {
         &self.captured_variables
     }
@@ -192,7 +200,7 @@ impl<'n> TreeNodeVisitor<'n> for Captures<'n> {
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         if let Some(lambda) = node.as_any().downcast_ref::<LambdaExpr>() {
             for param in &lambda.params {
-                *self.shadows.entry_ref(param.as_str()).or_default() += 1;
+                *self.shadows.entry(param.as_str()).or_default() += 1;
             }
         } else if let Some(lambda_variable) =
             node.as_any().downcast_ref::<LambdaVariable>()
@@ -228,5 +236,103 @@ impl<'n> TreeNodeVisitor<'n> for Captures<'n> {
         }
 
         Ok(TreeNodeRecursion::Continue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        LambdaFunctionExpr,
+        expressions::{Column, LambdaExpr, NoOp, lambda::lambda, lambda_variable},
+    };
+    use arrow::{
+        array::RecordBatch,
+        datatypes::{DataType, Field, FieldRef, Schema},
+    };
+    use datafusion_common::{HashSet, Result};
+    use datafusion_expr::{ColumnarValue, LambdaUDF};
+    use std::sync::Arc;
+
+    #[derive(Debug, Hash, Eq, PartialEq)]
+    struct DummyLambdaUDF;
+
+    impl LambdaUDF for DummyLambdaUDF {
+        fn as_any(&self) -> &dyn std::any::Any {
+            unimplemented!()
+        }
+
+        fn name(&self) -> &str {
+            "dummy_udlf"
+        }
+
+        fn signature(&self) -> &datafusion_expr::LambdaSignature {
+            unimplemented!()
+        }
+
+        fn lambdas_parameters(
+            &self,
+            _args: &[datafusion_expr::ValueOrLambda<FieldRef, ()>],
+        ) -> Result<Vec<Option<Vec<Field>>>> {
+            unimplemented!()
+        }
+
+        fn return_field_from_args(
+            &self,
+            _args: datafusion_expr::LambdaReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            unimplemented!()
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: datafusion_expr::LambdaFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_lambda_captures() {
+        let null_field = Arc::new(Field::new("", DataType::Null, true));
+
+        //`var_b -> dummy_udlf(var_a, var_b, column@0, var_c -> var_c))`
+        let inner = LambdaExpr::try_new(
+            vec![String::from("var_b")],
+            Arc::new(LambdaFunctionExpr::new(
+                "dummy_udlf",
+                Arc::new(DummyLambdaUDF),
+                vec![
+                    lambda_variable("var_a", Arc::clone(&null_field)).unwrap(),
+                    lambda_variable("var_b", Arc::clone(&null_field)).unwrap(),
+                    Arc::new(Column::new("column", 0)),
+                    lambda(
+                        ["var_c"],
+                        lambda_variable("var_c", Arc::clone(&null_field)).unwrap(),
+                    )
+                    .unwrap(),
+                ],
+                Arc::clone(&null_field),
+                Arc::new(Default::default()),
+            )),
+        )
+        .unwrap();
+
+        assert_eq!(inner.captured_columns(), &HashSet::from([0]));
+        assert_eq!(
+            inner.captured_variables(),
+            &HashSet::from([String::from("var_a")])
+        );
+    }
+
+    #[test]
+    fn test_lambda_evaluate() {
+        let lambda = lambda(["a"], Arc::new(NoOp::new())).unwrap();
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        assert!(lambda.evaluate(&batch).is_err());
+    }
+
+    #[test]
+    fn test_lambda_duplicate_name() {
+        assert!(lambda(["a", "a"], Arc::new(NoOp::new())).is_err());
     }
 }

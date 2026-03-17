@@ -23,89 +23,16 @@ statement ok
 set datafusion.sql_parser.dialect = databricks;
 
 statement ok
-CREATE TABLE tt
+CREATE TABLE t (list array<int>, number int)
 AS VALUES
 ([1, 50], 10),
-([4, 50], 40);
-
-statement ok
-CREATE TABLE t AS SELECT 1 as f, [ [ [2, 3], [2] ], [ [1] ], [ [] ] ] as v, 1 as n;
-
-#test potentialy sliced list
-select array_transform(tt.column_1, v -> v*2) from tt order by column_2 limit 1;
-
-query I?
-SELECT t.n, array_transform([], e1 -> t.n) from t;
-----
-1 []
-
-query ?
-SELECT array_transform([1, 2], e1 -> (select n from t));
-----
-[1, 1]
-
-query ?
-SELECT array_transform(t.v, (v1, i) -> array_transform(v1, (v2, j) -> array_transform(v2, v3 -> j)) ) from t;
-----
-[[[1, 1], [2]], [[1]], [[]]]
-
-query I?
-SELECT t.n, array_transform([1, 2], (e) -> n) from t;
-----
-1 [1, 1]
-
-# projection pushdown
-query ?
-SELECT array_transform([1, 2], (e) -> n) from t;
-----
-[1, 1]
-
-query ?
-SELECT array_transform([1, 2], (e, i) -> i) from t;
-----
-[1, 2]
-
-# type coercion
-query ?
-SELECT array_transform([1.0, 2.0], v -> v + t.n) from t;
-----
-[2.0, 4.0]
-
-query TT
-EXPLAIN SELECT array_transform([1.0, 2.0], v -> v + t.n) from t;
-----
-logical_plan
-01)Projection: List([2.0, 4.0]) AS array_transform(make_array(Float64(1),Float64(2)),(e, i) -> e + i)
-02)--EmptyRelation: rows=1
-physical_plan
-01)ProjectionExec: expr=[[2.0, 4.0] as array_transform(make_array(Float64(1),Float64(2)),(e, i) -> e + i)]
-02)--PlaceholderRowExec
-
-#cse
-query TT
-explain select n + 1, array_transform([1], v -> v + n + 1) from t;
-----
-logical_plan
-01)Projection: t.n + Int64(1), array_transform(List([1]), (v) -> v + t.n + Int64(1)) AS array_transform(make_array(Int64(1)),(v) -> v + t.n + Int64(1))
-02)--TableScan: t projection=[n]
-physical_plan
-01)ProjectionExec: expr=[n@0 + 1 as t.n + Int64(1), array_transform([1], (v) -> v@-1 + n@0 + 1) as array_transform(make_array(Int64(1)),(v) -> v + t.n + Int64(1))]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+([4, 50], 40),
+([7, 50], 60);
 
 query ?
 SELECT array_transform([1,2,3,4,5], v -> v*2);
 ----
 [2, 4, 6, 8, 10]
-
-query ?
-SELECT array_transform([1,2,3,4,5], v -> 2);
-----
-[2, 2, 2, 2, 2]
-
-query ?
-SELECT array_transform([[1,2],[3,4,5]], v -> array_transform(v, v -> v*2));
-----
-[[2, 4], [6, 8, 10]]
 
 query ?
 SELECT array_transform([1,2,3,4,5], v -> repeat("a", v));
@@ -117,48 +44,202 @@ SELECT array_transform([1,2,3,4,5], v -> list_repeat("a", v));
 ----
 [[a], [a, a], [a, a, a], [a, a, a, a], [a, a, a, a, a]]
 
-query TT
-EXPLAIN SELECT array_transform([1,2,3,4,5], v -> v*2);
+
+# version without limit/offset of queries below
+query ?
+select array_transform(t.list, v -> v*2) from t order by t.number;
 ----
-logical_plan
-01)Projection: List([2, 4, 6, 8, 10]) AS array_transform(make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)),(v) -> v * Int64(2))
-02)--EmptyRelation: rows=1
-physical_plan
-01)ProjectionExec: expr=[[2, 4, 6, 8, 10] as array_transform(make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)),(v) -> v * Int64(2))]
-02)--PlaceholderRowExec
+[2, 100]
+[8, 100]
+[14, 100]
+
+# sliced lists
+query ?
+select array_transform(t.list, v -> v*2) from t order by t.number limit 1;
+----
+[2, 100]
 
 query ?
-SELECT array_transform(
-	[[1]],
-	v -> array_concat(
-		array_transform(v, v -> v),
-		array_transform(v, v1 -> v1 + v[0])
-	)
-);
+select array_transform(t.list, v -> v*2) from t order by t.number offset 1;
 ----
-[[1, NULL]]
-
-query I??
-SELECT t.n, t.v, array_transform(t.v, (v, i) -> array_transform(v, (v, j) -> n) ) from t;
-----
-1 [[[2, 3], [2]], [[1]], [[]]] [[1, 1], [1], [1]]
+[8, 100]
+[14, 100]
 
 query ?
-SELECT array_transform([1,2,3,4,5], v -> v*2);
+select array_transform(t.list, v -> v*2) from t order by t.number limit 1 offset 1;
 ----
-[2, 4, 6, 8, 10]
+[8, 100]
 
+# lambda that uses only captured column which also only appears within the lambda
+query ?
+SELECT array_transform([1, 2], v -> t.number) from t;
+----
+[10, 10]
+[40, 40]
+[60, 60]
 
-# expr simplifier
+# return scalar
+query I?
+SELECT t.number, array_transform([1, 2], e1 -> 24) from t;
+----
+10 [24, 24]
+40 [24, 24]
+60 [24, 24]
+
+# uses only the first parameter
+query ?
+SELECT array_transform([1, 2], (v, i) -> v+1) from t;
+----
+[2, 3]
+[2, 3]
+[2, 3]
+
+# uses only the second parameter
+query ?
+SELECT array_transform([10, 20], (v, i) -> i) from t;
+----
+[1, 2]
+[1, 2]
+[1, 2]
+
+# use only capture of a parent lambda variable
+query ?
+SELECT array_transform([[1, 2]], (a, i) -> array_transform(a, b -> i))
+----
+[[1, 1]]
+
+# use only capture of a parent lambda variable and a column
+query ?
+SELECT array_transform([[1, 2]], (a, i) -> array_transform(a, b -> i + t.number)) from t
+----
+[[11, 11]]
+[[41, 41]]
+[[61, 61]]
+
+# use only capture of a parent lambda variable and own variable
+query ?
+SELECT array_transform([[1, 2]], (a, i) -> array_transform(a, b -> i + b))
+----
+[[2, 3]]
+
+# use capture of a column, a parent lambda variable and own variable
+query ?
+SELECT array_transform([[1, 2]], (a, i) -> array_transform(a, b -> i + b + t.number)) from t
+----
+[[12, 13]]
+[[42, 43]]
+[[62, 63]]
+
+# shadows parent lambda variable
+query ?
+SELECT array_transform([[1, 2]], a -> array_transform(a, a -> a+1))
+----
+[[2, 3]]
+
+# multiple nesting
+query ?
+SELECT array_transform([[[1], [2], [3]]], (a, i) -> array_transform(a, (b, j) -> array_transform(b, (c, k) -> c + i + j + k)));
+----
+[[[4], [6], [8]]]
+
+# parameter shadows unqualified column
+query I?
+SELECT number, array_transform([1, 2], number -> number+1) from t;
+----
+10 [2, 3]
+40 [2, 3]
+60 [2, 3]
+
+# type coercion inside lambda body
+query ?
+SELECT array_transform([1.0, 2.0], v -> v + t.number) from t;
+----
+[11.0, 12.0]
+[41.0, 42.0]
+[61.0, 62.0]
+
 query TT
-EXPLAIN SELECT v = v, array_transform([t.n], v -> v = v) from t;
+EXPLAIN SELECT array_transform([1.0, 2.0], v -> v + t.number) from t;
 ----
 logical_plan
-01)Projection: Boolean(true) AS t.v = t.v, List([true]) AS array_transform(make_array(Int64(1)),(v) -> v = v)
-02)--TableScan: t projection=[]
+01)Projection: array_transform(List([1.0, 2.0]), (v) -> v + CAST(t.number AS Float64)) AS array_transform(make_array(Float64(1),Float64(2)),(v) -> v + t.number)
+02)--TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[true as t.v = t.v, [true] as array_transform(make_array(Int64(1)),(v) -> v = v)]
+01)ProjectionExec: expr=[array_transform([1.0, 2.0], (v) -> v@ + CAST(number@0 AS Float64)) as array_transform(make_array(Float64(1),Float64(2)),(v) -> v + t.number)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#cse
+query TT
+explain select t.number*2, array_transform([1], v -> v + t.number*2) from t;
+----
+logical_plan
+01)Projection: __common_expr_1 AS t.number * Int64(2), array_transform(List([1]), (v) -> v + __common_expr_1) AS array_transform(make_array(Int64(1)),(v) -> v + t.number * Int64(2))
+02)--Projection: CAST(t.number AS Int64) * Int64(2) AS __common_expr_1
+03)----TableScan: t projection=[number]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 as t.number * Int64(2), array_transform([1], (v) -> v@ + __common_expr_1@0) as array_transform(make_array(Int64(1)),(v) -> v + t.number * Int64(2))]
+02)--ProjectionExec: expr=[CAST(number@0 AS Int64) * 2 as __common_expr_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+#cse should not eliminate subtrees containing lambdas
+query TT
+explain select array_transform([t.number], v -> 5), array_transform([t.number+1], v -> 5) from t;
+----
+logical_plan
+01)Projection: array_transform(make_array(t.number), (v) -> Int64(5)), array_transform(make_array(CAST(t.number AS Int64) + Int64(1)), (v) -> Int64(5))
+02)--TableScan: t projection=[number]
+physical_plan
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> 5) as array_transform(make_array(t.number),(v) -> Int64(5)), array_transform(make_array(CAST(number@0 AS Int64) + 1), (v) -> 5) as array_transform(make_array(t.number + Int64(1)),(v) -> Int64(5))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#cse should not eliminate subtrees containing lambda variables
+query TT
+explain select array_transform([t.number], v -> v*2), array_transform([t.number+1], (v, i) -> v*2) from t;
+----
+logical_plan
+01)Projection: array_transform(make_array(t.number), (v) -> CAST(v AS Int64) * Int64(2)), array_transform(make_array(CAST(t.number AS Int64) + Int64(1)), (v, i) -> v * Int64(2))
+02)--TableScan: t projection=[number]
+physical_plan
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> CAST(v@ AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(make_array(CAST(number@0 AS Int64) + 1), (v, i) -> v@ * 2) as array_transform(make_array(t.number + Int64(1)),(v, i) -> v * Int64(2))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+# test that sql planner plans resolved lambda variables, as v[1] planning checks the datatype of lhs
+query ?
+SELECT array_transform([[10, 20]], v -> v[1]);
+----
+[10]
+
+
+# expr simplifier inside lambda body
+query TT
+EXPLAIN SELECT array_transform([t.number], v -> v = v) from t;
+----
+logical_plan
+01)Projection: array_transform(make_array(t.number), (v) -> v IS NOT NULL OR Boolean(NULL)) AS array_transform(make_array(t.number),(v) -> v = v)
+02)--TableScan: t projection=[number]
+physical_plan
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> v@ IS NOT NULL OR NULL) as array_transform(make_array(t.number),(v) -> v = v)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+# array_transform coercion rules
+query TT
+explain select array_transform(arrow_cast(t.list, 'ListView(Int32)'), a -> a+1) from t;
+----
+logical_plan
+01)Projection: array_transform(CAST(CAST(t.list AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a AS Int64) + Int64(1)) AS array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))
+02)--TableScan: t projection=[list]
+physical_plan
+01)ProjectionExec: expr=[array_transform(CAST(CAST(list@0 AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a@ AS Int64) + 1) as array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query ?
+select array_transform(arrow_cast(t.list, 'ListView(Int32)'), a -> a+1) from t;
+----
+[2, 51]
+[5, 51]
+[8, 51]
 
 
 query error
@@ -174,39 +255,25 @@ query error DataFusion error: Error during planning: array_transform expects a v
 select array_transform(v -> v*2, [1, 2]);
 
 query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 2
-SELECT array_transform([1, 2], (e, i, j) -> i) from t;
+SELECT array_transform([1, 2], (e, i, j) -> i);
 
 query error DataFusion error: Error during planning: lambda parameters names must be unique, got \(v, v\)
 SELECT array_transform([1], (v, v) -> v*2);
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,12\)\.\.Location\(1,13\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,17\)\.\.Location\(1,18\)\) \}\) \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,12\)\.\.Location\(1,13\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,17\)\.\.Location\(1,18\)\) \}\), syntax: Arrow \}\)
 SELECT abs(v -> v);
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,8\)\.\.Location\(1,9\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,13\)\.\.Location\(1,14\)\) \}\) \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,8\)\.\.Location\(1,9\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,13\)\.\.Location\(1,14\)\) \}\), syntax: Arrow \}\)
 SELECT v -> v;
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,34\)\.\.Location\(1,35\)\) \}\), body: BinaryOp \{ left: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,39\)\.\.Location\(1,40\)\) \}\), op: Plus, right: Value\(ValueWithSpan \{ value: Number\("1", false\), span: Span\(Location\(1,41\)\.\.Location\(1,42\)\) \}\) \} \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,34\)\.\.Location\(1,35\)\) \}\), body: BinaryOp \{ left: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,39\)\.\.Location\(1,40\)\) \}\), op: Plus, right: Value\(ValueWithSpan \{ value: Number\("1", false\), span: Span\(Location\(1,41\)\.\.Location\(1,42\)\) \}\) \}, syntax: Arrow \}\)
 SELECT array_transform([1], v -> v -> v+1);
 
+query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 30"\)
+SELECT array_transform([1], () -> 1);
 
-query ?
-SELECT array_transform([[2, 3]], v -> array_transform(v, j -> v));
-----
-[[[2, 3], [2, 3]]]
+statement ok
+drop table t;
 
-
-query TT
-explain select array_transform(list_view, a -> a+1) from table_with_list_view;
-----
-initial_logical_plan
-01)Projection: array_transform(table_with_list_view.list_view, (a) -> a + Int64(1))
-02)--TableScan: table_with_list_view
-logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
-logical_plan after type_coercion Error during planning: Cannot automatically convert ListView(nullable Int32) to List(nullable Int32)
-
-query error
-select array_transform(list_view, a -> a+1) from table_with_list_view;
-----
-DataFusion error: type_coercion
-caused by
-Error during planning: Cannot automatically convert ListView(nullable Int32) to List(nullable Int32)
+statement ok
+set datafusion.sql_parser.dialect = generic;
