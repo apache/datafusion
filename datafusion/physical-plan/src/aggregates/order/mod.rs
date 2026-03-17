@@ -52,7 +52,8 @@ impl GroupOrdering {
         }
     }
 
-    // How many groups be emitted, or None if no data can be emitted
+    /// Returns how many groups can be emitted while respecting the current
+    /// ordering guarantees, or `None` if no data can be emitted.
     pub fn emit_to(&self) -> Option<EmitTo> {
         match self {
             GroupOrdering::None => None,
@@ -61,7 +62,7 @@ impl GroupOrdering {
         }
     }
 
-    /// Updates the state the input is done
+    /// Updates the state to indicate that the input is complete.
     pub fn input_done(&mut self) {
         match self {
             GroupOrdering::None => {}
@@ -70,8 +71,8 @@ impl GroupOrdering {
         }
     }
 
-    /// remove the first n groups from the internal state, shifting
-    /// all existing indexes down by `n`
+    /// Removes the first `n` groups from the internal state, shifting all
+    /// existing indexes down by `n`.
     pub fn remove_groups(&mut self, n: usize) {
         match self {
             GroupOrdering::None => {}
@@ -80,16 +81,14 @@ impl GroupOrdering {
         }
     }
 
-    /// Called when new groups are added in a batch
+    /// Called when new groups are added in a batch.
     ///
-    /// * `total_num_groups`: total number of groups (so max
-    ///   group_index is total_num_groups - 1).
-    ///
-    /// * `group_values`: group key values for *each row* in the batch
+    /// * `batch_group_values`: group key values for each row in the batch
     ///
     /// * `group_indices`: indices for each row in the batch
     ///
-    /// * `hashes`: hash values for each row in the batch
+    /// * `total_num_groups`: total number of groups (so max
+    ///   group_index is total_num_groups - 1).
     pub fn new_groups(
         &mut self,
         batch_group_values: &[ArrayRef],
@@ -112,7 +111,7 @@ impl GroupOrdering {
         Ok(())
     }
 
-    /// Return the size of memory used by the ordering state, in bytes
+    /// Returns the size of memory used by the ordering state, in bytes.
     pub fn size(&self) -> usize {
         size_of::<Self>()
             + match self {
