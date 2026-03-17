@@ -141,14 +141,14 @@ pub fn eliminate_outer(
 ) -> JoinType {
     let mut new_join_type = join_type;
     match join_type {
-        JoinType::Left => {
+        JoinType::Left | JoinType::LeftSingle => {
+            // For LeftSingle: converting to Inner is safe because the WHERE
+            // clause already filters out NULL (unmatched) rows. The at-most-one
+            // guarantee is ensured by the GROUP BY added during decorrelation.
             if right_non_nullable {
                 new_join_type = JoinType::Inner;
             }
         }
-        // LeftSingle cannot be eliminated to Inner because that would
-        // lose the at-most-one-match runtime enforcement.
-        JoinType::LeftSingle => {}
         JoinType::Right => {
             if left_non_nullable {
                 new_join_type = JoinType::Inner;

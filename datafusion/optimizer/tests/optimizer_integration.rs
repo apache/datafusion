@@ -129,15 +129,14 @@ fn subquery_filter_with_cast() -> Result<()> {
     format!("{plan}"),
     @r#"
     Projection: test.col_int32
-      Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.avg(test.col_int32)
-        LeftSingle Join:
-          TableScan: test projection=[col_int32]
-          SubqueryAlias: __scalar_sq_1
-            Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]
-              Projection: test.col_int32
-                Filter: __common_expr_3 >= Date32("2002-05-08") AND __common_expr_3 <= Date32("2002-05-13")
-                  Projection: CAST(test.col_utf8 AS Date32) AS __common_expr_3, test.col_int32
-                    TableScan: test projection=[col_int32, col_utf8]
+      Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.avg(test.col_int32)
+        TableScan: test projection=[col_int32]
+        SubqueryAlias: __scalar_sq_1
+          Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]
+            Projection: test.col_int32
+              Filter: __common_expr_4 >= Date32("2002-05-08") AND __common_expr_4 <= Date32("2002-05-13")
+                Projection: CAST(test.col_utf8 AS Date32) AS __common_expr_4, test.col_int32
+                  TableScan: test projection=[col_int32, col_utf8]
     "#
     );
     Ok(())
