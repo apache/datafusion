@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
@@ -32,8 +32,9 @@ use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequire
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream, execute_input_stream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, MappedExpr,
+    Partitioning, PlanProperties, RecomputePropertiesBehavior, SendableRecordBatchStream,
+    execute_input_stream,
 };
 
 use async_trait::async_trait;
@@ -231,6 +232,53 @@ impl ExecutionPlan for DataSinkExec {
             }
         }
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let Some(sort_order) = &self.sort_order else {
+            return Ok(Transformed::no(self));
+        };
+
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+        let mut new_reqs = Vec::with_capacity(sort_order.len());
+        for req in sort_order.iter() {
+            let mapped = f(Arc::clone(&req.expr))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_reqs.push(
+                datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement {
+                    expr: mapped.expr.data,
+                    options: req.options,
+                },
+            );
+        }
+
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+
+        let new_sort_order = LexRequirement::new(new_reqs);
+        let new_node = if any_recompute {
+            DataSinkExec::new(
+                Arc::clone(&self.input),
+                Arc::clone(&self.sink),
+                new_sort_order,
+            )
+        } else {
+            DataSinkExec {
+                sort_order: new_sort_order,
+                ..(*self).clone()
+            }
+        };
+        Ok(Transformed::yes(Arc::new(new_node) as _))
     }
 
     /// Execute the plan and return a stream of `RecordBatch`es for

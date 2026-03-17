@@ -19,8 +19,8 @@ use crate::coalesce::LimitedBatchCoalescer;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    check_if_same_properties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, MappedExpr,
+    PlanProperties, check_if_same_properties,
 };
 use arrow::array::RecordBatch;
 use arrow_schema::{Fields, Schema, SchemaRef};
@@ -175,6 +175,13 @@ impl ExecutionPlan for AsyncFuncExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

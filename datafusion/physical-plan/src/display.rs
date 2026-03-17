@@ -1122,12 +1122,13 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion_common::{
-        Result, Statistics, internal_datafusion_err, tree_node::TreeNodeRecursion,
+        Result, Statistics, internal_datafusion_err,
+        tree_node::{Transformed, TreeNodeRecursion},
     };
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_physical_expr::PhysicalExpr;
 
-    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
+    use crate::{DisplayAs, ExecutionPlan, MappedExpr, PlanProperties};
 
     use super::DisplayableExecutionPlan;
 
@@ -1177,6 +1178,13 @@ mod tests {
             _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn map_expressions(
+            self: Arc<Self>,
+            _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+        ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+            Ok(Transformed::no(self))
         }
 
         fn execute(

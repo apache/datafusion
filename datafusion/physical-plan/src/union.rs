@@ -28,7 +28,7 @@ use std::{any::Any, sync::Arc};
 
 use super::{
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
+    ExecutionPlanProperties, MappedExpr, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
@@ -50,7 +50,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     Result, assert_or_internal_err, exec_err, internal_datafusion_err,
 };
@@ -279,6 +279,13 @@ impl ExecutionPlan for UnionExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(
@@ -614,6 +621,13 @@ impl ExecutionPlan for InterleaveExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

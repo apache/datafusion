@@ -26,12 +26,12 @@ use crate::filter_pushdown::{
 use crate::projection::ProjectionExec;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SortOrderPushdownResult,
-    check_if_same_properties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, MappedExpr, PlanProperties,
+    SortOrderPushdownResult, check_if_same_properties,
 };
 use arrow::array::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -178,6 +178,13 @@ impl ExecutionPlan for BufferExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

@@ -29,8 +29,8 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, MappedExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
@@ -158,6 +158,13 @@ impl ExecutionPlan for RecursiveQueryExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     // TODO: control these hints and see whether we can

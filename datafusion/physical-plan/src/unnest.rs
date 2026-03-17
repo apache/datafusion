@@ -27,7 +27,7 @@ use super::metrics::{
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
+    DisplayFormatType, Distribution, ExecutionPlan, MappedExpr, RecordBatchStream,
     SendableRecordBatchStream, check_if_same_properties,
 };
 
@@ -43,7 +43,7 @@ use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
     internal_err,
@@ -247,6 +247,13 @@ impl ExecutionPlan for UnnestExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

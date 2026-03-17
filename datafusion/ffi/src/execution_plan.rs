@@ -21,11 +21,12 @@ use std::sync::Arc;
 
 use abi_stable::StableAbi;
 use abi_stable::std_types::{RString, RVec};
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, MappedExpr, PlanProperties,
 };
 use tokio::runtime::Handle;
 
@@ -310,6 +311,15 @@ impl ExecutionPlan for ForeignExecutionPlan {
         }
         Ok(tnr)
     }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(
+            Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
+    }
 }
 
 #[cfg(test)]
@@ -399,6 +409,15 @@ pub(crate) mod tests {
                 }
             }
             Ok(tnr)
+        }
+
+        fn map_expressions(
+            self: Arc<Self>,
+            _f: &mut dyn FnMut(
+                Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+            ) -> Result<MappedExpr>,
+        ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+            Ok(Transformed::no(self))
         }
     }
 

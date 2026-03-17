@@ -53,7 +53,8 @@ use crate::projection::{
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    MappedExpr, PlanProperties, RecomputePropertiesBehavior, RecordBatchStream,
+    SendableRecordBatchStream,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
@@ -66,7 +67,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::bisect;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
@@ -480,6 +481,89 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
         }
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn crate::PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+
+        // Map join key expressions (on clauses)
+        let mut new_on: Vec<(PhysicalExprRef, PhysicalExprRef)> =
+            Vec::with_capacity(self.on.len());
+        for (left, right) in self.on.iter() {
+            let mapped_left = f(Arc::clone(left))?;
+            if mapped_left.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped_left.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            let mapped_right = f(Arc::clone(right))?;
+            if mapped_right.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped_right.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_on.push((mapped_left.expr.data, mapped_right.expr.data));
+        }
+
+        // Map join filter expression if present
+        let new_filter = if let Some(filter) = &self.filter {
+            let mapped = f(Arc::clone(filter.expression()))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            Some(JoinFilter::new(
+                mapped.expr.data,
+                filter.column_indices.clone(),
+                Arc::clone(&filter.schema),
+            ))
+        } else {
+            None
+        };
+
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+
+        if any_recompute {
+            let new_node = SymmetricHashJoinExec::try_new(
+                Arc::clone(&self.left),
+                Arc::clone(&self.right),
+                new_on,
+                new_filter,
+                &self.join_type,
+                self.null_equality,
+                self.left_sort_exprs.clone(),
+                self.right_sort_exprs.clone(),
+                self.mode,
+            )?;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            let new_node = SymmetricHashJoinExec {
+                left: Arc::clone(&self.left),
+                right: Arc::clone(&self.right),
+                on: new_on,
+                filter: new_filter,
+                join_type: self.join_type,
+                random_state: self.random_state.clone(),
+                metrics: ExecutionPlanMetricsSet::new(),
+                column_indices: self.column_indices.clone(),
+                null_equality: self.null_equality,
+                left_sort_exprs: self.left_sort_exprs.clone(),
+                right_sort_exprs: self.right_sort_exprs.clone(),
+                mode: self.mode,
+                cache: Arc::clone(&self.cache),
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn with_new_children(

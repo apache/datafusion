@@ -29,17 +29,18 @@ use super::{
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    check_if_same_properties,
+    DisplayFormatType, Distribution, ExecutionPlan, MappedExpr, Partitioning,
+    RecomputePropertiesBehavior, check_if_same_properties,
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -191,6 +192,46 @@ impl ExecutionPlan for GlobalLimitExec {
             }
         }
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let Some(ordering) = &self.required_ordering else {
+            return Ok(Transformed::no(self));
+        };
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+        let mut new_ordering = Vec::with_capacity(ordering.len());
+        for sort_expr in ordering.iter() {
+            let mapped = f(Arc::clone(&sort_expr.expr))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_ordering.push(PhysicalSortExpr {
+                expr: mapped.expr.data,
+                options: sort_expr.options,
+            });
+        }
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+        let new_ordering =
+            LexOrdering::new(new_ordering).or_else(|| self.required_ordering.clone());
+        if any_recompute {
+            let mut new_node =
+                GlobalLimitExec::new(Arc::clone(&self.input), self.skip, self.fetch);
+            new_node.set_required_ordering(new_ordering);
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            let mut new_node = (*self).clone();
+            new_node.required_ordering = new_ordering;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn with_new_children(
@@ -379,6 +420,45 @@ impl ExecutionPlan for LocalLimitExec {
             }
         }
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let Some(ordering) = &self.required_ordering else {
+            return Ok(Transformed::no(self));
+        };
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+        let mut new_ordering = Vec::with_capacity(ordering.len());
+        for sort_expr in ordering.iter() {
+            let mapped = f(Arc::clone(&sort_expr.expr))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_ordering.push(PhysicalSortExpr {
+                expr: mapped.expr.data,
+                options: sort_expr.options,
+            });
+        }
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+        let new_ordering =
+            LexOrdering::new(new_ordering).or_else(|| self.required_ordering.clone());
+        if any_recompute {
+            let mut new_node = LocalLimitExec::new(Arc::clone(&self.input), self.fetch);
+            new_node.set_required_ordering(new_ordering);
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            let mut new_node = (*self).clone();
+            new_node.required_ordering = new_ordering;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn with_new_children(

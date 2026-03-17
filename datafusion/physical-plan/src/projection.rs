@@ -33,7 +33,10 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, FilterRemapper, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
-use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr, check_if_same_properties};
+use crate::{
+    DisplayFormatType, ExecutionPlan, MappedExpr, PhysicalExpr,
+    RecomputePropertiesBehavior, check_if_same_properties,
+};
 use std::any::Any;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -327,6 +330,51 @@ impl ExecutionPlan for ProjectionExec {
             tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
         }
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+        let mut new_exprs: Vec<ProjectionExpr> =
+            Vec::with_capacity(self.projector.projection().as_ref().len());
+        for proj_expr in self.projector.projection().as_ref().iter() {
+            let mapped = f(Arc::clone(&proj_expr.expr))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_exprs.push(ProjectionExpr {
+                expr: mapped.expr.data,
+                alias: proj_expr.alias.clone(),
+            });
+        }
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+        if any_recompute {
+            let new_node = ProjectionExec::try_new(new_exprs, Arc::clone(&self.input))?;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            // Preserve cache: rebuild the projector with new expressions but reuse
+            // the existing output schema since properties are preserved.
+            let new_projection = ProjectionExprs::from_expressions(
+                new_exprs.into_iter().collect::<Arc<_>>(),
+            );
+            let new_projector =
+                new_projection.make_projector(self.input.schema().as_ref())?;
+            let new_node = ProjectionExec {
+                projector: new_projector,
+                input: Arc::clone(&self.input),
+                metrics: ExecutionPlanMetricsSet::new(),
+                cache: Arc::clone(&self.cache),
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn with_new_children(

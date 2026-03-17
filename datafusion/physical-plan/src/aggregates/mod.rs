@@ -32,8 +32,9 @@ use crate::filter_pushdown::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
-    SendableRecordBatchStream, Statistics, check_if_same_properties,
+    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode, MappedExpr,
+    RecomputePropertiesBehavior, SendableRecordBatchStream, Statistics,
+    check_if_same_properties,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::utils::collect_columns;
@@ -45,7 +46,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
@@ -1413,6 +1414,123 @@ impl ExecutionPlan for AggregateExec {
         Ok(tnr)
     }
 
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+
+        // Map group_by expressions
+        let mut new_group_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            Vec::with_capacity(self.group_by.expr.len());
+        for (expr, alias) in self.group_by.expr.iter() {
+            let mapped = f(Arc::clone(expr))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_group_exprs.push((mapped.expr.data, alias.clone()));
+        }
+
+        // Map aggr_expr (args + order_by expressions)
+        let mut new_aggr_exprs: Vec<Arc<AggregateFunctionExpr>> =
+            Vec::with_capacity(self.aggr_expr.len());
+        for aggr in self.aggr_expr.iter() {
+            let all = aggr.all_expressions();
+            let mut new_args: Vec<Arc<dyn PhysicalExpr>> =
+                Vec::with_capacity(all.args.len());
+            let mut new_order_bys: Vec<Arc<dyn PhysicalExpr>> =
+                Vec::with_capacity(all.order_by_exprs.len());
+            for arg in all.args {
+                let mapped = f(arg)?;
+                if mapped.expr.transformed {
+                    any_transformed = true;
+                }
+                if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                    any_recompute = true;
+                }
+                new_args.push(mapped.expr.data);
+            }
+            for ob_expr in all.order_by_exprs {
+                let mapped = f(ob_expr)?;
+                if mapped.expr.transformed {
+                    any_transformed = true;
+                }
+                if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                    any_recompute = true;
+                }
+                new_order_bys.push(mapped.expr.data);
+            }
+            let new_aggr = aggr
+                .with_new_expressions(new_args, new_order_bys)
+                .unwrap_or_else(|| (**aggr).clone());
+            new_aggr_exprs.push(Arc::new(new_aggr));
+        }
+
+        // Map filter expressions (FILTER WHERE clauses)
+        let mut new_filter_exprs: Vec<Option<Arc<dyn PhysicalExpr>>> =
+            Vec::with_capacity(self.filter_expr.len());
+        for filter_opt in self.filter_expr.iter() {
+            match filter_opt {
+                None => new_filter_exprs.push(None),
+                Some(filter) => {
+                    let mapped = f(Arc::clone(filter))?;
+                    if mapped.expr.transformed {
+                        any_transformed = true;
+                    }
+                    if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                        any_recompute = true;
+                    }
+                    new_filter_exprs.push(Some(mapped.expr.data));
+                }
+            }
+        }
+
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+
+        let new_group_by = PhysicalGroupBy::new(
+            new_group_exprs,
+            self.group_by.null_expr.clone(),
+            self.group_by.groups.clone(),
+            self.group_by.has_grouping_set,
+        );
+
+        if any_recompute {
+            let mut new_node = AggregateExec::try_new(
+                self.mode,
+                new_group_by,
+                new_aggr_exprs,
+                new_filter_exprs,
+                Arc::clone(&self.input),
+                Arc::clone(&self.input_schema),
+            )?;
+            new_node.limit_options = self.limit_options;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            let new_node = AggregateExec {
+                mode: self.mode,
+                group_by: Arc::new(new_group_by),
+                aggr_expr: new_aggr_exprs.into(),
+                filter_expr: new_filter_exprs.into(),
+                limit_options: self.limit_options,
+                input: Arc::clone(&self.input),
+                schema: Arc::clone(&self.schema),
+                input_schema: Arc::clone(&self.input_schema),
+                metrics: ExecutionPlanMetricsSet::new(),
+                required_input_ordering: self.required_input_ordering.clone(),
+                input_order_mode: self.input_order_mode.clone(),
+                cache: Arc::clone(&self.cache),
+                dynamic_filter: self.dynamic_filter.clone(),
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -2515,6 +2633,13 @@ mod tests {
             _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn map_expressions(
+            self: Arc<Self>,
+            _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+        ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+            Ok(Transformed::no(self))
         }
 
         fn with_new_children(

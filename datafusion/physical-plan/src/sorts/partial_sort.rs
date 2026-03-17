@@ -61,18 +61,19 @@ use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
-    check_if_same_properties,
+    MappedExpr, Partitioning, PlanProperties, RecomputePropertiesBehavior,
+    SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_execution::{RecordBatchStream, TaskContext};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use futures::{Stream, StreamExt, ready};
 use log::trace;
@@ -297,6 +298,54 @@ impl ExecutionPlan for PartialSortExec {
             tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
         }
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+        let mut new_sort_exprs = Vec::with_capacity(self.expr.len());
+        for sort_expr in self.expr.iter() {
+            let mapped = f(Arc::clone(&sort_expr.expr))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_sort_exprs.push(PhysicalSortExpr {
+                expr: mapped.expr.data,
+                options: sort_expr.options,
+            });
+        }
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+        let new_lex =
+            LexOrdering::new(new_sort_exprs).unwrap_or_else(|| self.expr.clone());
+        if any_recompute {
+            let new_node = PartialSortExec::new(
+                new_lex,
+                Arc::clone(&self.input),
+                self.common_prefix_length,
+            )
+            .with_fetch(self.fetch)
+            .with_preserve_partitioning(self.preserve_partitioning);
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            let new_node = PartialSortExec {
+                input: Arc::clone(&self.input),
+                expr: new_lex,
+                common_prefix_length: self.common_prefix_length,
+                metrics_set: ExecutionPlanMetricsSet::new(),
+                preserve_partitioning: self.preserve_partitioning,
+                fetch: self.fetch,
+                cache: Arc::clone(&self.cache),
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn with_new_children(

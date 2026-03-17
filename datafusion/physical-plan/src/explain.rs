@@ -23,11 +23,11 @@ use std::sync::Arc;
 use super::{DisplayAs, PlanProperties, SendableRecordBatchStream};
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::{DisplayFormatType, ExecutionPlan, MappedExpr, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::display::StringifiedPlan;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
@@ -127,6 +127,13 @@ impl ExecutionPlan for ExplainExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

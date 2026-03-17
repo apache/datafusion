@@ -31,10 +31,10 @@ use crate::projection::{
     ProjectionExec, all_alias_free_columns, new_projections_for_columns, update_ordering,
 };
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use crate::{ExecutionPlan, MappedExpr, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -255,6 +255,13 @@ impl ExecutionPlan for StreamingTableExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

@@ -41,7 +41,7 @@ use crate::projection::{
     try_embed_projection, update_expr,
 };
 use crate::{
-    DisplayFormatType, ExecutionPlan,
+    DisplayFormatType, ExecutionPlan, MappedExpr, RecomputePropertiesBehavior,
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics},
 };
 
@@ -51,7 +51,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
 };
@@ -533,6 +533,29 @@ impl ExecutionPlan for FilterExec {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         f(self.predicate.as_ref())
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mapped = f(Arc::clone(&self.predicate))?;
+        if !mapped.expr.transformed {
+            return Ok(Transformed::no(self));
+        }
+        let new_predicate = mapped.expr.data;
+        if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+            let new_node = FilterExecBuilder::from(&*self)
+                .with_predicate(new_predicate)
+                .build()?;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            let new_node = FilterExec {
+                predicate: new_predicate,
+                ..(*self).clone()
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

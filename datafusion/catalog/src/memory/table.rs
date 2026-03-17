@@ -32,7 +32,7 @@ use arrow::compute::{and, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{Constraints, DFSchema, SchemaExt, not_impl_err, plan_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
@@ -46,8 +46,8 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PhysicalExpr, PlanProperties, common,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, MappedExpr,
+    Partitioning, PhysicalExpr, PlanProperties, common,
 };
 use datafusion_session::Session;
 
@@ -642,5 +642,12 @@ impl ExecutionPlan for DmlResultExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 }

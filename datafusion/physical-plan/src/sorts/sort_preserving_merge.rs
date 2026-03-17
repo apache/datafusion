@@ -27,16 +27,18 @@ use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
-    check_if_same_properties,
+    MappedExpr, Partitioning, PlanProperties, RecomputePropertiesBehavior,
+    SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
+};
 
 use crate::execution_plan::{EvaluationType, SchedulingType};
 use log::{debug, trace};
@@ -301,6 +303,49 @@ impl ExecutionPlan for SortPreservingMergeExec {
             tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
         }
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+        let mut new_sort_exprs = Vec::with_capacity(self.expr.len());
+        for sort_expr in self.expr.iter() {
+            let mapped = f(Arc::clone(&sort_expr.expr))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_sort_exprs.push(PhysicalSortExpr {
+                expr: mapped.expr.data,
+                options: sort_expr.options,
+            });
+        }
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+        let new_lex =
+            LexOrdering::new(new_sort_exprs).unwrap_or_else(|| self.expr.clone());
+        if any_recompute {
+            let new_node = SortPreservingMergeExec::new(new_lex, Arc::clone(&self.input))
+                .with_fetch(self.fetch)
+                .with_round_robin_repartition(self.enable_round_robin_repartition);
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            let new_node = SortPreservingMergeExec {
+                input: Arc::clone(&self.input),
+                expr: new_lex,
+                metrics: ExecutionPlanMetricsSet::new(),
+                fetch: self.fetch,
+                cache: Arc::clone(&self.cache),
+                enable_round_robin_repartition: self.enable_round_robin_repartition,
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn with_new_children(
@@ -1431,6 +1476,12 @@ mod tests {
             _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
+        }
+        fn map_expressions(
+            self: Arc<Self>,
+            _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+        ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+            Ok(Transformed::no(self))
         }
         fn with_new_children(
             self: Arc<Self>,

@@ -54,8 +54,8 @@ use crate::projection::{
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, MappedExpr, Partitioning,
+    PlanProperties, RecomputePropertiesBehavior, SendableRecordBatchStream, Statistics,
     common::can_project,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
@@ -72,7 +72,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -1257,6 +1257,88 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+
+        // Map join key expressions (on clauses)
+        let mut new_on: Vec<(PhysicalExprRef, PhysicalExprRef)> =
+            Vec::with_capacity(self.on.len());
+        for (left, right) in self.on.iter() {
+            let mapped_left = f(Arc::clone(left))?;
+            if mapped_left.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped_left.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            let mapped_right = f(Arc::clone(right))?;
+            if mapped_right.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped_right.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_on.push((mapped_left.expr.data, mapped_right.expr.data));
+        }
+
+        // Map join filter expression if present
+        let new_filter = if let Some(filter) = &self.filter {
+            let mapped = f(Arc::clone(filter.expression()))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            Some(JoinFilter::new(
+                mapped.expr.data,
+                filter.column_indices.clone(),
+                Arc::clone(&filter.schema),
+            ))
+        } else {
+            None
+        };
+
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+
+        if any_recompute {
+            let new_node = self
+                .builder()
+                .with_on(new_on)
+                .with_filter(new_filter)
+                .recompute_properties()
+                .build_exec()?;
+            Ok(Transformed::yes(new_node))
+        } else {
+            let new_node = HashJoinExec {
+                left: Arc::clone(&self.left),
+                right: Arc::clone(&self.right),
+                on: new_on,
+                filter: new_filter,
+                join_type: self.join_type,
+                join_schema: Arc::clone(&self.join_schema),
+                left_fut: Arc::clone(&self.left_fut),
+                random_state: self.random_state.clone(),
+                mode: self.mode,
+                metrics: ExecutionPlanMetricsSet::new(),
+                projection: self.projection.clone(),
+                column_indices: self.column_indices.clone(),
+                null_equality: self.null_equality,
+                null_aware: self.null_aware,
+                cache: Arc::clone(&self.cache),
+                dynamic_filter: None,
+                fetch: self.fetch,
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     /// Creates a new HashJoinExec with different children while preserving configuration.

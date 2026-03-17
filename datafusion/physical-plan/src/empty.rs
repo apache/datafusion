@@ -23,14 +23,14 @@ use std::sync::Arc;
 use crate::memory::MemoryStream;
 use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::{
-    DisplayFormatType, ExecutionPlan, Partitioning,
+    DisplayFormatType, ExecutionPlan, MappedExpr, Partitioning,
     execution_plan::{Boundedness, EmissionType},
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{ColumnStatistics, Result, ScalarValue, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
@@ -129,6 +129,13 @@ impl ExecutionPlan for EmptyExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

@@ -35,8 +35,9 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
+    ExecutionPlanProperties, InputOrderMode, MappedExpr, PlanProperties,
+    RecomputePropertiesBehavior, RecordBatchStream, SendableRecordBatchStream,
+    Statistics, WindowExpr, check_if_same_properties,
 };
 
 use arrow::compute::take_record_batch;
@@ -48,7 +49,7 @@ use arrow::{
 };
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
@@ -336,6 +337,88 @@ impl ExecutionPlan for BoundedWindowAggExec {
             }
         }
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+        let mut new_window_exprs: Vec<Arc<dyn WindowExpr>> =
+            Vec::with_capacity(self.window_expr.len());
+
+        for window_expr in self.window_expr.iter() {
+            let all = window_expr.all_expressions();
+            let mut new_args: Vec<Arc<dyn PhysicalExpr>> =
+                Vec::with_capacity(all.args.len());
+            let mut new_partition_bys: Vec<Arc<dyn PhysicalExpr>> =
+                Vec::with_capacity(all.partition_by_exprs.len());
+            let mut new_order_bys: Vec<Arc<dyn PhysicalExpr>> =
+                Vec::with_capacity(all.order_by_exprs.len());
+
+            for arg in all.args {
+                let mapped = f(arg)?;
+                if mapped.expr.transformed {
+                    any_transformed = true;
+                }
+                if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                    any_recompute = true;
+                }
+                new_args.push(mapped.expr.data);
+            }
+            for pb in all.partition_by_exprs {
+                let mapped = f(pb)?;
+                if mapped.expr.transformed {
+                    any_transformed = true;
+                }
+                if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                    any_recompute = true;
+                }
+                new_partition_bys.push(mapped.expr.data);
+            }
+            for ob in all.order_by_exprs {
+                let mapped = f(ob)?;
+                if mapped.expr.transformed {
+                    any_transformed = true;
+                }
+                if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                    any_recompute = true;
+                }
+                new_order_bys.push(mapped.expr.data);
+            }
+
+            let new_expr = window_expr
+                .with_new_expressions(new_args, new_partition_bys, new_order_bys)
+                .unwrap_or_else(|| Arc::clone(window_expr));
+            new_window_exprs.push(new_expr);
+        }
+
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+
+        if any_recompute {
+            let new_node = BoundedWindowAggExec::try_new(
+                new_window_exprs,
+                Arc::clone(&self.input),
+                self.input_order_mode.clone(),
+                self.can_repartition,
+            )?;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            let new_node = BoundedWindowAggExec {
+                input: Arc::clone(&self.input),
+                window_expr: new_window_exprs,
+                schema: Arc::clone(&self.schema),
+                metrics: ExecutionPlanMetricsSet::new(),
+                input_order_mode: self.input_order_mode.clone(),
+                ordered_partition_by_indices: self.ordered_partition_by_indices.clone(),
+                cache: Arc::clone(&self.cache),
+                can_repartition: self.can_repartition,
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {

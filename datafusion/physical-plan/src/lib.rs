@@ -42,9 +42,10 @@ pub use datafusion_physical_expr::{
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::execution_plan::{
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,
-    displayable, execute_input_stream, execute_stream, execute_stream_partitioned,
-    get_plan_string, with_new_children_if_necessary,
+    ExecutionPlan, ExecutionPlanProperties, MappedExpr, PlanProperties,
+    RecomputePropertiesBehavior, collect, collect_partitioned, displayable,
+    execute_input_stream, execute_stream, execute_stream_partitioned, get_plan_string,
+    with_new_children_if_necessary,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;

@@ -65,6 +65,45 @@ use datafusion_physical_expr_common::sort_expr::{
 
 use futures::stream::{StreamExt, TryStreamExt};
 
+/// Controls whether plan properties (schema, ordering, partitioning) are
+/// recomputed after expressions are replaced by [`ExecutionPlan::map_expressions`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecomputePropertiesBehavior {
+    /// Recompute plan properties after expression replacement.
+    /// Use this when the transformation may change the semantics of the expressions
+    /// (e.g. changing column references, output types, sort keys).
+    Recompute,
+    /// Reuse the existing cached plan properties without recomputation.
+    /// Use this when the transformation preserves the plan's semantics
+    /// (e.g. substituting placeholder expressions with concrete values).
+    /// The caller is responsible for ensuring that properties remain valid.
+    Preserve,
+}
+
+/// Return type of the closure passed to [`ExecutionPlan::map_expressions`].
+/// Wraps a transformed expression together with a directive on whether the
+/// plan's cached properties should be recomputed after the replacement.
+pub struct MappedExpr {
+    pub expr: Transformed<Arc<dyn PhysicalExpr>>,
+    pub recompute: RecomputePropertiesBehavior,
+}
+
+impl MappedExpr {
+    pub fn recompute(expr: Transformed<Arc<dyn PhysicalExpr>>) -> Self {
+        Self {
+            expr,
+            recompute: RecomputePropertiesBehavior::Recompute,
+        }
+    }
+
+    pub fn preserve(expr: Transformed<Arc<dyn PhysicalExpr>>) -> Self {
+        Self {
+            expr,
+            recompute: RecomputePropertiesBehavior::Preserve,
+        }
+    }
+}
+
 /// Represent nodes in the DataFusion Physical Plan.
 ///
 /// Calling [`execute`] produces an `async` [`SendableRecordBatchStream`] of
@@ -280,6 +319,114 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         &self,
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
+
+    /// Apply a transformation to all expressions owned directly by this node,
+    /// returning a new node with the transformed expressions.
+    ///
+    /// This is the write counterpart to [`Self::apply_expressions`]. Like
+    /// `apply_expressions`, this only visits expressions directly owned by the
+    /// node, not expressions in child nodes.
+    ///
+    /// The closure receives each expression and returns a [`MappedExpr`] that
+    /// contains the (possibly transformed) expression and a
+    /// [`RecomputePropertiesBehavior`] directive. If **any** expression signals
+    /// [`RecomputePropertiesBehavior::Recompute`], the implementor must
+    /// recompute its [`PlanProperties`] (schema, ordering, partitioning).
+    /// Otherwise the existing cached properties may be reused.
+    ///
+    /// Use [`RecomputePropertiesBehavior::Preserve`] when the transformation
+    /// does not change which columns are referenced or their types (e.g.
+    /// substituting a placeholder `$1` with a concrete value `42`).
+    ///
+    /// Use [`RecomputePropertiesBehavior::Recompute`] when the transformation
+    /// may change the semantics of the expression in a way that affects plan
+    /// properties (e.g. replacing a sort key column reference `a` with `b`,
+    /// which invalidates the cached output ordering).
+    ///
+    /// Returns [`Transformed::no`] if no expression was changed, or
+    /// [`Transformed::yes`] with the new node if any expression was replaced.
+    ///
+    /// # Example Usage
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion_physical_plan::{ExecutionPlan, MappedExpr, RecomputePropertiesBehavior};
+    /// # use datafusion_common::tree_node::Transformed;
+    /// # fn example(plan: Arc<dyn ExecutionPlan>) -> datafusion_common::Result<()> {
+    /// // Substitute placeholder expressions, preserving plan properties.
+    /// let result = plan.map_expressions(&mut |expr| {
+    ///     Ok(MappedExpr::preserve(Transformed::no(expr)))
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// See also the unit tests in this module for examples of the `Preserve`
+    /// and `Recompute` paths:
+    /// [`test_map_expressions_preserve_reuses_cache`] and
+    /// [`test_map_expressions_recompute_produces_new_cache`].
+    ///
+    /// # Implementation Examples
+    ///
+    /// ## Node with no expressions (e.g., EmptyExec, CoalescePartitionsExec)
+    /// ```ignore
+    /// fn map_expressions(
+    ///     self: Arc<Self>,
+    ///     _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    /// ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    ///     Ok(Transformed::no(self))
+    /// }
+    /// ```
+    ///
+    /// ## Node with a single expression (e.g., FilterExec)
+    /// ```ignore
+    /// fn map_expressions(
+    ///     self: Arc<Self>,
+    ///     f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    /// ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    ///     let mapped = f(Arc::clone(&self.predicate))?;
+    ///     if !mapped.expr.transformed {
+    ///         return Ok(Transformed::no(self));
+    ///     }
+    ///     if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+    ///         // rebuild node using constructor, which calls compute_properties
+    ///         Ok(Transformed::yes(Arc::new(MyExec::new(mapped.expr.data, self.input)?)))
+    ///     } else {
+    ///         // reuse cached properties
+    ///         Ok(Transformed::yes(Arc::new(MyExec { predicate: mapped.expr.data, ..(*self).clone() })))
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ## Node with multiple expressions (e.g., SortExec, ProjectionExec)
+    /// ```ignore
+    /// fn map_expressions(
+    ///     self: Arc<Self>,
+    ///     f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    /// ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    ///     let mut any_transformed = false;
+    ///     let mut any_recompute = false;
+    ///     let mut new_exprs = Vec::with_capacity(self.exprs.len());
+    ///     for expr in &self.exprs {
+    ///         let mapped = f(Arc::clone(expr))?;
+    ///         any_transformed |= mapped.expr.transformed;
+    ///         any_recompute |= mapped.recompute == RecomputePropertiesBehavior::Recompute;
+    ///         new_exprs.push(mapped.expr.data);
+    ///     }
+    ///     if !any_transformed {
+    ///         return Ok(Transformed::no(self));
+    ///     }
+    ///     if any_recompute {
+    ///         Ok(Transformed::yes(Arc::new(MyExec::new(new_exprs, self.input)?)))
+    ///     } else {
+    ///         Ok(Transformed::yes(Arc::new(MyExec { exprs: new_exprs, cache: Arc::clone(&self.cache), ..(*self).clone() })))
+    ///     }
+    /// }
+    /// ```
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>>;
 
     /// Returns a new `ExecutionPlan` where all existing children were replaced
     /// by the `children`, in order
@@ -1639,6 +1786,13 @@ mod tests {
             Ok(TreeNodeRecursion::Continue)
         }
 
+        fn map_expressions(
+            self: Arc<Self>,
+            _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+        ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+            Ok(Transformed::no(self))
+        }
+
         fn execute(
             &self,
             _partition: usize,
@@ -1705,6 +1859,13 @@ mod tests {
             Ok(TreeNodeRecursion::Continue)
         }
 
+        fn map_expressions(
+            self: Arc<Self>,
+            _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+        ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+            Ok(Transformed::no(self))
+        }
+
         fn with_new_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
@@ -1729,10 +1890,25 @@ mod tests {
     }
 
     /// A test node that holds a fixed list of expressions, used to test
-    /// `apply_expressions` behavior.
+    /// `apply_expressions` and `map_expressions` behavior.
     #[derive(Debug)]
     struct MultiExprExec {
         exprs: Vec<Arc<dyn PhysicalExpr>>,
+        cache: Arc<PlanProperties>,
+    }
+
+    impl MultiExprExec {
+        fn new(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+            Self {
+                exprs,
+                cache: Arc::new(PlanProperties::new(
+                    EquivalenceProperties::new(Arc::new(Schema::empty())),
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Final,
+                    Boundedness::Bounded,
+                )),
+            }
+        }
     }
 
     impl DisplayAs for MultiExprExec {
@@ -1754,8 +1930,8 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &std::sync::Arc<PlanProperties> {
-            unimplemented!()
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.cache
         }
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -1778,6 +1954,42 @@ mod tests {
                 tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
             }
             Ok(tnr)
+        }
+
+        fn map_expressions(
+            self: Arc<Self>,
+            f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+        ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+            let mut any_transformed = false;
+            let mut any_recompute = false;
+            let mut new_exprs = Vec::with_capacity(self.exprs.len());
+            for expr in &self.exprs {
+                let mapped = f(Arc::clone(expr))?;
+                if mapped.expr.transformed {
+                    any_transformed = true;
+                }
+                if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                    any_recompute = true;
+                }
+                new_exprs.push(mapped.expr.data);
+            }
+            if !any_transformed {
+                return Ok(Transformed::no(self));
+            }
+            let new_node = if any_recompute {
+                // Recompute properties — in a real node this would re-derive
+                // schema, ordering, partitioning etc. from the new expressions.
+                // Here we just produce a fresh stub to show the path is taken.
+                MultiExprExec::new(new_exprs)
+            } else {
+                // Preserve properties — reuse the existing cache since the
+                // transformation does not affect plan properties.
+                MultiExprExec {
+                    exprs: new_exprs,
+                    cache: Arc::clone(&self.cache),
+                }
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
         }
 
         fn execute(
@@ -1807,9 +2019,7 @@ mod tests {
     /// `apply_expressions` visits all expressions when `f` always returns `Continue`.
     #[test]
     fn test_apply_expressions_continue_visits_all() -> Result<()> {
-        let plan = MultiExprExec {
-            exprs: vec![lit_expr(1), lit_expr(2), lit_expr(3)],
-        };
+        let plan = MultiExprExec::new(vec![lit_expr(1), lit_expr(2), lit_expr(3)]);
         let mut visited = 0usize;
         plan.apply_expressions(&mut |_expr| {
             visited += 1;
@@ -1821,9 +2031,7 @@ mod tests {
 
     #[test]
     fn test_apply_expressions_stop_halts_early() -> Result<()> {
-        let plan = MultiExprExec {
-            exprs: vec![lit_expr(1), lit_expr(2), lit_expr(3)],
-        };
+        let plan = MultiExprExec::new(vec![lit_expr(1), lit_expr(2), lit_expr(3)]);
         let mut visited = 0usize;
         let tnr = plan.apply_expressions(&mut |_expr| {
             visited += 1;
@@ -1832,6 +2040,71 @@ mod tests {
         // Only the first expression is visited; the rest are skipped.
         assert_eq!(visited, 1);
         assert_eq!(tnr, TreeNodeRecursion::Stop);
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_expressions_no_change() -> Result<()> {
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(MultiExprExec::new(vec![
+            lit_expr(1),
+            lit_expr(2),
+            lit_expr(3),
+        ]));
+        let result = plan.map_expressions(&mut |expr| {
+            Ok(MappedExpr::preserve(Transformed::no(expr)))
+        })?;
+        assert!(!result.transformed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_expressions_with_change() -> Result<()> {
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(MultiExprExec::new(vec![lit_expr(1), lit_expr(2)]));
+        // Replace every expression with lit(99)
+        let result = plan.map_expressions(&mut |_expr| {
+            Ok(MappedExpr::preserve(Transformed::yes(lit_expr(99))))
+        })?;
+        assert!(result.transformed);
+        // The new node should have 2 expressions, both lit(99)
+        let mut visited = 0usize;
+        result.data.apply_expressions(&mut |_| {
+            visited += 1;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(visited, 2);
+        Ok(())
+    }
+
+    /// `map_expressions` with `Preserve` reuses the existing cache pointer.
+    #[test]
+    fn test_map_expressions_preserve_reuses_cache() -> Result<()> {
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(MultiExprExec::new(vec![lit_expr(1)]));
+        let original_cache = Arc::clone(plan.properties());
+
+        let result = plan.map_expressions(&mut |_expr| {
+            Ok(MappedExpr::preserve(Transformed::yes(lit_expr(99))))
+        })?;
+        assert!(result.transformed);
+        // Cache pointer is the same — no recomputation occurred.
+        assert!(Arc::ptr_eq(&original_cache, result.data.properties()));
+        Ok(())
+    }
+
+    /// `map_expressions` with `Recompute` produces a fresh cache.
+    #[test]
+    fn test_map_expressions_recompute_produces_new_cache() -> Result<()> {
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(MultiExprExec::new(vec![lit_expr(1)]));
+        let original_cache = Arc::clone(plan.properties());
+
+        let result = plan.map_expressions(&mut |_expr| {
+            Ok(MappedExpr::recompute(Transformed::yes(lit_expr(99))))
+        })?;
+        assert!(result.transformed);
+        // Cache pointer differs — properties were recomputed.
+        assert!(!Arc::ptr_eq(&original_cache, result.data.properties()));
         Ok(())
     }
 

@@ -32,11 +32,11 @@ use crate::memory::MemoryStream;
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
-use crate::{DisplayAs, DisplayFormatType, PlanProperties};
+use crate::{DisplayAs, DisplayFormatType, MappedExpr, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     Result, Statistics, assert_or_internal_err, config::ConfigOptions, project_schema,
 };
@@ -157,6 +157,13 @@ impl ExecutionPlan for TestMemoryExec {
             }
         }
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

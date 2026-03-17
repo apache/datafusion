@@ -41,8 +41,8 @@ use datafusion_physical_plan::projection::{
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, MappedExpr,
+    PlanProperties, SendableRecordBatchStream,
 };
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
@@ -327,6 +327,15 @@ impl ExecutionPlan for OutputRequirementExec {
         }
 
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(
+            Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+        ) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 }
 

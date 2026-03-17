@@ -33,7 +33,7 @@ use crate::projection::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    ExecutionPlanProperties, MappedExpr, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics, check_if_same_properties, handle_state,
 };
 
@@ -41,7 +41,7 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
 };
@@ -293,6 +293,13 @@ impl ExecutionPlan for CrossJoinExec {
     ) -> Result<TreeNodeRecursion> {
         // CrossJoin has no join conditions or expressions
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

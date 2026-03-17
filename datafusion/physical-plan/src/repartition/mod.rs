@@ -40,8 +40,8 @@ use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
-    check_if_same_properties,
+    DisplayFormatType, ExecutionPlan, MappedExpr, Partitioning, PlanProperties,
+    RecomputePropertiesBehavior, Statistics, check_if_same_properties,
 };
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
@@ -49,7 +49,7 @@ use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::transpose;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err,
@@ -928,6 +928,57 @@ impl ExecutionPlan for RepartitionExec {
             return Ok(tnr);
         }
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let Partitioning::Hash(exprs, n) = self.partitioning() else {
+            return Ok(Transformed::no(self));
+        };
+        let n = *n;
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+        let mut new_exprs = Vec::with_capacity(exprs.len());
+        for expr in exprs.iter() {
+            let mapped = f(Arc::clone(expr))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_exprs.push(mapped.expr.data);
+        }
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+        let new_partitioning = Partitioning::Hash(new_exprs, n);
+        // For Preserve, we still need to update the partitioning in the cache.
+        // For both branches, rebuild using try_new (which recomputes cache).
+        // The Preserve case skips full property recompute by reusing cache structure
+        // but partitioning must be updated.
+        if any_recompute {
+            let mut new_node =
+                RepartitionExec::try_new(Arc::clone(&self.input), new_partitioning)?;
+            if self.preserve_order {
+                new_node = new_node.with_preserve_order();
+            }
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            // For preserve, update the partitioning in cache directly
+            let mut new_cache = (*self.cache).clone();
+            new_cache.partitioning = new_partitioning;
+            let new_node = RepartitionExec {
+                input: Arc::clone(&self.input),
+                state: Default::default(),
+                metrics: ExecutionPlanMetricsSet::new(),
+                preserve_order: self.preserve_order,
+                cache: Arc::new(new_cache),
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn with_new_children(

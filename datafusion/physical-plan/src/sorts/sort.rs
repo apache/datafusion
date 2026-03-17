@@ -50,15 +50,15 @@ use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    ExecutionPlanProperties, MappedExpr, Partitioning, PlanProperties,
+    RecomputePropertiesBehavior, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
@@ -1204,6 +1204,45 @@ impl ExecutionPlan for SortExec {
         Ok(tnr)
     }
 
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+        let mut new_sort_exprs = Vec::with_capacity(self.expr.len());
+        for sort_expr in self.expr.iter() {
+            let mapped = f(Arc::clone(&sort_expr.expr))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_sort_exprs.push(PhysicalSortExpr {
+                expr: mapped.expr.data,
+                options: sort_expr.options,
+            });
+        }
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+        let new_lex =
+            LexOrdering::new(new_sort_exprs).unwrap_or_else(|| self.expr.clone());
+        if any_recompute {
+            let mut new_sort = SortExec::new(new_lex, Arc::clone(&self.input));
+            new_sort.preserve_partitioning = self.preserve_partitioning;
+            if let Some(fetch) = self.fetch {
+                new_sort = new_sort.with_fetch(Some(fetch));
+            }
+            Ok(Transformed::yes(Arc::new(new_sort) as _))
+        } else {
+            let mut new_sort = self.cloned();
+            new_sort.expr = new_lex;
+            Ok(Transformed::yes(Arc::new(new_sort) as _))
+        }
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }
@@ -1503,6 +1542,13 @@ mod tests {
             _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn map_expressions(
+            self: Arc<Self>,
+            _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+        ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+            Ok(Transformed::no(self))
         }
 
         fn execute(

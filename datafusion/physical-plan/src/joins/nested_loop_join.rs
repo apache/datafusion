@@ -45,8 +45,8 @@ use crate::projection::{
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    check_if_same_properties,
+    MappedExpr, PlanProperties, RecomputePropertiesBehavior, RecordBatchStream,
+    SendableRecordBatchStream, check_if_same_properties,
 };
 
 use arrow::array::{
@@ -61,7 +61,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     JoinSide, Result, ScalarValue, Statistics, arrow_err, assert_eq_or_internal_err,
     internal_datafusion_err, internal_err, project_schema, unwrap_or_internal_err,
@@ -567,6 +567,47 @@ impl ExecutionPlan for NestedLoopJoinExec {
             f(filter.expression().as_ref())?;
         }
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn crate::PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let Some(filter) = &self.filter else {
+            return Ok(Transformed::no(self));
+        };
+
+        let mapped = f(Arc::clone(filter.expression()))?;
+        if !mapped.expr.transformed {
+            return Ok(Transformed::no(self));
+        }
+
+        let new_filter = Some(JoinFilter::new(
+            mapped.expr.data,
+            filter.column_indices.clone(),
+            Arc::clone(&filter.schema),
+        ));
+
+        if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+            let new_node = NestedLoopJoinExecBuilder::from(&*self)
+                .with_filter(new_filter)
+                .build()?;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            let new_node = NestedLoopJoinExec {
+                left: Arc::clone(&self.left),
+                right: Arc::clone(&self.right),
+                filter: new_filter,
+                join_type: self.join_type,
+                join_schema: Arc::clone(&self.join_schema),
+                build_side_data: Default::default(),
+                column_indices: self.column_indices.clone(),
+                projection: self.projection.clone(),
+                metrics: Default::default(),
+                cache: Arc::clone(&self.cache),
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn with_new_children(

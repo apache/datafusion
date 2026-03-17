@@ -23,7 +23,7 @@ use arrow::{
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::not_impl_err;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{JoinSide, Result, internal_err};
 use datafusion_execution::{
     SendableRecordBatchStream,
@@ -53,7 +53,8 @@ use crate::joins::piecewise_merge_join::utils::{
 use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, check_if_same_properties,
+    DisplayAs, DisplayFormatType, ExecutionPlanProperties, MappedExpr,
+    RecomputePropertiesBehavior, check_if_same_properties,
 };
 use crate::{
     ExecutionPlan, PlanProperties,
@@ -518,6 +519,68 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     ) -> Result<TreeNodeRecursion> {
         // Apply to the two expressions being compared in the range predicate
         f(self.on.0.as_ref())?.visit_sibling(|| f(self.on.1.as_ref()))
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mapped_left = f(Arc::clone(&self.on.0))?;
+        let mapped_right = f(Arc::clone(&self.on.1))?;
+
+        let any_transformed =
+            mapped_left.expr.transformed || mapped_right.expr.transformed;
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+
+        let any_recompute = mapped_left.recompute
+            == RecomputePropertiesBehavior::Recompute
+            || mapped_right.recompute == RecomputePropertiesBehavior::Recompute;
+
+        let new_on = (mapped_left.expr.data, mapped_right.expr.data);
+
+        if any_recompute {
+            let new_node = PiecewiseMergeJoinExec::try_new(
+                Arc::clone(&self.buffered),
+                Arc::clone(&self.streamed),
+                new_on,
+                self.operator,
+                self.join_type,
+                self.num_partitions,
+            )?;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            // Rebuild sort exprs from new on + existing sort options
+            let new_left_sort_exprs = vec![PhysicalSortExpr::new(
+                Arc::clone(&new_on.0),
+                self.sort_options,
+            )];
+            let new_right_sort_exprs = vec![PhysicalSortExpr::new(
+                Arc::clone(&new_on.1),
+                self.sort_options,
+            )];
+            let new_left_lex = LexOrdering::new(new_left_sort_exprs)
+                .unwrap_or_else(|| self.left_child_plan_required_order.clone());
+            let new_right_lex = LexOrdering::new(new_right_sort_exprs)
+                .unwrap_or_else(|| self.right_batch_required_orders.clone());
+            let new_node = PiecewiseMergeJoinExec {
+                buffered: Arc::clone(&self.buffered),
+                streamed: Arc::clone(&self.streamed),
+                on: new_on,
+                operator: self.operator,
+                join_type: self.join_type,
+                schema: Arc::clone(&self.schema),
+                buffered_fut: Default::default(),
+                metrics: ExecutionPlanMetricsSet::new(),
+                left_child_plan_required_order: new_left_lex,
+                right_batch_required_orders: new_right_lex,
+                sort_options: self.sort_options,
+                cache: Arc::clone(&self.cache),
+                num_partitions: self.num_partitions,
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

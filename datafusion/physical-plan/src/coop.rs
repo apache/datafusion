@@ -71,7 +71,7 @@
 //! that report [`SchedulingType::NonCooperative`] in their [plan properties](ExecutionPlan::properties).
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_physical_expr::PhysicalExpr;
 #[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
@@ -87,8 +87,9 @@ use crate::filter_pushdown::{
 };
 use crate::projection::ProjectionExec;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, SortOrderPushdownResult, check_if_same_properties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, MappedExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, SortOrderPushdownResult,
+    check_if_same_properties,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
@@ -287,6 +288,13 @@ impl ExecutionPlan for CooperativeExec {
         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        _f: &mut dyn FnMut(Arc<dyn PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        Ok(Transformed::no(self))
     }
 
     fn with_new_children(

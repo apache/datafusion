@@ -39,12 +39,13 @@ use crate::projection::{
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, SendableRecordBatchStream, Statistics, check_if_same_properties,
+    MappedExpr, PlanProperties, RecomputePropertiesBehavior, SendableRecordBatchStream,
+    Statistics, check_if_same_properties,
 };
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
     plan_err,
@@ -466,6 +467,103 @@ impl ExecutionPlan for SortMergeJoinExec {
             tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
         }
         Ok(tnr)
+    }
+
+    fn map_expressions(
+        self: Arc<Self>,
+        f: &mut dyn FnMut(Arc<dyn crate::PhysicalExpr>) -> Result<MappedExpr>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let mut any_transformed = false;
+        let mut any_recompute = false;
+
+        // Map join key expressions (on clauses)
+        let mut new_on: JoinOn = Vec::with_capacity(self.on.len());
+        for (left, right) in self.on.iter() {
+            let mapped_left = f(Arc::clone(left))?;
+            if mapped_left.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped_left.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            let mapped_right = f(Arc::clone(right))?;
+            if mapped_right.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped_right.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            new_on.push((mapped_left.expr.data, mapped_right.expr.data));
+        }
+
+        // Map join filter expression if present
+        let new_filter = if let Some(filter) = &self.filter {
+            let mapped = f(Arc::clone(filter.expression()))?;
+            if mapped.expr.transformed {
+                any_transformed = true;
+            }
+            if mapped.recompute == RecomputePropertiesBehavior::Recompute {
+                any_recompute = true;
+            }
+            Some(JoinFilter::new(
+                mapped.expr.data,
+                filter.column_indices.clone(),
+                Arc::clone(&filter.schema),
+            ))
+        } else {
+            None
+        };
+
+        if !any_transformed {
+            return Ok(Transformed::no(self));
+        }
+
+        if any_recompute {
+            let new_node = SortMergeJoinExec::try_new(
+                Arc::clone(&self.left),
+                Arc::clone(&self.right),
+                new_on,
+                new_filter,
+                self.join_type,
+                self.sort_options.clone(),
+                self.null_equality,
+            )?;
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        } else {
+            // Rebuild sort exprs from new on + existing sort options
+            let (new_left_sort_exprs, new_right_sort_exprs): (Vec<_>, Vec<_>) = new_on
+                .iter()
+                .zip(self.sort_options.iter())
+                .map(|((l, r), sort_op)| {
+                    let left = PhysicalSortExpr {
+                        expr: Arc::clone(l),
+                        options: *sort_op,
+                    };
+                    let right = PhysicalSortExpr {
+                        expr: Arc::clone(r),
+                        options: *sort_op,
+                    };
+                    (left, right)
+                })
+                .unzip();
+            let new_node = SortMergeJoinExec {
+                left: Arc::clone(&self.left),
+                right: Arc::clone(&self.right),
+                on: new_on,
+                filter: new_filter,
+                join_type: self.join_type,
+                schema: Arc::clone(&self.schema),
+                metrics: ExecutionPlanMetricsSet::new(),
+                left_sort_exprs: LexOrdering::new(new_left_sort_exprs)
+                    .unwrap_or_else(|| self.left_sort_exprs.clone()),
+                right_sort_exprs: LexOrdering::new(new_right_sort_exprs)
+                    .unwrap_or_else(|| self.right_sort_exprs.clone()),
+                sort_options: self.sort_options.clone(),
+                null_equality: self.null_equality,
+                cache: Arc::clone(&self.cache),
+            };
+            Ok(Transformed::yes(Arc::new(new_node) as _))
+        }
     }
 
     fn with_new_children(
