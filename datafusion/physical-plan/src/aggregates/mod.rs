@@ -71,7 +71,7 @@ use topk::heap::is_supported_heap_type;
 pub mod group_values;
 mod no_grouping;
 pub mod order;
-mod row_hash;
+pub(crate) mod row_hash;
 mod topk;
 mod topk_stream;
 

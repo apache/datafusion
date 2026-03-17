@@ -36,6 +36,7 @@ use crate::topk_aggregation::TopKAggregation;
 use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
+use crate::group_join::GroupJoinOptimization;
 use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
@@ -105,6 +106,10 @@ impl PhysicalOptimizer {
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
+            // GroupJoin fuses AggregateExec + HashJoinExec into a single GroupJoinExec
+            // when group-by columns come from the left side and aggregates from the right side.
+            // Must run before EnforceDistribution as that may insert operators between them.
+            Arc::new(GroupJoinOptimization::new()),
             // The FilterPushdown rule tries to push down filters as far as it can.
             // For example, it will push down filtering from a `FilterExec` to `DataSourceExec`.
             // Note that this does not push down dynamic filters (such as those created by a `SortExec` operator in TopK mode),
