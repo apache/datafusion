@@ -40,6 +40,7 @@ use std::sync::Arc;
 define_udwf_and_expr!(
     RowNumber,
     row_number,
+    row_number_udwf,
     "Returns a unique row number for each row in window partition beginning at 1."
 );
 

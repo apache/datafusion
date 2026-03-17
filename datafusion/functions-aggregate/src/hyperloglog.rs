@@ -34,7 +34,7 @@
 //!
 //! This module also borrows some code structure from [pdatastructs.rs](https://github.com/crepererum/pdatastructs.rs/blob/3997ed50f6b6871c9e53c4c5e0f48f431405fc63/src/hyperloglog.rs).
 
-use ahash::RandomState;
+use std::hash::BuildHasher;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
@@ -61,12 +61,7 @@ where
 /// shared across cluster, this SEED will have to be consistent across all
 /// parties otherwise we might have corruption. So ideally for later this seed
 /// shall be part of the serialized form (or stay unchanged across versions).
-const SEED: RandomState = RandomState::with_seeds(
-    0x885f6cab121d01a3_u64,
-    0x71e4379f2976ad8f_u64,
-    0xbf30173dd28a8816_u64,
-    0x0eaea5d736d733a4_u64,
-);
+const SEED: foldhash::quality::FixedState = foldhash::quality::FixedState::with_seed(0);
 
 impl<T> Default for HyperLogLog<T>
 where
@@ -97,7 +92,7 @@ where
         }
     }
 
-    /// choice of hash function: ahash is already an dependency
+    /// choice of hash function: foldhash is already an dependency
     /// and it fits the requirements of being a 64bit hash with
     /// reasonable performance.
     #[inline]

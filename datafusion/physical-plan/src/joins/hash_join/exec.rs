@@ -89,7 +89,7 @@ use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, l
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
@@ -99,7 +99,7 @@ use super::partitioned_hash_eval::SeededRandomState;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 pub(crate) const HASH_JOIN_SEED: SeededRandomState =
-    SeededRandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
+    SeededRandomState::with_seed(12210250226015887276);
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
@@ -4304,7 +4304,7 @@ mod tests {
             ("y", &vec![200, 300]),
         );
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let hashes_buff = &mut vec![0; left.num_rows()];
         let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 
@@ -4371,7 +4371,7 @@ mod tests {
             ("y", &vec![200, 300]),
         );
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let hashes_buff = &mut vec![0; left.num_rows()];
         let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 

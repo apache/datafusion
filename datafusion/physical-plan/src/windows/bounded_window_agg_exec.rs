@@ -67,7 +67,7 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 
 use crate::execution_plan::CardinalityEffect;
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use futures::stream::Stream;
 use futures::{StreamExt, ready};
 use hashbrown::hash_table::HashTable;

@@ -39,6 +39,7 @@ use std::sync::Arc;
 define_udwf_and_expr!(
     CumeDist,
     cume_dist,
+    cume_dist_udwf,
     "Calculates the cumulative distribution of a value in a group of values."
 );
 
