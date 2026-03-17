@@ -99,6 +99,11 @@ If you are concerned that a larger design will be lost in a string of small PRs,
 
 Note all commits in a PR are squashed when merged to the `main` branch so there is one commit per PR after merge.
 
+## Release Management and Backports
+
+Contributor-facing guidance for release branches, patch releases, and backports
+is documented in the [Release Management](release_management.md) guide.
+
 ## Conventional Commits & Labeling PRs
 
 We generate change logs for each release using an automated process that will categorize PRs based on the title

@@ -19,59 +19,13 @@
 
 # Release Process
 
-DataFusion typically has major releases around once per month, including breaking API changes.
+For contributor-facing guidance on release branches and backports, see the
+[Contributor Guide Release Management page](../../docs/source/contributor-guide/release_management.md).
 
-Patch releases are made on an adhoc basis, but we try and avoid them given the frequent major releases.
-
-## Release Process Overview
-
-New development happens on the `main` branch.
-Releases are made from branches, e.g. `branch-50` for the `50.x.y` release series.
-
-To prepare for a new release series, we:
-
-- Create a new branch from `main`, such as `branch-50` in the Apache repository (not in a fork)
-- Continue merging new features changes to `main` branch
-- Prepare the release branch for release:
-  - Update version numbers in `Cargo.toml` files and create `CHANGELOG.md`
-  - Add additional changes to the release branch as needed
-- When the code is ready, create GitHub tags release candidate (rc) artifacts from the release branch.
-- After the release is approved, publish to [crates.io], the ASF distribution servers, and GitHub tags.
-
-To add changes to the release branch, depending on the change we either:
-
-- Fix the issue on `main` and then backport the change to the release branch (e.g. [#18129])
-- Fix the issue on the release branch and then forward-port the change back to `main` (e.g.[#18057])
+The rest of this guide contains the commands for maintainers to create release
+candidates and run the release process.
 
 [crates.io]: https://crates.io/crates/datafusion
-[#18129]: https://github.com/apache/datafusion/pull/18129
-[#18057]: https://github.com/apache/datafusion/pull/18057
-
-## Backporting (add changes) to `branch-*` branch
-
-If you would like to propose your change for inclusion in a patch release, the
-change must be applied to the relevant release branch. To do so please follow
-these steps:
-
-1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
-2. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
-3. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-50`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
-
-For example, to backport commit `12345` from `main` to `branch-50`:
-
-```shell
-git checkout branch-50
-git checkout -b backport_to_50
-git cherry-pick 12345 # your git commit hash
-git push -u <your fork>
-# make a PR as normal targeting branch-50, prefixed with [branch-50]
-```
-
-It is also acceptable to fix the issue directly on the release branch first
-and then cherry-pick the change back to `main` branch in a new PR.
-
-[example release issue]: https://github.com/apache/datafusion/issues/18072
-[example backport pr]: https://github.com/apache/datafusion/pull/18131
 
 ## Release Prerequisites
 
