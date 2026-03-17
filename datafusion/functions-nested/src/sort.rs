@@ -151,7 +151,7 @@ impl ScalarUDFImpl for ArraySort {
     }
 }
 
-fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 3 {
         return exec_err!("array_sort expects one to three arguments");
     }
