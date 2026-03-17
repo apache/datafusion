@@ -32,7 +32,7 @@ use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::joins::HashJoinExec;
-use datafusion_physical_plan::joins::group_join::GroupJoinExec;
+use datafusion_physical_plan::joins::group_join::{GroupBySide, GroupJoinExec};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 
@@ -219,46 +219,81 @@ fn try_create_group_join(
         Some(key_subst.get(&resolved).copied().unwrap_or(resolved))
     };
 
-    // Group-by expressions must all resolve to left-side join columns (after substitution)
+    // Classify each group-by column as left-side or right-side.
+    // Left-side: resolves (with key substitution) to left schema.
+    // Right-side: resolves to right schema (any right column, not just join keys).
+    let mut group_by_order: Vec<GroupBySide> = Vec::new();
     for (expr, _alias) in group_by.expr() {
-        if !expr_columns_in_side(expr.as_ref(), &resolve_gby, 0, left_field_count) {
+        if expr_columns_in_side(expr.as_ref(), &resolve_gby, 0, left_field_count) {
+            group_by_order.push(GroupBySide::Left);
+        } else if expr_columns_in_side(
+            expr.as_ref(),
+            &*resolve_index,
+            left_field_count,
+            usize::MAX,
+        ) {
+            group_by_order.push(GroupBySide::Right);
+        } else {
+            // Expression references neither side cleanly (e.g. spans both)
             return Ok(None);
         }
     }
 
-    // Aggregate arguments must all resolve to right-side join columns
+    // Classify each aggregate's argument expressions: all must resolve to a single side.
+    let mut aggr_arg_sides: Vec<GroupBySide> = Vec::new();
     for agg_expr in agg_exec.aggr_expr() {
-        for arg in agg_expr.expressions() {
-            if !expr_columns_in_side(
-                arg.as_ref(),
-                &*resolve_index,
-                left_field_count,
-                usize::MAX,
-            ) {
-                return Ok(None);
+        let args = agg_expr.expressions();
+        if args.is_empty() {
+            // COUNT(*) style — treat as right side (no actual args to evaluate)
+            aggr_arg_sides.push(GroupBySide::Right);
+            continue;
+        }
+        let all_right = args.iter().all(|arg| {
+            expr_columns_in_side(arg.as_ref(), &*resolve_index, left_field_count, usize::MAX)
+        });
+        let all_left = args.iter().all(|arg| {
+            expr_columns_in_side(arg.as_ref(), &*resolve_index, 0, left_field_count)
+        });
+        if all_right {
+            aggr_arg_sides.push(GroupBySide::Right);
+        } else if all_left {
+            aggr_arg_sides.push(GroupBySide::Left);
+        } else {
+            // Args span both sides — cannot fuse
+            return Ok(None);
+        }
+    }
+
+    // Remap group-by into left and right lists, preserving the group_by_order mapping
+    let mut left_gby: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+    let mut right_gby: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+    for ((expr, alias), &side) in group_by.expr().iter().zip(group_by_order.iter()) {
+        match side {
+            GroupBySide::Left => {
+                left_gby.push((remap_columns(expr, &resolve_gby, 0), alias.clone()));
+            }
+            GroupBySide::Right => {
+                right_gby
+                    .push((remap_columns(expr, &*resolve_index, left_field_count), alias.clone()));
             }
         }
     }
 
-    // Remap group-by expressions to reference the left input schema directly (with substitution)
-    let remapped_group_by: Vec<_> = group_by
-        .expr()
-        .iter()
-        .map(|(expr, alias)| {
-            let remapped = remap_columns(expr, &resolve_gby, 0);
-            (remapped, alias.clone())
-        })
-        .collect();
-
-    // Remap aggregate arguments to reference the right input schema directly
+    // Remap aggregate arguments to reference the appropriate input schema
     let remapped_aggr_exprs: Option<Vec<_>> = agg_exec
         .aggr_expr()
         .iter()
-        .map(|expr| {
+        .zip(aggr_arg_sides.iter())
+        .map(|(expr, &side)| {
+            let offset = if side == GroupBySide::Right {
+                left_field_count
+            } else {
+                0
+            };
             let remapped_args: Vec<Arc<dyn PhysicalExpr>> = expr
                 .expressions()
                 .iter()
-                .map(|a| remap_columns(a, &*resolve_index, left_field_count))
+                .map(|a| remap_columns(a, &*resolve_index, offset))
                 .collect();
             expr.with_new_expressions(remapped_args, vec![])
         })
@@ -270,13 +305,16 @@ fn try_create_group_join(
     let remapped_aggr_exprs: Vec<_> =
         remapped_aggr_exprs.into_iter().map(Arc::new).collect();
 
-    GroupJoinExec::try_new(
+    GroupJoinExec::try_new_extended(
         *agg_exec.mode(),
         Arc::clone(hash_join.left()),
         Arc::clone(hash_join.right()),
         hash_join.on().to_vec(),
-        remapped_group_by,
+        left_gby,
+        right_gby,
+        group_by_order,
         remapped_aggr_exprs,
+        aggr_arg_sides,
         Arc::clone(&agg_exec.schema()),
     )
     .map(Some)
