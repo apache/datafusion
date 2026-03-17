@@ -490,7 +490,6 @@ pub fn serialize_physical_expr_with_converter(
             ))),
         })
     } else if let Some(expr) = expr.downcast_ref::<HashExpr>() {
-        let (s0, s1, s2, s3) = expr.seeds();
         Ok(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
@@ -500,10 +499,7 @@ pub fn serialize_physical_expr_with_converter(
                         codec,
                         proto_converter,
                     )?,
-                    seed0: s0,
-                    seed1: s1,
-                    seed2: s2,
-                    seed3: s3,
+                    seed0: expr.seed(),
                     description: expr.description().to_string(),
                 },
             )),

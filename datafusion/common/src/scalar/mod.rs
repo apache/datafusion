@@ -996,7 +996,7 @@ impl Hash for ScalarValue {
 fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
     let len = arr.len();
     let hashes_buffer = &mut vec![0; len];
-    let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+    let random_state = crate::hash_utils::RandomState::with_seed(0);
     let hashes = create_hashes(&[arr], &random_state, hashes_buffer)
         .expect("hash_nested_array: failed to create row hashes");
     // Hash back to std::hash::Hasher
@@ -3675,6 +3675,22 @@ impl ScalarValue {
                 SingleRowListArrayBuilder::new(nested_array)
                     .with_field(field)
                     .build_fixed_size_list_scalar(list_size)
+            }
+            DataType::ListView(field) => {
+                let list_array = array.as_list_view::<i32>();
+                let nested_array = list_array.value(index);
+                // Store as List scalar since ScalarValue has no ListView variant.
+                SingleRowListArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_list_scalar()
+            }
+            DataType::LargeListView(field) => {
+                let list_array = array.as_list_view::<i64>();
+                let nested_array = list_array.value(index);
+                // Store as LargeList scalar since ScalarValue has no LargeListView variant.
+                SingleRowListArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_large_list_scalar()
             }
             DataType::Date32 => typed_cast!(array, index, as_date32_array, Date32)?,
             DataType::Date64 => typed_cast!(array, index, as_date64_array, Date64)?,
