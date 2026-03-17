@@ -52,12 +52,35 @@ impl GroupOrdering {
         }
     }
 
-    // How many groups be emitted, or None if no data can be emitted
+    /// Returns how many groups be emitted while respecting the current ordering
+    /// guarantees, or `None` if no data can be emitted
     pub fn emit_to(&self) -> Option<EmitTo> {
         match self {
             GroupOrdering::None => None,
             GroupOrdering::Partial(partial) => partial.emit_to(),
             GroupOrdering::Full(full) => full.emit_to(),
+        }
+    }
+
+    /// Returns the emit strategy to use under memory pressure (OOM).
+    ///
+    /// Returns the strategy that must be used when emitting up to `n` groups
+    /// while respecting the current ordering guarantees.
+    ///
+    /// Returns `None` if no data can be emitted.
+    pub fn oom_emit_to(&self, n: usize) -> Option<EmitTo> {
+        if n == 0 {
+            return None;
+        }
+
+        match self {
+            GroupOrdering::None => Some(EmitTo::First(n)),
+            GroupOrdering::Partial(_) | GroupOrdering::Full(_) => {
+                self.emit_to().map(|emit_to| match emit_to {
+                    EmitTo::First(max) => EmitTo::First(n.min(max)),
+                    EmitTo::All => EmitTo::First(n),
+                })
+            }
         }
     }
 
@@ -120,5 +143,61 @@ impl GroupOrdering {
                 GroupOrdering::Partial(partial) => partial.size(),
                 GroupOrdering::Full(full) => full.size(),
             }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use arrow::array::{ArrayRef, Int32Array};
+
+    #[test]
+    fn test_oom_emit_to_none_ordering() {
+        let group_ordering = GroupOrdering::None;
+
+        assert_eq!(group_ordering.oom_emit_to(0), None);
+        assert_eq!(group_ordering.oom_emit_to(5), Some(EmitTo::First(5)));
+    }
+
+    #[test]
+    fn test_oom_emit_to_partial_clamps_to_boundary() -> Result<()> {
+        let mut group_ordering =
+            GroupOrdering::Partial(GroupOrderingPartial::try_new(vec![0])?);
+
+        let batch_group_values: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+        ];
+        let group_indices = vec![0, 1, 2];
+
+        group_ordering.new_groups(&batch_group_values, &group_indices, 3)?;
+
+        assert_eq!(group_ordering.emit_to(), Some(EmitTo::First(2)));
+        assert_eq!(group_ordering.oom_emit_to(1), Some(EmitTo::First(1)));
+        assert_eq!(group_ordering.oom_emit_to(3), Some(EmitTo::First(2)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_oom_emit_to_partial_without_boundary() -> Result<()> {
+        let mut group_ordering =
+            GroupOrdering::Partial(GroupOrderingPartial::try_new(vec![0])?);
+
+        let batch_group_values: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![1, 1, 1])),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+        ];
+        let group_indices = vec![0, 1, 2];
+
+        group_ordering.new_groups(&batch_group_values, &group_indices, 3)?;
+
+        assert_eq!(group_ordering.emit_to(), None);
+        assert_eq!(group_ordering.oom_emit_to(3), None);
+
+        Ok(())
     }
 }
