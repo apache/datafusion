@@ -653,7 +653,7 @@ impl HashJoinStream {
         if is_empty && self.filter.is_none() {
             let result = build_batch_empty_build_side(
                 &self.schema,
-                &build_side.left_data.batch(),
+                &build_side.left_data.batch().schema(),
                 &state.batch,
                 &self.column_indices,
                 self.join_type,
