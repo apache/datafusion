@@ -158,7 +158,7 @@ pub trait Dialect: Send + Sync {
     ) -> Result<Option<ast::Expr>> {
         Ok(None)
     }
-    
+
     /// Allows the dialect to override lambda function unparsing if the dialect has specific rules.
     /// Returns None if the default unparsing should be used, or Some(ast::Expr) if there is
     /// a custom implementation for the function.

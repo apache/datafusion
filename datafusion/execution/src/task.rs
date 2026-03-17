@@ -21,7 +21,7 @@ use crate::{
 };
 use datafusion_common::{Result, internal_datafusion_err, plan_datafusion_err};
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, ScalarUDF, LambdaUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, LambdaUDF, ScalarUDF, WindowUDF};
 use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
 

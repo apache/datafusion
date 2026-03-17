@@ -3410,9 +3410,7 @@ impl Display for SchemaDisplay<'_> {
                     SchemaDisplay(body)
                 )
             }
-            Expr::LambdaVariable(c) => {
-                f.write_str(&c.name)
-            }
+            Expr::LambdaVariable(c) => f.write_str(&c.name),
         }
     }
 }

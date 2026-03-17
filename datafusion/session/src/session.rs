@@ -109,7 +109,7 @@ pub trait Session: Send + Sync {
 
     /// Return reference to scalar_functions
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>>;
-    
+
     /// Return reference to lambda_functions
     fn lambda_functions(&self) -> &HashMap<String, Arc<dyn LambdaUDF>>;
 

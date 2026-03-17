@@ -735,7 +735,10 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_lambda_meta(&self, _name: &str) -> Option<Arc<dyn datafusion_expr::LambdaUDF>> {
+    fn get_lambda_meta(
+        &self,
+        _name: &str,
+    ) -> Option<Arc<dyn datafusion_expr::LambdaUDF>> {
         None
     }
 

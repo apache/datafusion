@@ -32,10 +32,10 @@ pub mod binary_map {
     pub use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
 }
 pub mod async_scalar_function;
-pub mod lambda_function;
 pub mod equivalence;
 pub mod expressions;
 pub mod intervals;
+pub mod lambda_function;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
@@ -70,9 +70,9 @@ pub use datafusion_physical_expr_common::sort_expr::{
     PhysicalSortRequirement,
 };
 
+pub use lambda_function::LambdaFunctionExpr;
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
-pub use lambda_function::LambdaFunctionExpr;
 pub use simplifier::PhysicalExprSimplifier;
 pub use utils::{conjunction, conjunction_opt, split_conjunction};
 

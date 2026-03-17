@@ -39,7 +39,9 @@ impl FunctionRegistry for NoRegistry {
     }
 
     fn udlf(&self, name: &str) -> Result<Arc<dyn datafusion_expr::LambdaUDF>> {
-        plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Lambda Function '{name}'")
+        plan_err!(
+            "No function registry provided to deserialize, so can not deserialize User Defined Lambda Function '{name}'"
+        )
     }
 
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {

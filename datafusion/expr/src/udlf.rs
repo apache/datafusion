@@ -23,7 +23,7 @@ use crate::{ColumnarValue, Documentation, Expr};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::signature::Volatility;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -148,7 +148,8 @@ impl PartialOrd for dyn LambdaUDF {
             "Detected incorrect implementation of PartialEq when comparing functions: '{}' and '{}'. \
             The functions compare as equal, but they are not equal based on general properties that \
             the PartialOrd implementation observes,",
-            self.name(), other.name()
+            self.name(),
+            other.name()
         );
         Some(cmp)
     }
@@ -169,8 +170,8 @@ pub struct LambdaFunctionArgs {
     /// The evaluated arguments and lambdas to the function
     pub args: Vec<ValueOrLambda<ColumnarValue, LambdaArgument>>,
     /// Field associated with each arg, if it exists
-    /// For lambdas, it will be the field of the result of 
-    /// the lambda if evaluated with the parameters 
+    /// For lambdas, it will be the field of the result of
+    /// the lambda if evaluated with the parameters
     /// returned from [`LambdaUDF::lambdas_parameters`]
     pub arg_fields: Vec<ValueOrLambda<FieldRef, FieldRef>>,
     /// The number of rows in record batch being evaluated
@@ -447,14 +448,14 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     }
 
     /// Returns a list of the same size as args where each value is the logic below applied to value at the correspondent position in args:
-    /// 
+    ///
     /// If it's a value, return None
     /// If it's a lambda, return the list of all parameters that that lambda supports
-    /// 
+    ///
     /// Example for array_transform:
-    /// 
+    ///
     /// `array_transform([2.0, 8.0], v -> v > 4.0)`
-    /// 
+    ///
     /// ```ignore
     /// let lambdas_parameters = array_transform.lambdas_parameters(&[
     ///      ValueOrLambdaParameter::Value(Field::new("", DataType::new_list(DataType::Float32, false)))]), // the Field of the literal `[2, 8]`
@@ -470,14 +471,14 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     ///         Some(vec![
     ///             // the value being transformed
     ///             Field::new("", DataType::Float32, false),
-    ///             // the 1-based index being transformed, not used on the example above, 
+    ///             // the 1-based index being transformed, not used on the example above,
     ///             //but implementations doesn't need to care about it
     ///             Field::new("", DataType::Int32, false),
     ///         ])
     ///      ]
     /// )
     /// ```
-    /// 
+    ///
     /// The implementation can assume that some other part of the code has coerced
     /// the actual argument types to match [`Self::signature`].
     fn lambdas_parameters(
@@ -486,7 +487,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     ) -> Result<Vec<Option<Vec<Field>>>>;
 
     /// What type will be returned by this function, given the arguments?
-    /// 
+    ///
     /// The implementation can assume that some other part of the code has coerced
     /// the actual argument types to match [`Self::signature`].
     ///

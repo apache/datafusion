@@ -18,7 +18,8 @@
 use datafusion::execution::SessionStateDefaults;
 use datafusion_common::{HashSet, Result, not_impl_err};
 use datafusion_expr::{
-    AggregateUDF, DocSection, Documentation, LambdaUDF, ScalarUDF, WindowUDF, aggregate_doc_sections, scalar_doc_sections, window_doc_sections
+    AggregateUDF, DocSection, Documentation, LambdaUDF, ScalarUDF, WindowUDF,
+    aggregate_doc_sections, scalar_doc_sections, window_doc_sections,
 };
 use itertools::Itertools;
 use std::env::args;

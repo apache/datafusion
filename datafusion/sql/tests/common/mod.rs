@@ -301,7 +301,7 @@ impl ContextProvider for MockContextProvider {
     fn udf_names(&self) -> Vec<String> {
         self.state.scalar_functions.keys().cloned().collect()
     }
-    
+
     fn udlf_names(&self) -> Vec<String> {
         self.state.lambda_functions.keys().cloned().collect()
     }

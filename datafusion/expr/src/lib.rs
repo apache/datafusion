@@ -128,7 +128,7 @@ pub use udaf::{
 };
 pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 pub use udlf::{
-    LambdaFunctionArgs, LambdaArgument, LambdaReturnFieldArgs, LambdaSignature,
+    LambdaArgument, LambdaFunctionArgs, LambdaReturnFieldArgs, LambdaSignature,
     LambdaTypeSignature, LambdaUDF, ValueOrLambda,
 };
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};

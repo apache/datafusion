@@ -629,7 +629,7 @@ pub fn serialize_expr(
         Expr::LambdaFunction(_) | Expr::Lambda(_) | Expr::LambdaVariable(_) => {
             return Err(Error::General(
                 "Proto serialization error: Lambda not implemented".to_string(),
-            ))
+            ));
         }
     };
 

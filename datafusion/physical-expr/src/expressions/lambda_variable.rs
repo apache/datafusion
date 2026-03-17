@@ -28,7 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::ColumnarValue;
 
 /// Represents the lambda variable with a given name and field
@@ -56,10 +56,7 @@ impl Hash for LambdaVariable {
 impl LambdaVariable {
     /// Create a new lambda variable expression
     pub fn new(name: String, field: FieldRef) -> Self {
-        Self {
-            name,
-            field,
-        }
+        Self { name, field }
     }
 
     /// Get the variable's name
@@ -120,6 +117,9 @@ impl PhysicalExpr for LambdaVariable {
 }
 
 /// Create a lambda variable expression
-pub fn lambda_variable(name: impl Into<String>, field: FieldRef) -> Result<Arc<dyn PhysicalExpr>> {
+pub fn lambda_variable(
+    name: impl Into<String>,
+    field: FieldRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(LambdaVariable::new(name.into(), field)))
 }

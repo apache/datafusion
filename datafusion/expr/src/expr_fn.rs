@@ -18,7 +18,9 @@
 //! Functions for creating logical expressions
 
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery, Lambda, LambdaVariable, NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction
+    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery, Lambda,
+    LambdaVariable, NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions,
+    WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -733,11 +735,14 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 
 /// Create a lambda expression
 pub fn lambda(params: impl IntoIterator<Item = impl Into<String>>, body: Expr) -> Expr {
-    Expr::Lambda(Lambda::new(params.into_iter().map(Into::into).collect(), body))
+    Expr::Lambda(Lambda::new(
+        params.into_iter().map(Into::into).collect(),
+        body,
+    ))
 }
 
 /// Create an unresolved lambda variable expression
-/// 
+///
 /// The expression tree or [`LogicalPlan`] which
 /// owns this variable must be resolved before usage with either
 /// [`Expr::resolve_lambdas_variables`] or [`LogicalPlan::resolve_lambdas_variables`].

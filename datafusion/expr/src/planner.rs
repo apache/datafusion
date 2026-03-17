@@ -24,7 +24,8 @@ use crate::expr::NullTreatment;
 #[cfg(feature = "sql")]
 use crate::logical_plan::LogicalPlan;
 use crate::{
-    AggregateUDF, Expr, GetFieldAccess, LambdaUDF, ScalarUDF, SortExpr, TableSource, WindowFrame, WindowFunctionDefinition, WindowUDF
+    AggregateUDF, Expr, GetFieldAccess, LambdaUDF, ScalarUDF, SortExpr, TableSource,
+    WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use datafusion_common::datatype::DataTypeExt;
@@ -101,7 +102,7 @@ pub trait ContextProvider {
 
     /// Return the scalar function with a given name, if any
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
-    
+
     /// Return the lambda function with a given name, if any
     fn get_lambda_meta(&self, name: &str) -> Option<Arc<dyn LambdaUDF>>;
 
@@ -132,7 +133,7 @@ pub trait ContextProvider {
 
     /// Return all scalar function names
     fn udf_names(&self) -> Vec<String>;
-    
+
     /// Return all lambda function names
     fn udlf_names(&self) -> Vec<String>;
 

@@ -21,7 +21,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err
+    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, internal_datafusion_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
     Expr, ExprSchemable, SortExpr, ValueOrLambda, WindowFrame, WindowFunctionDefinition,

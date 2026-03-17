@@ -23,12 +23,11 @@ use arrow::{
     datatypes::{DataType, Field, FieldRef},
 };
 use datafusion_common::{
-    exec_err, plan_err,
+    Result, exec_err, plan_err,
     utils::{
         adjust_offsets_for_slice, list_values, list_values_index, list_values_row_number,
         take_function_args,
     },
-    Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, LambdaFunctionArgs, LambdaReturnFieldArgs,
@@ -118,7 +117,7 @@ impl LambdaUDF for ArrayTransform {
                     "{} expected a list as first argument, got {}",
                     self.name(),
                     list
-                )
+                );
             }
         };
 
@@ -175,7 +174,7 @@ impl LambdaUDF for ArrayTransform {
         let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
 
         let list_array = list.to_array(args.number_rows)?;
-        
+
         // as per list_values docs, if list_array is sliced, list_values will be sliced too,
         // so before constructing the transformed array below, we must adjust the list offsets with
         // adjust_offsets_for_slice
@@ -210,7 +209,7 @@ impl LambdaUDF for ArrayTransform {
                     "{} expected ScalarFunctionArgs.return_field to be a list, got {}",
                     self.name(),
                     args.return_field
-                )
+                );
             }
         };
 
