@@ -1137,7 +1137,7 @@ pub(crate) fn build_batch_from_indices(
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_empty_build_side(
     schema: &Schema,
-    build_batch: &RecordBatch,
+    left_schema: &Schema,
     probe_batch: &RecordBatch,
     column_indices: &[ColumnIndex],
     join_type: JoinType,
@@ -1165,7 +1165,7 @@ pub(crate) fn build_batch_empty_build_side(
                 let array = match column_index.side {
                     // left -> null array
                     JoinSide::Left => new_null_array(
-                        build_batch.column(column_index.index).data_type(),
+                        left_schema.field(column_index.index).data_type(),
                         num_rows,
                     ),
                     // right -> respective right array
@@ -1878,6 +1878,11 @@ pub(super) fn equal_rows_arr(
 
     let single_batch = left_arrays_per_batch.len() == 1;
 
+    // Pre-compute fallback index arrays once (used across all keys that need fallback).
+    // Lazy: only allocated if a key actually needs the fallback path.
+    let mut fallback_row_indices: Option<UInt32Array> = None;
+    let mut fallback_il_indices: Option<Vec<(usize, usize)>> = None;
+
     for key_idx in 0..num_keys {
         let right_array = &right_arrays[key_idx];
 
@@ -1892,46 +1897,44 @@ pub(super) fn equal_rows_arr(
                 &left_arrays_per_batch[0][key_idx],
                 right_array,
                 null_equality,
-                |packed| packed as usize,
             );
 
         if !handled {
             // Fallback: materialize via take/interleave, then eq
             let arr_left = if single_batch {
-                let row_indices: UInt32Array =
-                    left_indices.iter().map(|&v| v as u32).collect();
+                let row_indices = fallback_row_indices.get_or_insert_with(|| {
+                    left_indices.iter().map(|&v| v as u32).collect()
+                });
                 take(
                     left_arrays_per_batch[0][key_idx].as_ref(),
-                    &row_indices,
+                    row_indices,
                     None,
                 )?
             } else {
+                let il_indices = fallback_il_indices.get_or_insert_with(|| {
+                    left_indices
+                        .iter()
+                        .map(|&packed| {
+                            let batch_idx = (packed >> 32) as usize;
+                            let row_idx = (packed & 0xFFFFFFFF) as usize;
+                            (batch_idx, row_idx)
+                        })
+                        .collect()
+                });
                 let arrays: Vec<&dyn Array> = left_arrays_per_batch
                     .iter()
                     .map(|batch_keys| batch_keys[key_idx].as_ref())
                     .collect();
-                let il_indices: Vec<(usize, usize)> = left_indices
-                    .iter()
-                    .map(|&packed| {
-                        let batch_idx = (packed >> 32) as usize;
-                        let row_idx = (packed & 0xFFFFFFFF) as usize;
-                        (batch_idx, row_idx)
-                    })
-                    .collect();
-                compute::interleave(&arrays, &il_indices)?
+                compute::interleave(&arrays, il_indices)?
             };
             let arr_right = take(right_array.as_ref(), indices_right, None)?;
             let eq_result = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
             // AND the result into our mutable bitmap.
-            // Null positions in eq_result are treated as "not equal".
-            let eq_values = eq_result.values();
-            let eq_nulls = eq_result.nulls();
-            for i in 0..num_rows {
-                if equal_bits.get_bit(i)
-                    && (!eq_values.value(i) || eq_nulls.is_some_and(|n| !n.is_valid(i)))
-                {
-                    equal_bits.set_bit(i, false);
-                }
+            // Null positions in eq_result are treated as "not equal":
+            // first AND with the values, then AND with the validity bitmap.
+            and_bitmap_with_boolean_buffer(&mut equal_bits, eq_result.values());
+            if let Some(eq_nulls) = eq_result.nulls() {
+                and_bitmap_with_boolean_buffer(&mut equal_bits, eq_nulls.inner());
             }
         }
     }
@@ -1948,9 +1951,23 @@ pub(super) fn equal_rows_arr(
     ))
 }
 
+/// AND a `BooleanBuffer` into a `BooleanBufferBuilder` in-place using
+/// word-level operations on the underlying byte slices.
+fn and_bitmap_with_boolean_buffer(
+    builder: &mut BooleanBufferBuilder,
+    rhs: &BooleanBuffer,
+) {
+    let lhs = builder.as_slice_mut();
+    let rhs = rhs.inner().as_slice();
+    for (l, r) in lhs.iter_mut().zip(rhs.iter()) {
+        *l &= r;
+    }
+}
+
 /// Compare rows element-wise without materializing intermediate arrays.
 /// Returns `true` if the comparison was handled, `false` if fallback is needed.
 ///
+/// Only works for single-batch builds where packed index == row index.
 /// Clears bits in `equal_bits` where the left and right values at the
 /// indexed positions are not equal (respecting `null_equality`).
 fn compare_rows_elementwise(
@@ -1960,7 +1977,6 @@ fn compare_rows_elementwise(
     left_array: &ArrayRef,
     right_array: &ArrayRef,
     null_equality: NullEquality,
-    left_index_to_row: impl Fn(u64) -> usize,
 ) -> bool {
     // Nested types need special comparison logic, fall back
     if left_array.data_type().is_nested() {
@@ -1978,7 +1994,6 @@ fn compare_rows_elementwise(
                 &left,
                 &right,
                 null_equality,
-                &left_index_to_row,
             );
         }};
     }
@@ -2028,8 +2043,10 @@ fn compare_rows_elementwise(
 }
 
 /// Inner loop for element-wise comparison. Generic over array type via `ArrayAccessor`.
-/// Compares `left.value(left_index_to_row(left_indices[i]))` against
+/// Compares `left.value(left_indices[i] as usize)` against
 /// `right.value(right_indices[i])` for each row, clearing bits that don't match.
+///
+/// Only valid for single-batch builds where packed index == row index.
 fn do_compare_elementwise<A: ArrayAccessor>(
     equal_bits: &mut BooleanBufferBuilder,
     left_indices: &[u64],
@@ -2037,7 +2054,6 @@ fn do_compare_elementwise<A: ArrayAccessor>(
     left: &A,
     right: &A,
     null_equality: NullEquality,
-    left_index_to_row: &dyn Fn(u64) -> usize,
 ) where
     A::Item: PartialEq,
 {
@@ -2053,7 +2069,7 @@ fn do_compare_elementwise<A: ArrayAccessor>(
             if !equal_bits.get_bit(i) {
                 continue;
             }
-            let l_idx = left_index_to_row(left_indices[i]);
+            let l_idx = left_indices[i] as usize;
             let r_idx = right_indices[i] as usize;
             if left.value(l_idx) != right.value(r_idx) {
                 equal_bits.set_bit(i, false);
@@ -2064,7 +2080,7 @@ fn do_compare_elementwise<A: ArrayAccessor>(
             if !equal_bits.get_bit(i) {
                 continue;
             }
-            let l_idx = left_index_to_row(left_indices[i]);
+            let l_idx = left_indices[i] as usize;
             let r_idx = right_indices[i] as usize;
             let l_null = left_nulls.is_some_and(|nulls| !nulls.is_valid(l_idx));
             let r_null = right_nulls.is_some_and(|nulls| !nulls.is_valid(r_idx));
@@ -3205,7 +3221,7 @@ mod tests {
 
         let result = build_batch_empty_build_side(
             &empty_schema,
-            &build_batch,
+            &build_batch.schema(),
             &probe_batch,
             &[], // no column indices with empty projection
             JoinType::Right,
