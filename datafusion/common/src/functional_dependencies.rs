@@ -349,12 +349,16 @@ impl FunctionalDependencies {
                 right_func_dependencies =
                     right_func_dependencies.with_dependency(Dependency::Multi);
 
-                if *join_type == JoinType::Left || *join_type == JoinType::LeftSingle {
-                    // Downgrade the right side, since it may have additional NULL values:
-                    right_func_dependencies.downgrade_dependencies();
-                } else if *join_type == JoinType::Right {
-                    // Downgrade the left side, since it may have additional NULL values:
-                    left_func_dependencies.downgrade_dependencies();
+                match join_type {
+                    JoinType::Left | JoinType::LeftSingle => {
+                        // Downgrade the right side, since it may have additional NULL values:
+                        right_func_dependencies.downgrade_dependencies();
+                    }
+                    JoinType::Right => {
+                        // Downgrade the left side, since it may have additional NULL values:
+                        left_func_dependencies.downgrade_dependencies();
+                    }
+                    _ => {}
                 }
                 // Combine left and right functional dependencies:
                 left_func_dependencies.extend(right_func_dependencies);

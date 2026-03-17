@@ -1191,22 +1191,26 @@ pub(crate) fn adjust_indices_by_join_type(
 /// multiple right-side matches for a single left row. This is used by
 /// `LeftSingle` joins to enforce the scalar subquery "at most one row" invariant.
 fn check_single_match(left_indices: &UInt64Array) -> Result<()> {
-    // The left_indices are produced in order of matching, so duplicates for
-    // the same left row will be adjacent or scattered. We use a simple scan.
     if left_indices.len() <= 1 {
         return Ok(());
     }
-    let mut seen = HashSet::with_capacity(left_indices.len());
-    for i in 0..left_indices.len() {
-        if left_indices.is_null(i) {
-            continue;
-        }
-        let val = left_indices.value(i);
-        if !seen.insert(val) {
-            return Err(DataFusionError::Internal(
+    // Single pass: find max index and check for duplicates using a bitmap.
+    // Left indices from the hash probe are non-null row positions.
+    let values = left_indices.values();
+    let mut max_idx: usize = 0;
+    for &val in values.iter() {
+        max_idx = max_idx.max(val as usize);
+    }
+    let mut seen = BooleanBufferBuilder::new(max_idx + 1);
+    seen.append_n(max_idx + 1, false);
+    for &val in values.iter() {
+        let idx = val as usize;
+        if seen.get_bit(idx) {
+            return Err(DataFusionError::Execution(
                 "Scalar subquery produced more than one row".to_string(),
             ));
         }
+        seen.set_bit(idx, true);
     }
     Ok(())
 }

@@ -147,19 +147,7 @@ impl JoinType {
 
     /// Does the join type support swapping inputs?
     pub fn supports_swap(&self) -> bool {
-        matches!(
-            self,
-            JoinType::Inner
-                | JoinType::Left
-                | JoinType::Right
-                | JoinType::Full
-                | JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::LeftAnti
-                | JoinType::RightAnti
-                | JoinType::LeftMark
-                | JoinType::RightMark
-        ) && !matches!(self, JoinType::LeftSingle)
+        !matches!(self, JoinType::LeftSingle)
     }
 }
 
