@@ -1886,18 +1886,29 @@ pub(super) fn equal_rows_arr(
     for key_idx in 0..num_keys {
         let right_array = &right_arrays[key_idx];
 
-        // For single-batch builds, try element-wise comparison which avoids
-        // allocating intermediate arrays via take+eq per key column.
-        // Falls back to take+eq for nested/unsupported types or multi-batch.
-        let handled = single_batch
-            && compare_rows_elementwise(
+        // Try element-wise comparison which avoids allocating intermediate arrays.
+        // Works for both single-batch and multi-batch builds on common types.
+        // Falls back to take/interleave+eq for nested/unsupported types.
+        let handled = if single_batch {
+            compare_rows_elementwise(
                 &mut equal_bits,
                 left_indices,
                 right_indices,
                 &left_arrays_per_batch[0][key_idx],
                 right_array,
                 null_equality,
-            );
+            )
+        } else {
+            compare_rows_elementwise_multi(
+                &mut equal_bits,
+                left_indices,
+                right_indices,
+                left_arrays_per_batch,
+                key_idx,
+                right_array,
+                null_equality,
+            )
+        };
 
         if !handled {
             // Fallback: materialize via take/interleave, then eq
@@ -2089,6 +2100,144 @@ fn do_compare_elementwise<A: ArrayAccessor>(
                 (true, true) => null_equality == NullEquality::NullEqualsNull,
                 (true, false) | (false, true) => false,
                 (false, false) => left.value(l_idx) == right.value(r_idx),
+            };
+            if !is_equal {
+                equal_bits.set_bit(i, false);
+            }
+        }
+    }
+}
+
+/// Compare rows element-wise for multi-batch builds without materializing
+/// intermediate arrays. Decodes packed indices to (batch_idx, row_idx) and
+/// accesses the correct batch array directly.
+/// Returns `true` if the comparison was handled, `false` if fallback is needed.
+fn compare_rows_elementwise_multi(
+    equal_bits: &mut BooleanBufferBuilder,
+    left_indices: &[u64],
+    right_indices: &[u32],
+    left_arrays_per_batch: &[Vec<ArrayRef>],
+    key_idx: usize,
+    right_array: &ArrayRef,
+    null_equality: NullEquality,
+) -> bool {
+    if right_array.data_type().is_nested() {
+        return false;
+    }
+
+    macro_rules! compare_multi {
+        ($array_type:ty) => {{
+            let left_typed: Vec<&$array_type> = left_arrays_per_batch
+                .iter()
+                .map(|keys| keys[key_idx].as_any().downcast_ref::<$array_type>().unwrap())
+                .collect();
+            let right = right_array.as_any().downcast_ref::<$array_type>().unwrap();
+            do_compare_elementwise_multi(
+                equal_bits,
+                left_indices,
+                right_indices,
+                &left_typed,
+                &right,
+                null_equality,
+            );
+        }};
+    }
+
+    match right_array.data_type() {
+        DataType::Null => {
+            match null_equality {
+                NullEquality::NullEqualsNothing => {
+                    for i in 0..left_indices.len() {
+                        equal_bits.set_bit(i, false);
+                    }
+                }
+                NullEquality::NullEqualsNull => {}
+            }
+        }
+        DataType::Boolean => compare_multi!(BooleanArray),
+        DataType::Int8 => compare_multi!(Int8Array),
+        DataType::Int16 => compare_multi!(Int16Array),
+        DataType::Int32 => compare_multi!(Int32Array),
+        DataType::Int64 => compare_multi!(Int64Array),
+        DataType::UInt8 => compare_multi!(UInt8Array),
+        DataType::UInt16 => compare_multi!(UInt16Array),
+        DataType::UInt32 => compare_multi!(UInt32Array),
+        DataType::UInt64 => compare_multi!(UInt64Array),
+        DataType::Float32 => compare_multi!(Float32Array),
+        DataType::Float64 => compare_multi!(Float64Array),
+        DataType::Binary => compare_multi!(BinaryArray),
+        DataType::BinaryView => compare_multi!(BinaryViewArray),
+        DataType::FixedSizeBinary(_) => compare_multi!(FixedSizeBinaryArray),
+        DataType::LargeBinary => compare_multi!(LargeBinaryArray),
+        DataType::Utf8 => compare_multi!(StringArray),
+        DataType::Utf8View => compare_multi!(StringViewArray),
+        DataType::LargeUtf8 => compare_multi!(LargeStringArray),
+        DataType::Decimal128(..) => compare_multi!(Decimal128Array),
+        DataType::Timestamp(time_unit, None) => match time_unit {
+            TimeUnit::Second => compare_multi!(TimestampSecondArray),
+            TimeUnit::Millisecond => compare_multi!(TimestampMillisecondArray),
+            TimeUnit::Microsecond => compare_multi!(TimestampMicrosecondArray),
+            TimeUnit::Nanosecond => compare_multi!(TimestampNanosecondArray),
+        },
+        DataType::Date32 => compare_multi!(Date32Array),
+        DataType::Date64 => compare_multi!(Date64Array),
+        _ => return false,
+    }
+    true
+}
+
+/// Inner loop for multi-batch element-wise comparison.
+/// Decodes packed indices to access the correct batch array per row.
+///
+/// Takes `&[A]` where `A` is a reference type like `&Int32Array` that implements
+/// `ArrayAccessor`. Null checking works through auto-deref to the `Array` trait.
+fn do_compare_elementwise_multi<A: ArrayAccessor>(
+    equal_bits: &mut BooleanBufferBuilder,
+    left_indices: &[u64],
+    right_indices: &[u32],
+    left_arrays: &[A],
+    right: &A,
+    null_equality: NullEquality,
+) where
+    A::Item: PartialEq,
+{
+    let right_nulls = right.nulls();
+    let has_nulls = right.null_count() > 0
+        || left_arrays
+            .iter()
+            .any(|a| a.null_count() > 0);
+    let num_rows = left_indices.len();
+
+    if !has_nulls {
+        for i in 0..num_rows {
+            if !equal_bits.get_bit(i) {
+                continue;
+            }
+            let packed = left_indices[i];
+            let batch_idx = (packed >> 32) as usize;
+            let row_idx = (packed & 0xFFFFFFFF) as usize;
+            let r_idx = right_indices[i] as usize;
+            if left_arrays[batch_idx].value(row_idx) != right.value(r_idx) {
+                equal_bits.set_bit(i, false);
+            }
+        }
+    } else {
+        for i in 0..num_rows {
+            if !equal_bits.get_bit(i) {
+                continue;
+            }
+            let packed = left_indices[i];
+            let batch_idx = (packed >> 32) as usize;
+            let row_idx = (packed & 0xFFFFFFFF) as usize;
+            let r_idx = right_indices[i] as usize;
+            let left = &left_arrays[batch_idx];
+            let l_null = left.nulls().is_some_and(|n| !n.is_valid(row_idx));
+            let r_null = right_nulls.is_some_and(|n| !n.is_valid(r_idx));
+
+            let is_equal = match (l_null, r_null) {
+                (true, true) => null_equality == NullEquality::NullEqualsNull,
+                (true, false) | (false, true) => false,
+                (false, false) => left.value(row_idx) == right.value(r_idx),
             };
             if !is_equal {
                 equal_bits.set_bit(i, false);
