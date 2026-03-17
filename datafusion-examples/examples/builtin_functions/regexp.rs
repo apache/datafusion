@@ -340,5 +340,87 @@ pub async fn regexp() -> Result<()> {
         &result
     );
 
+    //
+    //
+    // regexp_extract examples
+    //
+    //
+    // regexp_extract format is regexp_extract(str, regexp, idx)
+    // idx=0 returns the entire matched string, idx=N returns the Nth capture group
+    // if the regex did not match, or the group did not match, an empty string is returned
+    //
+
+    // extract year from date string (group 1)
+    let result = ctx
+        .sql("SELECT regexp_extract('2024-03-16', '(\\d{4})-(\\d{2})-(\\d{2})', 1)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        &[
+            "+-----------------------------------------------------------------------------+",
+            r#"| regexp_extract(Utf8("2024-03-16"),Utf8("(\d{4})-(\d{2})-(\d{2})"),Int64(1)) |"#,
+            "+-----------------------------------------------------------------------------+",
+            "| 2024                                                                        |",
+            "+-----------------------------------------------------------------------------+",
+        ],
+        &result
+    );
+
+    // idx=0 returns the entire matched string
+    let result = ctx
+        .sql("SELECT regexp_extract('2024-03-16', '(\\d{4})-(\\d{2})-(\\d{2})', 0)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        &[
+            "+-----------------------------------------------------------------------------+",
+            r#"| regexp_extract(Utf8("2024-03-16"),Utf8("(\d{4})-(\d{2})-(\d{2})"),Int64(0)) |"#,
+            "+-----------------------------------------------------------------------------+",
+            "| 2024-03-16                                                                  |",
+            "+-----------------------------------------------------------------------------+",
+        ],
+        &result
+    );
+
+    // no match returns empty string (not NULL)
+    let result = ctx
+        .sql("SELECT regexp_extract('no digits here', '(\\d+)', 1)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        &[
+            "+---------------------------------------------------------------+",
+            r#"| regexp_extract(Utf8("no digits here"),Utf8("(\d+)"),Int64(1)) |"#,
+            "+---------------------------------------------------------------+",
+            "|                                                               |",
+            "+---------------------------------------------------------------+",
+        ],
+        &result
+    );
+
+    // NULL input returns NULL
+    let result = ctx
+        .sql("SELECT regexp_extract(NULL, '(\\d+)', 1)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        &[
+            "+---------------------------------------------+",
+            r#"| regexp_extract(NULL,Utf8("(\d+)"),Int64(1)) |"#,
+            "+---------------------------------------------+",
+            "|                                             |",
+            "+---------------------------------------------+",
+        ],
+        &result
+    );
+
     Ok(())
 }
