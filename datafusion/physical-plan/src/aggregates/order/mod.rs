@@ -162,19 +162,31 @@ mod tests {
         assert_eq!(group_ordering.oom_emit_to(5), Some(EmitTo::First(5)));
     }
 
-    #[test]
-    fn test_oom_emit_to_partial_clamps_to_boundary() -> Result<()> {
+    /// Creates a partially ordered grouping state with three groups.
+    ///
+    /// `sort_key_values` controls whether a sort boundary exists in the batch:
+    /// distinct values such as `[1, 2, 3]` create boundaries, while repeated
+    /// values such as `[1, 1, 1]` do not.
+    fn partial_ordering(sort_key_values: Vec<i32>) -> Result<GroupOrdering> {
         let mut group_ordering =
             GroupOrdering::Partial(GroupOrderingPartial::try_new(vec![0])?);
 
         let batch_group_values: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(sort_key_values)),
             Arc::new(Int32Array::from(vec![10, 20, 30])),
         ];
         let group_indices = vec![0, 1, 2];
 
         group_ordering.new_groups(&batch_group_values, &group_indices, 3)?;
 
+        Ok(group_ordering)
+    }
+
+    #[test]
+    fn test_oom_emit_to_partial_clamps_to_boundary() -> Result<()> {
+        let group_ordering = partial_ordering(vec![1, 2, 3])?;
+
+        // Can emit both `1` and `2` groups because we have seen `3`
         assert_eq!(group_ordering.emit_to(), Some(EmitTo::First(2)));
         assert_eq!(group_ordering.oom_emit_to(1), Some(EmitTo::First(1)));
         assert_eq!(group_ordering.oom_emit_to(3), Some(EmitTo::First(2)));
@@ -184,17 +196,9 @@ mod tests {
 
     #[test]
     fn test_oom_emit_to_partial_without_boundary() -> Result<()> {
-        let mut group_ordering =
-            GroupOrdering::Partial(GroupOrderingPartial::try_new(vec![0])?);
+        let group_ordering = partial_ordering(vec![1, 1, 1])?;
 
-        let batch_group_values: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(vec![1, 1, 1])),
-            Arc::new(Int32Array::from(vec![10, 20, 30])),
-        ];
-        let group_indices = vec![0, 1, 2];
-
-        group_ordering.new_groups(&batch_group_values, &group_indices, 3)?;
-
+        // Can't emit the last `1` group as it may have more values
         assert_eq!(group_ordering.emit_to(), None);
         assert_eq!(group_ordering.oom_emit_to(3), None);
 
