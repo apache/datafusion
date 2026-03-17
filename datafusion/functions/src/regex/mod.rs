@@ -104,6 +104,11 @@ pub mod expr_fn {
         super::regexp_like().call(args)
     }
 
+    /// Extracts the first match of a regular expression capture group from a string.
+    pub fn regexp_extract(str: Expr, regexp: Expr, idx: Expr) -> Expr {
+        super::regexp_extract().call(vec![str, regexp, idx])
+    }
+
     /// Replaces substrings in a string that match.
     pub fn regexp_replace(
         string: Expr,
