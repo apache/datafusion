@@ -90,7 +90,9 @@ impl ScalarUDFImpl for SparkArraysZip {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(|arr| arrays_zip_inner(arr, StructOrdinal::ZeroBased))(&args.args)
+        make_scalar_function(|arr| arrays_zip_inner(arr, StructOrdinal::ZeroBased))(
+            &args.args,
+        )
     }
 
     fn aliases(&self) -> &[String] {

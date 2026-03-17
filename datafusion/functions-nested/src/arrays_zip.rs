@@ -17,6 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for arrays_zip function.
 
+use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, Capacities, ListArray, MutableArrayData, StructArray, new_null_array,
 };
@@ -30,7 +31,6 @@ use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-use crate::utils::make_scalar_function;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -138,7 +138,9 @@ impl ScalarUDFImpl for ArraysZip {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(|arr| arrays_zip_inner(arr, StructOrdinal::OneBased))(&args.args)
+        make_scalar_function(|arr| arrays_zip_inner(arr, StructOrdinal::OneBased))(
+            &args.args,
+        )
     }
 
     fn aliases(&self) -> &[String] {
