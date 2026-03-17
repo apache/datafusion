@@ -70,7 +70,7 @@ fn create_string_list_array(num_rows: usize, elements_per_row: usize) -> ArrayRe
     let mut indices: Vec<usize> = (0..total_values).collect();
     indices.shuffle(&mut rng);
     let string_values: Vec<String> =
-        indices.iter().map(|i| format!("value_{:06}", i)).collect();
+        indices.iter().map(|i| format!("value_{i:06}")).collect();
     let values = Arc::new(StringArray::from(string_values));
 
     let offsets: Vec<i32> = (0..=num_rows)
@@ -98,7 +98,7 @@ fn bench_array_sort(c: &mut Criterion) {
             &elements_per_row,
             |b, _| {
                 b.iter(|| {
-                    black_box(array_sort_inner(&[array.clone()]).unwrap());
+                    black_box(array_sort_inner(std::slice::from_ref(&array)).unwrap());
                 });
             },
         );
@@ -109,7 +109,7 @@ fn bench_array_sort(c: &mut Criterion) {
         let array = create_int32_list_array(NUM_ROWS, 50, true);
         group.bench_function("int32_with_nulls", |b| {
             b.iter(|| {
-                black_box(array_sort_inner(&[array.clone()]).unwrap());
+                black_box(array_sort_inner(std::slice::from_ref(&array)).unwrap());
             });
         });
     }
@@ -122,7 +122,7 @@ fn bench_array_sort(c: &mut Criterion) {
             &elements_per_row,
             |b, _| {
                 b.iter(|| {
-                    black_box(array_sort_inner(&[array.clone()]).unwrap());
+                    black_box(array_sort_inner(std::slice::from_ref(&array)).unwrap());
                 });
             },
         );
