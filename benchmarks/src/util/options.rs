@@ -22,11 +22,15 @@ use datafusion::{
     execution::{
         disk_manager::DiskManagerBuilder,
         memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool},
-        runtime_env::RuntimeEnvBuilder,
+        object_store::ObjectStoreUrl,
+        runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
     },
     prelude::SessionConfig,
 };
 use datafusion_common::{DataFusionError, Result};
+use object_store::local::LocalFileSystem;
+
+use super::latency_object_store::LatencyObjectStore;
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
@@ -61,6 +65,11 @@ pub struct CommonOpt {
     /// Activate debug mode to see more details
     #[arg(short, long)]
     pub debug: bool,
+
+    /// Simulate object store latency to mimic remote storage (e.g. S3).
+    /// Adds random latency in the range 20-200ms to each object store operation.
+    #[arg(long = "simulate-latency")]
+    pub simulate_latency: bool,
 }
 
 impl CommonOpt {
@@ -122,6 +131,22 @@ impl CommonOpt {
         }
         Ok(rt_builder)
     }
+
+    /// Build the runtime environment, optionally wrapping the local filesystem
+    /// with a throttled object store to simulate remote storage latency.
+    pub fn build_runtime(&self) -> Result<Arc<RuntimeEnv>> {
+        let rt = self.runtime_env_builder()?.build_arc()?;
+        if self.simulate_latency {
+            let store: Arc<dyn object_store::ObjectStore> =
+                Arc::new(LatencyObjectStore::new(LocalFileSystem::new()));
+            let url = ObjectStoreUrl::parse("file:///")?;
+            rt.register_object_store(url.as_ref(), store);
+            println!(
+                "Simulating S3-like object store latency (get: 25-200ms, list: 40-400ms)"
+            );
+        }
+        Ok(rt)
+    }
 }
 
 /// Parse capacity limit from string to number of bytes by allowing units: K, M and G.
@@ -164,6 +189,7 @@ mod tests {
             memory_limit: None,
             sort_spill_reservation_bytes: None,
             debug: false,
+            simulate_latency: false,
         };
 
         // With env var set, builder should succeed and have a memory pool

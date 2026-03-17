@@ -903,76 +903,125 @@ macro_rules! assert_ne_or_internal_err {
 ///     plan_err!("Error {val:?}")
 ///
 /// `NAME_ERR` -  macro name for wrapping Err(DataFusionError::*)
+/// `PREFIXED_NAME_ERR` - underscore-prefixed alias for NAME_ERR (e.g., _plan_err)
+/// (Needed to avoid compiler error when using macro in the same crate: `macros from the current crate cannot be referred to by absolute paths`)
 /// `NAME_DF_ERR` -  macro name for wrapping DataFusionError::*. Needed to keep backtrace opportunity
 /// in construction where DataFusionError::* used directly, like `map_err`, `ok_or_else`, etc
+/// `PREFIXED_NAME_DF_ERR` - underscore-prefixed alias for NAME_DF_ERR (e.g., _plan_datafusion_err).
+/// (Needed to avoid compiler error when using macro in the same crate: `macros from the current crate cannot be referred to by absolute paths`)
 macro_rules! make_error {
-    ($NAME_ERR:ident, $NAME_DF_ERR: ident, $ERR:ident) => { make_error!(@inner ($), $NAME_ERR, $NAME_DF_ERR, $ERR); };
-    (@inner ($d:tt), $NAME_ERR:ident, $NAME_DF_ERR:ident, $ERR:ident) => {
-        ::paste::paste!{
-            /// Macro wraps `$ERR` to add backtrace feature
-            #[macro_export]
-            macro_rules! $NAME_DF_ERR {
-                ($d($d args:expr),* $d(; diagnostic=$d DIAG:expr)?) => {{
-                    let err =$crate::DataFusionError::$ERR(
-                        ::std::format!(
-                            "{}{}",
-                            ::std::format!($d($d args),*),
-                            $crate::DataFusionError::get_back_trace(),
-                        ).into()
-                    );
-                    $d (
-                        let err = err.with_diagnostic($d DIAG);
-                    )?
-                    err
-                }
-            }
+    ($NAME_ERR:ident, $PREFIXED_NAME_ERR:ident, $NAME_DF_ERR:ident, $PREFIXED_NAME_DF_ERR:ident, $ERR:ident) => {
+        make_error!(@inner ($), $NAME_ERR, $PREFIXED_NAME_ERR, $NAME_DF_ERR, $PREFIXED_NAME_DF_ERR, $ERR);
+    };
+    (@inner ($d:tt), $NAME_ERR:ident, $PREFIXED_NAME_ERR:ident, $NAME_DF_ERR:ident, $PREFIXED_NAME_DF_ERR:ident, $ERR:ident) => {
+        /// Macro wraps `$ERR` to add backtrace feature
+        #[macro_export]
+        macro_rules! $NAME_DF_ERR {
+            ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
+                let err = $crate::DataFusionError::$ERR(
+                    ::std::format!(
+                        "{}{}",
+                        ::std::format!($d($d args),*),
+                        $crate::DataFusionError::get_back_trace(),
+                    ).into()
+                );
+                $d (
+                    let err = err.with_diagnostic($d DIAG);
+                )?
+                err
+            }}
         }
 
-            /// Macro wraps Err(`$ERR`) to add backtrace feature
-            #[macro_export]
-            macro_rules! $NAME_ERR {
-                ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
-                    let err = $crate::[<_ $NAME_DF_ERR>]!($d($d args),*);
-                    $d (
-                        let err = err.with_diagnostic($d DIAG);
-                    )?
-                    Err(err)
-
-                }}
-            }
-
-
-            #[doc(hidden)]
-            pub use $NAME_ERR as [<_ $NAME_ERR>];
-            #[doc(hidden)]
-            pub use $NAME_DF_ERR as [<_ $NAME_DF_ERR>];
+        /// Macro wraps Err(`$ERR`) to add backtrace feature
+        #[macro_export]
+        macro_rules! $NAME_ERR {
+            ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
+                let err = $crate::$PREFIXED_NAME_DF_ERR!($d($d args),*);
+                $d (
+                    let err = err.with_diagnostic($d DIAG);
+                )?
+                Err(err)
+            }}
         }
+
+        #[doc(hidden)]
+        pub use $NAME_ERR as $PREFIXED_NAME_ERR;
+        #[doc(hidden)]
+        pub use $NAME_DF_ERR as $PREFIXED_NAME_DF_ERR;
     };
 }
 
 // Exposes a macro to create `DataFusionError::Plan` with optional backtrace
-make_error!(plan_err, plan_datafusion_err, Plan);
+make_error!(
+    plan_err,
+    _plan_err,
+    plan_datafusion_err,
+    _plan_datafusion_err,
+    Plan
+);
 
 // Exposes a macro to create `DataFusionError::Internal` with optional backtrace
-make_error!(internal_err, internal_datafusion_err, Internal);
+make_error!(
+    internal_err,
+    _internal_err,
+    internal_datafusion_err,
+    _internal_datafusion_err,
+    Internal
+);
 
 // Exposes a macro to create `DataFusionError::NotImplemented` with optional backtrace
-make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
+make_error!(
+    not_impl_err,
+    _not_impl_err,
+    not_impl_datafusion_err,
+    _not_impl_datafusion_err,
+    NotImplemented
+);
 
 // Exposes a macro to create `DataFusionError::Execution` with optional backtrace
-make_error!(exec_err, exec_datafusion_err, Execution);
+make_error!(
+    exec_err,
+    _exec_err,
+    exec_datafusion_err,
+    _exec_datafusion_err,
+    Execution
+);
 
 // Exposes a macro to create `DataFusionError::Configuration` with optional backtrace
-make_error!(config_err, config_datafusion_err, Configuration);
+make_error!(
+    config_err,
+    _config_err,
+    config_datafusion_err,
+    _config_datafusion_err,
+    Configuration
+);
 
 // Exposes a macro to create `DataFusionError::Substrait` with optional backtrace
-make_error!(substrait_err, substrait_datafusion_err, Substrait);
+make_error!(
+    substrait_err,
+    _substrait_err,
+    substrait_datafusion_err,
+    _substrait_datafusion_err,
+    Substrait
+);
 
 // Exposes a macro to create `DataFusionError::ResourcesExhausted` with optional backtrace
-make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
+make_error!(
+    resources_err,
+    _resources_err,
+    resources_datafusion_err,
+    _resources_datafusion_err,
+    ResourcesExhausted
+);
 
 // Exposes a macro to create `DataFusionError::Ffi` with optional backtrace
-make_error!(ffi_err, ffi_datafusion_err, Ffi);
+make_error!(
+    ffi_err,
+    _ffi_err,
+    ffi_datafusion_err,
+    _ffi_datafusion_err,
+    Ffi
+);
 
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]

@@ -51,14 +51,14 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
           save-if: ${{ github.ref_name == 'main' }}
@@ -111,7 +111,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -142,7 +142,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -174,14 +174,14 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -277,7 +277,7 @@ jobs:
       volumes:
         - /usr/local:/host/usr/local
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -287,7 +287,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
          save-if: ${{ github.ref_name == 'main' }}
          shared-key: "amd-ci"
@@ -324,7 +324,7 @@ jobs:
     needs: linux-build-lib
     runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -332,7 +332,7 @@ jobs:
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -356,7 +356,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -366,7 +366,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-linux-test-example"
@@ -387,7 +387,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -409,7 +409,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -431,7 +431,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@a37010ded18ff788be4440302bd6830b1ae50d8b  # v2.68.25
+        uses: taiki-e/install-action@de6bbd1333b8f331563d54a051e542c7dfef81c3  # v2.68.34
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -450,7 +450,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -498,7 +498,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -523,7 +523,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -654,7 +654,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -666,7 +666,7 @@ jobs:
       - name: Install Clippy
         run: rustup component add clippy
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-clippy"
@@ -701,7 +701,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: true
@@ -771,7 +771,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@a37010ded18ff788be4440302bd6830b1ae50d8b  # v2.68.25
+        uses: taiki-e/install-action@de6bbd1333b8f331563d54a051e542c7dfef81c3  # v2.68.34
         with:
           tool: cargo-msrv
 

@@ -87,9 +87,6 @@ version = "52.3.0"
 # for the inherited dependency but cannot do the reverse (override from true to false).
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
 apache-avro = { version = "0.21", default-features = false }
 arrow = { version = "58.0.0", features = [
     "prettyprint",
@@ -173,7 +170,6 @@ parquet = { version = "58.0.0", default-features = false, features = [
     "async",
     "object_store",
 ] }
-paste = "1.0.15"
 pbjson = { version = "0.9.0" }
 pbjson-types = "0.9"
 # Should match arrow-flight's version of prost.
@@ -261,6 +257,12 @@ opt-level = 3
 overflow-checks = false
 rpath = false
 strip = false            # Retain debug info for flamegraphs
+
+[profile.ci-optimized]
+inherits = "release"
+codegen-units = 16
+lto = "thin"
+strip = true
 
 [profile.ci]
 debug = false
