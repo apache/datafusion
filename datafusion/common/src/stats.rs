@@ -1492,6 +1492,7 @@ mod tests {
             col1_stats.sum_value,
             Precision::Exact(ScalarValue::Int32(Some(1100)))
         ); // 500 + 600
+        assert_eq!(col1_stats.avg_byte_size, Precision::Exact(4));
 
         let col2_stats = &summary_stats.column_statistics[1];
         assert_eq!(col2_stats.null_count, Precision::Exact(5)); // 2 + 3
@@ -1507,6 +1508,7 @@ mod tests {
             col2_stats.sum_value,
             Precision::Exact(ScalarValue::Int32(Some(2200)))
         ); // 1000 + 1200
+        assert_eq!(col2_stats.avg_byte_size, Precision::Exact(4));
     }
 
     #[test]
@@ -1565,6 +1567,7 @@ mod tests {
             Precision::Inexact(ScalarValue::Int32(Some(-10)))
         );
         assert_eq!(col_stats.sum_value, Precision::Absent);
+        assert_eq!(col_stats.avg_byte_size, Precision::Inexact(4));
     }
 
     #[test]
