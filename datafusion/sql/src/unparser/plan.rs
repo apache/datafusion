@@ -775,6 +775,7 @@ impl Unparser<'_> {
                     }
                     JoinType::Inner
                     | JoinType::Left
+                    | JoinType::LeftSingle
                     | JoinType::Right
                     | JoinType::Full => {
                         let Ok(Some(relation)) = right_relation.build() else {
@@ -1257,7 +1258,9 @@ impl Unparser<'_> {
                     ast::JoinOperator::CrossJoin(constraint)
                 }
             },
-            JoinType::Left => ast::JoinOperator::LeftOuter(constraint),
+            JoinType::Left | JoinType::LeftSingle => {
+                ast::JoinOperator::LeftOuter(constraint)
+            }
             JoinType::Right => ast::JoinOperator::RightOuter(constraint),
             JoinType::Full => ast::JoinOperator::FullOuter(constraint),
             JoinType::LeftAnti => ast::JoinOperator::LeftAnti(constraint),

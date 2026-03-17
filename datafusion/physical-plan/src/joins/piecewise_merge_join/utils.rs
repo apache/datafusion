@@ -41,7 +41,10 @@ pub(super) fn is_existence_join(join_type: JoinType) -> bool {
 // Returns boolean to check if the join type needs to record
 // buffered side matches for classic joins
 pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
-    matches!(join_type, JoinType::Full | JoinType::Left)
+    matches!(
+        join_type,
+        JoinType::Full | JoinType::Left | JoinType::LeftSingle
+    )
 }
 
 // Returns boolean for whether or not we need to build the buffered side
@@ -51,6 +54,7 @@ pub(super) fn build_visited_indices_map(join_type: JoinType) -> bool {
         join_type,
         JoinType::Full
             | JoinType::Left
+            | JoinType::LeftSingle
             | JoinType::LeftAnti
             | JoinType::RightAnti
             | JoinType::LeftSemi

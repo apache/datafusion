@@ -612,6 +612,7 @@ fn multi_hash_joins() -> Result<()> {
         match join_type {
             JoinType::Inner
             | JoinType::Left
+            | JoinType::LeftSingle
             | JoinType::Right
             | JoinType::Full
             | JoinType::LeftSemi
@@ -634,7 +635,7 @@ fn multi_hash_joins() -> Result<()> {
 
                 match join_type {
                     // Should include 3 RepartitionExecs
-                    JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+                    JoinType::Inner | JoinType::Left | JoinType::LeftSingle | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
 
                                 assert_plan!(plan_distrib, @r"
                                 HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, c@2)]
@@ -677,6 +678,7 @@ fn multi_hash_joins() -> Result<()> {
         match join_type {
             JoinType::Inner
             | JoinType::Left
+            | JoinType::LeftSingle
             | JoinType::Right
             | JoinType::Full
             | JoinType::RightSemi

@@ -764,6 +764,7 @@ fn split_join_requirements(
         // In these cases requirements are split between left/right children:
         JoinType::Inner
         | JoinType::Left
+        | JoinType::LeftSingle
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftMark

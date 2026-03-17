@@ -327,6 +327,7 @@ pub fn adjust_input_keys_ordering(
                         requirements.data.clone()
                     }
                     JoinType::Left
+                    | JoinType::LeftSingle
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
                     | JoinType::Full

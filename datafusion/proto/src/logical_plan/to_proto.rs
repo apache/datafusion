@@ -700,6 +700,7 @@ impl From<JoinType> for protobuf::JoinType {
             JoinType::RightAnti => protobuf::JoinType::Rightanti,
             JoinType::LeftMark => protobuf::JoinType::Leftmark,
             JoinType::RightMark => protobuf::JoinType::Rightmark,
+            JoinType::LeftSingle => protobuf::JoinType::Leftsingle,
         }
     }
 }

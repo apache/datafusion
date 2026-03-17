@@ -228,7 +228,7 @@ pub struct ColumnIndex {
 fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> Field {
     let force_nullable = match join_type {
         JoinType::Inner => false,
-        JoinType::Left => !is_left, // right input is padded with nulls
+        JoinType::Left | JoinType::LeftSingle => !is_left, // right input is padded with nulls
         JoinType::Right => is_left, // left input is padded with nulls
         JoinType::Full => true,     // both inputs can be padded with nulls
         JoinType::LeftSemi => false, // doesn't introduce nulls
@@ -287,7 +287,11 @@ pub fn build_join_schema(
     };
 
     let (fields, column_indices): (SchemaBuilder, Vec<ColumnIndex>) = match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::LeftSingle
+        | JoinType::Full
+        | JoinType::Right => {
             // left then right
             left_fields().chain(right_fields()).unzip()
         }
@@ -486,6 +490,17 @@ fn estimate_join_cardinality(
         .unzip::<_, _, Vec<_>, Vec<_>>();
 
     match join_type {
+        JoinType::LeftSingle => {
+            // LeftSingle produces exactly one row per left row
+            Some(PartialJoinStatistics {
+                num_rows: *left_stats.num_rows.get_value()?,
+                column_statistics: left_stats
+                    .column_statistics
+                    .into_iter()
+                    .chain(right_stats.column_statistics)
+                    .collect(),
+            })
+        }
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             let ij_cardinality = estimate_inner_join_cardinality(
                 Statistics {
@@ -848,6 +863,7 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(
         join_type,
         JoinType::Left
+            | JoinType::LeftSingle
             | JoinType::LeftAnti
             | JoinType::LeftSemi
             | JoinType::LeftMark
@@ -1065,6 +1081,7 @@ pub(crate) fn build_batch_empty_build_side(
         // empty RecordBatch
         JoinType::Inner
         | JoinType::Left
+        | JoinType::LeftSingle
         | JoinType::LeftSemi
         | JoinType::RightSemi
         | JoinType::LeftAnti
@@ -1122,6 +1139,12 @@ pub(crate) fn adjust_indices_by_join_type(
             Ok((left_indices, right_indices))
             // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
         }
+        JoinType::LeftSingle => {
+            // Like Left join, but verify at most one match per left row.
+            // Check for duplicate left indices (which would mean multiple right matches).
+            check_single_match(&left_indices)?;
+            Ok((left_indices, right_indices))
+        }
         JoinType::Right => {
             // combine the matched and unmatched right result together
             append_right_indices(
@@ -1162,6 +1185,30 @@ pub(crate) fn adjust_indices_by_join_type(
             ))
         }
     }
+}
+
+/// Checks that no left index appears more than once, which would indicate
+/// multiple right-side matches for a single left row. This is used by
+/// `LeftSingle` joins to enforce the scalar subquery "at most one row" invariant.
+fn check_single_match(left_indices: &UInt64Array) -> Result<()> {
+    // The left_indices are produced in order of matching, so duplicates for
+    // the same left row will be adjacent or scattered. We use a simple scan.
+    if left_indices.len() <= 1 {
+        return Ok(());
+    }
+    let mut seen = HashSet::with_capacity(left_indices.len());
+    for i in 0..left_indices.len() {
+        if left_indices.is_null(i) {
+            continue;
+        }
+        let val = left_indices.value(i);
+        if !seen.insert(val) {
+            return Err(DataFusionError::Internal(
+                "Scalar subquery produced more than one row".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Appends right indices to left indices based on the specified order mode.
@@ -1512,9 +1559,11 @@ pub(crate) fn symmetric_join_output_partitioning(
     let left_partitioning = left.output_partitioning();
     let right_partitioning = right.output_partitioning();
     let result = match join_type {
-        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
-            left_partitioning.clone()
-        }
+        JoinType::Left
+        | JoinType::LeftSingle
+        | JoinType::LeftSemi
+        | JoinType::LeftAnti
+        | JoinType::LeftMark => left_partitioning.clone(),
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
             right_partitioning.clone()
         }
@@ -1543,6 +1592,7 @@ pub(crate) fn asymmetric_join_output_partitioning(
             right.output_partitioning().clone()
         }
         JoinType::Left
+        | JoinType::LeftSingle
         | JoinType::LeftSemi
         | JoinType::LeftAnti
         | JoinType::Full

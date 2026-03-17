@@ -72,11 +72,26 @@ pub enum JoinType {
     /// Same logic as the LeftMark Join above, however it returns a record for each record from the
     /// right input.
     RightMark,
+    /// Left Single Join
+    ///
+    /// Like a left outer join, but returns an error if more than one row from the right
+    /// side matches any given row from the left side. This is used for decorrelating scalar
+    /// subqueries: a scalar subquery must produce at most one row per outer row, so a single
+    /// join enforces this constraint at runtime.
+    ///
+    /// Semantics:
+    /// - If a left row has exactly one match on the right: returns the matched pair
+    /// - If a left row has no match on the right: returns the left row with NULLs for right columns
+    /// - If a left row has more than one match on the right: returns a runtime error
+    LeftSingle,
 }
 
 impl JoinType {
     pub fn is_outer(self) -> bool {
-        self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
+        self == JoinType::Left
+            || self == JoinType::Right
+            || self == JoinType::Full
+            || self == JoinType::LeftSingle
     }
 
     /// Returns the `JoinType` if the (2) inputs were swapped
@@ -94,6 +109,9 @@ impl JoinType {
             JoinType::RightAnti => JoinType::LeftAnti,
             JoinType::LeftMark => JoinType::RightMark,
             JoinType::RightMark => JoinType::LeftMark,
+            JoinType::LeftSingle => {
+                panic!("LeftSingle join does not support swap")
+            }
         }
     }
 
@@ -123,6 +141,7 @@ impl JoinType {
             JoinType::RightAnti => (true, false),
             JoinType::LeftMark => (false, true),
             JoinType::RightMark => (true, false),
+            JoinType::LeftSingle => (false, true),
         }
     }
 
@@ -140,7 +159,7 @@ impl JoinType {
                 | JoinType::RightAnti
                 | JoinType::LeftMark
                 | JoinType::RightMark
-        )
+        ) && !matches!(self, JoinType::LeftSingle)
     }
 }
 
@@ -157,6 +176,7 @@ impl Display for JoinType {
             JoinType::RightAnti => "RightAnti",
             JoinType::LeftMark => "LeftMark",
             JoinType::RightMark => "RightMark",
+            JoinType::LeftSingle => "LeftSingle",
         };
         write!(f, "{join_type}")
     }
@@ -178,6 +198,7 @@ impl FromStr for JoinType {
             "RIGHTANTI" => Ok(JoinType::RightAnti),
             "LEFTMARK" => Ok(JoinType::LeftMark),
             "RIGHTMARK" => Ok(JoinType::RightMark),
+            "LEFTSINGLE" => Ok(JoinType::LeftSingle),
             _ => _not_impl_err!("The join type {s} does not exist or is not implemented"),
         }
     }

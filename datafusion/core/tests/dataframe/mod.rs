@@ -2592,6 +2592,7 @@ async fn verify_join_output_partitioning() -> Result<()> {
 
         match join_type {
             JoinType::Left
+            | JoinType::LeftSingle
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::LeftMark => {

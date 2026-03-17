@@ -596,6 +596,7 @@ fn expr_source_side(
     match join_type {
         JoinType::Inner
         | JoinType::Left
+        | JoinType::LeftSingle
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftMark

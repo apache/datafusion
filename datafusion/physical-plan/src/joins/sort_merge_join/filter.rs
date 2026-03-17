@@ -158,6 +158,7 @@ pub fn needs_deferred_filtering(
         && matches!(
             join_type,
             JoinType::Left
+                | JoinType::LeftSingle
                 | JoinType::LeftSemi
                 | JoinType::LeftMark
                 | JoinType::Right
@@ -282,7 +283,7 @@ pub fn get_corrected_filter_mask(
     let mut seen_true = false;
 
     match join_type {
-        JoinType::Left | JoinType::Right => {
+        JoinType::Left | JoinType::LeftSingle | JoinType::Right => {
             // For outer joins: Keep first matching row per input row,
             // convert rest to nulls, add null-joined rows for unmatched
             for i in 0..row_indices_length {
@@ -425,7 +426,7 @@ pub fn filter_record_batch_by_join_type(
     let filtered_record_batch = filter_record_batch(record_batch, corrected_mask)?;
 
     match join_type {
-        JoinType::Left | JoinType::LeftMark => {
+        JoinType::Left | JoinType::LeftSingle | JoinType::LeftMark => {
             // For left joins, add null-joined rows where mask is false
             let null_mask = compute::not(corrected_mask)?;
             let null_joined_batch = filter_record_batch(record_batch, &null_mask)?;

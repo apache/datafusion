@@ -117,5 +117,7 @@ fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
         JoinType::RightMark => join_rel::JoinType::RightMark,
         JoinType::RightAnti => join_rel::JoinType::RightAnti,
         JoinType::RightSemi => join_rel::JoinType::RightSemi,
+        // LeftSingle is an internal join type; map to Left for substrait
+        JoinType::LeftSingle => join_rel::JoinType::Left,
     }
 }

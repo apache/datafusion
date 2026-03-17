@@ -411,6 +411,7 @@ impl PiecewiseMergeJoinExec {
             | JoinType::RightAnti
             | JoinType::RightMark => JoinSide::Right,
             JoinType::Left
+            | JoinType::LeftSingle
             | JoinType::LeftAnti
             | JoinType::LeftSemi
             | JoinType::LeftMark => JoinSide::Left,

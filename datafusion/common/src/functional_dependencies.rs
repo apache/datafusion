@@ -339,7 +339,7 @@ impl FunctionalDependencies {
         let mut left_func_dependencies = self.clone();
 
         match join_type {
-            JoinType::Inner | JoinType::Left | JoinType::Right => {
+            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::LeftSingle => {
                 // Add offset to right schema:
                 right_func_dependencies.add_offset(left_cols_len);
 
@@ -349,7 +349,7 @@ impl FunctionalDependencies {
                 right_func_dependencies =
                     right_func_dependencies.with_dependency(Dependency::Multi);
 
-                if *join_type == JoinType::Left {
+                if *join_type == JoinType::Left || *join_type == JoinType::LeftSingle {
                     // Downgrade the right side, since it may have additional NULL values:
                     right_func_dependencies.downgrade_dependencies();
                 } else if *join_type == JoinType::Right {

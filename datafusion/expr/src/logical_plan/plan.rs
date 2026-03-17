@@ -549,7 +549,11 @@ impl LogicalPlan {
                 join_type,
                 ..
             }) => match join_type {
-                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                JoinType::Inner
+                | JoinType::Left
+                | JoinType::LeftSingle
+                | JoinType::Right
+                | JoinType::Full => {
                     if left.schema().fields().is_empty() {
                         right.head_output_expr()
                     } else {
@@ -1345,6 +1349,7 @@ impl LogicalPlan {
                 ..
             }) => match join_type {
                 JoinType::Inner => Some(left.max_rows()? * right.max_rows()?),
+                JoinType::LeftSingle => left.max_rows(),
                 JoinType::Left | JoinType::Right | JoinType::Full => {
                     match (left.max_rows()?, right.max_rows()?, join_type) {
                         (0, 0, _) => Some(0),

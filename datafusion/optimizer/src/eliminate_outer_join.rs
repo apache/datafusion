@@ -141,7 +141,7 @@ pub fn eliminate_outer(
 ) -> JoinType {
     let mut new_join_type = join_type;
     match join_type {
-        JoinType::Left => {
+        JoinType::Left | JoinType::LeftSingle => {
             if right_non_nullable {
                 new_join_type = JoinType::Inner;
             }

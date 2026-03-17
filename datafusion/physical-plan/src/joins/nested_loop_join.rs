@@ -372,6 +372,7 @@ impl NestedLoopJoinExec {
                 // If we need to generate unmatched rows from the *build side*,
                 // we need to emit them at the end.
                 JoinType::Left
+                | JoinType::LeftSingle
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
                 | JoinType::Full => EmissionType::Both,
@@ -2099,6 +2100,7 @@ fn build_unmatched_batch_empty_schema(
 ) -> Result<Option<RecordBatch>> {
     let result_size = match join_type {
         JoinType::Left
+        | JoinType::LeftSingle
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftAnti
@@ -2191,11 +2193,11 @@ fn build_unmatched_batch(
     }
 
     match join_type {
-        JoinType::Full | JoinType::Right | JoinType::Left => {
+        JoinType::Full | JoinType::Right | JoinType::Left | JoinType::LeftSingle => {
             if join_type == JoinType::Right {
                 debug_assert_eq!(batch_side, JoinSide::Right);
             }
-            if join_type == JoinType::Left {
+            if join_type == JoinType::Left || join_type == JoinType::LeftSingle {
                 debug_assert_eq!(batch_side, JoinSide::Left);
             }
 
