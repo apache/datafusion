@@ -25,8 +25,6 @@ For contributor-facing guidance on release branches and backports, see the
 The rest of this guide contains the commands for maintainers to create release
 candidates and run the release process.
 
-[crates.io]: https://crates.io/crates/datafusion
-
 ## Release Prerequisites
 
 ### Add git remote for `apache` repo
