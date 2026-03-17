@@ -992,23 +992,20 @@ fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBat
     )?)
 }
 
-/// Apply null mask from build_indices onto a result array.
+/// Apply null mask from index nulls onto a result array.
 /// Used for outer joins where unmatched rows are represented as null indices.
-fn apply_null_mask(result: ArrayRef, build_indices: &UInt64Array) -> Result<ArrayRef> {
-    if let Some(idx_nulls) = build_indices.nulls() {
-        let data = result.to_data();
-        let combined_nulls = if let Some(existing) = data.nulls() {
-            NullBuffer::new(existing.inner() & idx_nulls.inner())
-        } else {
-            idx_nulls.clone()
-        };
-        Ok(arrow::array::make_array(
-            data.into_builder()
-                .null_bit_buffer(Some(combined_nulls.into_inner().into_inner()))
-                .build()?,
-        ))
-    } else {
-        Ok(result)
+fn apply_null_mask(result: ArrayRef, index_nulls: Option<&NullBuffer>) -> ArrayRef {
+    let combined = NullBuffer::union(result.nulls(), index_nulls);
+    // SAFETY: We only modify the null buffer, which is the union of the existing nulls
+    // and the index nulls. All other array data (buffers, offsets, child data) is unchanged.
+    unsafe {
+        arrow::array::make_array(
+            result
+                .into_data()
+                .into_builder()
+                .nulls(combined)
+                .build_unchecked(),
+        )
     }
 }
 
@@ -1105,11 +1102,7 @@ pub(crate) fn build_batch_from_indices(
                     let result = compute::interleave(&arrays, il_indices)?;
                     // Apply null mask from build_indices (for outer joins where
                     // unmatched rows are represented as null indices)
-                    if build_indices.null_count() > 0 {
-                        apply_null_mask(result, build_indices)?
-                    } else {
-                        result
-                    }
+                    apply_null_mask(result, build_indices.nulls())
                 }
                 BuildGather::AllNull => {
                     // All build indices are null (outer join with no matches)
@@ -1870,9 +1863,7 @@ pub(super) fn equal_rows_arr(
     null_equality: NullEquality,
 ) -> Result<(UInt64Array, UInt32Array)> {
     if left_arrays_per_batch.is_empty() || right_arrays.is_empty() {
-        return Err(DataFusionError::Internal(
-            "At least one array should be provided for both left and right".to_string(),
-        ));
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
     }
 
     let num_keys = right_arrays.len();
