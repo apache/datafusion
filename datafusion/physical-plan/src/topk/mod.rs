@@ -18,14 +18,14 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    array::{Array, AsArray},
+    array::{Array, AsArray, BinaryArray, ListArray, MapArray, StringArray},
     compute::{FilterBuilder, interleave_record_batch, prep_null_mask_filter},
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use std::mem::size_of;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::{any::Any, cmp::Ordering, collections::BinaryHeap, sync::Arc};
+use std::ops::Range;
+use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
@@ -34,9 +34,9 @@ use crate::spill::get_record_batch_memory_size;
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{
-    DataFusionError, HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
+    HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
@@ -761,6 +761,26 @@ impl TopKHeap {
         topk_rows: &[TopKRow],
         max_rows_per_batch: usize,
     ) -> Result<Vec<RecordBatch>> {
+        let (record_batches, batch_id_array_pos) = self.collect_record_batches();
+        let all_indices = self.collect_indices(topk_rows, &batch_id_array_pos)?;
+        let index_ranges = split_indices_by_i32_offsets(
+            &record_batches,
+            &all_indices,
+            max_rows_per_batch.max(1),
+            I32_OFFSET_LIMIT,
+        )?;
+
+        let mut batches = Vec::with_capacity(index_ranges.len());
+        for range in index_ranges {
+            let indices = &all_indices[range];
+            let batch = interleave_record_batch(&record_batches, indices)?;
+            batches.push(batch);
+        }
+
+        Ok(batches)
+    }
+
+    fn collect_record_batches(&self) -> (Vec<&RecordBatch>, HashMap<u32, usize>) {
         // Collect the batches into a vec and store the "batch_id -> array_pos" mapping.
         // This is needed since the batch ids are not continuous.
         let mut record_batches = Vec::new();
@@ -769,8 +789,15 @@ impl TopKHeap {
             record_batches.push(&batch.batch);
             batch_id_array_pos.insert(*batch_id, array_pos);
         }
+        (record_batches, batch_id_array_pos)
+    }
 
-        let all_indices = topk_rows
+    fn collect_indices(
+        &self,
+        topk_rows: &[TopKRow],
+        batch_id_array_pos: &HashMap<u32, usize>,
+    ) -> Result<Vec<(usize, usize)>> {
+        topk_rows
             .iter()
             .map(|k| {
                 let array_pos = batch_id_array_pos.get(&k.batch_id).ok_or_else(|| {
@@ -781,42 +808,7 @@ impl TopKHeap {
                 })?;
                 Ok((*array_pos, k.index))
             })
-            .collect::<Result<Vec<_>>>()?;
-
-        let max_rows_per_batch = max_rows_per_batch.max(1);
-        let mut batches = Vec::new();
-        let mut start = 0;
-        while start < all_indices.len() {
-            let remaining_rows = all_indices.len() - start;
-            let mut chunk_size = remaining_rows.min(max_rows_per_batch);
-
-            loop {
-                let indices = &all_indices[start..start + chunk_size];
-                match try_interleave_record_batch(&record_batches, indices) {
-                    Ok(batch) => {
-                        batches.push(batch);
-                        start += chunk_size;
-                        break;
-                    }
-                    Err(InterleaveError::Overflow(_)) if chunk_size > 1 => {
-                        chunk_size = chunk_size.div_ceil(2);
-                        if chunk_size == 0 {
-                            return internal_err!(
-                                "Invalid TopK chunk size during interleave"
-                            );
-                        }
-                    }
-                    Err(InterleaveError::Overflow(message)) => {
-                        return internal_err!(
-                            "TopK failed to interleave a single row due to offset overflow: {message}"
-                        );
-                    }
-                    Err(InterleaveError::DataFusion(err)) => return Err(err),
-                }
-            }
-        }
-
-        Ok(batches)
+            .collect::<Result<Vec<_>>>()
     }
 
     /// Compact this heap, rewriting all stored batches into new input
@@ -923,55 +915,162 @@ impl TopKHeap {
         Ok(Some(scalar_values))
     }
 }
+const I32_OFFSET_LIMIT: i64 = i32::MAX as i64;
 
-enum InterleaveError {
-    Overflow(String),
-    DataFusion(DataFusionError),
-}
-
-fn try_interleave_record_batch(
+fn split_indices_by_i32_offsets(
     record_batches: &[&RecordBatch],
-    indices: &[(usize, usize)],
-) -> std::result::Result<RecordBatch, InterleaveError> {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        interleave_record_batch(record_batches, indices)
-    }));
+    all_indices: &[(usize, usize)],
+    max_rows_per_batch: usize,
+    max_offset: i64,
+) -> Result<Vec<Range<usize>>> {
+    if all_indices.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    match result {
-        Ok(Ok(batch)) => Ok(batch),
-        Ok(Err(err)) => {
-            let message = err.to_string();
-            if is_overflow_message(&message) {
-                Err(InterleaveError::Overflow(message))
-            } else {
-                Err(InterleaveError::DataFusion(err.into()))
-            }
+    let var_width_columns =
+        collect_var_width_columns(record_batches.first().ok_or_else(|| {
+            internal_datafusion_err!("Missing record batches for TopK interleave")
+        })?);
+
+    if var_width_columns.is_empty() {
+        return Ok(split_indices_by_row_count(
+            all_indices.len(),
+            max_rows_per_batch,
+        ));
+    }
+
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut totals = vec![0_i64; var_width_columns.len()];
+
+    for (pos, (batch_pos, row_index)) in all_indices.iter().enumerate() {
+        if pos - start >= max_rows_per_batch {
+            ranges.push(start..pos);
+            start = pos;
+            totals.fill(0);
         }
-        Err(payload) => {
-            let message = panic_message(payload.as_ref());
-            if is_overflow_message(&message) {
-                Err(InterleaveError::Overflow(message))
-            } else {
-                Err(InterleaveError::DataFusion(internal_datafusion_err!(
-                    "TopK interleave panicked: {message}"
-                )))
+
+        let batch = record_batches.get(*batch_pos).ok_or_else(|| {
+            internal_datafusion_err!("Invalid batch position in TopK indices")
+        })?;
+
+        let mut row_sizes = Vec::with_capacity(var_width_columns.len());
+        for column in &var_width_columns {
+            let array = batch.column(column.column_index);
+            let size = column.row_size(array.as_ref(), *row_index)?;
+            if size > max_offset {
+                return internal_err!(
+                    "TopK row requires {size} offsets which exceeds i32::MAX"
+                );
             }
+            row_sizes.push(size);
         }
+
+        if totals
+            .iter()
+            .zip(row_sizes.iter())
+            .any(|(total, size)| total + size > max_offset)
+        {
+            ranges.push(start..pos);
+            start = pos;
+            totals.fill(0);
+        }
+
+        for (total, size) in totals.iter_mut().zip(row_sizes.iter()) {
+            *total += *size;
+        }
+    }
+
+    if start < all_indices.len() {
+        ranges.push(start..all_indices.len());
+    }
+
+    Ok(ranges)
+}
+
+fn split_indices_by_row_count(
+    total_rows: usize,
+    max_rows_per_batch: usize,
+) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let max_rows_per_batch = max_rows_per_batch.max(1);
+    while start < total_rows {
+        let end = (start + max_rows_per_batch).min(total_rows);
+        ranges.push(start..end);
+        start = end;
+    }
+    ranges
+}
+
+fn collect_var_width_columns(batch: &RecordBatch) -> Vec<VarWidthColumn> {
+    batch
+        .columns()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, array)| VarWidthColumn::new(index, array.data_type()))
+        .collect()
+}
+
+struct VarWidthColumn {
+    column_index: usize,
+    kind: VarWidthKind,
+}
+
+impl VarWidthColumn {
+    fn new(column_index: usize, data_type: &DataType) -> Option<Self> {
+        let kind = match data_type {
+            DataType::Utf8 => VarWidthKind::Utf8,
+            DataType::Binary => VarWidthKind::Binary,
+            DataType::List(_) => VarWidthKind::List,
+            DataType::Map(_, _) => VarWidthKind::Map,
+            _ => return None,
+        };
+
+        Some(Self { column_index, kind })
+    }
+
+    fn row_size(&self, array: &dyn Array, row: usize) -> Result<i64> {
+        let size = match self.kind {
+            VarWidthKind::Utf8 => array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!("Expected Utf8 array for TopK interleave")
+                })?
+                .value_length(row) as i64,
+            VarWidthKind::Binary => array
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!("Expected Binary array for TopK interleave")
+                })?
+                .value_length(row) as i64,
+            VarWidthKind::List => array
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!("Expected List array for TopK interleave")
+                })?
+                .value_length(row) as i64,
+            VarWidthKind::Map => array
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!("Expected Map array for TopK interleave")
+                })?
+                .value_length(row) as i64,
+        };
+
+        Ok(size)
     }
 }
 
-fn is_overflow_message(message: &str) -> bool {
-    message.to_ascii_lowercase().contains("overflow")
-}
-
-fn panic_message(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_string()
-    }
+enum VarWidthKind {
+    Utf8,
+    Binary,
+    List,
+    Map,
 }
 
 /// Represents one of the top K rows held in this heap. Orders
@@ -1246,6 +1345,23 @@ mod tests {
             ],
             &batches
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_split_indices_by_i32_offsets_uses_sizes() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec!["aaa", "bb", "cccc"]))],
+        )?;
+        let record_batches = vec![&batch];
+        let all_indices = vec![(0, 0), (0, 1), (0, 2)];
+
+        let ranges = split_indices_by_i32_offsets(&record_batches, &all_indices, 10, 5)?;
+
+        assert_eq!(ranges, vec![0..2, 2..3]);
 
         Ok(())
     }
