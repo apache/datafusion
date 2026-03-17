@@ -100,11 +100,16 @@ impl LambdaUDF for ArrayTransform {
         &self.signature
     }
 
-    fn coerce_value_types(
-        &self,
-        arg_types: &[ValueOrLambda<DataType, ()>],
-    ) -> Result<Vec<Option<DataType>>> {
-        let (list, _lambda) = value_lambda_pair(self.name(), arg_types)?;
+    fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let list = if arg_types.len() == 1 {
+            &arg_types[0]
+        } else {
+            return plan_err!(
+                "{} function requires 1 value arguments, got {}",
+                self.name(),
+                arg_types.len()
+            );
+        };
 
         let coerced = match list {
             DataType::List(_)
@@ -121,7 +126,7 @@ impl LambdaUDF for ArrayTransform {
             }
         };
 
-        Ok(vec![Some(coerced), None])
+        Ok(vec![coerced])
     }
 
     fn lambdas_parameters(

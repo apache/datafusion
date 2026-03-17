@@ -245,13 +245,13 @@ select array_transform(arrow_cast(t.list, 'ListView(Int32)'), a -> a+1) from t;
 query error
 select array_transform();
 ----
-DataFusion error: Execution error: array_transform function requires 2 arguments, got 0
+DataFusion error: Error during planning: array_transform function requires 1 value arguments, got 0
 
 
 query error DataFusion error: Error during planning: array_transform expected a list as first argument, got Int64
 select array_transform(1, v -> v*2);
 
-query error DataFusion error: Error during planning: array_transform expects a value followed by a lambda, got Lambda\(\(\)\) and Value\(List\(Field \{ data_type: Int64, nullable: true \}\)\)
+query error DataFusion error: Error during planning: array_transform expects a value followed by a lambda, got Lambda\(\(\)\) and Value\(Field \{ name: "make_array\(Int64\(1\),Int64\(2\)\)", data_type: List\(Field \{ data_type: Int64, nullable: true \}\), nullable: true \}\)
 select array_transform(v -> v*2, [1, 2]);
 
 query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 2

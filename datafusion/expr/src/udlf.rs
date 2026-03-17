@@ -606,21 +606,21 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
     ///
-    /// For example, if your function requires a floating point arguments, but the user calls
-    /// it like `my_func(1::int)` (i.e. with `1` as an integer), coerce_types can return `[DataType::Float64]`
-    /// to ensure the argument is converted to `1::double`
+    /// For example, if your function requires a contiguous list argument, but the user calls
+    /// it like `my_func(c, v -> v+2)` (i.e. with `c` as a ListView), coerce_types can return `[DataType::List(..)]`
+    /// to ensure the argument is converted to a List
     ///
     /// # Parameters
-    /// * `arg_types`: The argument types of the arguments this function with
+    /// * `arg_types`: The argument types of the value arguments of this function, excluding lambdas
     ///
     /// # Return value
     /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
     /// arguments to these specific types.
-    fn coerce_value_types(
-        &self,
-        _arg_types: &[ValueOrLambda<DataType, ()>],
-    ) -> Result<Vec<Option<DataType>>> {
-        not_impl_err!("Function {} does not implement coerce_types", self.name())
+    fn coerce_value_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!(
+            "Function {} does not implement coerce_value_types",
+            self.name()
+        )
     }
 
     /// Returns the documentation for this Lambda UDF.

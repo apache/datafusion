@@ -167,36 +167,42 @@ pub fn value_fields_with_lambda_udf<L: Clone>(
         LambdaTypeSignature::UserDefined => {
             let arg_types = current_fields
                 .iter()
-                .map(|p| match p {
-                    ValueOrLambda::Value(field) => {
-                        ValueOrLambda::Value(field.data_type().clone())
-                    }
-                    ValueOrLambda::Lambda(_) => ValueOrLambda::Lambda(()),
+                .filter_map(|p| match p {
+                    ValueOrLambda::Value(field) => Some(field.data_type().clone()),
+                    ValueOrLambda::Lambda(_) => None,
                 })
                 .collect::<Vec<_>>();
 
             let coerced_types = func.coerce_value_types(&arg_types)?;
 
-            std::iter::zip(current_fields, coerced_types)
-                .map(|(field, coerce_to)| match (field, coerce_to) {
-                    (ValueOrLambda::Value(field), Some(coerce_to)) => {
-                        Ok(ValueOrLambda::Value(Arc::new(
-                            field.as_ref().clone().with_data_type(coerce_to),
-                        )))
+            if coerced_types.len() != arg_types.len() {
+                return plan_err!(
+                    "{} coerce_value_types should have returned {} items but returned {}",
+                    func.name(),
+                    arg_types.len(),
+                    coerced_types.len()
+                );
+            }
+
+            let mut coerced_types = coerced_types.into_iter();
+
+            Ok(current_fields
+                .iter()
+                .map(|current_field| match current_field {
+                    ValueOrLambda::Value(field) => {
+                        let data_type = coerced_types
+                            .next()
+                            .expect("coerced_types len should have been checked above");
+
+                        ValueOrLambda::Value(Arc::new(
+                            field.as_ref().clone().with_data_type(data_type),
+                        ))
                     }
-                    (ValueOrLambda::Lambda(v), None) => {
-                        Ok(ValueOrLambda::Lambda(v.clone()))
+                    ValueOrLambda::Lambda(lambda) => {
+                        ValueOrLambda::Lambda(lambda.clone())
                     }
-                    (ValueOrLambda::Value(_), None) => plan_err!(
-                        "{} coerce_values_types returned None for a value",
-                        func.name()
-                    ),
-                    (ValueOrLambda::Lambda(_), Some(_)) => plan_err!(
-                        "{} coerce_values_types returned Some for a lambda",
-                        func.name()
-                    ),
                 })
-                .collect()
+                .collect())
         }
         LambdaTypeSignature::VariadicAny => Ok(current_fields.to_vec()),
         LambdaTypeSignature::Any(number) => {
