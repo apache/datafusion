@@ -2501,7 +2501,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     let on_columns = vec![datafusion::physical_plan::expressions::col("col", &schema)?];
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
         on_columns,
-        datafusion::physical_plan::joins::SeededRandomState::with_seeds(0, 0, 0, 0),
+        datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
         hash_map,
         "test_lookup".to_string(),
     ));
@@ -2545,7 +2545,7 @@ fn roundtrip_hash_expr() -> Result<()> {
     let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
     let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(HashExpr::new(
         on_columns,
-        SeededRandomState::with_seeds(0, 1, 2, 3), // arbitrary random seeds for testing
+        SeededRandomState::with_seed(0), // arbitrary random seed for testing
         "test_hash".to_string(),
     ));
 
@@ -2559,7 +2559,7 @@ fn roundtrip_hash_expr() -> Result<()> {
 
     // Confirm that the debug string contains the random state seeds
     assert!(
-        format!("{filter:?}").contains("test_hash(a@0, b@1, [0,1,2,3])"),
+        format!("{filter:?}").contains("test_hash(a@0, b@1, [0])"),
         "Debug string missing seeds: {filter:?}"
     );
     roundtrip_test(filter)

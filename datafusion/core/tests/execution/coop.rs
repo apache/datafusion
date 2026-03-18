@@ -794,9 +794,9 @@ async fn stream_yields(
     let yielded = select! {
         result = join_handle => {
             match result {
-                Ok(Pending) => Yielded::ReadyOrPending,
-                Ok(Ready(Ok(_))) => Yielded::ReadyOrPending,
-                Ok(Ready(Err(e))) => Yielded::Err(e),
+                Ok(Poll::Pending) => Yielded::ReadyOrPending,
+                Ok(Poll::Ready(Ok(_))) => Yielded::ReadyOrPending,
+                Ok(Poll::Ready(Err(e))) => Yielded::Err(e),
                 Err(_) => Yielded::Err(exec_datafusion_err!("join error")),
             }
         },

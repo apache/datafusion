@@ -4003,6 +4003,12 @@ select array_position(arrow_cast(['a', 'b', 'c', 'b'], 'FixedSizeList(4, Utf8)')
 
 ## array_positions (aliases: `list_positions`)
 
+# array_positions with empty array
+query ?
+select array_positions(arrow_cast(make_array(), 'List(Int64)'), 1);
+----
+[]
+
 query ?
 select array_positions([1, 2, 3, 4, 5], null);
 ----
@@ -5528,21 +5534,47 @@ select
  array_remove(make_array(1, null, 2), null),
  array_remove(make_array(1, null, 2, null), null);
 ----
-[1, 2] [1, 2, NULL]
+NULL NULL
 
 query ??
 select
  array_remove(arrow_cast(make_array(1, null, 2), 'LargeList(Int64)'), null),
  array_remove(arrow_cast(make_array(1, null, 2, null), 'LargeList(Int64)'), null);
 ----
-[1, 2] [1, 2, NULL]
+NULL NULL
 
 query ??
 select
  array_remove(arrow_cast(make_array(1, null, 2), 'FixedSizeList(3, Int64)'), null),
  array_remove(arrow_cast(make_array(1, null, 2, null), 'FixedSizeList(4, Int64)'), null);
 ----
-[1, 2] [1, 2, NULL]
+NULL NULL
+
+# array_remove with null element from column
+query ?
+select array_remove(column1, column2) from (values
+  (make_array(1, 2, 3), 2),
+  (make_array(4, 5, 6), null),
+  (make_array(7, 8, 9), 8),
+  (null, 1)
+) as t(column1, column2);
+----
+[1, 3]
+NULL
+[7, 9]
+NULL
+
+# array_remove with null element from column (LargeList)
+query ?
+select array_remove(column1, column2) from (values
+  (arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 2),
+  (arrow_cast(make_array(4, 5, 6), 'LargeList(Int64)'), null),
+  (arrow_cast(make_array(7, 8, 9), 'LargeList(Int64)'), 8)
+) as t(column1, column2);
+----
+[1, 3]
+NULL
+[7, 9]
 
 # array_remove scalar function #2 (element is list)
 query ??
@@ -5685,6 +5717,46 @@ select array_remove(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [1
 
 ## array_remove_n (aliases: `list_remove_n`)
 
+# array_remove_n with null element scalar
+query ??
+select array_remove_n(make_array(1, 2, 2, 1, 1), NULL, 2),
+       array_remove_n(make_array(1, 2, 2, 1, 1), 2, 2);
+----
+NULL [1, 1, 1]
+
+# array_remove_n with null element scalar (LargeList)
+query ??
+select array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), NULL, 2),
+       array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2, 2);
+----
+NULL [1, 1, 1]
+
+# array_remove_n with null element from column
+query ?
+select array_remove_n(column1, column2, column3) from (values
+  (make_array(1, 2, 2, 1, 1), 2, 2),
+  (make_array(3, 4, 4, 3, 3), null, 2),
+  (make_array(5, 6, 6, 5, 5), 6, 1),
+  (null, 1, 1)
+) as t(column1, column2, column3);
+----
+[1, 1, 1]
+NULL
+[5, 6, 5, 5]
+NULL
+
+# array_remove_n with null element from column (LargeList)
+query ?
+select array_remove_n(column1, column2, column3) from (values
+  (arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2, 2),
+  (arrow_cast(make_array(3, 4, 4, 3, 3), 'LargeList(Int64)'), null, 2),
+  (arrow_cast(make_array(5, 6, 6, 5, 5), 'LargeList(Int64)'), 6, 1)
+) as t(column1, column2, column3);
+----
+[1, 1, 1]
+NULL
+[5, 6, 5, 5]
+
 # array_remove_n scalar function #1
 query ???
 select array_remove_n(make_array(1, 2, 2, 1, 1), 2, 2), array_remove_n(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0, 2), array_remove_n(make_array('h', 'e', 'l', 'l', 'o'), 'l', 3);
@@ -5777,7 +5849,33 @@ select array_remove_n(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], 
 query ?
 select array_remove_all(make_array(1, 2, 2, 1, 1), NULL);
 ----
-[1, 2, 2, 1, 1]
+NULL
+
+# array_remove_all with null element from column
+query ?
+select array_remove_all(column1, column2) from (values
+  (make_array(1, 2, 2, 1, 1), 2),
+  (make_array(3, 4, 4, 3, 3), null),
+  (make_array(5, 6, 6, 5, 5), 6),
+  (null, 1)
+) as t(column1, column2);
+----
+[1, 1, 1]
+NULL
+[5, 5, 5]
+NULL
+
+# array_remove_all with null element from column (LargeList)
+query ?
+select array_remove_all(column1, column2) from (values
+  (arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2),
+  (arrow_cast(make_array(3, 4, 4, 3, 3), 'LargeList(Int64)'), null),
+  (arrow_cast(make_array(5, 6, 6, 5, 5), 'LargeList(Int64)'), 6)
+) as t(column1, column2);
+----
+[1, 1, 1]
+NULL
+[5, 5, 5]
 
 # array_remove_all scalar function #1
 query ???
