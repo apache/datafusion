@@ -101,8 +101,8 @@ fn classify_char(c: char) -> Option<char> {
     }
 }
 
-fn is_separator(c: char) -> bool {
-    !c.to_ascii_uppercase().is_ascii_uppercase()
+fn is_ignored(c: char) -> bool {
+    matches!(c.to_ascii_uppercase(), 'H' | 'W')
 }
 
 fn compute_soundex(s: &str) -> String {
@@ -122,16 +122,20 @@ fn compute_soundex(s: &str) -> String {
             break;
         }
 
-        if is_separator(c) {
-            last_code = None;
+        if is_ignored(c) {
             continue;
         }
 
-        if let Some(code) = classify_char(c) {
-            if last_code != Some(code) {
-                soundex_code.push(code);
+        match classify_char(c) {
+            Some(code) => {
+                if last_code != Some(code) {
+                    soundex_code.push(code);
+                }
+                last_code = Some(code);
             }
-            last_code = Some(code);
+            None => {
+                last_code = None;
+            }
         }
     }
     format!("{soundex_code:0<4}")
