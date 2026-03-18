@@ -82,12 +82,10 @@ fn spark_soundex_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     let str_array = as_generic_string_array::<T>(array)?;
-
     let result = str_array
         .iter()
         .map(|s| s.map(compute_soundex))
         .collect::<StringArray>();
-
     Ok(Arc::new(result))
 }
 
