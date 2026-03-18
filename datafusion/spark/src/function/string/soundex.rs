@@ -91,11 +91,6 @@ fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
-const US_ENGLISH_MAPPING: [u8; 26] = [
-    b'0', b'1', b'2', b'3', b'0', b'1', b'2', b'7', b'0', b'2', b'2', b'4', b'5', b'5',
-    b'0', b'1', b'2', b'6', b'2', b'3', b'0', b'1', b'7', b'2', b'0', b'2',
-];
-
 fn compute_soundex(s: &str) -> String {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
@@ -112,8 +107,7 @@ fn compute_soundex(s: &str) -> String {
 
     let mut soundex_code = [first_ch, b'0', b'0', b'0'];
     let mut sxi = 1;
-    let idx = (first_ch - b'A') as usize;
-    let mut last_code = US_ENGLISH_MAPPING[idx];
+    let mut last_code = classify_char(first_ch.into());
 
     for i in bytes.iter().skip(1) {
         let mut b = *i;
@@ -125,8 +119,7 @@ fn compute_soundex(s: &str) -> String {
             continue;
         }
 
-        let idx = (b - b'A') as usize;
-        let code = US_ENGLISH_MAPPING[idx];
+        let code = classify_char(b.into());
 
         if code == b'7' {
             continue;
@@ -143,4 +136,17 @@ fn compute_soundex(s: &str) -> String {
     }
 
     String::from_utf8_lossy(&soundex_code).to_string()
+}
+
+fn classify_char(ch: char) -> u8 {
+    match ch.to_ascii_uppercase() {
+        'A' | 'E' | 'I' | 'O' | 'U' | 'Y' => 0,
+        'B' | 'F' | 'P' | 'V' => 1,
+        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => 2,
+        'D' | 'T' => 3,
+        'L' => 4,
+        'M' | 'N' => 5,
+        'R' => 6,
+        _ => 7,
+    }
 }
