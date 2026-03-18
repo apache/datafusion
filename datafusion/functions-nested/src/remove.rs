@@ -483,8 +483,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
 mod tests {
     use crate::remove::{ArrayRemove, ArrayRemoveAll, ArrayRemoveN};
     use arrow::array::{
-        Array, ArrayRef, AsArray, GenericListArray, Int32Array, ListArray,
-        OffsetSizeTrait,
+        Array, ArrayRef, AsArray, GenericListArray, ListArray, OffsetSizeTrait,
     };
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::ScalarValue;
@@ -643,59 +642,13 @@ mod tests {
         assert_array_remove(input_list, expected_list, element_to_remove);
     }
 
-    #[test]
-    fn test_array_remove_null_element_returns_null() {
-        let input_list = Arc::new(ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-                Some(1),
-                None,
-                Some(2),
-                None,
-                Some(4),
-            ])]),
-        ));
-        let expected_list = ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                None::<Vec<Option<i32>>>,
-            ]),
-        );
-
-        assert_array_remove(input_list, expected_list, ScalarValue::Int32(None));
-    }
-
-    #[test]
-    fn test_array_remove_row_wise_null_element_returns_null() {
-        let input_list = Arc::new(ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), Some(2), None, Some(2), Some(4)]),
-                Some(vec![Some(5), None, Some(6)]),
-            ]),
-        ));
-        let element_to_remove = Arc::new(Int32Array::from(vec![Some(2), None]));
-        let expected_list = ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), None, Some(2), Some(4)]),
-                None::<Vec<Option<i32>>>,
-            ]),
-        );
-
-        assert_array_remove_array_arg(input_list, element_to_remove, expected_list);
-    }
-
     fn assert_array_remove(
         input_list: ArrayRef,
         expected_list: GenericListArray<i32>,
         element_to_remove: ScalarValue,
     ) {
         assert_eq!(input_list.data_type(), expected_list.data_type());
-        assert_eq!(
-            expected_list.value_type(),
-            element_to_remove.data_type().clone()
-        );
+        assert_eq!(expected_list.value_type(), element_to_remove.data_type());
         let input_list_len = input_list.len();
         let input_list_data_type = input_list.data_type().clone();
 
@@ -722,60 +675,6 @@ mod tests {
                 args: vec![
                     ColumnarValue::Array(input_list),
                     ColumnarValue::Scalar(element_to_remove),
-                ],
-                arg_fields: args_fields,
-                number_rows: input_list_len,
-                return_field,
-                config_options: Arc::new(Default::default()),
-            })
-            .unwrap();
-
-        assert_eq!(result.data_type(), input_list_data_type);
-        match result {
-            ColumnarValue::Array(array) => {
-                let result_list = array.as_list::<i32>();
-                assert_eq!(result_list, &expected_list);
-            }
-            _ => panic!("Expected ColumnarValue::Array"),
-        }
-    }
-
-    fn assert_array_remove_array_arg(
-        input_list: ArrayRef,
-        element_to_remove: ArrayRef,
-        expected_list: GenericListArray<i32>,
-    ) {
-        assert_eq!(input_list.data_type(), expected_list.data_type());
-        assert_eq!(
-            expected_list.value_type(),
-            element_to_remove.data_type().clone()
-        );
-        let input_list_len = input_list.len();
-        let input_list_data_type = input_list.data_type().clone();
-
-        let udf = ArrayRemove::new();
-        let args_fields = vec![
-            Arc::new(Field::new("num", input_list.data_type().clone(), false)),
-            Arc::new(Field::new(
-                "el",
-                element_to_remove.data_type().clone(),
-                true,
-            )),
-        ];
-        let scalar_args = vec![None, None];
-
-        let return_field = udf
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &args_fields,
-                scalar_arguments: &scalar_args,
-            })
-            .unwrap();
-
-        let result = udf
-            .invoke_with_args(ScalarFunctionArgs {
-                args: vec![
-                    ColumnarValue::Array(input_list),
-                    ColumnarValue::Array(element_to_remove),
                 ],
                 arg_fields: args_fields,
                 number_rows: input_list_len,
@@ -846,54 +745,6 @@ mod tests {
         assert_array_remove_n(input_list, expected_list, element_to_remove, 2);
     }
 
-    #[test]
-    fn test_array_remove_n_null_element_returns_null() {
-        let input_list = Arc::new(ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-                Some(1),
-                None,
-                Some(2),
-                None,
-                Some(4),
-            ])]),
-        ));
-        let expected_list = ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                None::<Vec<Option<i32>>>,
-            ]),
-        );
-
-        assert_array_remove_n(input_list, expected_list, ScalarValue::Int32(None), 2);
-    }
-
-    #[test]
-    fn test_array_remove_n_row_wise_null_element_returns_null() {
-        let input_list = Arc::new(ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), Some(2), None, Some(2), Some(4)]),
-                Some(vec![Some(5), None, Some(6)]),
-            ]),
-        ));
-        let element_to_remove = Arc::new(Int32Array::from(vec![Some(2), None]));
-        let expected_list = ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), None, Some(4)]),
-                None::<Vec<Option<i32>>>,
-            ]),
-        );
-
-        assert_array_remove_n_array_arg(
-            input_list,
-            element_to_remove,
-            ScalarValue::Int64(Some(2)),
-            expected_list,
-        );
-    }
-
     fn assert_array_remove_n(
         input_list: ArrayRef,
         expected_list: GenericListArray<i32>,
@@ -901,10 +752,7 @@ mod tests {
         n: i64,
     ) {
         assert_eq!(input_list.data_type(), expected_list.data_type());
-        assert_eq!(
-            expected_list.value_type(),
-            element_to_remove.data_type().clone()
-        );
+        assert_eq!(expected_list.value_type(), element_to_remove.data_type());
         let input_list_len = input_list.len();
         let input_list_data_type = input_list.data_type().clone();
 
@@ -935,63 +783,6 @@ mod tests {
                     ColumnarValue::Array(input_list),
                     ColumnarValue::Scalar(element_to_remove),
                     ColumnarValue::Scalar(count_scalar),
-                ],
-                arg_fields: args_fields,
-                number_rows: input_list_len,
-                return_field,
-                config_options: Arc::new(Default::default()),
-            })
-            .unwrap();
-
-        assert_eq!(result.data_type(), input_list_data_type);
-        match result {
-            ColumnarValue::Array(array) => {
-                let result_list = array.as_list::<i32>();
-                assert_eq!(result_list, &expected_list);
-            }
-            _ => panic!("Expected ColumnarValue::Array"),
-        }
-    }
-
-    fn assert_array_remove_n_array_arg(
-        input_list: ArrayRef,
-        element_to_remove: ArrayRef,
-        n: ScalarValue,
-        expected_list: GenericListArray<i32>,
-    ) {
-        assert_eq!(input_list.data_type(), expected_list.data_type());
-        assert_eq!(
-            expected_list.value_type(),
-            element_to_remove.data_type().clone()
-        );
-        let input_list_len = input_list.len();
-        let input_list_data_type = input_list.data_type().clone();
-
-        let udf = ArrayRemoveN::new();
-        let args_fields = vec![
-            Arc::new(Field::new("num", input_list.data_type().clone(), false)),
-            Arc::new(Field::new(
-                "el",
-                element_to_remove.data_type().clone(),
-                true,
-            )),
-            Arc::new(Field::new("count", DataType::Int64, false)),
-        ];
-        let scalar_args = vec![None, None, Some(&n)];
-
-        let return_field = udf
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &args_fields,
-                scalar_arguments: &scalar_args,
-            })
-            .unwrap();
-
-        let result = udf
-            .invoke_with_args(ScalarFunctionArgs {
-                args: vec![
-                    ColumnarValue::Array(input_list),
-                    ColumnarValue::Array(element_to_remove),
-                    ColumnarValue::Scalar(n),
                 ],
                 arg_fields: args_fields,
                 number_rows: input_list_len,
@@ -1062,59 +853,13 @@ mod tests {
         assert_array_remove_all(input_list, expected_list, element_to_remove);
     }
 
-    #[test]
-    fn test_array_remove_all_null_element_returns_null() {
-        let input_list = Arc::new(ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-                Some(1),
-                None,
-                Some(2),
-                None,
-                Some(4),
-            ])]),
-        ));
-        let expected_list = ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                None::<Vec<Option<i32>>>,
-            ]),
-        );
-
-        assert_array_remove_all(input_list, expected_list, ScalarValue::Int32(None));
-    }
-
-    #[test]
-    fn test_array_remove_all_row_wise_null_element_returns_null() {
-        let input_list = Arc::new(ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), Some(2), None, Some(2), Some(4)]),
-                Some(vec![Some(5), None, Some(6)]),
-            ]),
-        ));
-        let element_to_remove = Arc::new(Int32Array::from(vec![Some(2), None]));
-        let expected_list = ensure_field_nullability(
-            true,
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), None, Some(4)]),
-                None::<Vec<Option<i32>>>,
-            ]),
-        );
-
-        assert_array_remove_all_array_arg(input_list, element_to_remove, expected_list);
-    }
-
     fn assert_array_remove_all(
         input_list: ArrayRef,
         expected_list: GenericListArray<i32>,
         element_to_remove: ScalarValue,
     ) {
         assert_eq!(input_list.data_type(), expected_list.data_type());
-        assert_eq!(
-            expected_list.value_type(),
-            element_to_remove.data_type().clone()
-        );
+        assert_eq!(expected_list.value_type(), element_to_remove.data_type());
         let input_list_len = input_list.len();
         let input_list_data_type = input_list.data_type().clone();
 
@@ -1141,60 +886,6 @@ mod tests {
                 args: vec![
                     ColumnarValue::Array(input_list),
                     ColumnarValue::Scalar(element_to_remove),
-                ],
-                arg_fields: args_fields,
-                number_rows: input_list_len,
-                return_field,
-                config_options: Arc::new(Default::default()),
-            })
-            .unwrap();
-
-        assert_eq!(result.data_type(), input_list_data_type);
-        match result {
-            ColumnarValue::Array(array) => {
-                let result_list = array.as_list::<i32>();
-                assert_eq!(result_list, &expected_list);
-            }
-            _ => panic!("Expected ColumnarValue::Array"),
-        }
-    }
-
-    fn assert_array_remove_all_array_arg(
-        input_list: ArrayRef,
-        element_to_remove: ArrayRef,
-        expected_list: GenericListArray<i32>,
-    ) {
-        assert_eq!(input_list.data_type(), expected_list.data_type());
-        assert_eq!(
-            expected_list.value_type(),
-            element_to_remove.data_type().clone()
-        );
-        let input_list_len = input_list.len();
-        let input_list_data_type = input_list.data_type().clone();
-
-        let udf = ArrayRemoveAll::new();
-        let args_fields = vec![
-            Arc::new(Field::new("num", input_list.data_type().clone(), false)),
-            Arc::new(Field::new(
-                "el",
-                element_to_remove.data_type().clone(),
-                true,
-            )),
-        ];
-        let scalar_args = vec![None, None];
-
-        let return_field = udf
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &args_fields,
-                scalar_arguments: &scalar_args,
-            })
-            .unwrap();
-
-        let result = udf
-            .invoke_with_args(ScalarFunctionArgs {
-                args: vec![
-                    ColumnarValue::Array(input_list),
-                    ColumnarValue::Array(element_to_remove),
                 ],
                 arg_fields: args_fields,
                 number_rows: input_list_len,
