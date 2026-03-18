@@ -37,8 +37,8 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 use crate::expressions::{LambdaExpr, Literal};
 
-use arrow::array::{Array, NullArray, RecordBatch};
-use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use arrow::array::{Array, RecordBatch};
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::type_coercion::functions::value_fields_with_lambda_udf;
@@ -169,24 +169,6 @@ impl LambdaFunctionExpr {
     pub fn config_options(&self) -> &ConfigOptions {
         &self.config_options
     }
-
-    /// Given an arbitrary PhysicalExpr attempt to downcast it to a LambdaFunctionExpr
-    /// and verify that its inner function is of type T.
-    /// If the downcast fails, or the function is not of type T, returns `None`.
-    /// Otherwise returns `Some(LambdaFunctionExpr)`.
-    pub fn try_downcast_func<T>(expr: &dyn PhysicalExpr) -> Option<&LambdaFunctionExpr>
-    where
-        T: 'static,
-    {
-        match expr.as_any().downcast_ref::<LambdaFunctionExpr>() {
-            Some(lambda_expr)
-                if lambda_expr.fun().as_any().downcast_ref::<T>().is_some() =>
-            {
-                Some(lambda_expr)
-            }
-            _ => None,
-        }
-    }
 }
 
 impl fmt::Display for LambdaFunctionExpr {
@@ -289,43 +271,6 @@ impl PhysicalExpr for LambdaFunctionExpr {
                             );
                         }
 
-                        let indices = lambda.captured_columns();
-                        let variables = lambda.captured_variables();
-
-                        let captures = if !indices.is_empty() || !variables.is_empty() {
-                            let (fields, columns): (Vec<_>, _) = std::iter::zip(
-                                batch.schema_ref().fields(),
-                                batch.columns(),
-                            )
-                            .enumerate()
-                            .map(|(column_index, (field, column))| {
-                                if indices.contains(&column_index)
-                                    || variables.contains(field.name())
-                                {
-                                    (Arc::clone(field), Arc::clone(column))
-                                } else {
-                                    // To avoid costly copies of uncaptured columns, we swap them with a NullArray
-                                    // while keeping the number of columns on the batch the same
-                                    // so captured columns indices are kept stable across the whole tree.
-                                    (
-                                        Arc::new(Field::new(
-                                            field.name(),
-                                            DataType::Null,
-                                            false,
-                                        )),
-                                        Arc::new(NullArray::new(column.len())) as _,
-                                    )
-                                }
-                            })
-                            .unzip();
-
-                            let schema = Arc::new(Schema::new(fields));
-
-                            Some(RecordBatch::try_new(schema, columns)?)
-                        } else {
-                            None
-                        };
-
                         let params = std::iter::zip(lambda.params(), lambda_params)
                             .map(|(name, param)| Arc::new(param.with_name(name)))
                             .collect();
@@ -333,7 +278,6 @@ impl PhysicalExpr for LambdaFunctionExpr {
                         Ok(ValueOrLambda::Lambda(LambdaArgument::new(
                             params,
                             Arc::clone(lambda.body()),
-                            captures,
                         )))
                     }
                     (Some(_lambda), None) => exec_err!(

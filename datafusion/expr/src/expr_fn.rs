@@ -741,15 +741,9 @@ pub fn lambda(params: impl IntoIterator<Item = impl Into<String>>, body: Expr) -
     ))
 }
 
-/// Create an unresolved lambda variable expression
-///
-/// The expression tree or [`LogicalPlan`] which
-/// owns this variable must be resolved before usage with either
-/// [`Expr::resolve_lambdas_variables`] or [`LogicalPlan::resolve_lambdas_variables`].
-///
-/// [`LogicalPlan::resolve_lambdas_variables`]: crate::LogicalPlan::resolve_lambdas_variables
-pub fn lambda_var(name: impl Into<String>) -> Expr {
-    Expr::LambdaVariable(LambdaVariable::new(name.into(), None))
+/// Create an lambda variable expression
+pub fn lambda_var(name: impl Into<String>, field: FieldRef) -> Expr {
+    Expr::LambdaVariable(LambdaVariable::new(name.into(), field))
 }
 
 /// Extensions for configuring [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]

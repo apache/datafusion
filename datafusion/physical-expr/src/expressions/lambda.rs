@@ -21,27 +21,20 @@ use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::expressions::{Column, LambdaVariable};
 use crate::physical_expr::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{HashSet, Result, internal_err, tree_node::TreeNodeVisitor};
-use datafusion_common::{
-    plan_err,
-    tree_node::{TreeNode, TreeNodeRecursion},
-};
+use datafusion_common::plan_err;
+use datafusion_common::{HashSet, Result, internal_err};
 use datafusion_expr::ColumnarValue;
-use hashbrown::{HashMap, hash_map::EntryRef};
 
 /// Represents a lambda with the given parameters names and body
 #[derive(Debug, Eq, Clone)]
 pub struct LambdaExpr {
     params: Vec<String>,
     body: Arc<dyn PhysicalExpr>,
-    captured_columns: HashSet<usize>,
-    captured_variables: HashSet<String>,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808 [https://github.com/apache/datafusion/issues/13196]
@@ -69,21 +62,7 @@ impl LambdaExpr {
     }
 
     fn new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Self {
-        let (captured_columns, captured_variables) = {
-            let mut captures = Captures::new(&params);
-
-            body.visit(&mut captures)
-                .expect("visitor should be infallible");
-
-            (captures.columns, captures.variables)
-        };
-
-        Self {
-            params,
-            body,
-            captured_columns,
-            captured_variables,
-        }
+        Self { params, body }
     }
 
     /// Get the lambda's params names
@@ -94,22 +73,6 @@ impl LambdaExpr {
     /// Get the lambda's body
     pub fn body(&self) -> &Arc<dyn PhysicalExpr> {
         &self.body
-    }
-
-    pub(crate) fn captured_columns(&self) -> &HashSet<usize> {
-        &self.captured_columns
-    }
-
-    /// Returns lambdas variables names that aren't of this lambda nor any other lambda down tree.
-    /// Example:
-    ///
-    /// `array_transform([[[1, 2, 3]]], a -> array_transform(a, b -> array_transform(b, c -> length(a) + length(b) + c)))`
-    ///
-    /// For the outermost lambda, this would return an empty hash set
-    /// For the middle one, `HashSet("a")`
-    /// And for the innermost, `HashSet("a", "b")`
-    pub(crate) fn captured_variables(&self) -> &HashSet<String> {
-        &self.captured_variables
     }
 }
 
@@ -178,151 +141,11 @@ fn all_unique(params: &[String]) -> bool {
     }
 }
 
-struct Captures<'a> {
-    shadows: HashMap<&'a str, usize>,
-    columns: HashSet<usize>,
-    variables: HashSet<String>,
-}
-
-impl<'a> Captures<'a> {
-    fn new(params: &'a [String]) -> Self {
-        Self {
-            shadows: params.iter().map(|p| (p.as_str(), 1)).collect(),
-            columns: HashSet::new(),
-            variables: HashSet::new(),
-        }
-    }
-}
-
-impl<'n> TreeNodeVisitor<'n> for Captures<'n> {
-    type Node = Arc<dyn PhysicalExpr>;
-
-    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-        if let Some(lambda) = node.as_any().downcast_ref::<LambdaExpr>() {
-            for param in &lambda.params {
-                *self.shadows.entry(param.as_str()).or_default() += 1;
-            }
-        } else if let Some(lambda_variable) =
-            node.as_any().downcast_ref::<LambdaVariable>()
-        {
-            if !self.shadows.contains_key(lambda_variable.name()) {
-                self.variables.insert(lambda_variable.name().to_owned());
-            }
-        } else if let Some(col) = node.as_any().downcast_ref::<Column>() {
-            self.columns.insert(col.index());
-        }
-
-        Ok(TreeNodeRecursion::Continue)
-    }
-
-    fn f_up(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-        if let Some(lambda) = node.as_any().downcast_ref::<LambdaExpr>() {
-            for param in &lambda.params {
-                match self.shadows.entry_ref(param.as_str()) {
-                    EntryRef::Occupied(mut v) => {
-                        if *v.get() > 1 {
-                            *v.get_mut() -= 1;
-                        } else {
-                            v.remove();
-                        }
-                    }
-                    EntryRef::Vacant(_v) => {
-                        unreachable!(
-                            "f_down should have inserted a value for every param"
-                        )
-                    }
-                }
-            }
-        }
-
-        Ok(TreeNodeRecursion::Continue)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::{
-        LambdaFunctionExpr,
-        expressions::{Column, LambdaExpr, NoOp, lambda::lambda, lambda_variable},
-    };
-    use arrow::{
-        array::RecordBatch,
-        datatypes::{DataType, Field, FieldRef, Schema},
-    };
-    use datafusion_common::{HashSet, Result};
-    use datafusion_expr::{ColumnarValue, LambdaUDF};
+    use crate::expressions::{NoOp, lambda::lambda};
+    use arrow::{array::RecordBatch, datatypes::Schema};
     use std::sync::Arc;
-
-    #[derive(Debug, Hash, Eq, PartialEq)]
-    struct DummyLambdaUDF;
-
-    impl LambdaUDF for DummyLambdaUDF {
-        fn as_any(&self) -> &dyn std::any::Any {
-            unimplemented!()
-        }
-
-        fn name(&self) -> &str {
-            "dummy_udlf"
-        }
-
-        fn signature(&self) -> &datafusion_expr::LambdaSignature {
-            unimplemented!()
-        }
-
-        fn lambdas_parameters(
-            &self,
-            _args: &[datafusion_expr::ValueOrLambda<FieldRef, ()>],
-        ) -> Result<Vec<Option<Vec<Field>>>> {
-            unimplemented!()
-        }
-
-        fn return_field_from_args(
-            &self,
-            _args: datafusion_expr::LambdaReturnFieldArgs,
-        ) -> Result<FieldRef> {
-            unimplemented!()
-        }
-
-        fn invoke_with_args(
-            &self,
-            _args: datafusion_expr::LambdaFunctionArgs,
-        ) -> Result<ColumnarValue> {
-            unimplemented!()
-        }
-    }
-
-    #[test]
-    fn test_lambda_captures() {
-        let null_field = Arc::new(Field::new("", DataType::Null, true));
-
-        //`var_b -> dummy_udlf(var_a, var_b, column@0, var_c -> var_c))`
-        let inner = LambdaExpr::try_new(
-            vec![String::from("var_b")],
-            Arc::new(LambdaFunctionExpr::new(
-                "dummy_udlf",
-                Arc::new(DummyLambdaUDF),
-                vec![
-                    lambda_variable("var_a", Arc::clone(&null_field)).unwrap(),
-                    lambda_variable("var_b", Arc::clone(&null_field)).unwrap(),
-                    Arc::new(Column::new("column", 0)),
-                    lambda(
-                        ["var_c"],
-                        lambda_variable("var_c", Arc::clone(&null_field)).unwrap(),
-                    )
-                    .unwrap(),
-                ],
-                Arc::clone(&null_field),
-                Arc::new(Default::default()),
-            )),
-        )
-        .unwrap();
-
-        assert_eq!(inner.captured_columns(), &HashSet::from([0]));
-        assert_eq!(
-            inner.captured_variables(),
-            &HashSet::from([String::from("var_a")])
-        );
-    }
 
     #[test]
     fn test_lambda_evaluate() {

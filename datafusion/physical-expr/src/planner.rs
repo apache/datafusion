@@ -27,8 +27,7 @@ use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
-    DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err, plan_err,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
@@ -440,12 +439,7 @@ pub fn create_physical_expr(
             name,
             field,
             spans: _,
-        }) => expressions::lambda_variable(
-            name,
-            Arc::clone(field.as_ref().ok_or_else(|| {
-                plan_datafusion_err!("unresolved LambdaVariable {name}")
-            })?),
-        ),
+        }) => expressions::lambda_variable(name, Arc::clone(field)),
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }

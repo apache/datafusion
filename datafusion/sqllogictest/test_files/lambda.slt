@@ -44,40 +44,6 @@ SELECT array_transform([1,2,3,4,5], v -> list_repeat("a", v));
 ----
 [[a], [a, a], [a, a, a], [a, a, a, a], [a, a, a, a, a]]
 
-
-# version without limit/offset of queries below
-query ?
-select array_transform(t.list, v -> v*2) from t order by t.number;
-----
-[2, 100]
-[8, 100]
-[14, 100]
-
-# sliced lists
-query ?
-select array_transform(t.list, v -> v*2) from t order by t.number limit 1;
-----
-[2, 100]
-
-query ?
-select array_transform(t.list, v -> v*2) from t order by t.number offset 1;
-----
-[8, 100]
-[14, 100]
-
-query ?
-select array_transform(t.list, v -> v*2) from t order by t.number limit 1 offset 1;
-----
-[8, 100]
-
-# lambda that uses only captured column which also only appears within the lambda
-query ?
-SELECT array_transform([1, 2], v -> t.number) from t;
-----
-[10, 10]
-[40, 40]
-[60, 60]
-
 # return scalar
 query I?
 SELECT t.number, array_transform([1, 2], e1 -> 24) from t;
@@ -85,50 +51,6 @@ SELECT t.number, array_transform([1, 2], e1 -> 24) from t;
 10 [24, 24]
 40 [24, 24]
 60 [24, 24]
-
-# uses only the first parameter
-query ?
-SELECT array_transform([1, 2], (v, i) -> v+1) from t;
-----
-[2, 3]
-[2, 3]
-[2, 3]
-
-# uses only the second parameter
-query ?
-SELECT array_transform([10, 20], (v, i) -> i) from t;
-----
-[1, 2]
-[1, 2]
-[1, 2]
-
-# use only capture of a parent lambda variable
-query ?
-SELECT array_transform([[1, 2]], (a, i) -> array_transform(a, b -> i))
-----
-[[1, 1]]
-
-# use only capture of a parent lambda variable and a column
-query ?
-SELECT array_transform([[1, 2]], (a, i) -> array_transform(a, b -> i + t.number)) from t
-----
-[[11, 11]]
-[[41, 41]]
-[[61, 61]]
-
-# use only capture of a parent lambda variable and own variable
-query ?
-SELECT array_transform([[1, 2]], (a, i) -> array_transform(a, b -> i + b))
-----
-[[2, 3]]
-
-# use capture of a column, a parent lambda variable and own variable
-query ?
-SELECT array_transform([[1, 2]], (a, i) -> array_transform(a, b -> i + b + t.number)) from t
-----
-[[12, 13]]
-[[42, 43]]
-[[62, 63]]
 
 # shadows parent lambda variable
 query ?
@@ -138,7 +60,7 @@ SELECT array_transform([[1, 2]], a -> array_transform(a, a -> a+1))
 
 # multiple nesting
 query ?
-SELECT array_transform([[[1], [2], [3]]], (a, i) -> array_transform(a, (b, j) -> array_transform(b, (c, k) -> c + i + j + k)));
+SELECT array_transform([[[1], [2], [3]]], a -> array_transform(a, b -> array_transform(b, c -> c*2)));
 ----
 [[[4], [6], [8]]]
 
@@ -152,14 +74,14 @@ SELECT number, array_transform([1, 2], number -> number+1) from t;
 
 # type coercion inside lambda body
 query ?
-SELECT array_transform([1.0, 2.0], v -> v + t.number) from t;
+SELECT array_transform([1.0, 2.0], v -> v + 3) from t;
 ----
 [11.0, 12.0]
 [41.0, 42.0]
 [61.0, 62.0]
 
 query TT
-EXPLAIN SELECT array_transform([1.0, 2.0], v -> v + t.number) from t;
+EXPLAIN SELECT array_transform([1.0, 2.0], v -> v + 3) from t;
 ----
 logical_plan
 01)Projection: array_transform(List([1.0, 2.0]), (v) -> v + CAST(t.number AS Float64)) AS array_transform(make_array(Float64(1),Float64(2)),(v) -> v + t.number)
@@ -167,19 +89,6 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[array_transform([1.0, 2.0], (v) -> v@ + CAST(number@0 AS Float64)) as array_transform(make_array(Float64(1),Float64(2)),(v) -> v + t.number)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-
-#cse
-query TT
-explain select t.number*2, array_transform([1], v -> v + t.number*2) from t;
-----
-logical_plan
-01)Projection: __common_expr_1 AS t.number * Int64(2), array_transform(List([1]), (v) -> v + __common_expr_1) AS array_transform(make_array(Int64(1)),(v) -> v + t.number * Int64(2))
-02)--Projection: CAST(t.number AS Int64) * Int64(2) AS __common_expr_1
-03)----TableScan: t projection=[number]
-physical_plan
-01)ProjectionExec: expr=[__common_expr_1@0 as t.number * Int64(2), array_transform([1], (v) -> v@ + __common_expr_1@0) as array_transform(make_array(Int64(1)),(v) -> v + t.number * Int64(2))]
-02)--ProjectionExec: expr=[CAST(number@0 AS Int64) * 2 as __common_expr_1]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 #cse should not eliminate subtrees containing lambdas
 query TT

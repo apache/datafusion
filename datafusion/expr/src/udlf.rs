@@ -23,7 +23,7 @@ use crate::{ColumnarValue, Documentation, Expr};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::signature::Volatility;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -74,12 +74,6 @@ pub struct LambdaSignature {
     pub type_signature: LambdaTypeSignature,
     /// The volatility of the function. See [Volatility] for more information.
     pub volatility: Volatility,
-    /// Optional parameter names for the function arguments.
-    ///
-    /// If provided, enables named argument notation for function calls (e.g., `func(a => 1, b => v -> v+1)`).
-    ///
-    /// Defaults to `None`, meaning only positional arguments are supported.
-    pub parameter_names: Option<Vec<String>>,
 }
 
 impl LambdaSignature {
@@ -88,7 +82,6 @@ impl LambdaSignature {
         LambdaSignature {
             type_signature,
             volatility,
-            parameter_names: None,
         }
     }
 
@@ -97,7 +90,6 @@ impl LambdaSignature {
         Self {
             type_signature: LambdaTypeSignature::UserDefined,
             volatility,
-            parameter_names: None,
         }
     }
 
@@ -106,7 +98,6 @@ impl LambdaSignature {
         Self {
             type_signature: LambdaTypeSignature::VariadicAny,
             volatility,
-            parameter_names: None,
         }
     }
 
@@ -115,7 +106,6 @@ impl LambdaSignature {
         Self {
             type_signature: LambdaTypeSignature::Any(arg_count),
             volatility,
-            parameter_names: None,
         }
     }
 }
@@ -205,134 +195,32 @@ pub struct LambdaArgument {
     /// For example, for `array_transform([2], v -> -v)`,
     /// this will be the physical expression of `-v`
     body: Arc<dyn PhysicalExpr>,
-    /// A RecordBatch containing at least the captured columns inside this lambda body, if any
-    /// Note that it may contain additional, non-specified columns, but that's a implementation detail
-    ///
-    /// For example, for `array_transform([2], v -> v + a + b)`,
-    /// this will be a `RecordBatch` with at least two columns, `a` and `b`
-    captures: Option<RecordBatch>,
 }
 
 impl LambdaArgument {
-    pub fn new(
-        params: Vec<FieldRef>,
-        body: Arc<dyn PhysicalExpr>,
-        captures: Option<RecordBatch>,
-    ) -> Self {
-        Self {
-            params,
-            body,
-            captures,
-        }
+    pub fn new(params: Vec<FieldRef>, body: Arc<dyn PhysicalExpr>) -> Self {
+        Self { params, body }
     }
 
     /// Evaluate this lambda
     /// `args` should evalute to the value of each parameter
     /// of the correspondent lambda returned in [LambdaUDF::lambdas_parameters].
-    ///
-    /// `adjust` should adjust the captured columns of this
-    /// lambda, if any, relative to it's parameters
-    ///
-    /// Tip: For adjusting multiple arrays by indices, use [`take_arrays`]
-    ///
-    /// [`take_arrays`]: arrow::compute::take_arrays
     pub fn evaluate(
         &self,
         args: &[&dyn Fn() -> Result<ArrayRef>],
-        mut adjust: impl FnMut(&[ArrayRef]) -> Result<Vec<ArrayRef>>,
     ) -> Result<ColumnarValue> {
-        let adjusted_captures = self
-            .captures
-            .as_ref()
-            .map(|captures| {
-                let adjusted_columns = adjust(captures.columns())?;
+        let columns = args
+            .iter()
+            .take(self.params.len())
+            .map(|arg| arg())
+            .collect::<Result<_>>()?;
 
-                RecordBatch::try_new(captures.schema(), adjusted_columns)
-            })
-            .transpose()?;
+        let schema = Arc::new(Schema::new(self.params.clone()));
 
-        let merged = merge_captures_with_variables(
-            adjusted_captures.as_ref(),
-            &self.params,
-            args,
-        )?;
+        let batch = RecordBatch::try_new(schema, columns)?;
 
-        self.body.evaluate(&merged)
+        self.body.evaluate(&batch)
     }
-}
-
-fn merge_captures_with_variables(
-    captures: Option<&RecordBatch>,
-    params: &[FieldRef],
-    variables: &[&dyn Fn() -> Result<ArrayRef>],
-) -> Result<RecordBatch> {
-    if variables.len() < params.len() {
-        return exec_err!(
-            "expected at least {} lambda arguments to merge with captures, got {}",
-            params.len(),
-            variables.len()
-        );
-    }
-
-    match captures {
-        Some(captures) => {
-            let old_fields = captures.schema_ref().fields();
-
-            let mut new_fields = old_fields
-                .iter()
-                .map(|field| {
-                    if !fields_contains(params, field.name()) {
-                        return Arc::clone(field);
-                    }
-
-                    let mut i = 0;
-
-                    loop {
-                        let alias = format!("{}_shadowed_{i}", field.name());
-
-                        if !fields_contains(params, &alias)
-                            && old_fields.find(&alias).is_none()
-                        {
-                            break Arc::new(Field::new(
-                                alias,
-                                field.data_type().clone(),
-                                field.is_nullable(),
-                            ));
-                        }
-
-                        i += 1;
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            new_fields.extend_from_slice(params);
-
-            let mut columns = captures.columns().to_vec();
-
-            for arg in &variables[..params.len()] {
-                columns.push(arg()?);
-            }
-
-            let new_schema = Arc::new(Schema::new(new_fields));
-
-            Ok(RecordBatch::try_new(new_schema, columns)?)
-        }
-        None => {
-            let columns = variables
-                .iter()
-                .take(params.len())
-                .map(|arg| arg())
-                .collect::<Result<_>>()?;
-
-            let schema = Arc::new(Schema::new(params));
-
-            Ok(RecordBatch::try_new(schema, columns)?)
-        }
-    }
-}
-
-fn fields_contains(fields: &[FieldRef], name: &str) -> bool {
-    fields.iter().any(|f| f.name().as_str() == name)
 }
 
 /// Information about arguments passed to the function
@@ -421,32 +309,6 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// [`Volatility`]: datafusion_expr_common::signature::Volatility
     fn signature(&self) -> &LambdaSignature;
 
-    /// Create a new instance of this function with updated configuration.
-    ///
-    /// This method is called when configuration options change at runtime
-    /// (e.g., via `SET` statements) to allow functions that depend on
-    /// configuration to update themselves accordingly.
-    ///
-    /// Note the current [`ConfigOptions`] are also passed to [`Self::invoke_with_args`] so
-    /// this API is not needed for functions where the values may
-    /// depend on the current options.
-    ///
-    /// This API is useful for functions where the return
-    /// **type** depends on the configuration options, such as the `now()` function
-    /// which depends on the current timezone.
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - The updated configuration options
-    ///
-    /// # Returns
-    ///
-    /// * `Some(LambdaUDF)` - A new instance of this function configured with the new settings
-    /// * `None` - If this function does not change with new configuration settings (the default)
-    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<Arc<dyn LambdaUDF>> {
-        None
-    }
-
     /// Returns a list of the same size as args where each value is the logic below applied to value at the correspondent position in args:
     ///
     /// If it's a value, return None
@@ -524,41 +386,6 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
     fn invoke_with_args(&self, args: LambdaFunctionArgs) -> Result<ColumnarValue>;
-
-    /// Optionally apply per-UDF simplification / rewrite rules.
-    ///
-    /// This can be used to apply function specific simplification rules during
-    /// optimization (e.g. `arrow_cast` --> `Expr::Cast`). The default
-    /// implementation does nothing.
-    ///
-    /// Note that DataFusion handles simplifying arguments and  "constant
-    /// folding" (replacing a function call with constant arguments such as
-    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
-    /// optimizations manually for specific UDFs.
-    ///
-    /// # Arguments
-    /// * `args`: The arguments of the function
-    /// * `info`: The necessary information for simplification
-    ///
-    /// # Returns
-    /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
-    /// if the function cannot be simplified, the arguments *MUST* be returned
-    /// unmodified
-    ///
-    /// # Notes
-    ///
-    /// The returned expression must have the same schema as the original
-    /// expression, including both the data type and nullability. For example,
-    /// if the original expression is nullable, the returned expression must
-    /// also be nullable, otherwise it may lead to schema verification errors
-    /// later in query planning.
-    fn simplify(
-        &self,
-        args: Vec<Expr>,
-        _info: &SimplifyContext,
-    ) -> Result<ExprSimplifyResult> {
-        Ok(ExprSimplifyResult::Original(args))
-    }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
     /// and thus any side effects (like divide by zero) may not be encountered.

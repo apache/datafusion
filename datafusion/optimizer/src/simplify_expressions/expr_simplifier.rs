@@ -448,11 +448,9 @@ impl TreeNodeRewriter for Canonicalizer {
         };
         match (left.as_ref(), right.as_ref(), op.swap()) {
             // <col1> <op> <col2>
-            (
-                left_ref @ (Expr::Column(_) | Expr::LambdaVariable(_)),
-                right_ref @ (Expr::Column(_) | Expr::LambdaVariable(_)),
-                Some(swapped_op),
-            ) if right_ref > left_ref => {
+            (Expr::Column(left_col), Expr::Column(right_col), Some(swapped_op))
+                if right_col > left_col =>
+            {
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
                     left: right,
                     op: swapped_op,
@@ -460,15 +458,13 @@ impl TreeNodeRewriter for Canonicalizer {
                 })))
             }
             // <literal> <op> <col>
-            (
-                Expr::Literal(_, _),
-                Expr::Column(_) | Expr::LambdaVariable(_),
-                Some(swapped_op),
-            ) => Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
-                left: right,
-                op: swapped_op,
-                right: left,
-            }))),
+            (Expr::Literal(_a, _), Expr::Column(_b), Some(swapped_op)) => {
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                    left: right,
+                    op: swapped_op,
+                    right: left,
+                })))
+            }
             _ => Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
                 left,
                 op,
@@ -2212,8 +2208,8 @@ fn are_inlist_and_eq(left: &Expr, right: &Expr) -> bool {
     let left = as_inlist(left);
     let right = as_inlist(right);
     if let (Some(lhs), Some(rhs)) = (left, right) {
-        matches!(lhs.expr.as_ref(), Expr::Column(_) | Expr::LambdaVariable(_))
-            && matches!(rhs.expr.as_ref(), Expr::Column(_) | Expr::LambdaVariable(_))
+        matches!(lhs.expr.as_ref(), Expr::Column(_))
+            && matches!(rhs.expr.as_ref(), Expr::Column(_))
             && lhs.expr == rhs.expr
             && !lhs.negated
             && !rhs.negated
@@ -2228,20 +2224,16 @@ fn as_inlist(expr: &'_ Expr) -> Option<Cow<'_, InList>> {
         Expr::InList(inlist) => Some(Cow::Borrowed(inlist)),
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
             match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(_) | Expr::LambdaVariable(_), Expr::Literal(_, _)) => {
-                    Some(Cow::Owned(InList {
-                        expr: left.clone(),
-                        list: vec![*right.clone()],
-                        negated: false,
-                    }))
-                }
-                (Expr::Literal(_, _), Expr::Column(_) | Expr::LambdaVariable(_)) => {
-                    Some(Cow::Owned(InList {
-                        expr: right.clone(),
-                        list: vec![*left.clone()],
-                        negated: false,
-                    }))
-                }
+                (Expr::Column(_), Expr::Literal(_, _)) => Some(Cow::Owned(InList {
+                    expr: left.clone(),
+                    list: vec![*right.clone()],
+                    negated: false,
+                })),
+                (Expr::Literal(_, _), Expr::Column(_)) => Some(Cow::Owned(InList {
+                    expr: right.clone(),
+                    list: vec![*left.clone()],
+                    negated: false,
+                })),
                 _ => None,
             }
         }
@@ -2257,20 +2249,16 @@ fn to_inlist(expr: Expr) -> Option<InList> {
             op: Operator::Eq,
             right,
         }) => match (left.as_ref(), right.as_ref()) {
-            (Expr::Column(_) | Expr::LambdaVariable(_), Expr::Literal(_, _)) => {
-                Some(InList {
-                    expr: left,
-                    list: vec![*right],
-                    negated: false,
-                })
-            }
-            (Expr::Literal(_, _), Expr::Column(_) | Expr::LambdaVariable(_)) => {
-                Some(InList {
-                    expr: right,
-                    list: vec![*left],
-                    negated: false,
-                })
-            }
+            (Expr::Column(_), Expr::Literal(_, _)) => Some(InList {
+                expr: left,
+                list: vec![*right],
+                negated: false,
+            }),
+            (Expr::Literal(_, _), Expr::Column(_)) => Some(InList {
+                expr: right,
+                list: vec![*left],
+                negated: false,
+            }),
             _ => None,
         },
         _ => None,

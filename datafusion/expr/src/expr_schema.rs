@@ -207,11 +207,9 @@ impl ExprSchemable for Expr {
                 Ok(self.to_field(schema)?.1.data_type().clone())
             }
             Expr::Lambda(Lambda { params: _, body }) => body.get_type(schema),
-            Expr::LambdaVariable(LambdaVariable { name, field, .. }) => Ok(field
-                .as_ref()
-                .ok_or_else(|| plan_datafusion_err!("unresolved LambdaVariable {name}"))?
-                .data_type()
-                .clone()),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => {
+                Ok(field.data_type().clone())
+            }
         }
     }
 
@@ -369,10 +367,7 @@ impl ExprSchemable for Expr {
                 Ok(self.to_field(input_schema)?.1.is_nullable())
             }
             Expr::Lambda(l) => l.body.nullable(input_schema),
-            Expr::LambdaVariable(LambdaVariable { name, field, .. }) => Ok(field
-                .as_ref()
-                .ok_or_else(|| plan_datafusion_err!("unresolved LambdaVariable {name}"))?
-                .is_nullable()),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => Ok(field.is_nullable()),
         }
     }
 
@@ -645,11 +640,7 @@ impl ExprSchemable for Expr {
 
                 func.func.return_field_from_args(args)
             }
-            Expr::LambdaVariable(l) => {
-                Ok(Arc::clone(l.field.as_ref().ok_or_else(|| {
-                    plan_datafusion_err!("unresolved LambdaVariable {}", l.name)
-                })?))
-            }
+            Expr::LambdaVariable(l) => Ok(Arc::clone(&l.field)),
         }?;
 
         Ok((

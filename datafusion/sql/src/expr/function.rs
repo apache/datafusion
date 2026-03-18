@@ -328,14 +328,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
-            let (args, arg_names): (Vec<_>, Vec<_>) = args
-                .into_iter()
-                .map(|a| {
-                    self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context)
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .unzip();
+            let (args, arg_names) =
+                self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
             let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
                 if let Some(param_names) = &fm.signature().parameter_names {
@@ -380,11 +374,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // LambdaUDF::lambdas_parameters to then plan the lambda arguments with
             // resolved lambda variables
             enum ExprOrLambda {
-                Expr((Expr, Option<ArgumentName>)),
-                Lambda((sqlparser::ast::LambdaFunction, Option<ArgumentName>)),
+                Expr(Expr),
+                Lambda(sqlparser::ast::LambdaFunction),
             }
 
-            let pairs = args
+            let partially_planned = args
                 .into_iter()
                 .map(|a| match a {
                     FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Lambda(
@@ -397,46 +391,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             );
                         }
 
-                        Ok(ExprOrLambda::Lambda((lambda, None)))
+                        Ok(ExprOrLambda::Lambda(lambda))
                     }
-                    FunctionArg::Named {
-                        name,
-                        arg: FunctionArgExpr::Expr(SQLExpr::Lambda(lambda)),
-                        operator: _,
-                    }
-                    | FunctionArg::ExprNamed {
-                        name: SQLExpr::Identifier(name),
-                        arg: FunctionArgExpr::Expr(SQLExpr::Lambda(lambda)),
-                        operator: _,
-                    } => {
-                        if !all_unique(&lambda.params) {
-                            return plan_err!(
-                                "lambda parameters names must be unique, got {}",
-                                lambda.params
-                            );
-                        }
-
-                        let arg_name = ArgumentName {
-                            value: name.value,
-                            is_quoted: name.quote_style.is_some(),
-                        };
-
-                        Ok(ExprOrLambda::Lambda((lambda, Some(arg_name))))
-                    }
-                    _ => Ok(ExprOrLambda::Expr(
-                        self.sql_fn_arg_to_logical_expr_with_name(
-                            a,
-                            schema,
-                            planner_context,
-                        )?,
-                    )),
+                    _ => Ok(ExprOrLambda::Expr(self.sql_fn_arg_to_logical_expr(
+                        a,
+                        schema,
+                        planner_context,
+                    )?)),
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let current_fields = pairs
+            let current_fields = partially_planned
                 .iter()
                 .map(|e| match e {
-                    ExprOrLambda::Expr((expr, _name)) => {
+                    ExprOrLambda::Expr(expr) => {
                         Ok(ValueOrLambda::Value(expr.to_field(schema)?.1))
                     }
                     ExprOrLambda::Lambda(_lambda_function) => {
@@ -449,12 +417,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             let lambdas_parameters = fm.lambdas_parameters(&coerced)?;
 
-            let pairs = pairs
+            let args = partially_planned
                 .into_iter()
                 .zip(lambdas_parameters)
                 .map(|(e, lambda_parameters)| match (e, lambda_parameters) {
                     (ExprOrLambda::Expr(expr), None) => Ok(expr),
-                    (ExprOrLambda::Lambda((lambda, name)), Some(lambda_params)) => {
+                    (ExprOrLambda::Lambda(lambda), Some(lambda_params)) => {
                         if lambda.params.len() > lambda_params.len() {
                             return plan_err!(
                                 "lambda defined {} params but UDF support only {}",
@@ -475,17 +443,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             .clone()
                             .with_lambda_parameters(lambda_parameters);
 
-                        Ok((
-                            Expr::Lambda(Lambda {
-                                params,
-                                body: Box::new(self.sql_expr_to_logical_expr(
-                                    *lambda.body,
-                                    schema,
-                                    &mut planner_context,
-                                )?),
-                            }),
-                            name,
-                        ))
+                        Ok(Expr::Lambda(Lambda {
+                            params,
+                            body: Box::new(self.sql_expr_to_logical_expr(
+                                *lambda.body,
+                                schema,
+                                &mut planner_context,
+                            )?),
+                        }))
                     }
                     (ExprOrLambda::Expr(_), Some(_)) => plan_err!(
                         "{} reported parameters for an argument that is not a lambda",
@@ -498,27 +463,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let (args, arg_names): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
-
-            let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
-                if let Some(param_names) = &fm.signature().parameter_names {
-                    datafusion_expr::arguments::resolve_function_arguments(
-                        param_names,
-                        args,
-                        arg_names,
-                    )?
-                } else {
-                    return plan_err!(
-                        "Function '{}' does not support named arguments",
-                        fm.name()
-                    );
-                }
-            } else {
-                args
-            };
-
-            // After resolution, all arguments are positional
-            let inner = LambdaFunction::new(fm, resolved_args);
+            let inner = LambdaFunction::new(fm, args);
 
             if name.eq_ignore_ascii_case(inner.name()) {
                 return Ok(Expr::LambdaFunction(inner));

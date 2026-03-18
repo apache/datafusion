@@ -2057,7 +2057,16 @@ mod tests {
             (
                 Expr::LambdaFunction(LambdaFunction::new(
                     Arc::new(DummyLambdaUDF),
-                    vec![col("a"), lambda(["v"], -lambda_var("v"))],
+                    vec![
+                        col("a"),
+                        lambda(
+                            ["v"],
+                            -lambda_var(
+                                "v",
+                                Arc::new(Field::new("", DataType::Null, true)),
+                            ),
+                        ),
+                    ],
                 )),
                 r#"dummy_udlf(a, (v) -> -v)"#,
             ),
