@@ -10,8 +10,12 @@
 
 ## Before Committing
 
-See [Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
-for the required formatting and lint checks.
+Before committing any changes, you MUST follow the instructions in
+[Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
+and ensure the required checks listed there pass. Do not commit code that
+fails any of those checks.
+
+When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md).
 
 ## Testing
 
