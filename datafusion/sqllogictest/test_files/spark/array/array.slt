@@ -222,6 +222,8 @@ select arrays_zip([42], ['hello']);
 ----
 [{0: 42, 1: hello}]
 
-# error: too few arguments
-statement error
+# single argument
+query ?
 select arrays_zip([1, 2, 3]);
+----
+[{0: 1}, {0: 2}, {0: 3}]

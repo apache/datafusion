@@ -184,8 +184,8 @@ pub fn arrays_zip_inner(
     args: &[ArrayRef],
     struct_ordinal: StructOrdinal,
 ) -> Result<ArrayRef> {
-    if args.len() < 2 {
-        return exec_err!("arrays_zip requires at least two arguments");
+    if args.is_empty() {
+        return exec_err!("arrays_zip requires at least one argument");
     }
 
     let (start_ordinal, end_ordinal) = match struct_ordinal {
