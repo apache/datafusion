@@ -19,10 +19,13 @@ use std::any::Any;
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RResult, RVec};
+use crate::ffi_option::FfiOption;
+use crate::ffi_option::FfiResult;
+use stabby::alloc::vec::Vec as SVec;
+
 use arrow::datatypes::SchemaRef;
-use async_ffi::{FfiFuture, FutureExt};
+
+use crate::ffi_future::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::error::{DataFusionError, Result};
@@ -89,7 +92,7 @@ use crate::{df_result, rresult_return};
 /// It is important to be careful when expanding these functions to be certain which
 /// side of the interface each object refers to.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_TableProvider {
     /// Return the table schema
     schema: unsafe extern "C" fn(provider: &Self) -> WrappedSchema,
@@ -108,9 +111,9 @@ pub struct FFI_TableProvider {
     scan: unsafe extern "C" fn(
         provider: &Self,
         session: FFI_SessionRef,
-        projections: ROption<RVec<usize>>,
-        filters_serialized: RVec<u8>,
-        limit: ROption<usize>,
+        projections: FfiOption<SVec<usize>>,
+        filters_serialized: SVec<u8>,
+        limit: FfiOption<usize>,
     ) -> FfiFuture<FFIResult<FFI_ExecutionPlan>>,
 
     /// Return the type of table. See [`TableType`] for options.
@@ -122,8 +125,8 @@ pub struct FFI_TableProvider {
     supports_filters_pushdown: Option<
         unsafe extern "C" fn(
             provider: &FFI_TableProvider,
-            filters_serialized: RVec<u8>,
-        ) -> FFIResult<RVec<FFI_TableProviderFilterPushDown>>,
+            filters_serialized: SVec<u8>,
+        ) -> FFIResult<SVec<FFI_TableProviderFilterPushDown>>,
     >,
 
     insert_into: unsafe extern "C" fn(
@@ -190,7 +193,7 @@ fn supports_filters_pushdown_internal(
     filters_serialized: &[u8],
     task_ctx: &Arc<TaskContext>,
     codec: &dyn LogicalExtensionCodec,
-) -> Result<RVec<FFI_TableProviderFilterPushDown>> {
+) -> Result<SVec<FFI_TableProviderFilterPushDown>> {
     let filters = match filters_serialized.is_empty() {
         true => vec![],
         false => {
@@ -202,7 +205,7 @@ fn supports_filters_pushdown_internal(
     };
     let filters_borrowed: Vec<&Expr> = filters.iter().collect();
 
-    let results: RVec<_> = provider
+    let results: SVec<_> = provider
         .supports_filters_pushdown(&filters_borrowed)?
         .iter()
         .map(|v| v.into())
@@ -213,8 +216,8 @@ fn supports_filters_pushdown_internal(
 
 unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
-    filters_serialized: RVec<u8>,
-) -> FFIResult<RVec<FFI_TableProviderFilterPushDown>> {
+    filters_serialized: SVec<u8>,
+) -> FFIResult<SVec<FFI_TableProviderFilterPushDown>> {
     let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
     let task_ctx = rresult_return!(<Arc<TaskContext>>::try_from(
         &provider.logical_codec.task_ctx_provider
@@ -225,16 +228,16 @@ unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
         &task_ctx,
         logical_codec.as_ref(),
     )
-    .map_err(|e| e.to_string().into())
+    .map_err(|e| stabby::alloc::string::String::from(e.to_string().as_str()))
     .into()
 }
 
 unsafe extern "C" fn scan_fn_wrapper(
     provider: &FFI_TableProvider,
     session: FFI_SessionRef,
-    projections: ROption<RVec<usize>>,
-    filters_serialized: RVec<u8>,
-    limit: ROption<usize>,
+    projections: FfiOption<SVec<usize>>,
+    filters_serialized: SVec<u8>,
+    limit: FfiOption<usize>,
 ) -> FfiFuture<FFIResult<FFI_ExecutionPlan>> {
     let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
         (&provider.logical_codec.task_ctx_provider).try_into();
@@ -269,8 +272,10 @@ unsafe extern "C" fn scan_fn_wrapper(
             }
         };
 
-        let projections: Option<Vec<usize>> =
-            projections.into_option().map(|p| p.into_iter().collect());
+        let projections: Option<Vec<usize>> = {
+            let opt: Option<SVec<usize>> = projections.into();
+            opt.map(|p| p.into_iter().collect())
+        };
 
         let plan = rresult_return!(
             internal_provider
@@ -278,7 +283,7 @@ unsafe extern "C" fn scan_fn_wrapper(
                 .await
         );
 
-        RResult::ROk(FFI_ExecutionPlan::new(plan, runtime.clone()))
+        FfiResult::Ok(FFI_ExecutionPlan::new(plan, runtime.clone()))
     }
     .into_ffi()
 }
@@ -315,7 +320,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
                 .await
         );
 
-        RResult::ROk(FFI_ExecutionPlan::new(plan, runtime.clone()))
+        FfiResult::Ok(FFI_ExecutionPlan::new(plan, runtime.clone()))
     }
     .into_ffi()
 }
@@ -462,7 +467,7 @@ impl TableProvider for ForeignTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
 
-        let projections: ROption<RVec<usize>> = projection
+        let projections: FfiOption<SVec<usize>> = projection
             .map(|p| p.iter().map(|v| v.to_owned()).collect())
             .into();
 
@@ -470,7 +475,8 @@ impl TableProvider for ForeignTableProvider {
         let filter_list = LogicalExprList {
             expr: serialize_exprs(filters, codec.as_ref())?,
         };
-        let filters_serialized = filter_list.encode_to_vec().into();
+        let filters_serialized: SVec<u8> =
+            filter_list.encode_to_vec().into_iter().collect();
 
         let plan = unsafe {
             let maybe_plan = (self.0.scan)(
@@ -515,7 +521,10 @@ impl TableProvider for ForeignTableProvider {
             };
             let serialized_filters = expr_list.encode_to_vec();
 
-            let pushdowns = df_result!(pushdown_fn(&self.0, serialized_filters.into()))?;
+            let pushdowns = df_result!(pushdown_fn(
+                &self.0,
+                serialized_filters.into_iter().collect()
+            ))?;
 
             Ok(pushdowns.iter().map(|v| v.into()).collect())
         }

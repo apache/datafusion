@@ -19,9 +19,12 @@ use std::any::Any;
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RResult, RString, RVec};
-use async_ffi::{FfiFuture, FutureExt};
+use crate::ffi_option::FfiOption;
+use crate::ffi_option::FfiResult;
+use stabby::alloc::string::String as SString;
+use stabby::alloc::vec::Vec as SVec;
+
+use crate::ffi_future::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{SchemaProvider, TableProvider};
 use datafusion_common::error::{DataFusionError, Result};
@@ -38,32 +41,32 @@ use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing [`SchemaProvider`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_SchemaProvider {
-    pub owner_name: ROption<RString>,
+    pub owner_name: FfiOption<SString>,
 
-    pub table_names: unsafe extern "C" fn(provider: &Self) -> RVec<RString>,
+    pub table_names: unsafe extern "C" fn(provider: &Self) -> SVec<SString>,
 
     pub table: unsafe extern "C" fn(
         provider: &Self,
-        name: RString,
+        name: SString,
     )
-        -> FfiFuture<FFIResult<ROption<FFI_TableProvider>>>,
+        -> FfiFuture<FFIResult<FfiOption<FFI_TableProvider>>>,
 
     pub register_table: unsafe extern "C" fn(
         provider: &Self,
-        name: RString,
+        name: SString,
         table: FFI_TableProvider,
     )
-        -> FFIResult<ROption<FFI_TableProvider>>,
+        -> FFIResult<FfiOption<FFI_TableProvider>>,
 
     pub deregister_table: unsafe extern "C" fn(
         provider: &Self,
-        name: RString,
+        name: SString,
     )
-        -> FFIResult<ROption<FFI_TableProvider>>,
+        -> FFIResult<FfiOption<FFI_TableProvider>>,
 
-    pub table_exist: unsafe extern "C" fn(provider: &Self, name: RString) -> bool,
+    pub table_exist: unsafe extern "C" fn(provider: &Self, name: SString) -> bool,
 
     pub logical_codec: FFI_LogicalExtensionCodec,
 
@@ -113,19 +116,22 @@ impl FFI_SchemaProvider {
 
 unsafe extern "C" fn table_names_fn_wrapper(
     provider: &FFI_SchemaProvider,
-) -> RVec<RString> {
+) -> SVec<SString> {
     unsafe {
         let provider = provider.inner();
 
         let table_names = provider.table_names();
-        table_names.into_iter().map(|s| s.into()).collect()
+        table_names
+            .into_iter()
+            .map(|s| SString::from(s.as_str()))
+            .collect()
     }
 }
 
 unsafe extern "C" fn table_fn_wrapper(
     provider: &FFI_SchemaProvider,
-    name: RString,
-) -> FfiFuture<FFIResult<ROption<FFI_TableProvider>>> {
+    name: SString,
+) -> FfiFuture<FFIResult<FfiOption<FFI_TableProvider>>> {
     unsafe {
         let runtime = provider.runtime();
         let logical_codec = provider.logical_codec.clone();
@@ -138,7 +144,7 @@ unsafe extern "C" fn table_fn_wrapper(
                 })
                 .into();
 
-            RResult::ROk(table)
+            FfiResult::Ok(table)
         }
         .into_ffi()
     }
@@ -146,9 +152,9 @@ unsafe extern "C" fn table_fn_wrapper(
 
 unsafe extern "C" fn register_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
-    name: RString,
+    name: SString,
     table: FFI_TableProvider,
-) -> FFIResult<ROption<FFI_TableProvider>> {
+) -> FFIResult<FfiOption<FFI_TableProvider>> {
     unsafe {
         let runtime = provider.runtime();
         let logical_codec = provider.logical_codec.clone();
@@ -156,19 +162,19 @@ unsafe extern "C" fn register_table_fn_wrapper(
 
         let table = Arc::new(ForeignTableProvider(table));
 
-        let returned_table = rresult_return!(provider.register_table(name.into(), table))
-            .map(|t| {
+        let returned_table =
+            rresult_return!(provider.register_table(name.to_string(), table)).map(|t| {
                 FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
             });
 
-        RResult::ROk(returned_table.into())
+        FfiResult::Ok(returned_table.into())
     }
 }
 
 unsafe extern "C" fn deregister_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
-    name: RString,
-) -> FFIResult<ROption<FFI_TableProvider>> {
+    name: SString,
+) -> FFIResult<FfiOption<FFI_TableProvider>> {
     unsafe {
         let runtime = provider.runtime();
         let logical_codec = provider.logical_codec.clone();
@@ -179,13 +185,13 @@ unsafe extern "C" fn deregister_table_fn_wrapper(
                 FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
             });
 
-        RResult::ROk(returned_table.into())
+        FfiResult::Ok(returned_table.into())
     }
 }
 
 unsafe extern "C" fn table_exist_fn_wrapper(
     provider: &FFI_SchemaProvider,
-    name: RString,
+    name: SString,
 ) -> bool {
     unsafe { provider.inner().table_exist(name.as_str()) }
 }
@@ -259,7 +265,7 @@ impl FFI_SchemaProvider {
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
-        let owner_name = provider.owner_name().map(|s| s.into()).into();
+        let owner_name = provider.owner_name().map(SString::from).into();
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
         Self {
@@ -313,15 +319,14 @@ impl SchemaProvider for ForeignSchemaProvider {
     }
 
     fn owner_name(&self) -> Option<&str> {
-        let name: Option<&RString> = self.0.owner_name.as_ref().into();
-        name.map(|s| s.as_str())
+        self.0.owner_name.as_ref().map(|s| s.as_str())
     }
 
     fn table_names(&self) -> Vec<String> {
         unsafe {
             (self.0.table_names)(&self.0)
                 .into_iter()
-                .map(|s| s.into())
+                .map(|s| s.to_string())
                 .collect()
         }
     }
@@ -332,7 +337,7 @@ impl SchemaProvider for ForeignSchemaProvider {
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
         unsafe {
             let table: Option<FFI_TableProvider> =
-                df_result!((self.0.table)(&self.0, name.into()).await)?.into();
+                df_result!((self.0.table)(&self.0, SString::from(name)).await)?.into();
 
             let table = table.as_ref().map(<Arc<dyn TableProvider>>::from);
 
@@ -357,8 +362,12 @@ impl SchemaProvider for ForeignSchemaProvider {
             };
 
             let returned_provider: Option<FFI_TableProvider> =
-                df_result!((self.0.register_table)(&self.0, name.into(), ffi_table))?
-                    .into();
+                df_result!((self.0.register_table)(
+                    &self.0,
+                    SString::from(name.as_str()),
+                    ffi_table
+                ))?
+                .into();
 
             Ok(returned_provider
                 .map(|t| Arc::new(ForeignTableProvider(t)) as Arc<dyn TableProvider>))
@@ -367,7 +376,7 @@ impl SchemaProvider for ForeignSchemaProvider {
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         let returned_provider: Option<FFI_TableProvider> = unsafe {
-            df_result!((self.0.deregister_table)(&self.0, name.into()))?.into()
+            df_result!((self.0.deregister_table)(&self.0, SString::from(name)))?.into()
         };
 
         Ok(returned_provider
@@ -376,7 +385,7 @@ impl SchemaProvider for ForeignSchemaProvider {
 
     /// Returns true if table exist in the schema provider, false otherwise.
     fn table_exist(&self, name: &str) -> bool {
-        unsafe { (self.0.table_exist)(&self.0, name.into()) }
+        unsafe { (self.0.table_exist)(&self.0, SString::from(name)) }
     }
 }
 

@@ -18,7 +18,6 @@
 use std::ffi::c_void;
 
 use crate::config::FFI_ConfigOptions;
-use abi_stable::StableAbi;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::config::SessionConfig;
@@ -35,7 +34,7 @@ use datafusion_execution::config::SessionConfig;
 /// SessionConfig via a FFI interface would be extensive and provide limited
 /// value over this version.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_SessionConfig {
     /// FFI stable configuration options.
     pub config_options: FFI_ConfigOptions,

@@ -19,13 +19,15 @@ use std::any::Any;
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use crate::ffi_option::FfiOption;
+use crate::ffi_option::FfiResult;
 use datafusion_catalog::{CatalogProvider, SchemaProvider};
 use datafusion_common::error::Result;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
+use stabby::alloc::string::String as SString;
+use stabby::alloc::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
 use crate::execution::FFI_TaskContextProvider;
@@ -36,28 +38,28 @@ use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_CatalogProvider {
-    pub schema_names: unsafe extern "C" fn(provider: &Self) -> RVec<RString>,
+    pub schema_names: unsafe extern "C" fn(provider: &Self) -> SVec<SString>,
 
     pub schema: unsafe extern "C" fn(
         provider: &Self,
-        name: RString,
-    ) -> ROption<FFI_SchemaProvider>,
+        name: SString,
+    ) -> FfiOption<FFI_SchemaProvider>,
 
     pub register_schema: unsafe extern "C" fn(
         provider: &Self,
-        name: RString,
+        name: SString,
         schema: &FFI_SchemaProvider,
     )
-        -> FFIResult<ROption<FFI_SchemaProvider>>,
+        -> FFIResult<FfiOption<FFI_SchemaProvider>>,
 
-    pub deregister_schema: unsafe extern "C" fn(
-        provider: &Self,
-        name: RString,
-        cascade: bool,
-    )
-        -> FFIResult<ROption<FFI_SchemaProvider>>,
+    pub deregister_schema:
+        unsafe extern "C" fn(
+            provider: &Self,
+            name: SString,
+            cascade: bool,
+        ) -> FFIResult<FfiOption<FFI_SchemaProvider>>,
 
     pub logical_codec: FFI_LogicalExtensionCodec,
 
@@ -107,17 +109,20 @@ impl FFI_CatalogProvider {
 
 unsafe extern "C" fn schema_names_fn_wrapper(
     provider: &FFI_CatalogProvider,
-) -> RVec<RString> {
+) -> SVec<SString> {
     unsafe {
         let names = provider.inner().schema_names();
-        names.into_iter().map(|s| s.into()).collect()
+        names
+            .into_iter()
+            .map(|s| SString::from(s.as_str()))
+            .collect()
     }
 }
 
 unsafe extern "C" fn schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
-    name: RString,
-) -> ROption<FFI_SchemaProvider> {
+    name: SString,
+) -> FfiOption<FFI_SchemaProvider> {
     unsafe {
         let maybe_schema = provider.inner().schema(name.as_str());
         maybe_schema
@@ -134,9 +139,9 @@ unsafe extern "C" fn schema_fn_wrapper(
 
 unsafe extern "C" fn register_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
-    name: RString,
+    name: SString,
     schema: &FFI_SchemaProvider,
-) -> FFIResult<ROption<FFI_SchemaProvider>> {
+) -> FFIResult<FfiOption<FFI_SchemaProvider>> {
     unsafe {
         let runtime = provider.runtime();
         let inner_provider = provider.inner();
@@ -153,15 +158,15 @@ unsafe extern "C" fn register_schema_fn_wrapper(
                 })
                 .into();
 
-        RResult::ROk(returned_schema)
+        FfiResult::Ok(returned_schema)
     }
 }
 
 unsafe extern "C" fn deregister_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
-    name: RString,
+    name: SString,
     cascade: bool,
-) -> FFIResult<ROption<FFI_SchemaProvider>> {
+) -> FFIResult<FfiOption<FFI_SchemaProvider>> {
     unsafe {
         let runtime = provider.runtime();
         let inner_provider = provider.inner();
@@ -169,7 +174,7 @@ unsafe extern "C" fn deregister_schema_fn_wrapper(
         let maybe_schema =
             rresult_return!(inner_provider.deregister_schema(name.as_str(), cascade));
 
-        RResult::ROk(
+        FfiResult::Ok(
             maybe_schema
                 .map(|schema| {
                     FFI_SchemaProvider::new_with_ffi_codec(
@@ -303,7 +308,7 @@ impl CatalogProvider for ForeignCatalogProvider {
         unsafe {
             (self.0.schema_names)(&self.0)
                 .into_iter()
-                .map(|s| s.into())
+                .map(|s| s.to_string())
                 .collect()
         }
     }
@@ -311,7 +316,7 @@ impl CatalogProvider for ForeignCatalogProvider {
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         unsafe {
             let maybe_provider: Option<FFI_SchemaProvider> =
-                (self.0.schema)(&self.0, name.into()).into();
+                (self.0.schema)(&self.0, SString::from(name)).into();
 
             maybe_provider.map(|provider| {
                 Arc::new(ForeignSchemaProvider(provider)) as Arc<dyn SchemaProvider>
@@ -334,8 +339,12 @@ impl CatalogProvider for ForeignCatalogProvider {
                 ),
             };
             let returned_schema: Option<FFI_SchemaProvider> =
-                df_result!((self.0.register_schema)(&self.0, name.into(), schema))?
-                    .into();
+                df_result!((self.0.register_schema)(
+                    &self.0,
+                    SString::from(name),
+                    schema
+                ))?
+                .into();
 
             Ok(returned_schema
                 .map(|s| Arc::new(ForeignSchemaProvider(s)) as Arc<dyn SchemaProvider>))
@@ -349,8 +358,12 @@ impl CatalogProvider for ForeignCatalogProvider {
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         unsafe {
             let returned_schema: Option<FFI_SchemaProvider> =
-                df_result!((self.0.deregister_schema)(&self.0, name.into(), cascade))?
-                    .into();
+                df_result!((self.0.deregister_schema)(
+                    &self.0,
+                    SString::from(name),
+                    cascade
+                ))?
+                .into();
 
             Ok(returned_schema
                 .map(|s| Arc::new(ForeignSchemaProvider(s)) as Arc<dyn SchemaProvider>))

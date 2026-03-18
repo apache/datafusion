@@ -19,8 +19,11 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::ffi::c_void;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{RResult, RStr, RString, RVec, Tuple2};
+use crate::ffi_option::FfiResult;
+use stabby::alloc::string::String as SString;
+use stabby::alloc::vec::Vec as SVec;
+use stabby::str::Str as SStr;
+
 use datafusion_common::config::{ConfigEntry, ConfigExtension, ExtensionOptions};
 use datafusion_common::{Result, exec_err};
 
@@ -38,17 +41,17 @@ use crate::df_result;
 /// are stored with the full path prefix to avoid overwriting values when using
 /// multiple extensions.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_ExtensionOptions {
     /// Return a deep clone of this [`ExtensionOptions`]
     pub cloned: unsafe extern "C" fn(&Self) -> FFI_ExtensionOptions,
 
     /// Set the given `key`, `value` pair
     pub set:
-        unsafe extern "C" fn(&mut Self, key: RStr, value: RStr) -> RResult<(), RString>,
+        unsafe extern "C" fn(&mut Self, key: SStr, value: SStr) -> FfiResult<(), SString>,
 
     /// Returns the [`ConfigEntry`] stored in this [`ExtensionOptions`]
-    pub entries: unsafe extern "C" fn(&Self) -> RVec<Tuple2<RString, RString>>,
+    pub entries: unsafe extern "C" fn(&Self) -> SVec<(SString, SString)>,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(&mut Self),
@@ -91,20 +94,22 @@ unsafe extern "C" fn cloned_fn_wrapper(
 
 unsafe extern "C" fn set_fn_wrapper(
     options: &mut FFI_ExtensionOptions,
-    key: RStr,
-    value: RStr,
-) -> RResult<(), RString> {
-    let _ = options.inner_mut().insert(key.into(), value.into());
-    RResult::ROk(())
+    key: SStr,
+    value: SStr,
+) -> FfiResult<(), SString> {
+    let _ = options
+        .inner_mut()
+        .insert(key.as_str().into(), value.as_str().into());
+    FfiResult::Ok(())
 }
 
 unsafe extern "C" fn entries_fn_wrapper(
     options: &FFI_ExtensionOptions,
-) -> RVec<Tuple2<RString, RString>> {
+) -> SVec<(SString, SString)> {
     options
         .inner()
         .iter()
-        .map(|(key, value)| (key.to_owned().into(), value.to_owned().into()).into())
+        .map(|(key, value)| (SString::from(key.as_str()), SString::from(value.as_str())))
         .collect()
 }
 
@@ -181,9 +186,9 @@ impl ExtensionOptions for FFI_ExtensionOptions {
         unsafe {
             (self.entries)(self)
                 .into_iter()
-                .map(|entry_tuple| ConfigEntry {
-                    key: entry_tuple.0.into(),
-                    value: Some(entry_tuple.1.into()),
+                .map(|(key, value)| ConfigEntry {
+                    key: key.to_string(),
+                    value: Some(value.to_string()),
                     description: "ffi_config_options",
                 })
                 .collect()
@@ -223,9 +228,9 @@ impl FFI_ExtensionOptions {
         let mut result = C::default();
 
         unsafe {
-            for entry in (self.entries)(self) {
-                let key = entry.0.as_str();
-                let value = entry.1.as_str();
+            for (key, value) in (self.entries)(self) {
+                let key = key.as_str();
+                let value = value.as_str();
 
                 if let Some((prefix, inner_key)) = key.split_once('.')
                     && prefix == C::PREFIX

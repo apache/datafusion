@@ -32,6 +32,8 @@ pub mod config;
 pub mod execution;
 pub mod execution_plan;
 pub mod expr;
+pub mod ffi_future;
+pub mod ffi_option;
 pub mod insert_op;
 pub mod physical_expr;
 pub mod plan_properties;

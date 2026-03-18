@@ -19,8 +19,9 @@ use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{RString, RVec};
+use stabby::alloc::string::String as SString;
+use stabby::alloc::vec::Vec as SVec;
+
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Field};
 use arrow::error::ArrowError;
@@ -50,13 +51,13 @@ pub mod return_type_args;
 
 /// A stable struct for sharing a [`ScalarUDF`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_ScalarUDF {
     /// FFI equivalent to the `name` of a [`ScalarUDF`]
-    pub name: RString,
+    pub name: SString,
 
     /// FFI equivalent to the `aliases` of a [`ScalarUDF`]
-    pub aliases: RVec<RString>,
+    pub aliases: SVec<SString>,
 
     /// FFI equivalent to the `volatility` of a [`ScalarUDF`]
     pub volatility: FFI_Volatility,
@@ -71,8 +72,8 @@ pub struct FFI_ScalarUDF {
     /// within an AbiStable wrapper.
     pub invoke_with_args: unsafe extern "C" fn(
         udf: &Self,
-        args: RVec<WrappedArray>,
-        arg_fields: RVec<WrappedSchema>,
+        args: SVec<WrappedArray>,
+        arg_fields: SVec<WrappedSchema>,
         num_rows: usize,
         return_field: WrappedSchema,
         config_options: FFI_ConfigOptions,
@@ -87,8 +88,8 @@ pub struct FFI_ScalarUDF {
     /// appropriate calls on the underlying [`ScalarUDF`]
     pub coerce_types: unsafe extern "C" fn(
         udf: &Self,
-        arg_types: RVec<WrappedSchema>,
-    ) -> FFIResult<RVec<WrappedSchema>>,
+        arg_types: SVec<WrappedSchema>,
+    ) -> FFIResult<SVec<WrappedSchema>>,
 
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
@@ -139,8 +140,8 @@ unsafe extern "C" fn return_field_from_args_fn_wrapper(
 
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udf: &FFI_ScalarUDF,
-    arg_types: RVec<WrappedSchema>,
-) -> FFIResult<RVec<WrappedSchema>> {
+    arg_types: SVec<WrappedSchema>,
+) -> FFIResult<SVec<WrappedSchema>> {
     let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
 
     let arg_fields = arg_types
@@ -158,8 +159,8 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
     udf: &FFI_ScalarUDF,
-    args: RVec<WrappedArray>,
-    arg_fields: RVec<WrappedSchema>,
+    args: SVec<WrappedArray>,
+    arg_fields: SVec<WrappedSchema>,
     number_rows: usize,
     return_field: WrappedSchema,
     config_options: FFI_ConfigOptions,
@@ -230,8 +231,12 @@ impl Clone for FFI_ScalarUDF {
 
 impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
     fn from(udf: Arc<ScalarUDF>) -> Self {
-        let name = udf.name().into();
-        let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
+        let name = SString::from(udf.name());
+        let aliases = udf
+            .aliases()
+            .iter()
+            .map(|a| SString::from(a.as_str()))
+            .collect();
         let volatility = udf.signature().volatility.into();
         let short_circuits = udf.short_circuits();
 
@@ -312,7 +317,7 @@ impl From<&FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
         if (udf.library_marker_id)() == crate::get_library_marker_id() {
             Arc::clone(udf.inner().inner())
         } else {
-            let name = udf.name.to_owned().into();
+            let name = udf.name.to_string();
             let signature = Signature::user_defined((&udf.volatility).into());
 
             let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
@@ -379,7 +384,8 @@ impl ScalarUDFImpl for ForeignScalarUDF {
                 })
             })
             .collect::<std::result::Result<Vec<_>, ArrowError>>()?
-            .into();
+            .into_iter()
+            .collect();
 
         let arg_fields_wrapped = arg_fields
             .iter()
@@ -389,7 +395,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         let arg_fields = arg_fields_wrapped
             .into_iter()
             .map(WrappedSchema)
-            .collect::<RVec<_>>();
+            .collect::<SVec<_>>();
 
         let return_field = return_field.as_ref().clone();
         let return_field = WrappedSchema(FFI_ArrowSchema::try_from(return_field)?);

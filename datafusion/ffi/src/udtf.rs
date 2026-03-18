@@ -18,8 +18,7 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{RResult, RVec};
+use crate::ffi_option::FfiResult;
 use datafusion_catalog::{TableFunctionImpl, TableProvider};
 use datafusion_common::error::Result;
 use datafusion_execution::TaskContext;
@@ -31,6 +30,7 @@ use datafusion_proto::logical_plan::{
 };
 use datafusion_proto::protobuf::LogicalExprList;
 use prost::Message;
+use stabby::alloc::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
 use crate::execution::FFI_TaskContextProvider;
@@ -41,12 +41,12 @@ use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_TableFunction {
     /// Equivalent to the `call` function of the TableFunctionImpl.
     /// The arguments are Expr passed as protobuf encoded bytes.
     pub call:
-        unsafe extern "C" fn(udtf: &Self, args: RVec<u8>) -> FFIResult<FFI_TableProvider>,
+        unsafe extern "C" fn(udtf: &Self, args: SVec<u8>) -> FFIResult<FFI_TableProvider>,
 
     pub logical_codec: FFI_LogicalExtensionCodec,
 
@@ -89,7 +89,7 @@ impl FFI_TableFunction {
 
 unsafe extern "C" fn call_fn_wrapper(
     udtf: &FFI_TableFunction,
-    args: RVec<u8>,
+    args: SVec<u8>,
 ) -> FFIResult<FFI_TableProvider> {
     let runtime = udtf.runtime();
     let udtf_inner = udtf.inner();
@@ -98,7 +98,7 @@ unsafe extern "C" fn call_fn_wrapper(
         rresult_return!((&udtf.logical_codec.task_ctx_provider).try_into());
     let codec: Arc<dyn LogicalExtensionCodec> = (&udtf.logical_codec).into();
 
-    let proto_filters = rresult_return!(LogicalExprList::decode(args.as_ref()));
+    let proto_filters = rresult_return!(LogicalExprList::decode(args.as_slice()));
 
     let args = rresult_return!(parse_exprs(
         proto_filters.expr.iter(),
@@ -107,7 +107,7 @@ unsafe extern "C" fn call_fn_wrapper(
     ));
 
     let table_provider = rresult_return!(udtf_inner.call(&args));
-    RResult::ROk(FFI_TableProvider::new_with_ffi_codec(
+    FfiResult::Ok(FFI_TableProvider::new_with_ffi_codec(
         table_provider,
         false,
         runtime,
@@ -213,7 +213,8 @@ impl TableFunctionImpl for ForeignTableFunction {
         let expr_list = LogicalExprList {
             expr: serialize_exprs(args, codec.as_ref())?,
         };
-        let filters_serialized = expr_list.encode_to_vec().into();
+        let filters_serialized: SVec<u8> =
+            expr_list.encode_to_vec().into_iter().collect();
 
         let table_provider = unsafe { (self.0.call)(&self.0, filters_serialized) };
 

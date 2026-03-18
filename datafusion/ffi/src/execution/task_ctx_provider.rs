@@ -18,7 +18,6 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Weak};
 
-use abi_stable::StableAbi;
 use datafusion_common::{DataFusionError, ffi_datafusion_err};
 use datafusion_execution::{TaskContext, TaskContextProvider};
 
@@ -32,7 +31,7 @@ use crate::{df_result, rresult};
 /// data passed across the FFI boundary. See the crate README for
 /// additional information.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_TaskContextProvider {
     /// Retrieve the current [`TaskContext`] provided the provider has not
     /// gone out of scope. This function will return an error if the weakly

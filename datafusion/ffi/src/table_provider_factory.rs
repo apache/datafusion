@@ -17,11 +17,11 @@
 
 use std::{ffi::c_void, sync::Arc};
 
-use abi_stable::{
-    StableAbi,
-    std_types::{RResult, RString, RVec},
-};
-use async_ffi::{FfiFuture, FutureExt};
+use crate::ffi_option::FfiResult;
+use stabby::alloc::string::String as SString;
+use stabby::alloc::vec::Vec as SVec;
+
+use crate::ffi_future::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider, TableProviderFactory};
 use datafusion_common::error::{DataFusionError, Result};
@@ -49,7 +49,7 @@ use crate::{df_result, rresult_return};
 ///
 /// [`FFI_TableProvider`]: crate::table_provider::FFI_TableProvider
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_TableProviderFactory {
     /// Create a TableProvider with the given command.
     ///
@@ -62,8 +62,8 @@ pub struct FFI_TableProviderFactory {
     create: unsafe extern "C" fn(
         factory: &Self,
         session: FFI_SessionRef,
-        cmd_serialized: RVec<u8>,
-    ) -> FfiFuture<RResult<FFI_TableProvider, RString>>,
+        cmd_serialized: SVec<u8>,
+    ) -> FfiFuture<FfiResult<FFI_TableProvider, SString>>,
 
     logical_codec: FFI_LogicalExtensionCodec,
 
@@ -144,7 +144,7 @@ impl FFI_TableProviderFactory {
 
     fn deserialize_cmd(
         &self,
-        cmd_serialized: &RVec<u8>,
+        cmd_serialized: &SVec<u8>,
     ) -> Result<CreateExternalTable, DataFusionError> {
         let task_ctx: Arc<TaskContext> =
             (&self.logical_codec.task_ctx_provider).try_into()?;
@@ -186,15 +186,15 @@ impl From<&FFI_TableProviderFactory> for Arc<dyn TableProviderFactory> {
 unsafe extern "C" fn create_fn_wrapper(
     factory: &FFI_TableProviderFactory,
     session: FFI_SessionRef,
-    cmd_serialized: RVec<u8>,
-) -> FfiFuture<RResult<FFI_TableProvider, RString>> {
+    cmd_serialized: SVec<u8>,
+) -> FfiFuture<FfiResult<FFI_TableProvider, SString>> {
     let factory = factory.clone();
 
     async move {
         let provider = rresult_return!(
             create_fn_wrapper_impl(factory, session, cmd_serialized).await
         );
-        RResult::ROk(provider)
+        FfiResult::Ok(provider)
     }
     .into_ffi()
 }
@@ -202,7 +202,7 @@ unsafe extern "C" fn create_fn_wrapper(
 async fn create_fn_wrapper_impl(
     factory: FFI_TableProviderFactory,
     session: FFI_SessionRef,
-    cmd_serialized: RVec<u8>,
+    cmd_serialized: SVec<u8>,
 ) -> Result<FFI_TableProvider, DataFusionError> {
     let runtime = factory.runtime().clone();
     let ffi_logical_codec = factory.logical_codec.clone();
@@ -269,7 +269,7 @@ impl ForeignTableProviderFactory {
     fn serialize_cmd(
         &self,
         cmd: CreateExternalTable,
-    ) -> Result<RVec<u8>, DataFusionError> {
+    ) -> Result<SVec<u8>, DataFusionError> {
         let logical_codec: Arc<dyn LogicalExtensionCodec> =
             (&self.0.logical_codec).into();
 
@@ -280,7 +280,7 @@ impl ForeignTableProviderFactory {
         let mut buf: Vec<u8> = Vec::new();
         plan.try_encode(&mut buf)?;
 
-        Ok(buf.into())
+        Ok(buf.into_iter().collect())
     }
 }
 

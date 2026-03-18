@@ -19,7 +19,7 @@
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-    use datafusion::error::{DataFusionError, Result};
+    use datafusion::error::Result;
     use datafusion_common::ScalarValue;
     use datafusion_common::config::{ConfigOptions, TableOptions};
     use datafusion_execution::config::SessionConfig;
@@ -31,13 +31,7 @@ mod tests {
     fn test_ffi_config_options_extension() -> Result<()> {
         let module = get_module()?;
 
-        let extension_options =
-            module
-                .create_extension_options()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External test library failed to implement create_extension_options"
-                        .to_string(),
-                ))?();
+        let extension_options = (module.create_extension_options)();
 
         let mut config = ConfigOptions::new();
         config.extensions.insert(extension_options);
@@ -61,13 +55,7 @@ mod tests {
     fn test_ffi_table_options_extension() -> Result<()> {
         let module = get_module()?;
 
-        let extension_options =
-            module
-                .create_extension_options()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External test library failed to implement create_extension_options"
-                        .to_string(),
-                ))?();
+        let extension_options = (module.create_extension_options)();
 
         let mut table_options = TableOptions::new();
         table_options.extensions.insert(extension_options);
@@ -92,13 +80,7 @@ mod tests {
     fn test_ffi_session_config_options_extension() -> Result<()> {
         let module = get_module()?;
 
-        let extension_options =
-            module
-                .create_extension_options()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External test library failed to implement create_extension_options"
-                        .to_string(),
-                ))?();
+        let extension_options = (module.create_extension_options)();
 
         let mut config = SessionConfig::new().with_option_extension(extension_options);
 

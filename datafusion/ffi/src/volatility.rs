@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::StableAbi;
 use datafusion_expr::Volatility;
 
-#[repr(C)]
-#[derive(Debug, StableAbi, Clone)]
+#[stabby::stabby]
+#[repr(u8)]
+#[derive(Debug, Clone)]
+#[expect(non_camel_case_types)]
 pub enum FFI_Volatility {
     Immutable,
     Stable,

@@ -17,12 +17,6 @@
 
 use std::sync::Arc;
 
-use abi_stable::library::{LibraryError, RootModule};
-use abi_stable::prefix_type::PrefixTypeTrait;
-use abi_stable::sabi_types::VersionStrings;
-use abi_stable::{
-    StableAbi, declare_root_module_statics, export_root_module, package_version_strings,
-};
 use arrow::array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
@@ -54,12 +48,10 @@ mod table_provider_factory;
 mod udf_udaf_udwf;
 pub mod utils;
 
-#[repr(C)]
-#[derive(StableAbi)]
-#[sabi(kind(Prefix(prefix_ref = ForeignLibraryModuleRef)))]
 /// This struct defines the module interfaces. It is to be shared by
 /// both the module loading program and library that implements the
 /// module.
+#[repr(C)]
 pub struct ForeignLibraryModule {
     /// Construct an opinionated catalog provider
     pub create_catalog:
@@ -103,17 +95,6 @@ pub struct ForeignLibraryModule {
     pub version: extern "C" fn() -> u64,
 }
 
-impl RootModule for ForeignLibraryModuleRef {
-    declare_root_module_statics! {ForeignLibraryModuleRef}
-    const BASE_NAME: &'static str = "datafusion_ffi";
-    const NAME: &'static str = "datafusion_ffi";
-    const VERSION_STRINGS: VersionStrings = package_version_strings!();
-
-    fn initialization(self) -> Result<Self, LibraryError> {
-        Ok(self)
-    }
-}
-
 pub fn create_test_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
@@ -149,9 +130,9 @@ extern "C" fn construct_table_provider_factory(
     table_provider_factory::create(codec)
 }
 
-#[export_root_module]
 /// This defines the entry point for using the module.
-pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
     ForeignLibraryModule {
         create_catalog: create_catalog_provider,
         create_catalog_list: create_catalog_provider_list,
@@ -167,5 +148,4 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_extension_options: config::create_extension_options,
         version: super::version,
     }
-    .leak_into_prefix()
 }

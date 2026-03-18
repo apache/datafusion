@@ -17,7 +17,6 @@
 
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
 use arrow_schema::SortOptions;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -28,7 +27,7 @@ use crate::physical_expr::FFI_PhysicalExpr;
 /// A stable struct for sharing [`PhysicalSortExpr`] across FFI boundaries.
 /// See [`PhysicalSortExpr`] for the meaning of each field.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_PhysicalSortExpr {
     expr: FFI_PhysicalExpr,
     options: FFI_SortOptions,
