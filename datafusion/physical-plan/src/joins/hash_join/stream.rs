@@ -54,7 +54,7 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
 
@@ -655,10 +655,10 @@ impl HashJoinStream {
                 self.join_type,
             )?;
             timer.done();
-
+            self.output_buffer.push_batch(result)?;
             self.state = HashJoinStreamState::FetchProbeBatch;
 
-            return Ok(StatefulStreamResult::Ready(Some(result)));
+            return Ok(StatefulStreamResult::Continue);
         }
 
         // get the matched by join keys indices

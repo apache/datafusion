@@ -384,12 +384,13 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // Get the all partitions statistics of the left
-        let left_stats = self.left.partition_statistics(None)?;
-        let right_stats = self.right.partition_statistics(partition)?;
+        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
+        let right_stats =
+            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
 
-        Ok(stats_cartesian_product(left_stats, right_stats))
+        Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
