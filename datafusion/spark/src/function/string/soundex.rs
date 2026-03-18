@@ -102,7 +102,7 @@ fn classify_char(c: char) -> Option<char> {
 }
 
 fn is_separator(c: char) -> bool {
-    !matches!(c.to_ascii_uppercase(), 'A'..='Z')
+    !c.to_ascii_uppercase().is_ascii_uppercase()
 }
 
 fn compute_soundex(s: &str) -> String {
