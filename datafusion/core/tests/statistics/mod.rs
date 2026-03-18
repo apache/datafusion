@@ -129,44 +129,6 @@ impl StatsCheckerNode {
 
         Ok(node)
     }
-
-    /// An accuracy score about number of rows that was estimated through [Statistics] vs what
-    /// was actually collected at runtime.
-    fn avg_row_accuracy(&self) -> usize {
-        fn collect_accuracy(node: &StatsCheckerNode) -> Vec<usize> {
-            let mut results = vec![];
-            for child in &node.children {
-                results.extend(collect_accuracy(child));
-            }
-            if let Some(accuracy) =
-                accuracy_percent(node.stats.num_rows, node.output_rows)
-            {
-                results.push(accuracy);
-            }
-            results
-        }
-        let accuracy = collect_accuracy(self);
-        accuracy.iter().sum::<usize>() / accuracy.len()
-    }
-
-    /// An accuracy score about number of bytes that was estimated through [Statistics] vs what
-    /// was actually collected at runtime.
-    fn avg_byte_accuracy(&self) -> usize {
-        fn collect_accuracy(node: &StatsCheckerNode) -> Vec<usize> {
-            let mut results = vec![];
-            for child in &node.children {
-                results.extend(collect_accuracy(child));
-            }
-            if let Some(accuracy) =
-                accuracy_percent(node.stats.total_byte_size, node.output_bytes)
-            {
-                results.push(accuracy);
-            }
-            results
-        }
-        let accuracy = collect_accuracy(self);
-        accuracy.iter().sum::<usize>() / accuracy.len()
-    }
 }
 
 fn accuracy_percent(estimated: Precision<usize>, actual: Option<usize>) -> Option<usize> {
