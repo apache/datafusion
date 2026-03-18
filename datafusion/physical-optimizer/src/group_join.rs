@@ -30,7 +30,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion_physical_plan::joins::HashJoinExec;
 use datafusion_physical_plan::joins::group_join::{GroupBySide, GroupJoinExec};
 use datafusion_physical_plan::joins::{JoinOn, PartitionMode};
@@ -177,6 +177,15 @@ fn try_create_group_join(
         PartitionMode::Partitioned => true,
         _ => return Ok(None),
     };
+
+    // For Partitioned mode, a group key may appear in multiple partitions.
+    // We can only fuse if the aggregate is Partial (with a Final stage above
+    // that merges across partitions). SinglePartitioned/Single modes assume
+    // each partition produces complete results, which GroupJoinExec can't
+    // guarantee when group-by keys differ from the join/partition key.
+    if partitioned && *agg_exec.mode() != AggregateMode::Partial {
+        return Ok(None);
+    }
 
     let group_by = agg_exec.group_expr();
     if group_by.has_grouping_set() {

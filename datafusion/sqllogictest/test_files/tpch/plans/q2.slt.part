@@ -130,7 +130,7 @@ physical_plan
 29)----------ProjectionExec: expr=[min(partsupp.ps_supplycost)@1 as min(partsupp.ps_supplycost), ps_partkey@0 as ps_partkey]
 30)------------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
 31)--------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
-32)----------------GroupJoinExec: mode=Partial, on=[(n_regionkey@2, r_regionkey@0)], group_by=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
+32)----------------GroupJoinExec: mode=Partial, join_type=Inner, on=[(n_regionkey@2, r_regionkey@0)], group_by=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
 33)------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)], projection=[ps_partkey@0, ps_supplycost@1, n_regionkey@4]
 34)--------------------RepartitionExec: partitioning=Hash([s_nationkey@2], 4), input_partitions=4
 35)----------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_suppkey@1, s_suppkey@0)], projection=[ps_partkey@0, ps_supplycost@2, s_nationkey@4]
