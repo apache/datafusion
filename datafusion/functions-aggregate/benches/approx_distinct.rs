@@ -102,31 +102,25 @@ fn approx_distinct_benchmark(c: &mut Criterion) {
 
         // --- Utf8 benchmarks ---
         let values = Arc::new(create_string_array(&string_pool)) as ArrayRef;
-        c.bench_function(
-            &format!("approx_distinct utf8 {pct}% distinct"),
-            |b| {
-                b.iter(|| {
-                    let mut accumulator = prepare_accumulator(DataType::Utf8);
-                    accumulator
-                        .update_batch(std::slice::from_ref(&values))
-                        .unwrap()
-                })
-            },
-        );
+        c.bench_function(&format!("approx_distinct utf8 {pct}% distinct"), |b| {
+            b.iter(|| {
+                let mut accumulator = prepare_accumulator(DataType::Utf8);
+                accumulator
+                    .update_batch(std::slice::from_ref(&values))
+                    .unwrap()
+            })
+        });
 
         // --- Utf8View benchmarks ---
         let values = Arc::new(create_string_view_array(&string_pool)) as ArrayRef;
-        c.bench_function(
-            &format!("approx_distinct utf8view {pct}% distinct"),
-            |b| {
-                b.iter(|| {
-                    let mut accumulator = prepare_accumulator(DataType::Utf8View);
-                    accumulator
-                        .update_batch(std::slice::from_ref(&values))
-                        .unwrap()
-                })
-            },
-        );
+        c.bench_function(&format!("approx_distinct utf8view {pct}% distinct"), |b| {
+            b.iter(|| {
+                let mut accumulator = prepare_accumulator(DataType::Utf8View);
+                accumulator
+                    .update_batch(std::slice::from_ref(&values))
+                    .unwrap()
+            })
+        });
     }
 }
 
