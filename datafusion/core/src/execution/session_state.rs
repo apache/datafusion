@@ -1576,28 +1576,16 @@ impl SessionStateBuilder {
 
         if let Some(lambda_functions) = lambda_functions {
             for udlf in lambda_functions {
-                let config_options = state.config().options();
-                match udlf.with_updated_config(config_options) {
-                    Some(new_udf) => {
-                        if let Err(err) = state.register_udlf(new_udf) {
-                            debug!(
-                                "Failed to re-register updated UDLF '{}': {}",
-                                udlf.name(),
-                                err
-                            );
-                        }
+                match state.register_udlf(Arc::clone(&udlf)) {
+                    Ok(Some(existing)) => {
+                        debug!("Overwrote existing UDLF '{}'", existing.name());
                     }
-                    None => match state.register_udlf(Arc::clone(&udlf)) {
-                        Ok(Some(existing)) => {
-                            debug!("Overwrote existing UDLF '{}'", existing.name());
-                        }
-                        Ok(None) => {
-                            debug!("Registered UDLF '{}'", udlf.name());
-                        }
-                        Err(err) => {
-                            debug!("Failed to register UDLF '{}': {}", udlf.name(), err);
-                        }
-                    },
+                    Ok(None) => {
+                        debug!("Registered UDLF '{}'", udlf.name());
+                    }
+                    Err(err) => {
+                        debug!("Failed to register UDLF '{}': {}", udlf.name(), err);
+                    }
                 }
             }
         }

@@ -18,7 +18,6 @@
 //! [`LambdaUDF`]: Lambda User Defined Functions
 
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
-use crate::simplify::{ExprSimplifyResult, SimplifyContext};
 use crate::{ColumnarValue, Documentation, Expr};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
