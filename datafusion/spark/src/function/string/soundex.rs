@@ -91,62 +91,63 @@ fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
-fn compute_soundex(s: &str) -> String {
-    let bytes = s.as_bytes();
-    if bytes.is_empty() {
-        return String::new();
-    }
-
-    let mut first_ch = bytes[0];
-
-    if first_ch.is_ascii_lowercase() {
-        first_ch -= 32;
-    } else if !first_ch.is_ascii_uppercase() {
-        return s.to_string();
-    }
-
-    let mut soundex_code = [first_ch, b'0', b'0', b'0'];
-    let mut sxi = 1;
-    let mut last_code = classify_char(first_ch.into());
-
-    for i in bytes.iter().skip(1) {
-        let mut b = *i;
-
-        if b.is_ascii_lowercase() {
-            b -= 32;
-        } else if !b.is_ascii_uppercase() {
-            last_code = b'0';
-            continue;
-        }
-
-        let code = classify_char(b.into());
-
-        if code == b'7' {
-            continue;
-        } else {
-            if code != b'0' && code != last_code {
-                soundex_code[sxi] = code;
-                sxi += 1;
-                if sxi > 3 {
-                    break;
-                }
-            }
-            last_code = code;
-        }
-    }
-
-    String::from_utf8_lossy(&soundex_code).to_string()
+enum SoundexChar {
+    Code(char),
+    Separator,
+    Ignored,
 }
 
-fn classify_char(ch: char) -> u8 {
-    match ch.to_ascii_uppercase() {
-        'A' | 'E' | 'I' | 'O' | 'U' | 'Y' => 0,
-        'B' | 'F' | 'P' | 'V' => 1,
-        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => 2,
-        'D' | 'T' => 3,
-        'L' => 4,
-        'M' | 'N' => 5,
-        'R' => 6,
-        _ => 7,
+fn classify_char(c: char) -> SoundexChar {
+    match c.to_ascii_uppercase() {
+        'B' | 'F' | 'P' | 'V' => SoundexChar::Code('1'),
+        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => SoundexChar::Code('2'),
+        'D' | 'T' => SoundexChar::Code('3'),
+        'L' => SoundexChar::Code('4'),
+        'M' | 'N' => SoundexChar::Code('5'),
+        'R' => SoundexChar::Code('6'),
+        'H' | 'W' => SoundexChar::Ignored,
+        _ => SoundexChar::Separator,
     }
+}
+
+fn compute_soundex(s: &str) -> String {
+    let mut chars = s.chars();
+
+    let first_char = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => c.to_ascii_uppercase(),
+        _ => return s.to_string(),
+    };
+
+    let mut result = String::with_capacity(4);
+    result.push(first_char);
+
+    let mut last_code = match classify_char(first_char) {
+        SoundexChar::Code(c) => Some(c),
+        _ => None,
+    };
+
+    for c in chars {
+        if result.len() >= 4 {
+            break;
+        }
+
+        match classify_char(c) {
+            SoundexChar::Code(code) => {
+                if last_code != Some(code) {
+                    result.push(code);
+                }
+                last_code = Some(code);
+            }
+            SoundexChar::Separator => {
+                last_code = None;
+            }
+            SoundexChar::Ignored => {}
+        }
+    }
+
+    while result.len() < 4 {
+        result.push('0');
+    }
+
+    result
 }
