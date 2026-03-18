@@ -37,6 +37,7 @@ use tokio::runtime::Runtime;
 const FULL_PREDICATE_SWEEP: [usize; 5] = [10, 20, 30, 40, 60];
 const FULL_DEPTH_SWEEP: [usize; 3] = [1, 2, 3];
 const DEFAULT_SWEEP_POINTS: [(usize, usize); 3] = [(10, 1), (30, 2), (60, 3)];
+const DEFAULT_SAMPLE_SIZE: usize = 10;
 
 // This benchmark suite is designed to test the performance of
 // logical planning with a large plan containing unions, many columns
@@ -350,6 +351,14 @@ fn push_down_filter_sweep_points() -> Vec<(usize, usize)> {
     }
 }
 
+fn push_down_filter_sample_size() -> usize {
+    env::var("DATAFUSION_PUSH_DOWN_FILTER_SAMPLE_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|sample_size| *sample_size >= 10)
+        .unwrap_or(DEFAULT_SAMPLE_SIZE)
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let baseline_ctx = SessionContext::new();
     let case_heavy_ctx = SessionContext::new();
@@ -376,10 +385,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let sweep_points = push_down_filter_sweep_points();
+    let sample_size = push_down_filter_sample_size();
 
     let mut hotspot_group =
         c.benchmark_group("push_down_filter_hotspot_case_heavy_left_join_ab");
-    hotspot_group.sample_size(10);
+    hotspot_group.sample_size(sample_size);
     for &(predicate_count, case_depth) in &sweep_points {
         let with_push_down_filter = build_case_heavy_left_join_df_with_push_down_filter(
             &rt,
@@ -429,7 +439,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let mut control_group =
         c.benchmark_group("push_down_filter_control_non_case_left_join_ab");
-    control_group.sample_size(10);
+    control_group.sample_size(sample_size);
     for &(predicate_count, nesting_depth) in &sweep_points {
         let with_push_down_filter = build_non_case_left_join_df_with_push_down_filter(
             &rt,
