@@ -491,6 +491,8 @@ impl ExecutionPlan for GroupJoinExec {
             reservation,
             hashes_buffer: Vec::new(),
             random_state,
+            probe_indices_buf: Vec::new(),
+            build_indices_buf: Vec::new(),
         };
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -539,7 +541,6 @@ struct GroupJoinStream {
     current_group_indices: Vec<usize>,
 
     batch_size: usize,
-    #[expect(dead_code)]
     baseline_metrics: BaselineMetrics,
     state: GroupJoinStreamState,
     /// Resolved right-side data (set after BuildRight state completes)
@@ -547,6 +548,9 @@ struct GroupJoinStream {
     reservation: MemoryReservation,
     hashes_buffer: Vec<u64>,
     random_state: RandomState,
+    /// Reusable buffers for probe/build indices (avoids per-batch allocation)
+    probe_indices_buf: Vec<u32>,
+    build_indices_buf: Vec<u64>,
 }
 
 impl GroupJoinStream {
@@ -573,6 +577,7 @@ impl GroupJoinStream {
                     let result = self.emit_results()?;
                     self.state = GroupJoinStreamState::Done;
                     if result.num_rows() > 0 {
+                        self.baseline_metrics.record_output(result.num_rows());
                         return Ok(Some(result));
                     }
                     return Ok(None);
@@ -601,6 +606,11 @@ impl GroupJoinStream {
             )
         })?;
 
+        // For inner joins with empty build side, skip all work
+        if right_data.map.is_empty() && !self.is_left_join {
+            return Ok(());
+        }
+
         // Pre-evaluate left-side group-by columns against the current left batch
         let left_gby_arrays: Vec<ArrayRef> = self
             .left_group_by_exprs
@@ -613,13 +623,10 @@ impl GroupJoinStream {
 
         // For LEFT JOIN with empty build side: all rows are unmatched
         if right_data.map.is_empty() {
-            if self.is_left_join {
-                self.emit_unmatched_left_rows(
-                    left_batch,
-                    &left_gby_arrays,
-                    &BooleanArray::from(vec![false; left_batch.num_rows()]),
-                )?;
-            }
+            self.emit_unmatched_left_rows(
+                &left_gby_arrays,
+                &BooleanArray::from(vec![false; left_batch.num_rows()]),
+            )?;
             return Ok(());
         }
 
@@ -633,19 +640,23 @@ impl GroupJoinStream {
             &mut self.hashes_buffer,
         )?;
 
-        let mut probe_indices_buf: Vec<u32> = Vec::new();
-        let mut build_indices_buf: Vec<u64> = Vec::new();
+        self.probe_indices_buf.clear();
+        self.build_indices_buf.clear();
         let mut offset: Option<MapOffset> = Some((0, None));
 
         // Use pre-computed build-side aggregate arrays from RightData
         let right_agg_arrays = &right_data.build_agg_arrays;
 
         // For LEFT JOIN, track which probe rows had at least one match
-        let mut matched_probe = vec![false; left_batch.num_rows()];
+        let mut matched_probe = if self.is_left_join {
+            vec![false; left_batch.num_rows()]
+        } else {
+            vec![]
+        };
 
         while let Some(current_offset) = offset {
-            probe_indices_buf.clear();
-            build_indices_buf.clear();
+            self.probe_indices_buf.clear();
+            self.build_indices_buf.clear();
 
             let (build_indices, probe_indices, next_offset) =
                 match right_data.map.as_ref() {
@@ -657,20 +668,24 @@ impl GroupJoinStream {
                         &self.hashes_buffer,
                         self.batch_size,
                         current_offset,
-                        &mut probe_indices_buf,
-                        &mut build_indices_buf,
+                        &mut self.probe_indices_buf,
+                        &mut self.build_indices_buf,
                     )?,
                     Map::ArrayMap(array_map) => {
                         let next = array_map.get_matched_indices_with_limit_offset(
                             &left_key_values,
                             self.batch_size,
                             current_offset,
-                            &mut probe_indices_buf,
-                            &mut build_indices_buf,
+                            &mut self.probe_indices_buf,
+                            &mut self.build_indices_buf,
                         )?;
                         (
-                            UInt64Array::from(std::mem::take(&mut build_indices_buf)),
-                            UInt32Array::from(std::mem::take(&mut probe_indices_buf)),
+                            UInt64Array::from(std::mem::take(
+                                &mut self.build_indices_buf,
+                            )),
+                            UInt32Array::from(std::mem::take(
+                                &mut self.probe_indices_buf,
+                            )),
                             next,
                         )
                     }
@@ -684,9 +699,11 @@ impl GroupJoinStream {
                 continue;
             }
 
-            // Mark matched probe rows
-            for &idx in probe_indices.values() {
-                matched_probe[idx as usize] = true;
+            // Mark matched probe rows (only for LEFT JOIN)
+            if self.is_left_join {
+                for &idx in probe_indices.values() {
+                    matched_probe[idx as usize] = true;
+                }
             }
 
             // Build the ordered group-by array list by interleaving left and right
@@ -700,24 +717,8 @@ impl GroupJoinStream {
                 .map(|arr| compute::take(arr.as_ref(), &build_indices, None))
                 .collect::<std::result::Result<_, _>>()?;
 
-            let mut left_i = 0;
-            let mut right_i = 0;
-            let matched_group_values: Vec<ArrayRef> = self
-                .group_by_order
-                .iter()
-                .map(|side| match side {
-                    GroupBySide::Left => {
-                        let v = Arc::clone(&left_taken[left_i]);
-                        left_i += 1;
-                        v
-                    }
-                    GroupBySide::Right => {
-                        let v = Arc::clone(&right_taken[right_i]);
-                        right_i += 1;
-                        v
-                    }
-                })
-                .collect();
+            let matched_group_values =
+                interleave_arrays(&self.group_by_order, &left_taken, &right_taken);
 
             self.group_values
                 .intern(&matched_group_values, &mut self.current_group_indices)?;
@@ -770,7 +771,7 @@ impl GroupJoinStream {
         // (0 for COUNT, NULL for SUM, etc.) which is correct LEFT JOIN semantics.
         if self.is_left_join {
             let matched_bitmap = BooleanArray::from(matched_probe);
-            self.emit_unmatched_left_rows(left_batch, &left_gby_arrays, &matched_bitmap)?;
+            self.emit_unmatched_left_rows(&left_gby_arrays, &matched_bitmap)?;
         }
 
         Ok(())
@@ -780,56 +781,37 @@ impl GroupJoinStream {
     /// Accumulators are not updated, so they retain default values (correct for LEFT JOIN).
     fn emit_unmatched_left_rows(
         &mut self,
-        _left_batch: &RecordBatch,
         left_gby_arrays: &[ArrayRef],
         matched_bitmap: &BooleanArray,
     ) -> Result<()> {
-        let unmatched: Vec<u32> = matched_bitmap
-            .iter()
-            .enumerate()
-            .filter(|(_, matched)| !matched.unwrap_or(false))
-            .map(|(i, _)| i as u32)
-            .collect();
+        // Invert the bitmap to get unmatched rows, then filter
+        let unmatched_bitmap = compute::not(matched_bitmap)?;
 
-        if unmatched.is_empty() {
+        // Check if there are any unmatched rows
+        if unmatched_bitmap.true_count() == 0 {
             return Ok(());
         }
 
-        let unmatched_indices = UInt32Array::from(unmatched);
+        let num_unmatched = unmatched_bitmap.true_count();
 
-        // Build group keys: probe-side taken at unmatched indices, build-side filled with NULLs
+        // Build group keys: probe-side filtered by unmatched, build-side filled with NULLs
         let unmatched_left_gby: Vec<ArrayRef> = left_gby_arrays
             .iter()
-            .map(|arr| compute::take(arr.as_ref(), &unmatched_indices, None))
-            .collect::<std::result::Result<_, _>>()?;
+            .map(|arr| {
+                compute::filter(arr.as_ref(), &unmatched_bitmap)
+                    .map_err(Into::into)
+            })
+            .collect::<Result<_>>()?;
 
         let right_data = self.right_data.as_ref().unwrap();
         let unmatched_right_gby: Vec<ArrayRef> = right_data
             .group_by_arrays
             .iter()
-            .map(|arr| {
-                arrow::array::new_null_array(arr.data_type(), unmatched_indices.len())
-            })
+            .map(|arr| arrow::array::new_null_array(arr.data_type(), num_unmatched))
             .collect();
 
-        let mut left_i = 0;
-        let mut right_i = 0;
-        let group_values: Vec<ArrayRef> = self
-            .group_by_order
-            .iter()
-            .map(|side| match side {
-                GroupBySide::Left => {
-                    let v = Arc::clone(&unmatched_left_gby[left_i]);
-                    left_i += 1;
-                    v
-                }
-                GroupBySide::Right => {
-                    let v = Arc::clone(&unmatched_right_gby[right_i]);
-                    right_i += 1;
-                    v
-                }
-            })
-            .collect();
+        let group_values =
+            interleave_arrays(&self.group_by_order, &unmatched_left_gby, &unmatched_right_gby);
 
         self.group_values
             .intern(&group_values, &mut self.current_group_indices)?;
@@ -868,6 +850,31 @@ impl GroupJoinStream {
 
         Ok(RecordBatch::try_new(Arc::clone(&self.schema), columns)?)
     }
+}
+
+/// Interleave left and right arrays according to the group-by order.
+fn interleave_arrays(
+    group_by_order: &[GroupBySide],
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+) -> Vec<ArrayRef> {
+    let mut left_i = 0;
+    let mut right_i = 0;
+    group_by_order
+        .iter()
+        .map(|side| match side {
+            GroupBySide::Left => {
+                let v = Arc::clone(&left_arrays[left_i]);
+                left_i += 1;
+                v
+            }
+            GroupBySide::Right => {
+                let v = Arc::clone(&right_arrays[right_i]);
+                right_i += 1;
+                v
+            }
+        })
+        .collect()
 }
 
 /// Collects all right-side (build) partitions into a single `RightData`.
