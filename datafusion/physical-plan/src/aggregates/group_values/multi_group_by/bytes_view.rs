@@ -19,7 +19,7 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray, make_view};
+use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
@@ -106,16 +106,152 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     fn append_val_inner(&mut self, array: &ArrayRef, row: usize) {
         let arr = array.as_byte_view::<B>();
 
-        // Null row case, set and return
         if arr.is_null(row) {
             self.nulls.append(true);
             self.views.push(0);
             return;
         }
 
-        // Not null row case
         self.nulls.append(false);
-        self.do_append_val_inner(arr, row);
+        self.extend_views_copy_bytes(arr, &[row]);
+    }
+
+    /// Translate an input view, offsetting `buffer_index` by `buffer_base`.
+    /// Inlined views (≤12 bytes) are returned as-is since they are self-contained.
+    #[inline(always)]
+    fn translate_view(input_view: u128, buffer_base: u32) -> u128 {
+        let len = input_view as u32;
+        if len <= 12 {
+            input_view
+        } else {
+            let mut bv = ByteView::from(input_view);
+            bv.buffer_index += buffer_base;
+            bv.as_u128()
+        }
+    }
+
+    /// Zero-copy batch append for non-null `rows`: adopt input buffers and
+    /// translate views via `extend`.
+    #[inline(never)]
+    fn extend_views_zero_copy(
+        &mut self,
+        array: &GenericByteViewArray<B>,
+        rows: &[usize],
+        buffer_base: u32,
+    ) {
+        let input_views = array.views();
+        self.views.extend(rows.iter().map(|&row| {
+            let input_view = unsafe { *input_views.get_unchecked(row) };
+            Self::translate_view(input_view, buffer_base)
+        }));
+    }
+
+    /// Copy batch append for non-null `rows`: copy non-inlined bytes into our
+    /// buffer and extend views, reusing the input view's prefix/length.
+    #[inline(never)]
+    fn extend_views_copy_bytes(
+        &mut self,
+        array: &GenericByteViewArray<B>,
+        rows: &[usize],
+    ) {
+        let input_views = array.views();
+        let views = &mut self.views;
+        let in_progress = &mut self.in_progress;
+        let completed = &mut self.completed;
+        let max_block_size = self.max_block_size;
+
+        views.extend(rows.iter().map(|&row| {
+            let input_view = unsafe { *input_views.get_unchecked(row) };
+            let len = input_view as u32;
+            if len <= 12 {
+                input_view
+            } else {
+                let value: &[u8] = unsafe { array.value_unchecked(row).as_ref() };
+                if in_progress.len() + len as usize > max_block_size {
+                    let flushed = replace(
+                        in_progress,
+                        Vec::with_capacity(max_block_size),
+                    );
+                    completed.push(Buffer::from_vec(flushed));
+                }
+                let buffer_index = completed.len() as u32;
+                let offset = in_progress.len() as u32;
+                in_progress.extend_from_slice(value);
+                let mut bv = ByteView::from(input_view);
+                bv.buffer_index = buffer_index;
+                bv.offset = offset;
+                bv.as_u128()
+            }
+        }));
+    }
+
+    /// Zero-copy batch append with nulls: handles null tracking per-row,
+    /// extends views via `extend`.
+    #[inline(never)]
+    fn extend_views_zero_copy_with_nulls(
+        &mut self,
+        array: &GenericByteViewArray<B>,
+        rows: &[usize],
+        buffer_base: u32,
+    ) {
+        let input_views = array.views();
+        let nulls = &mut self.nulls;
+        self.views.extend(rows.iter().map(|&row| {
+            if array.is_null(row) {
+                nulls.append(true);
+                0u128
+            } else {
+                nulls.append(false);
+                let input_view = unsafe { *input_views.get_unchecked(row) };
+                Self::translate_view(input_view, buffer_base)
+            }
+        }));
+    }
+
+    /// Copy batch append with nulls: handles null tracking per-row,
+    /// copies non-inlined bytes for non-null rows.
+    #[inline(never)]
+    fn extend_views_copy_bytes_with_nulls(
+        &mut self,
+        array: &GenericByteViewArray<B>,
+        rows: &[usize],
+    ) {
+        let input_views = array.views();
+        let in_progress = &mut self.in_progress;
+        let completed = &mut self.completed;
+        let max_block_size = self.max_block_size;
+        let nulls = &mut self.nulls;
+
+        self.views.extend(rows.iter().map(|&row| {
+            if array.is_null(row) {
+                nulls.append(true);
+                0u128
+            } else {
+                nulls.append(false);
+                let input_view = unsafe { *input_views.get_unchecked(row) };
+                let len = input_view as u32;
+                if len <= 12 {
+                    input_view
+                } else {
+                    let value: &[u8] =
+                        unsafe { array.value_unchecked(row).as_ref() };
+                    if in_progress.len() + len as usize > max_block_size {
+                        let flushed = replace(
+                            in_progress,
+                            Vec::with_capacity(max_block_size),
+                        );
+                        completed.push(Buffer::from_vec(flushed));
+                    }
+                    let buffer_index = completed.len() as u32;
+                    let offset = in_progress.len() as u32;
+                    in_progress.extend_from_slice(value);
+                    let mut bv = ByteView::from(input_view);
+                    bv.buffer_index = buffer_index;
+                    bv.offset = offset;
+                    bv.as_u128()
+                }
+            }
+        }));
     }
 
     // Don't inline to keep the code small and give LLVM the best chance of
@@ -135,7 +271,6 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         );
 
         for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to, don't need to check
             if !*equal_to_result {
                 continue;
             }
@@ -144,6 +279,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                 self.do_equal_to_inner::<HAS_NULLS, HAS_BUFFERS>(lhs_row, array, rhs_row);
         }
     }
+
+    /// When ≥90% of the batch consists of new groups, adopt the input array's
+    /// buffers directly (zero-copy) instead of copying string bytes. This avoids
+    /// memcpy for high-cardinality GROUP BY on strings. For low new-group ratios,
+    /// we fall back to copying to avoid holding references to mostly-unused buffers.
+    const ZERO_COPY_THRESHOLD: f64 = 0.9;
 
     fn vectorized_append_inner(&mut self, array: &ArrayRef, rows: &[usize]) {
         let arr = array.as_byte_view::<B>();
@@ -157,51 +298,46 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             Nulls::Some
         };
 
-        match all_null_or_non_null {
-            Nulls::Some => {
-                for &row in rows {
-                    self.append_val_inner(array, row);
-                }
-            }
-
-            Nulls::None => {
-                self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
-                }
-            }
-
-            Nulls::All => {
-                self.nulls.append_n(rows.len(), true);
-                let new_len = self.views.len() + rows.len();
-                self.views.resize(new_len, 0);
-            }
-        }
-    }
-
-    fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
-    where
-        B: ByteViewType,
-    {
-        let value: &[u8] = array.value(row).as_ref();
-
-        let value_len = value.len();
-        let view = if value_len <= 12 {
-            make_view(value, 0, 0)
+        let input_buffers = arr.data_buffers();
+        let new_group_ratio = if num_rows > 0 {
+            rows.len() as f64 / num_rows as f64
         } else {
-            // Ensure big enough block to hold the value firstly
-            self.ensure_in_progress_big_enough(value_len);
+            0.0
+        };
+        let use_zero_copy =
+            !input_buffers.is_empty() && new_group_ratio >= Self::ZERO_COPY_THRESHOLD;
 
-            // Append value
-            let buffer_index = self.completed.len();
-            let offset = self.in_progress.len();
-            self.in_progress.extend_from_slice(value);
-
-            make_view(value, buffer_index as u32, offset as u32)
+        let buffer_base = if use_zero_copy {
+            if !self.in_progress.is_empty() {
+                self.flush_in_progress();
+            }
+            let base = self.completed.len() as u32;
+            self.completed.extend(input_buffers.iter().cloned());
+            base
+        } else {
+            0
         };
 
-        // Append view
-        self.views.push(view);
+        match (all_null_or_non_null, use_zero_copy) {
+            (Nulls::None, true) => {
+                self.nulls.append_n(rows.len(), false);
+                self.extend_views_zero_copy(arr, rows, buffer_base);
+            }
+            (Nulls::None, false) => {
+                self.nulls.append_n(rows.len(), false);
+                self.extend_views_copy_bytes(arr, rows);
+            }
+            (Nulls::Some, true) => {
+                self.extend_views_zero_copy_with_nulls(arr, rows, buffer_base);
+            }
+            (Nulls::Some, false) => {
+                self.extend_views_copy_bytes_with_nulls(arr, rows);
+            }
+            (Nulls::All, _) => {
+                self.nulls.append_n(rows.len(), true);
+                self.views.resize(self.views.len() + rows.len(), 0);
+            }
+        }
     }
 
     fn ensure_in_progress_big_enough(&mut self, value_len: usize) {
