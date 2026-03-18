@@ -241,13 +241,11 @@ physical_plan
 01)SortPreservingMergeExec: [u@1 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[u@1 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[RegionID@0 as RegionID, count(alias1)@1 as u]
-04)------AggregateExec: mode=FinalPartitioned, gby=[RegionID@0 as RegionID], aggr=[count(alias1)]
+04)------AggregateExec: mode=SinglePartitioned, gby=[RegionID@0 as RegionID], aggr=[count(alias1)]
 05)--------RepartitionExec: partitioning=Hash([RegionID@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[RegionID@0 as RegionID], aggr=[count(alias1)]
-07)------------AggregateExec: mode=FinalPartitioned, gby=[RegionID@0 as RegionID, alias1@1 as alias1], aggr=[]
-08)--------------RepartitionExec: partitioning=Hash([RegionID@0, alias1@1], 4), input_partitions=1
-09)----------------AggregateExec: mode=Partial, gby=[RegionID@0 as RegionID, UserID@1 as alias1], aggr=[]
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID], file_type=parquet
+06)----------AggregateExec: mode=SinglePartitioned, gby=[RegionID@0 as RegionID, UserID@1 as alias1], aggr=[]
+07)------------RepartitionExec: partitioning=Hash([RegionID@0, UserID@1], 4), input_partitions=1
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID], file_type=parquet
 
 query II rowsort
 SELECT "RegionID", COUNT(DISTINCT "UserID") AS u FROM hits GROUP BY "RegionID" ORDER BY u DESC LIMIT 10;
@@ -300,15 +298,13 @@ physical_plan
 01)SortPreservingMergeExec: [u@1 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[u@1 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[MobilePhoneModel@0 as MobilePhoneModel, count(alias1)@1 as u]
-04)------AggregateExec: mode=FinalPartitioned, gby=[MobilePhoneModel@0 as MobilePhoneModel], aggr=[count(alias1)]
+04)------AggregateExec: mode=SinglePartitioned, gby=[MobilePhoneModel@0 as MobilePhoneModel], aggr=[count(alias1)]
 05)--------RepartitionExec: partitioning=Hash([MobilePhoneModel@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[MobilePhoneModel@0 as MobilePhoneModel], aggr=[count(alias1)]
-07)------------AggregateExec: mode=FinalPartitioned, gby=[MobilePhoneModel@0 as MobilePhoneModel, alias1@1 as alias1], aggr=[]
-08)--------------RepartitionExec: partitioning=Hash([MobilePhoneModel@0, alias1@1], 4), input_partitions=4
-09)----------------AggregateExec: mode=Partial, gby=[MobilePhoneModel@1 as MobilePhoneModel, UserID@0 as alias1], aggr=[]
-10)------------------FilterExec: MobilePhoneModel@1 != 
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
+06)----------AggregateExec: mode=SinglePartitioned, gby=[MobilePhoneModel@1 as MobilePhoneModel, UserID@0 as alias1], aggr=[]
+07)------------RepartitionExec: partitioning=Hash([MobilePhoneModel@1, UserID@0], 4), input_partitions=4
+08)--------------FilterExec: MobilePhoneModel@1 !=
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
 
 query TI
 SELECT "MobilePhoneModel", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "MobilePhoneModel" <> '' GROUP BY "MobilePhoneModel" ORDER BY u DESC LIMIT 10;
@@ -330,15 +326,13 @@ physical_plan
 01)SortPreservingMergeExec: [u@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[u@2 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[MobilePhone@0 as MobilePhone, MobilePhoneModel@1 as MobilePhoneModel, count(alias1)@2 as u]
-04)------AggregateExec: mode=FinalPartitioned, gby=[MobilePhone@0 as MobilePhone, MobilePhoneModel@1 as MobilePhoneModel], aggr=[count(alias1)]
+04)------AggregateExec: mode=SinglePartitioned, gby=[MobilePhone@0 as MobilePhone, MobilePhoneModel@1 as MobilePhoneModel], aggr=[count(alias1)]
 05)--------RepartitionExec: partitioning=Hash([MobilePhone@0, MobilePhoneModel@1], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[MobilePhone@0 as MobilePhone, MobilePhoneModel@1 as MobilePhoneModel], aggr=[count(alias1)]
-07)------------AggregateExec: mode=FinalPartitioned, gby=[MobilePhone@0 as MobilePhone, MobilePhoneModel@1 as MobilePhoneModel, alias1@2 as alias1], aggr=[]
-08)--------------RepartitionExec: partitioning=Hash([MobilePhone@0, MobilePhoneModel@1, alias1@2], 4), input_partitions=4
-09)----------------AggregateExec: mode=Partial, gby=[MobilePhone@1 as MobilePhone, MobilePhoneModel@2 as MobilePhoneModel, UserID@0 as alias1], aggr=[]
-10)------------------FilterExec: MobilePhoneModel@2 != 
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, MobilePhone, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
+06)----------AggregateExec: mode=SinglePartitioned, gby=[MobilePhone@1 as MobilePhone, MobilePhoneModel@2 as MobilePhoneModel, UserID@0 as alias1], aggr=[]
+07)------------RepartitionExec: partitioning=Hash([MobilePhone@1, MobilePhoneModel@2, UserID@0], 4), input_partitions=4
+08)--------------FilterExec: MobilePhoneModel@2 !=
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, MobilePhone, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
 
 query ITI
 SELECT "MobilePhone", "MobilePhoneModel", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "MobilePhoneModel" <> '' GROUP BY "MobilePhone", "MobilePhoneModel" ORDER BY u DESC LIMIT 10;
@@ -386,15 +380,13 @@ physical_plan
 01)SortPreservingMergeExec: [u@1 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[u@1 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[SearchPhrase@0 as SearchPhrase, count(alias1)@1 as u]
-04)------AggregateExec: mode=FinalPartitioned, gby=[SearchPhrase@0 as SearchPhrase], aggr=[count(alias1)]
+04)------AggregateExec: mode=SinglePartitioned, gby=[SearchPhrase@0 as SearchPhrase], aggr=[count(alias1)]
 05)--------RepartitionExec: partitioning=Hash([SearchPhrase@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[SearchPhrase@0 as SearchPhrase], aggr=[count(alias1)]
-07)------------AggregateExec: mode=FinalPartitioned, gby=[SearchPhrase@0 as SearchPhrase, alias1@1 as alias1], aggr=[]
-08)--------------RepartitionExec: partitioning=Hash([SearchPhrase@0, alias1@1], 4), input_partitions=4
-09)----------------AggregateExec: mode=Partial, gby=[SearchPhrase@1 as SearchPhrase, UserID@0 as alias1], aggr=[]
-10)------------------FilterExec: SearchPhrase@1 != 
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+06)----------AggregateExec: mode=SinglePartitioned, gby=[SearchPhrase@1 as SearchPhrase, UserID@0 as alias1], aggr=[]
+07)------------RepartitionExec: partitioning=Hash([SearchPhrase@1, UserID@0], 4), input_partitions=4
+08)--------------FilterExec: SearchPhrase@1 !=
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query TI
 SELECT "SearchPhrase", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY u DESC LIMIT 10;

@@ -16,7 +16,11 @@
 // under the License.
 
 //! CombinePartialFinalAggregate optimizer rule checks the adjacent Partial and Final AggregateExecs
-//! and try to combine them if necessary
+//! and try to combine them if necessary.
+//!
+//! Also combines Partial and FinalPartitioned aggregates separated by a RepartitionExec
+//! into a SinglePartitioned aggregate, which is particularly beneficial for the
+//! `SingleDistinctToGroupBy` pattern — reducing 4 aggregate layers to 2.
 
 use std::sync::Arc;
 
@@ -25,6 +29,7 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
+use datafusion_physical_plan::repartition::RepartitionExec;
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
@@ -34,6 +39,11 @@ use datafusion_physical_expr::{PhysicalExpr, physical_exprs_equal};
 
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
+///
+/// It also combines `FinalPartitioned → RepartitionExec → Partial` into
+/// `SinglePartitioned → RepartitionExec`, eliminating one aggregate layer.
+/// This fires twice on the 4-layer `SingleDistinctToGroupBy` pattern,
+/// reducing it to 2 aggregate layers.
 ///
 /// This rule should be applied after the EnforceDistribution and EnforceSorting rules
 #[derive(Default, Debug)]
@@ -65,7 +75,12 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 return Ok(Transformed::no(plan));
             }
 
-            // Check if the input is AggregateExec
+            // Try combining the 4-layer distinct pattern into 2 layers
+            if let Some(optimized) = try_combine_stacked_aggregates(agg_exec)? {
+                return Ok(Transformed::yes(optimized));
+            }
+
+            // Check if the input is AggregateExec (original combine logic)
             let Some(input_agg_exec) =
                 agg_exec.input().as_any().downcast_ref::<AggregateExec>()
             else {
@@ -122,6 +137,169 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Combines the 4-layer aggregate pattern from `SingleDistinctToGroupBy` into 2 layers.
+///
+/// Matches:
+/// ```text
+/// Agg(FinalPartitioned, G_outer) → Repart(G_outer) → Agg(Partial, G_outer) →
+///   Agg(FinalPartitioned, G_inner) → Repart(G_inner) → Agg(Partial, G_inner)
+/// ```
+///
+/// Replaces with:
+/// ```text
+/// Agg(SinglePartitioned, G_outer) → Repart(G_outer) →
+///   Agg(SinglePartitioned, G_inner) → Repart(G_inner)
+/// ```
+///
+/// Each `FinalPartitioned → Repartition → Partial` triple is combined into
+/// `SinglePartitioned → Repartition`. The repartition is rebuilt with the Partial's
+/// group-by expressions (referencing the raw input schema) since the Partial is removed.
+fn try_combine_stacked_aggregates(
+    outer_final: &AggregateExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    if *outer_final.mode() != AggregateMode::FinalPartitioned {
+        return Ok(None);
+    }
+
+    // Match: outer_final → outer_repart → outer_partial
+    let Some(outer_repart) = outer_final
+        .input()
+        .as_any()
+        .downcast_ref::<RepartitionExec>()
+    else {
+        return Ok(None);
+    };
+    let Some(outer_partial) = outer_repart
+        .input()
+        .as_any()
+        .downcast_ref::<AggregateExec>()
+    else {
+        return Ok(None);
+    };
+    if *outer_partial.mode() != AggregateMode::Partial {
+        return Ok(None);
+    }
+    if !can_combine(
+        (
+            outer_final.group_expr(),
+            outer_final.aggr_expr(),
+            outer_final.filter_expr(),
+        ),
+        (
+            outer_partial.group_expr(),
+            outer_partial.aggr_expr(),
+            outer_partial.filter_expr(),
+        ),
+    ) {
+        return Ok(None);
+    }
+
+    // Match: inner_final → inner_repart → inner_partial
+    let Some(inner_final) = outer_partial
+        .input()
+        .as_any()
+        .downcast_ref::<AggregateExec>()
+    else {
+        return Ok(None);
+    };
+    if *inner_final.mode() != AggregateMode::FinalPartitioned {
+        return Ok(None);
+    }
+    let Some(inner_repart) = inner_final
+        .input()
+        .as_any()
+        .downcast_ref::<RepartitionExec>()
+    else {
+        return Ok(None);
+    };
+    let Some(inner_partial) = inner_repart
+        .input()
+        .as_any()
+        .downcast_ref::<AggregateExec>()
+    else {
+        return Ok(None);
+    };
+    if *inner_partial.mode() != AggregateMode::Partial {
+        return Ok(None);
+    }
+    if !can_combine(
+        (
+            inner_final.group_expr(),
+            inner_final.aggr_expr(),
+            inner_final.filter_expr(),
+        ),
+        (
+            inner_partial.group_expr(),
+            inner_partial.aggr_expr(),
+            inner_partial.filter_expr(),
+        ),
+    ) {
+        return Ok(None);
+    }
+
+    // Verify inner group-by is a superset of outer (the stacked/distinct pattern)
+    if inner_final.group_expr().expr().len() <= outer_final.group_expr().expr().len() {
+        return Ok(None);
+    }
+
+    // Build the inner SinglePartitioned:
+    // SinglePartitioned(G_inner) → Repartition(Hash(G_inner)) → [original input]
+    let inner_target = inner_repart
+        .properties()
+        .output_partitioning()
+        .partition_count();
+    let inner_repart_exprs: Vec<Arc<dyn PhysicalExpr>> = inner_partial
+        .group_expr()
+        .expr()
+        .iter()
+        .map(|(e, _)| Arc::clone(e))
+        .collect();
+    let new_inner_repart = Arc::new(RepartitionExec::try_new(
+        Arc::clone(inner_partial.input()),
+        datafusion_physical_expr::Partitioning::Hash(inner_repart_exprs, inner_target),
+    )?);
+    let new_inner = Arc::new(AggregateExec::try_new(
+        AggregateMode::SinglePartitioned,
+        inner_partial.group_expr().clone(),
+        inner_partial.aggr_expr().to_vec(),
+        inner_partial.filter_expr().to_vec(),
+        new_inner_repart,
+        inner_partial.input_schema(),
+    )?);
+
+    // Build the outer SinglePartitioned:
+    // SinglePartitioned(G_outer) → Repartition(Hash(G_outer)) → [inner]
+    //
+    // The outer_partial's group-by references the raw input (inner's output).
+    // After replacing the inner, its output schema matches inner_partial's output
+    // (same group-by, same agg), so outer_partial's expressions are still valid.
+    let outer_target = outer_repart
+        .properties()
+        .output_partitioning()
+        .partition_count();
+    let outer_repart_exprs: Vec<Arc<dyn PhysicalExpr>> = outer_partial
+        .group_expr()
+        .expr()
+        .iter()
+        .map(|(e, _)| Arc::clone(e))
+        .collect();
+    let new_outer_repart = Arc::new(RepartitionExec::try_new(
+        new_inner,
+        datafusion_physical_expr::Partitioning::Hash(outer_repart_exprs, outer_target),
+    )?);
+    let new_outer = AggregateExec::try_new(
+        AggregateMode::SinglePartitioned,
+        outer_partial.group_expr().clone(),
+        outer_partial.aggr_expr().to_vec(),
+        outer_partial.filter_expr().to_vec(),
+        new_outer_repart,
+        outer_partial.input_schema(),
+    )?
+    .with_limit_options(outer_final.limit_options());
+
+    Ok(Some(Arc::new(new_outer)))
 }
 
 type GroupExprsRef<'a> = (
