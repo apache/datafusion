@@ -41,7 +41,6 @@ use crate::{
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
-        paste::paste! {
             #[doc = concat!("AggregateFunction that returns a [AggregateUDF](crate::AggregateUDF) for [`", stringify!($UDAF), "`]")]
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<crate::AggregateUDF> {
                 // Singleton instance of [$UDAF], ensures the UDAF is only created once
@@ -51,7 +50,6 @@ macro_rules! create_func {
                     });
                 std::sync::Arc::clone(&INSTANCE)
             }
-        }
     }
 }
 

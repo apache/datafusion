@@ -486,12 +486,7 @@ pub fn parse_physical_expr_with_converter(
             )?;
             Arc::new(HashExpr::new(
                 on_columns,
-                SeededRandomState::with_seeds(
-                    hash_expr.seed0,
-                    hash_expr.seed1,
-                    hash_expr.seed2,
-                    hash_expr.seed3,
-                ),
+                SeededRandomState::with_seed(hash_expr.seed0),
                 hash_expr.description.clone(),
             ))
         }
