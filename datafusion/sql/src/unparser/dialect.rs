@@ -248,6 +248,17 @@ pub trait Dialect: Send + Sync {
     fn supports_empty_select_list(&self) -> bool {
         false
     }
+
+    /// Override the default string literal unparsing.
+    ///
+    /// Returns `Some(ast::Expr)` to replace the default single-quoted string,
+    /// or `None` to use the default behavior.
+    ///
+    /// For example, MSSQL requires non-ASCII strings to use national string
+    /// literal syntax (`N'datafusion資料融合'`).
+    fn string_literal_to_sql(&self, _s: &str) -> Option<ast::Expr> {
+        None
+    }
 }
 
 /// `IntervalStyle` to use for unparsing

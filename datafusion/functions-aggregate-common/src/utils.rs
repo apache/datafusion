@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use ahash::RandomState;
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray,
 };
@@ -24,6 +23,7 @@ use arrow::datatypes::{
     ArrowNativeType, DataType, DecimalType, Field, FieldRef, ToByteSlice,
 };
 use datafusion_common::cast::{as_list_array, as_primitive_array};
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{

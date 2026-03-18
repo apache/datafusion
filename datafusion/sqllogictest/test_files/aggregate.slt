@@ -1776,7 +1776,7 @@ SELECT approx_distinct(null)
 query II
 SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_100
 ----
-100 100
+99 99
 
 # csv_query_approx_count_date_timestamp
 query IIIII
@@ -8050,21 +8050,21 @@ group0 -14
 group1 100
 
 # group median i16 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_i16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -16334
 group1 100
 
 # group median i32 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_i32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -1073741774
 group1 100
 
 # group median i64 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_i64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -4611686018427387854
@@ -8078,56 +8078,56 @@ group0 50
 group1 100
 
 # group median u16 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_u16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u32 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_u32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u64 non-nullable
-query TI
+query TI rowsort
 SELECT col_group, median(col_u64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median f32 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 2.75
 group1 3.2
 
 # group median f64 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 2.75
 group1 3.3
 
 # group median f64_nan non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f64_nan) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 NaN
 group1 NaN
 
 # group median decimal128 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_decimal128) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 0.0002
 group1 0.0003
 
 # group median decimal256 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_decimal256) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 0.0002
