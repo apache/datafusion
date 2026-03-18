@@ -30,7 +30,6 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, TypeSignature, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
@@ -167,10 +166,6 @@ where
 }
 
 impl ScalarUDFImpl for SparkCast {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_cast"
     }

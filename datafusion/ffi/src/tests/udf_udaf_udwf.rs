@@ -80,9 +80,6 @@ struct TimeZoneUDF {
 }
 
 impl ScalarUDFImpl for TimeZoneUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "TimeZoneUDF"
     }

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -230,7 +231,9 @@ impl Clone for FFI_ScalarUDF {
 
 impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
     fn from(udf: Arc<ScalarUDF>) -> Self {
-        if let Some(udf) = udf.inner().as_any().downcast_ref::<ForeignScalarUDF>() {
+        if let Some(udf) =
+            (udf.inner().as_ref() as &dyn Any).downcast_ref::<ForeignScalarUDF>()
+        {
             return udf.udf.clone();
         }
 
