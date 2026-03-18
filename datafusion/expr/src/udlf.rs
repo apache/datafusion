@@ -202,7 +202,7 @@ impl LambdaArgument {
     }
 
     /// Evaluate this lambda
-    /// `args` should evalute to the value of each parameter
+    /// `args` should evaluate to the value of each parameter
     /// of the correspondent lambda returned in [LambdaUDF::lambdas_parameters].
     pub fn evaluate(
         &self,
