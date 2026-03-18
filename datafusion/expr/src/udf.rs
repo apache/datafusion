@@ -217,7 +217,7 @@ impl ScalarUDF {
         self.inner.return_field_from_args(args)
     }
 
-    /// Do the function rewrite
+    /// Returns this scalar function's simplification result.
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
     pub fn simplify(

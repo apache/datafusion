@@ -17,7 +17,6 @@
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
-use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
 use arrow::datatypes::Field;
 use arrow::datatypes::{
@@ -27,17 +26,21 @@ use arrow::datatypes::{
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
     Float64Type, Int64Type, TimeUnit, UInt64Type,
 };
+use datafusion_common::hash_utils::RandomState;
+use datafusion_common::internal_err;
 use datafusion_common::types::{
     NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
     logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
 };
 use datafusion_common::{HashMap, Result, ScalarValue, exec_err, not_impl_err};
+use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr_fn::cast;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
-    ReversedUDAF, SetMonotonicity, Signature, TypeSignature, TypeSignatureClass,
-    Volatility,
+    Operator, ReversedUDAF, SetMonotonicity, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
@@ -54,7 +57,7 @@ make_udaf_expr_and_func!(
 );
 
 pub fn sum_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+    Expr::AggregateFunction(AggregateFunction::new_udf(
         sum_udaf(),
         vec![expr],
         true,
@@ -345,6 +348,47 @@ impl AggregateUDFImpl for Sum {
             DataType::UInt64 => SetMonotonicity::Increasing,
             _ => SetMonotonicity::NotMonotonic,
         }
+    }
+
+    /// Implement ClickBench Q29 specific optimization:
+    /// `SUM(arg + constant)` --> `SUM(arg) + constant * COUNT(arg)`
+    ///
+    /// See background on [`AggregateUDFImpl::simplify_expr_op_literal`]
+    fn simplify_expr_op_literal(
+        &self,
+        agg_function: &AggregateFunction,
+        arg: &Expr,
+        op: Operator,
+        lit: &Expr,
+        // Only support '+' so the order of the args doesn't matter
+        _arg_is_left: bool,
+    ) -> Result<Option<Expr>> {
+        if op != Operator::Plus {
+            return Ok(None);
+        }
+
+        let lit_type = match &lit {
+            Expr::Literal(value, _) => value.data_type(),
+            _ => {
+                return internal_err!(
+                    "Sum::simplify_expr_op_literal got a non literal argument"
+                );
+            }
+        };
+        if lit_type == DataType::Null {
+            return Ok(None);
+        }
+
+        // Build up SUM(arg)
+        let mut sum_agg = agg_function.clone();
+        sum_agg.params.args = vec![arg.clone()];
+        let sum_agg = Expr::AggregateFunction(sum_agg);
+
+        // COUNT(arg) - cast to the correct type
+        let count_agg = cast(crate::count::count(arg.clone()), lit_type);
+
+        // SUM(arg) + lit * COUNT(arg)
+        Ok(Some(sum_agg + (lit.clone() * count_agg)))
     }
 }
 

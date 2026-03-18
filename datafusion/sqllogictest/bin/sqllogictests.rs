@@ -18,9 +18,8 @@
 use clap::{ColorChoice, Parser, ValueEnum};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
-use datafusion::common::{
-    DataFusionError, HashMap, Result, exec_datafusion_err, exec_err,
-};
+use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
+use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DataFusion, DataFusionSubstraitRoundTrip, Filter,
     TestContext, df_value_validator, read_dir_recursive, setup_scratch_dir,
@@ -44,13 +43,12 @@ use crate::postgres_container::{
 };
 use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
-use std::ffi::OsStr;
 use std::fs;
 use std::io::{IsTerminal, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 #[cfg(feature = "postgres")]
@@ -59,6 +57,7 @@ mod postgres_container;
 const TEST_DIRECTORY: &str = "test_files/";
 const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
+const TPCH_PREFIX: &str = "tpch";
 const SQLITE_PREFIX: &str = "sqlite";
 const ERRS_PER_FILE_LIMIT: usize = 10;
 const TIMING_DEBUG_SLOW_FILES_ENV: &str = "SLT_TIMING_DEBUG_SLOW_FILES";
@@ -76,55 +75,6 @@ struct FileTiming {
     relative_path: PathBuf,
     elapsed: Duration,
 }
-
-/// TEST PRIORITY
-///
-/// Heuristically prioritize some test to run earlier.
-///
-/// Prioritizes test to run earlier if they are known to be long running (as
-/// each test file itself is run sequentially, but multiple test files are run
-/// in parallel.
-///
-/// Tests not listed here will run after the listed tests in an arbitrary order.
-///
-/// You can find the top longest running tests by running `--timing-summary` mode.
-/// For example
-///
-/// ```shell
-/// $  cargo test --profile=ci  --test sqllogictests -- --timing-summary top
-/// ...
-/// Per-file elapsed summary (deterministic):
-/// 1.    5.375s  push_down_filter_regression.slt
-/// 2.    3.174s  aggregate.slt
-/// 3.    3.158s  imdb.slt
-/// 4.    2.793s  joins.slt
-/// 5.    2.505s  array.slt
-/// 6.    2.265s  aggregate_skip_partial.slt
-/// 7.    2.260s  window.slt
-/// 8.    1.677s  group_by.slt
-/// 9.    0.973s  datetime/timestamps.slt
-/// 10.    0.822s  cte.slt
-/// ```
-static TEST_PRIORITY: LazyLock<HashMap<PathBuf, usize>> = LazyLock::new(|| {
-    [
-        (PathBuf::from("push_down_filter_regression.slt"), 0), // longest running, so run first.
-        (PathBuf::from("aggregate.slt"), 1),
-        (PathBuf::from("joins.slt"), 2),
-        (PathBuf::from("imdb.slt"), 3),
-        (PathBuf::from("array.slt"), 4),
-        (PathBuf::from("aggregate_skip_partial.slt"), 5),
-        (PathBuf::from("window.slt"), 6),
-        (PathBuf::from("group_by.slt"), 7),
-        (PathBuf::from("datetime/timestamps.slt"), 8),
-        (PathBuf::from("cte.slt"), 9),
-    ]
-    .into_iter()
-    .collect()
-});
-
-/// Default priority for tests not in the TEST_PRIORITY map. Tests with lower
-/// priority values run first.
-static DEFAULT_PRIORITY: usize = 100;
 
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -832,91 +782,35 @@ async fn run_complete_file_with_postgres(
     plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
 
-/// Represents a parsed test file
-#[derive(Debug)]
-struct TestFile {
-    /// The absolute path to the file
-    pub path: PathBuf,
-    /// The relative path of the file (used for display)
-    pub relative_path: PathBuf,
-}
-
-impl TestFile {
-    fn new(path: PathBuf) -> Self {
-        let p = path.to_string_lossy();
-        let relative_path = PathBuf::from(if p.starts_with(TEST_DIRECTORY) {
-            p.strip_prefix(TEST_DIRECTORY).unwrap()
-        } else if p.starts_with(DATAFUSION_TESTING_TEST_DIRECTORY) {
-            p.strip_prefix(DATAFUSION_TESTING_TEST_DIRECTORY).unwrap()
-        } else {
-            ""
-        });
-
-        Self {
-            path,
-            relative_path,
-        }
-    }
-
-    fn is_slt_file(&self) -> bool {
-        self.path.extension() == Some(OsStr::new("slt"))
-    }
-
-    fn check_sqlite(&self, options: &Options) -> bool {
-        if !self.relative_path.starts_with(SQLITE_PREFIX) {
-            return true;
-        }
-
-        options.include_sqlite
-    }
-
-    fn check_tpch(&self, options: &Options) -> bool {
-        if !self.relative_path.starts_with("tpch") {
-            return true;
-        }
-
-        options.include_tpch
-    }
-}
-
 fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
-    let mut paths = read_dir_recursive(TEST_DIRECTORY)?
+    let prefixes: &[&str] = if options.include_sqlite {
+        &[TEST_DIRECTORY, DATAFUSION_TESTING_TEST_DIRECTORY]
+    } else {
+        &[TEST_DIRECTORY]
+    };
+
+    let directories = prefixes
+        .iter()
+        .map(|prefix| {
+            read_dir_recursive(prefix).map_err(|e| {
+                exec_datafusion_err!("Error reading test directory {prefix}: {e}")
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut paths = directories
         .into_iter()
-        .map(TestFile::new)
+        .flatten()
+        .map(|p| TestFile::new(p, prefixes))
         .filter(|f| options.check_test_file(&f.path))
         .filter(|f| f.is_slt_file())
-        .filter(|f| f.check_tpch(options))
-        .filter(|f| f.check_sqlite(options))
+        .filter(|f| !f.relative_path_starts_with(TPCH_PREFIX) || options.include_tpch)
+        .filter(|f| !f.relative_path_starts_with(SQLITE_PREFIX) || options.include_sqlite)
         .filter(|f| options.check_pg_compat_file(f.path.as_path()))
         .collect::<Vec<_>>();
-    if options.include_sqlite {
-        let mut sqlite_paths = read_dir_recursive(DATAFUSION_TESTING_TEST_DIRECTORY)?
-            .into_iter()
-            .map(TestFile::new)
-            .filter(|f| options.check_test_file(&f.path))
-            .filter(|f| f.is_slt_file())
-            .filter(|f| f.check_sqlite(options))
-            .filter(|f| options.check_pg_compat_file(f.path.as_path()))
-            .collect::<Vec<_>>();
 
-        paths.append(&mut sqlite_paths)
-    }
-
-    Ok(sort_tests(paths))
-}
-
-/// Sort the tests heuristically by order of "priority"
-///
-/// Prioritizes test to run earlier if they are known to be long running (as
-/// each test file itself is run sequentially, but multiple test files are run
-/// in parallel.
-fn sort_tests(mut tests: Vec<TestFile>) -> Vec<TestFile> {
-    tests.sort_by_key(|f| {
-        TEST_PRIORITY
-            .get(&f.relative_path)
-            .unwrap_or(&DEFAULT_PRIORITY)
-    });
-    tests
+    paths.sort_unstable();
+    Ok(paths)
 }
 
 /// Parsed command line options

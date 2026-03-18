@@ -18,15 +18,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::builder::StringBuilder;
 use arrow::array::cast::AsArray;
-use arrow::array::{Array, ArrayRef, StringArray, new_null_array};
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::TypeSignature::Exact;
@@ -143,20 +143,17 @@ impl ScalarUDFImpl for ToCharFunc {
         let [date_time, format] = take_function_args(self.name(), &args)?;
 
         match format {
-            ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Null) => to_char_scalar(date_time, None),
-            // constant format
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
-                // invoke to_char_scalar with the known string, without converting to array
-                to_char_scalar(date_time, Some(format))
+            ColumnarValue::Scalar(ScalarValue::Null | ScalarValue::Utf8(None)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+            }
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt))) => {
+                to_char_scalar(date_time, fmt)
             }
             ColumnarValue::Array(_) => to_char_array(&args),
-            _ => {
-                exec_err!(
-                    "Format for `to_char` must be non-null Utf8, received {}",
-                    format.data_type()
-                )
-            }
+            _ => exec_err!(
+                "Format for `to_char` must be non-null Utf8, received {}",
+                format.data_type()
+            ),
         }
     }
 
@@ -171,11 +168,8 @@ impl ScalarUDFImpl for ToCharFunc {
 
 fn build_format_options<'a>(
     data_type: &DataType,
-    format: Option<&'a str>,
-) -> Result<FormatOptions<'a>, Result<ColumnarValue>> {
-    let Some(format) = format else {
-        return Ok(FormatOptions::new());
-    };
+    format: &'a str,
+) -> Result<FormatOptions<'a>> {
     let format_options = match data_type {
         Date32 => FormatOptions::new()
             .with_date_format(Some(format))
@@ -194,142 +188,112 @@ fn build_format_options<'a>(
             },
         ),
         other => {
-            return Err(exec_err!(
+            return exec_err!(
                 "to_char only supports date, time, timestamp and duration data types, received {other:?}"
-            ));
+            );
         }
     };
     Ok(format_options)
 }
 
-/// Special version when arg\[1] is a scalar
-fn to_char_scalar(
-    expression: &ColumnarValue,
-    format: Option<&str>,
-) -> Result<ColumnarValue> {
-    // it's possible that the expression is a scalar however because
-    // of the implementation in arrow-rs we need to convert it to an array
+/// Formats `expression` using a constant `format` string.
+fn to_char_scalar(expression: &ColumnarValue, format: &str) -> Result<ColumnarValue> {
+    // ArrayFormatter requires an array, so scalar expressions must be
+    // converted to a 1-element array first.
     let data_type = &expression.data_type();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
-    let array = expression.clone().into_array(1)?;
+    let array = expression.to_array(1)?;
 
-    if format.is_none() {
-        return if is_scalar_expression {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+    let format_options = build_format_options(data_type, format)?;
+    let formatter = ArrayFormatter::try_new(array.as_ref(), &format_options)?;
+
+    // Pad the preallocated capacity a bit because format specifiers often
+    // expand the string (e.g., %Y -> "2026")
+    let fmt_len = format.len() + 10;
+    let mut builder = StringBuilder::with_capacity(array.len(), array.len() * fmt_len);
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
         } else {
-            Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())))
-        };
+            // Write directly into the builder's internal buffer, then
+            // commit the value with append_value("").
+            match formatter.value(i).write(&mut builder) {
+                Ok(()) => builder.append_value(""),
+                // Arrow's Date32 formatter only handles date specifiers
+                // (%Y, %m, %d, ...). Format strings with time specifiers
+                // (%H, %M, %S, ...) cause it to fail. When this happens,
+                // we retry by casting to Date64, whose datetime formatter
+                // handles both date and time specifiers (with zero for
+                // the time components).
+                Err(_) if data_type == &Date32 => {
+                    return to_char_scalar(&expression.cast_to(&Date64, None)?, format);
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 
-    let format_options = match build_format_options(data_type, format) {
-        Ok(value) => value,
-        Err(value) => return value,
-    };
-
-    let formatter = ArrayFormatter::try_new(array.as_ref(), &format_options)?;
-    let formatted: Result<Vec<Option<String>>, ArrowError> = (0..array.len())
-        .map(|i| {
-            if array.is_null(i) {
-                Ok(None)
-            } else {
-                formatter.value(i).try_to_string().map(Some)
-            }
-        })
-        .collect();
-
-    if let Ok(formatted) = formatted {
-        if is_scalar_expression {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
-                formatted.first().unwrap().clone(),
-            )))
-        } else {
-            Ok(ColumnarValue::Array(
-                Arc::new(StringArray::from(formatted)) as ArrayRef
-            ))
-        }
+    let result = builder.finish();
+    if is_scalar_expression {
+        let val = result.is_valid(0).then(|| result.value(0).to_string());
+        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(val)))
     } else {
-        // if the data type was a Date32, formatting could have failed because the format string
-        // contained datetime specifiers, so we'll retry by casting the date array as a timestamp array
-        if data_type == &Date32 {
-            return to_char_scalar(&expression.cast_to(&Date64, None)?, format);
-        }
-
-        exec_err!("{}", formatted.unwrap_err())
+        Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
     }
 }
 
 fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
-    let mut results: Vec<Option<String>> = vec![];
+    let data_array = &arrays[0];
     let format_array = arrays[1].as_string::<i32>();
-    let data_type = arrays[0].data_type();
+    let data_type = data_array.data_type();
 
-    for idx in 0..arrays[0].len() {
-        let format = if format_array.is_null(idx) {
-            None
-        } else {
-            Some(format_array.value(idx))
-        };
-        if format.is_none() {
-            results.push(None);
+    // Arbitrary guess for the length of a typical formatted datetime string
+    let fmt_len = 30;
+    let mut builder =
+        StringBuilder::with_capacity(data_array.len(), data_array.len() * fmt_len);
+    let mut buffer = String::with_capacity(fmt_len);
+
+    for idx in 0..data_array.len() {
+        if format_array.is_null(idx) || data_array.is_null(idx) {
+            builder.append_null();
             continue;
         }
-        let format_options = match build_format_options(data_type, format) {
-            Ok(value) => value,
-            Err(value) => return value,
-        };
-        // this isn't ideal but this can't use ValueFormatter as it isn't independent
-        // from ArrayFormatter
-        let formatter = ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
-        let result = formatter.value(idx).try_to_string();
-        match result {
-            Ok(value) => results.push(Some(value)),
-            Err(e) => {
-                // if the data type was a Date32, formatting could have failed because the format string
-                // contained datetime specifiers, so we'll treat this specific date element as a timestamp
-                if data_type == &Date32 {
-                    let failed_date_value = arrays[0].slice(idx, 1);
 
-                    match retry_date_as_timestamp(&failed_date_value, &format_options) {
-                        Ok(value) => {
-                            results.push(Some(value));
-                            continue;
-                        }
-                        Err(e) => {
-                            return exec_err!("{}", e);
-                        }
-                    }
-                }
+        let format = format_array.value(idx);
+        let format_options = build_format_options(data_type, format)?;
+        let formatter = ArrayFormatter::try_new(data_array.as_ref(), &format_options)?;
 
-                return exec_err!("{}", e);
+        buffer.clear();
+
+        // We'd prefer to write directly to the StringBuilder's internal buffer,
+        // but the write might fail, and there's no easy way to ensure a partial
+        // write is removed from the buffer. So instead we write to a temporary
+        // buffer and `append_value` on success.
+        match formatter.value(idx).write(&mut buffer) {
+            Ok(()) => builder.append_value(&buffer),
+            // Retry with Date64 (see comment in to_char_scalar).
+            Err(_) if data_type == &Date32 => {
+                buffer.clear();
+                let date64_value = cast(&data_array.slice(idx, 1), &Date64)?;
+                let retry_fmt =
+                    ArrayFormatter::try_new(date64_value.as_ref(), &format_options)?;
+                retry_fmt.value(0).write(&mut buffer)?;
+                builder.append_value(&buffer);
             }
+            Err(e) => return Err(e.into()),
         }
     }
 
+    let result = builder.finish();
     match args[0] {
-        ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(StringArray::from(
-            results,
-        )) as ArrayRef)),
-        ColumnarValue::Scalar(_) => match results.first().unwrap() {
-            Some(value) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                value.to_string(),
-            )))),
-            None => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-        },
+        ColumnarValue::Scalar(_) => {
+            let val = result.is_valid(0).then(|| result.value(0).to_string());
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(val)))
+        }
+        ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef)),
     }
-}
-
-fn retry_date_as_timestamp(
-    array_ref: &ArrayRef,
-    format_options: &FormatOptions,
-) -> Result<String> {
-    let target_data_type = Date64;
-
-    let date_value = cast(&array_ref, &target_data_type)?;
-    let formatter = ArrayFormatter::try_new(date_value.as_ref(), format_options)?;
-    let result = formatter.value(0).try_to_string()?;
-
-    Ok(result)
 }
 
 #[cfg(test)]

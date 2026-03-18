@@ -26,11 +26,11 @@ use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
-use ahash::RandomState;
 use arrow::array::ArrayRef;
 use arrow::array::PrimitiveArray;
 use arrow::array::types::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
+use datafusion_common::hash_utils::RandomState;
 
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::{as_list_array, as_primitive_array};

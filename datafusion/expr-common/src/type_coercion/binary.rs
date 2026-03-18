@@ -324,6 +324,9 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             }
         },
+        Colon => {
+            Ok(Signature { lhs: lhs.clone(), rhs: rhs.clone(), ret: lhs.clone() })
+        },
         IntegerDivide | Arrow | LongArrow | HashArrow | HashLongArrow
         | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe => {
             not_impl_err!("Operator {} is not yet supported", self.op)

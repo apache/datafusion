@@ -3676,10 +3676,10 @@ select to_char(arrow_cast(123456, 'Duration(Second)'), null);
 ----
 NULL
 
-query error DataFusion error: Execution error: Cast error: Format error
+query error DataFusion error: Arrow error: Cast error: Format error
 SELECT to_char(timestamps, '%X%K') from formats;
 
-query error DataFusion error: Execution error: Cast error: Format error
+query error DataFusion error: Arrow error: Cast error: Format error
 SELECT to_char('2000-02-03'::date, '%X%K');
 
 query T
@@ -3725,6 +3725,21 @@ query T
 select to_char('2020-01-01 00:10:20.123'::timestamp at time zone 'America/New_York', '%Y-%m-%d %H:%M:%S.%3f');
 ----
 2020-01-01 00:10:20.123
+
+# Null values with array format
+query T
+SELECT to_char(column1, column2)
+FROM (VALUES
+    (DATE '2020-09-01', '%Y-%m-%d'),
+    (NULL, '%Y-%m-%d'),
+    (DATE '2020-09-02', NULL),
+    (NULL, NULL)
+);
+----
+2020-09-01
+NULL
+NULL
+NULL
 
 statement ok
 drop table formats;
@@ -5370,3 +5385,9 @@ SELECT to_timestamp(arrow_cast(100.5, 'Float16'), name) FROM test_to_timestamp_s
 
 statement ok
 drop table test_to_timestamp_scalar
+
+# date_bin with NULL interval should return NULL, not a planning error
+query P
+SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:00:00')
+----
+NULL
