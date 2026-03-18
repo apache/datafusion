@@ -789,29 +789,35 @@ mod test {
         }
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    enum BindBehavior {
+        None,
+        Match(&'static str),
+        Error,
+    }
+
     #[derive(Debug, PartialEq, Eq, Hash)]
-    struct RuntimeBindableExpr {
+    struct RuntimeBindTestExpr {
         name: &'static str,
-        // Selector used to decide if this node should bind for a given context.
-        bind_key: Option<&'static str>,
+        bind_behavior: BindBehavior,
         children: Vec<Arc<dyn PhysicalExpr>>,
     }
 
-    impl RuntimeBindableExpr {
+    impl RuntimeBindTestExpr {
         fn new(
             name: &'static str,
-            bind_key: Option<&'static str>,
+            bind_behavior: BindBehavior,
             children: Vec<Arc<dyn PhysicalExpr>>,
         ) -> Self {
             Self {
                 name,
-                bind_key,
+                bind_behavior,
                 children,
             }
         }
     }
 
-    impl PhysicalExpr for RuntimeBindableExpr {
+    impl PhysicalExpr for RuntimeBindTestExpr {
         fn as_any(&self) -> &dyn Any {
             self
         }
@@ -842,7 +848,7 @@ mod test {
         ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
             Ok(Arc::new(Self {
                 name: self.name,
-                bind_key: self.bind_key,
+                bind_behavior: self.bind_behavior,
                 children,
             }))
         }
@@ -855,83 +861,31 @@ mod test {
             &self,
             context: &(dyn Any + Send + Sync),
         ) -> datafusion_common::Result<Option<Arc<dyn PhysicalExpr>>> {
-            let Some(bind_key) = self.bind_key else {
-                return Ok(None);
-            };
-            let Some(ctx) = context.downcast_ref::<RuntimeBindContext>() else {
-                return Ok(None);
-            };
-            // Bind only when selector in context matches this node's key.
-            if ctx.target_key != bind_key {
-                return Ok(None);
+            match self.bind_behavior {
+                BindBehavior::None => Ok(None),
+                BindBehavior::Match(bind_key) => {
+                    let Some(ctx) = context.downcast_ref::<RuntimeBindContext>() else {
+                        return Ok(None);
+                    };
+                    if ctx.target_key != bind_key {
+                        return Ok(None);
+                    }
+
+                    Ok(Some(Arc::new(Self {
+                        // Simulate replacing runtime placeholder with bound payload.
+                        name: ctx.bound_name,
+                        bind_behavior: BindBehavior::None,
+                        children: self.children.clone(),
+                    })))
+                }
+                BindBehavior::Error => Err(datafusion_common::DataFusionError::Internal(
+                    "forced bind_runtime error".to_string(),
+                )),
             }
-
-            Ok(Some(Arc::new(Self {
-                // Simulate replacing runtime placeholder with bound payload.
-                name: ctx.bound_name,
-                bind_key: None,
-                children: self.children.clone(),
-            })))
         }
     }
 
-    impl Display for RuntimeBindableExpr {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            self.fmt_sql(f)
-        }
-    }
-
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct ErrorOnBindExpr;
-
-    impl PhysicalExpr for ErrorOnBindExpr {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn data_type(&self, _schema: &Schema) -> datafusion_common::Result<DataType> {
-            Ok(DataType::Int64)
-        }
-
-        fn nullable(&self, _schema: &Schema) -> datafusion_common::Result<bool> {
-            Ok(false)
-        }
-
-        fn evaluate(
-            &self,
-            batch: &RecordBatch,
-        ) -> datafusion_common::Result<ColumnarValue> {
-            let data = vec![1; batch.num_rows()];
-            Ok(ColumnarValue::Array(Arc::new(Int64Array::from(data))))
-        }
-
-        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-            vec![]
-        }
-
-        fn with_new_children(
-            self: Arc<Self>,
-            _children: Vec<Arc<dyn PhysicalExpr>>,
-        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
-            Ok(self)
-        }
-
-        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            f.write_str("ErrorOnBindExpr")
-        }
-
-        fn bind_runtime(
-            &self,
-            _context: &(dyn Any + Send + Sync),
-        ) -> datafusion_common::Result<Option<Arc<dyn PhysicalExpr>>> {
-            // Used to verify traversal propagates bind errors.
-            Err(datafusion_common::DataFusionError::Internal(
-                "forced bind_runtime error".to_string(),
-            ))
-        }
-    }
-
-    impl Display for ErrorOnBindExpr {
+    impl Display for RuntimeBindTestExpr {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             self.fmt_sql(f)
         }
@@ -1076,31 +1030,51 @@ mod test {
     }
 
     #[test]
-    fn test_bind_runtime_physical_expr_default_noop() {
-        // TestExpr does not override bind_runtime, so traversal is a no-op.
-        let expr: Arc<dyn PhysicalExpr> = Arc::new(TestExpr {});
+    fn test_bind_runtime_physical_expr_no_transform() {
         let ctx = RuntimeBindContext {
             target_key: "right",
             bound_name: "bound",
         };
 
+        // TestExpr does not override bind_runtime, so traversal is a no-op.
+        let default_expr: Arc<dyn PhysicalExpr> = Arc::new(TestExpr {});
         let transformed =
-            super::bind_runtime_physical_expr_opt(Arc::clone(&expr), &ctx).unwrap();
+            super::bind_runtime_physical_expr_opt(Arc::clone(&default_expr), &ctx)
+                .unwrap();
 
         assert!(!transformed.transformed);
-        assert!(Arc::ptr_eq(&expr, &transformed.data));
+        assert!(Arc::ptr_eq(&default_expr, &transformed.data));
+
+        // Context mismatch returns no transform even for bindable nodes.
+        let bindable_expr: Arc<dyn PhysicalExpr> = Arc::new(RuntimeBindTestExpr::new(
+            "left",
+            BindBehavior::Match("left"),
+            vec![],
+        ));
+        let transformed =
+            super::bind_runtime_physical_expr_opt(Arc::clone(&bindable_expr), &ctx)
+                .unwrap();
+
+        assert!(!transformed.transformed);
+        assert!(Arc::ptr_eq(&bindable_expr, &transformed.data));
     }
 
     #[test]
     fn test_bind_runtime_physical_expr_recurses() {
         // Only the right child matches target_key and should be rewritten.
-        let left: Arc<dyn PhysicalExpr> =
-            Arc::new(RuntimeBindableExpr::new("left", Some("left"), vec![]));
-        let right: Arc<dyn PhysicalExpr> =
-            Arc::new(RuntimeBindableExpr::new("right", Some("right"), vec![]));
-        let root: Arc<dyn PhysicalExpr> = Arc::new(RuntimeBindableExpr::new(
+        let left: Arc<dyn PhysicalExpr> = Arc::new(RuntimeBindTestExpr::new(
+            "left",
+            BindBehavior::Match("left"),
+            vec![],
+        ));
+        let right: Arc<dyn PhysicalExpr> = Arc::new(RuntimeBindTestExpr::new(
+            "right",
+            BindBehavior::Match("right"),
+            vec![],
+        ));
+        let root: Arc<dyn PhysicalExpr> = Arc::new(RuntimeBindTestExpr::new(
             "root",
-            None,
+            BindBehavior::None,
             vec![Arc::clone(&left), Arc::clone(&right)],
         ));
         let ctx = RuntimeBindContext {
@@ -1114,63 +1088,30 @@ mod test {
         let root = transformed
             .data
             .as_any()
-            .downcast_ref::<RuntimeBindableExpr>()
-            .expect("root should be RuntimeBindableExpr");
+            .downcast_ref::<RuntimeBindTestExpr>()
+            .expect("root should be RuntimeBindTestExpr");
         let left = root.children[0]
             .as_any()
-            .downcast_ref::<RuntimeBindableExpr>()
-            .expect("left should be RuntimeBindableExpr");
+            .downcast_ref::<RuntimeBindTestExpr>()
+            .expect("left should be RuntimeBindTestExpr");
         let right = root.children[1]
             .as_any()
-            .downcast_ref::<RuntimeBindableExpr>()
-            .expect("right should be RuntimeBindableExpr");
+            .downcast_ref::<RuntimeBindTestExpr>()
+            .expect("right should be RuntimeBindTestExpr");
 
         assert_eq!(left.name, "left");
         assert_eq!(right.name, "right_bound");
-        assert_eq!(right.bind_key, None);
-    }
-
-    #[test]
-    fn test_bind_runtime_physical_expr_returns_data() {
-        // The non-_opt helper should return the rewritten tree directly.
-        let expr: Arc<dyn PhysicalExpr> =
-            Arc::new(RuntimeBindableExpr::new("right", Some("right"), vec![]));
-        let ctx = RuntimeBindContext {
-            target_key: "right",
-            bound_name: "right_bound",
-        };
-
-        let bound = super::bind_runtime_physical_expr(expr, &ctx).unwrap();
-        let bound = bound
-            .as_any()
-            .downcast_ref::<RuntimeBindableExpr>()
-            .expect("bound should be RuntimeBindableExpr");
-
-        assert_eq!(bound.name, "right_bound");
-        assert_eq!(bound.bind_key, None);
-    }
-
-    #[test]
-    fn test_bind_runtime_physical_expr_context_mismatch_no_transform() {
-        // Context mismatch returns no transform even for bindable nodes.
-        let expr: Arc<dyn PhysicalExpr> =
-            Arc::new(RuntimeBindableExpr::new("left", Some("left"), vec![]));
-        let ctx = RuntimeBindContext {
-            target_key: "right",
-            bound_name: "right_bound",
-        };
-
-        let transformed =
-            super::bind_runtime_physical_expr_opt(Arc::clone(&expr), &ctx).unwrap();
-
-        assert!(!transformed.transformed);
-        assert!(Arc::ptr_eq(&expr, &transformed.data));
+        assert_eq!(right.bind_behavior, BindBehavior::None);
     }
 
     #[test]
     fn test_bind_runtime_physical_expr_propagates_error() {
         // A bind_runtime error from any node should fail the traversal.
-        let expr: Arc<dyn PhysicalExpr> = Arc::new(ErrorOnBindExpr);
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(RuntimeBindTestExpr::new(
+            "error",
+            BindBehavior::Error,
+            vec![],
+        ));
         let ctx = RuntimeBindContext {
             target_key: "right",
             bound_name: "right_bound",
