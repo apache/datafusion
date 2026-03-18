@@ -212,6 +212,11 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             .data()?
         };
 
+        // Narrow partition requirements for stacked aggregates from COUNT DISTINCT.
+        let adjusted = adjusted
+            .transform_down(narrow_stacked_aggregate_partition)
+            .data()?;
+
         let distribution_context = DistributionContext::new_default(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context = distribution_context
@@ -229,6 +234,98 @@ impl PhysicalOptimizerRule for EnforceDistribution {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Narrows the partition requirement of the inner `FinalPartitioned` aggregate
+/// in the COUNT DISTINCT stacked aggregate pattern.
+///
+/// COUNT(DISTINCT col) with GROUP BY is rewritten into two stacked aggregates:
+///
+/// ```text
+/// FinalPartitioned(gby=[G], aggr=[count(alias)])       <- outer
+///   Partial(gby=[G], aggr=[count(alias)])
+///     FinalPartitioned(gby=[G, alias], aggr=[])         <- inner
+///       Partial(gby=[G, alias], aggr=[])
+/// ```
+///
+/// By default the inner `FinalPartitioned` requests `Hash([G, alias])`.
+/// Since `Hash(G)` satisfies `Hash([G, alias])` via subset satisfaction
+/// (same G → same partition → same (G, alias) group co-located), we can
+/// narrow the inner's partition requirement to `Hash(G)`. This makes the
+/// data flow through as `Hash(G)`, which exactly satisfies the outer
+/// aggregate's requirement, eliminating the redundant repartition.
+fn narrow_stacked_aggregate_partition(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    // Match: outer FinalPartitioned aggregate
+    let Some(outer_agg) = plan.as_any().downcast_ref::<AggregateExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    if !matches!(outer_agg.mode(), AggregateMode::FinalPartitioned) {
+        return Ok(Transformed::no(plan));
+    }
+
+    let outer_gby_len = outer_agg.group_expr().expr().len();
+    if outer_gby_len == 0 {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Match: child is Partial aggregate with same group-by count
+    let partial_plan = outer_agg.input();
+    let Some(partial_agg) = partial_plan.as_any().downcast_ref::<AggregateExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    if !matches!(partial_agg.mode(), AggregateMode::Partial) {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Match: grandchild is FinalPartitioned aggregate with superset group-by
+    let inner_final_plan = partial_agg.input();
+    let Some(inner_final_agg) =
+        inner_final_plan.as_any().downcast_ref::<AggregateExec>()
+    else {
+        return Ok(Transformed::no(plan));
+    };
+    if !matches!(inner_final_agg.mode(), AggregateMode::FinalPartitioned) {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Only apply to the COUNT DISTINCT pattern: the inner aggregate has no
+    // aggregate functions (it's purely a deduplication step).
+    if !inner_final_agg.aggr_expr().is_empty() {
+        return Ok(Transformed::no(plan));
+    }
+
+    let inner_gby_len = inner_final_agg.group_expr().expr().len();
+    if inner_gby_len <= outer_gby_len {
+        // Inner group-by is not a superset of outer
+        return Ok(Transformed::no(plan));
+    }
+
+    // Already narrowed
+    if inner_final_agg.partition_by_exprs().is_some() {
+        return Ok(Transformed::no(plan));
+    }
+
+    // The inner FinalPartitioned's input_exprs are Column references to the
+    // inner Partial's output. The first `outer_gby_len` columns correspond to
+    // the base group-by columns (guaranteed by single_distinct_to_groupby).
+    let inner_input_exprs = inner_final_agg.group_expr().input_exprs();
+    let narrowed_exprs = inner_input_exprs[..outer_gby_len].to_vec();
+
+    // Rebuild the inner FinalPartitioned with narrowed partition_by_exprs
+    let new_inner_final = inner_final_agg
+        .clone()
+        .with_partition_by_exprs(narrowed_exprs);
+    let new_inner_final: Arc<dyn ExecutionPlan> = Arc::new(new_inner_final);
+
+    // Rebuild the Partial aggregate with the modified inner
+    let new_partial = Arc::clone(partial_plan).with_new_children(vec![new_inner_final])?;
+
+    // Rebuild the outer FinalPartitioned with the modified Partial
+    let new_plan = plan.with_new_children(vec![new_partial])?;
+
+    Ok(Transformed::yes(new_plan))
 }
 
 #[derive(Debug, Clone)]

@@ -654,6 +654,17 @@ pub struct AggregateExec {
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
     cache: Arc<PlanProperties>,
+    /// Optional override for the partition-by expressions used in
+    /// `required_input_distribution`. When set, the aggregate requests
+    /// `HashPartitioned` on these expressions instead of all group-by columns.
+    ///
+    /// This is used to optimize the COUNT DISTINCT stacked aggregate pattern:
+    /// the inner `FinalPartitioned` aggregate (with group-by `[G, distinct_col]`)
+    /// only needs to be partitioned by `G` (the base group-by columns), since
+    /// `Hash(G)` satisfies `Hash([G, distinct_col])` via subset satisfaction.
+    /// By narrowing the partition requirement, the outer aggregate's repartition
+    /// by `Hash(G)` becomes unnecessary.
+    partition_by_exprs: Option<Vec<Arc<dyn PhysicalExpr>>>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
     ///
@@ -685,6 +696,7 @@ impl AggregateExec {
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
+            partition_by_exprs: self.partition_by_exprs.clone(),
             dynamic_filter: self.dynamic_filter.clone(),
         }
     }
@@ -705,8 +717,27 @@ impl AggregateExec {
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
+            partition_by_exprs: self.partition_by_exprs.clone(),
             dynamic_filter: self.dynamic_filter.clone(),
         }
+    }
+
+    /// Set the partition-by expressions for this aggregate.
+    ///
+    /// When set, the aggregate requests `HashPartitioned` on these expressions
+    /// instead of all group-by columns. This is used to optimize stacked
+    /// aggregates from COUNT DISTINCT rewrites.
+    pub fn with_partition_by_exprs(
+        mut self,
+        partition_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        self.partition_by_exprs = Some(partition_by_exprs);
+        self
+    }
+
+    /// Returns the partition-by expressions override, if set.
+    pub fn partition_by_exprs(&self) -> Option<&[Arc<dyn PhysicalExpr>]> {
+        self.partition_by_exprs.as_deref()
     }
 
     pub fn cache(&self) -> &PlanProperties {
@@ -839,6 +870,7 @@ impl AggregateExec {
             limit_options: None,
             input_order_mode,
             cache: Arc::new(cache),
+            partition_by_exprs: None,
             dynamic_filter: None,
         };
 
@@ -1355,7 +1387,14 @@ impl ExecutionPlan for AggregateExec {
                 vec![Distribution::UnspecifiedDistribution]
             }
             AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
-                vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
+                // Use partition_by_exprs if set (for optimized COUNT DISTINCT pattern),
+                // otherwise use all group-by expressions.
+                let exprs = if let Some(partition_by) = &self.partition_by_exprs {
+                    partition_by.clone()
+                } else {
+                    self.group_by.input_exprs()
+                };
+                vec![Distribution::HashPartitioned(exprs)]
             }
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
@@ -1430,6 +1469,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.schema),
         )?;
         me.limit_options = self.limit_options;
+        me.partition_by_exprs.clone_from(&self.partition_by_exprs);
         me.dynamic_filter.clone_from(&self.dynamic_filter);
 
         Ok(Arc::new(me))
