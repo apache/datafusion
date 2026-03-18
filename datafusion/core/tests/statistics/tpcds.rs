@@ -27,7 +27,7 @@ use std::fs;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::statistics::Node;
+    use crate::statistics::StatsCheckerNode;
 
     #[tokio::test]
     async fn tpcds_1() -> Result<()> {
@@ -837,7 +837,7 @@ mod tests {
         let df = df.unwrap();
         let plan = df.create_physical_plan().await?;
         collect(plan.clone(), ctx.task_ctx()).await?;
-        let node = Node::from_plan(
+        let node = StatsCheckerNode::from_plan(
             &plan,
             StatsVsMetricsDisplayOptions {
                 display_output_bytes: true,

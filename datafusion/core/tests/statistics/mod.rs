@@ -31,18 +31,30 @@ struct StatsVsMetricsDisplayOptions {
     display_output_bytes: bool,
 }
 
-struct Node {
+/// Represents a node in a plan for which some statistics where estimated, and some metrics where
+/// collected at runtime.
+struct StatsCheckerNode {
+    /// The name of the original [ExecutionPlan].
     name: String,
-    stats: Statistics,
+    /// The stats attached to the original [ExecutionPlan].
+    stats: Arc<Statistics>,
+    /// How many rows actually flowed through the [ExecutionPlan] at runtime.
     output_rows: Option<usize>,
+    /// Now many bytes actually flowed through the [ExecutionPlan] at runtime.
     output_bytes: Option<usize>,
-    children: Vec<Node>,
+    /// The children of the [ExecutionPlan], represented as other [StatsCheckerNode].
+    children: Vec<StatsCheckerNode>,
+    /// Visualization options for this node.j
     opts: StatsVsMetricsDisplayOptions,
 }
 
-impl Debug for Node {
+impl Debug for StatsCheckerNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        fn fmt(f: &mut Formatter<'_>, node: &Node, depth: usize) -> std::fmt::Result {
+        fn fmt(
+            f: &mut Formatter<'_>,
+            node: &StatsCheckerNode,
+            depth: usize,
+        ) -> std::fmt::Result {
             for _ in 0..depth {
                 write!(f, "  ")?;
             }
@@ -85,17 +97,22 @@ impl Debug for Node {
     }
 }
 
-impl Node {
+impl StatsCheckerNode {
+    /// Given an already executed [ExecutionPlan], builds a [StatsCheckerNode] taking into account:
+    /// - its planning time statistics
+    /// - its runtime metrics
+    ///
+    /// The plan passed in this constructor should have been fully executed.
     fn from_plan(
         plan: &Arc<dyn ExecutionPlan>,
         opts: StatsVsMetricsDisplayOptions,
     ) -> Result<Self> {
         let mut children = vec![];
         for child in plan.children() {
-            children.push(Node::from_plan(child, opts)?);
+            children.push(StatsCheckerNode::from_plan(child, opts)?);
         }
 
-        let mut node = Node {
+        let mut node = StatsCheckerNode {
             name: plan.name().to_string(),
             stats: plan.partition_statistics(None)?,
             output_rows: None,
@@ -113,8 +130,10 @@ impl Node {
         Ok(node)
     }
 
+    /// An accuracy score about number of rows that was estimated through [Statistics] vs what
+    /// was actually collected at runtime.
     fn avg_row_accuracy(&self) -> usize {
-        fn collect_accuracy(node: &Node) -> Vec<usize> {
+        fn collect_accuracy(node: &StatsCheckerNode) -> Vec<usize> {
             let mut results = vec![];
             for child in &node.children {
                 results.extend(collect_accuracy(child));
@@ -130,8 +149,10 @@ impl Node {
         accuracy.iter().sum::<usize>() / accuracy.len()
     }
 
+    /// An accuracy score about number of bytes that was estimated through [Statistics] vs what
+    /// was actually collected at runtime.
     fn avg_byte_accuracy(&self) -> usize {
-        fn collect_accuracy(node: &Node) -> Vec<usize> {
+        fn collect_accuracy(node: &StatsCheckerNode) -> Vec<usize> {
             let mut results = vec![];
             for child in &node.children {
                 results.extend(collect_accuracy(child));
