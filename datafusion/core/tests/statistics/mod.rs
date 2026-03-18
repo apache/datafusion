@@ -59,31 +59,15 @@ impl Debug for StatsCheckerNode {
                 write!(f, "  ")?;
             }
             write!(f, "{}:", node.name)?;
-            fn display_opt<T: Display>(opt: Option<T>) -> impl Display {
-                match opt {
-                    None => "?".to_string(),
-                    Some(v) => v.to_string(),
-                }
-            }
             if node.opts.display_output_rows {
-                write!(
-                    f,
-                    " output_rows={} vs {} ({}%)",
-                    node.stats.num_rows,
-                    display_opt(node.output_rows),
-                    display_opt(accuracy_percent(node.stats.num_rows, node.output_rows))
-                )?;
+                write_metric(f, "output_rows", node.stats.num_rows, node.output_rows)?;
             }
             if node.opts.display_output_bytes {
-                write!(
+                write_metric(
                     f,
-                    " output_bytes={} vs {} ({}%)",
+                    "output_bytes",
                     node.stats.total_byte_size,
-                    display_opt(node.output_bytes),
-                    display_opt(accuracy_percent(
-                        node.stats.total_byte_size,
-                        node.output_bytes
-                    ))
+                    node.output_bytes,
                 )?;
             }
             writeln!(f)?;
@@ -95,6 +79,48 @@ impl Debug for StatsCheckerNode {
 
         fmt(f, self, 0)
     }
+}
+
+fn write_metric(
+    f: &mut Formatter<'_>,
+    label: &str,
+    estimated: Precision<usize>,
+    actual: Option<usize>,
+) -> std::fmt::Result {
+    let rounded_estimated = estimated.map(round);
+    let rounded_actual = actual.map(round);
+    write!(
+        f,
+        " {label}={} vs {} ({}%)",
+        rounded_estimated,
+        display_opt(rounded_actual),
+        display_opt(accuracy_percent(rounded_estimated, rounded_actual))
+    )
+}
+
+fn display_opt<T: Display>(opt: Option<T>) -> impl Display {
+    match opt {
+        None => "?".to_string(),
+        Some(v) => v.to_string(),
+    }
+}
+
+/// Rounds a value to reduce platform-dependent variation while
+/// preserving approximate precision:
+/// - Values <= 100: kept exact
+/// - Values <= 10000: rounded to 2 significant figures (~5% tolerance)
+/// - Values > 10000: rounded to 1 significant figure (~50% tolerance)
+fn round(n: usize) -> usize {
+    if n <= 100 {
+        return n;
+    }
+    let sig_figs = if n > 10000 { 1 } else { 2 };
+    let digits = (n as f64).log10().floor() as u32 + 1;
+    if digits <= sig_figs {
+        return n;
+    }
+    let divisor = 10usize.pow(digits - sig_figs);
+    ((n + divisor / 2) / divisor) * divisor
 }
 
 impl StatsCheckerNode {
