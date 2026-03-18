@@ -390,7 +390,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     let mut valid = NullBufferBuilder::new(list_array.len());
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
-        if list_array.is_null(row_index) {
+        if list_array.is_null(row_index) || element_array.is_null(row_index) {
             offsets.push(offsets[row_index]);
             valid.append_null();
             continue;
