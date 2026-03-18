@@ -33,6 +33,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::joins::HashJoinExec;
 use datafusion_physical_plan::joins::group_join::{GroupBySide, GroupJoinExec};
+use datafusion_physical_plan::joins::{JoinOn, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 
@@ -166,6 +167,12 @@ fn try_create_group_join(
         return Ok(None);
     }
 
+    // Only support CollectLeft mode — Partitioned mode has per-partition
+    // semantics that GroupJoinExec (which collects the entire build side) doesn't match.
+    if *hash_join.partition_mode() != PartitionMode::CollectLeft {
+        return Ok(None);
+    }
+
     let group_by = agg_exec.group_expr();
     if group_by.has_grouping_set() {
         return Ok(None);
@@ -195,12 +202,30 @@ fn try_create_group_join(
 
     // The join output schema (before any projection) is [left_cols..., right_cols...]
     let left_field_count = hash_join.left().schema().fields().len();
+    let right_field_count = hash_join.right().schema().fields().len();
 
     let resolve_index = build_resolver(hash_join, proj_exec);
 
-    // Build a substitution map: right-side join-key (raw join schema index) → left-side key index.
-    // When a GROUP BY column references a right join key `right_j`, and there is an ON condition
-    // `left_i = right_j`, we can substitute it with `left_i` (they are equal by the join predicate).
+    // In CollectLeft mode:
+    //   - HashJoinExec: LEFT is the build side (collected), RIGHT is probe (streamed).
+    //   - GroupJoinExec: RIGHT is build, LEFT is probe.
+    //   So we swap: GroupJoinExec.left = HashJoinExec.right,
+    //               GroupJoinExec.right = HashJoinExec.left.
+    //
+    // In the join output schema:
+    //   - Build columns (HashJoin.left):  [0, left_field_count)
+    //   - Probe columns (HashJoin.right): [left_field_count, left_field_count + right_field_count)
+    //
+    // GroupBySide::Left corresponds to the probe side (GroupJoinExec.left = HashJoin.right).
+    // GroupBySide::Right corresponds to the build side (GroupJoinExec.right = HashJoin.left).
+    let probe_range_start = left_field_count;
+    let probe_range_end = left_field_count + right_field_count;
+    let build_range_start = 0usize;
+    let build_range_end = left_field_count;
+
+    // Build a substitution map: build-side join keys → probe-side join keys.
+    // When a GROUP BY column references a build-side join key, we can substitute
+    // it with the equivalent probe-side key (equal by the equi-join predicate).
     // This is Section 3.2 of Moerkotte & Neumann VLDB 2011.
     let key_subst: HashMap<usize, usize> = hash_join
         .on()
@@ -208,33 +233,38 @@ fn try_create_group_join(
         .filter_map(|(l_expr, r_expr)| {
             let l_col = l_expr.as_any().downcast_ref::<Column>()?;
             let r_col = r_expr.as_any().downcast_ref::<Column>()?;
-            Some((left_field_count + r_col.index(), l_col.index()))
+            // Build side = HashJoin.left, Probe side = HashJoin.right
+            Some((l_col.index(), left_field_count + r_col.index()))
         })
         .collect();
 
-    // Resolver for group-by: after resolving through projections, substitute any right join key
-    // with its equivalent left join key.
+    // Resolver for group-by: after resolving through projections, substitute any
+    // build-side join key with its equivalent probe-side join key.
     let resolve_gby = |idx: usize| -> Option<usize> {
         let resolved = resolve_index(idx)?;
         Some(key_subst.get(&resolved).copied().unwrap_or(resolved))
     };
 
-    // Classify each group-by column as left-side or right-side.
-    // Left-side: resolves (with key substitution) to left schema.
-    // Right-side: resolves to right schema (any right column, not just join keys).
+    // Classify each group-by column:
+    //   - Probe side (GroupBySide::Left): resolves (with key_subst) to probe range
+    //   - Build side (GroupBySide::Right): resolves to build range
     let mut group_by_order: Vec<GroupBySide> = Vec::new();
     for (expr, _alias) in group_by.expr() {
-        if expr_columns_in_side(expr.as_ref(), &resolve_gby, 0, left_field_count) {
-            group_by_order.push(GroupBySide::Left);
+        if expr_columns_in_side(
+            expr.as_ref(),
+            &resolve_gby,
+            probe_range_start,
+            probe_range_end,
+        ) {
+            group_by_order.push(GroupBySide::Left); // probe side
         } else if expr_columns_in_side(
             expr.as_ref(),
             &*resolve_index,
-            left_field_count,
-            usize::MAX,
+            build_range_start,
+            build_range_end,
         ) {
-            group_by_order.push(GroupBySide::Right);
+            group_by_order.push(GroupBySide::Right); // build side
         } else {
-            // Expression references neither side cleanly (e.g. spans both)
             return Ok(None);
         }
     }
@@ -244,37 +274,53 @@ fn try_create_group_join(
     for agg_expr in agg_exec.aggr_expr() {
         let args = agg_expr.expressions();
         if args.is_empty() {
-            // COUNT(*) style — treat as right side (no actual args to evaluate)
+            // COUNT(*) style — treat as build side (no actual args to evaluate)
             aggr_arg_sides.push(GroupBySide::Right);
             continue;
         }
-        let all_right = args.iter().all(|arg| {
-            expr_columns_in_side(arg.as_ref(), &*resolve_index, left_field_count, usize::MAX)
+        let all_build = args.iter().all(|arg| {
+            expr_columns_in_side(
+                arg.as_ref(),
+                &*resolve_index,
+                build_range_start,
+                build_range_end,
+            )
         });
-        let all_left = args.iter().all(|arg| {
-            expr_columns_in_side(arg.as_ref(), &*resolve_index, 0, left_field_count)
+        let all_probe = args.iter().all(|arg| {
+            expr_columns_in_side(
+                arg.as_ref(),
+                &*resolve_index,
+                probe_range_start,
+                probe_range_end,
+            )
         });
-        if all_right {
-            aggr_arg_sides.push(GroupBySide::Right);
-        } else if all_left {
-            aggr_arg_sides.push(GroupBySide::Left);
+        if all_build {
+            aggr_arg_sides.push(GroupBySide::Right); // build side
+        } else if all_probe {
+            aggr_arg_sides.push(GroupBySide::Left); // probe side
         } else {
-            // Args span both sides — cannot fuse
             return Ok(None);
         }
     }
 
-    // Remap group-by into left and right lists, preserving the group_by_order mapping
+    // Remap group-by into probe (left) and build (right) lists
     let mut left_gby: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let mut right_gby: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     for ((expr, alias), &side) in group_by.expr().iter().zip(group_by_order.iter()) {
         match side {
             GroupBySide::Left => {
-                left_gby.push((remap_columns(expr, &resolve_gby, 0), alias.clone()));
+                // Probe side: remap with key_subst, subtract probe offset → 0-based in HashJoin.right schema
+                left_gby.push((
+                    remap_columns(expr, &resolve_gby, probe_range_start),
+                    alias.clone(),
+                ));
             }
             GroupBySide::Right => {
-                right_gby
-                    .push((remap_columns(expr, &*resolve_index, left_field_count), alias.clone()));
+                // Build side: remap, subtract build offset → 0-based in HashJoin.left schema
+                right_gby.push((
+                    remap_columns(expr, &*resolve_index, build_range_start),
+                    alias.clone(),
+                ));
             }
         }
     }
@@ -286,9 +332,9 @@ fn try_create_group_join(
         .zip(aggr_arg_sides.iter())
         .map(|(expr, &side)| {
             let offset = if side == GroupBySide::Right {
-                left_field_count
+                build_range_start
             } else {
-                0
+                probe_range_start
             };
             let remapped_args: Vec<Arc<dyn PhysicalExpr>> = expr
                 .expressions()
@@ -305,11 +351,20 @@ fn try_create_group_join(
     let remapped_aggr_exprs: Vec<_> =
         remapped_aggr_exprs.into_iter().map(Arc::new).collect();
 
+    // Swap inputs: GroupJoinExec.left (probe) = HashJoin.right,
+    //              GroupJoinExec.right (build) = HashJoin.left.
+    // Also swap the ON keys accordingly.
+    let swapped_on: JoinOn = hash_join
+        .on()
+        .iter()
+        .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
+        .collect();
+
     GroupJoinExec::try_new_extended(
         *agg_exec.mode(),
-        Arc::clone(hash_join.left()),
-        Arc::clone(hash_join.right()),
-        hash_join.on().to_vec(),
+        Arc::clone(hash_join.right()), // probe side → GroupJoinExec.left
+        Arc::clone(hash_join.left()),  // build side → GroupJoinExec.right
+        swapped_on,
         left_gby,
         right_gby,
         group_by_order,

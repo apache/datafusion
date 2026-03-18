@@ -44,8 +44,8 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::future::poll_fn;
 use futures::StreamExt;
+use futures::future::poll_fn;
 
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
@@ -79,6 +79,9 @@ struct RightData {
     values: Vec<ArrayRef>,
     /// Evaluated right-side group-by columns (for group key construction)
     group_by_arrays: Vec<ArrayRef>,
+    /// Pre-evaluated right-side (build-side) aggregate argument arrays.
+    /// One Vec<ArrayRef> per build-side aggregate, computed once and reused.
+    build_agg_arrays: Vec<Vec<ArrayRef>>,
 }
 
 impl fmt::Debug for RightData {
@@ -166,6 +169,7 @@ impl GroupJoinExec {
     /// - `group_by_order`: for each output group-by column, `Left` or `Right`
     ///   (consumed left-to-right within each side's list)
     /// - `aggr_arg_sides`: for each aggregate expression, which input side provides args
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new_extended(
         mode: AggregateMode,
         left: Arc<dyn ExecutionPlan>,
@@ -374,6 +378,14 @@ impl ExecutionPlan for GroupJoinExec {
                 .iter()
                 .map(|(e, _)| Arc::clone(e))
                 .collect();
+            // Collect build-side aggregate argument expressions to pre-evaluate once
+            let build_agg_exprs: Vec<Vec<Arc<dyn PhysicalExpr>>> = self
+                .aggr_expr
+                .iter()
+                .zip(self.aggr_arg_sides.iter())
+                .filter(|&(_, side)| *side == GroupBySide::Right)
+                .map(|(agg, _)| agg.expressions())
+                .collect();
             let random_state = RandomState::with_seed(0);
             let ctx = Arc::clone(&context);
             self.right_fut.try_once(|| {
@@ -381,6 +393,7 @@ impl ExecutionPlan for GroupJoinExec {
                     right,
                     on_right,
                     right_group_by_exprs,
+                    build_agg_exprs,
                     random_state,
                     ctx,
                 ))
@@ -403,8 +416,11 @@ impl ExecutionPlan for GroupJoinExec {
             .map(|(agg, &side)| (agg.expressions(), side))
             .collect();
 
-        let left_group_by_exprs: Vec<PhysicalExprRef> =
-            self.left_group_by.iter().map(|(e, _)| Arc::clone(e)).collect();
+        let left_group_by_exprs: Vec<PhysicalExprRef> = self
+            .left_group_by
+            .iter()
+            .map(|(e, _)| Arc::clone(e))
+            .collect();
         let group_by_order = self.group_by_order.clone();
 
         let mode = self.mode;
@@ -535,12 +551,9 @@ impl GroupJoinStream {
     async fn build_right_side(&mut self) -> Result<()> {
         // Await the shared right-side future (built once across all left partitions).
         // OnceFut uses a poll-based API, so we bridge it via poll_fn.
-        let right_data: Arc<RightData> = poll_fn(|cx| {
-            self.right_fut
-                .get(cx)
-                .map(|r| r.map(|arc| Arc::clone(arc)))
-        })
-        .await?;
+        let right_data: Arc<RightData> =
+            poll_fn(|cx| self.right_fut.get(cx).map(|r| r.map(Arc::clone)))
+                .await?;
         let batch_mem = get_record_batch_memory_size(&right_data.batch);
         self.reservation.try_grow(batch_mem)?;
         self.right_data = Some(right_data);
@@ -582,21 +595,8 @@ impl GroupJoinStream {
             })
             .collect::<Result<_>>()?;
 
-        // Pre-evaluate right-side aggregate arguments (right side is already built)
-        let right_agg_arrays: Vec<Vec<ArrayRef>> = self
-            .agg_args
-            .iter()
-            .filter(|(_, side)| *side == GroupBySide::Right)
-            .map(|(exprs, _)| {
-                exprs
-                    .iter()
-                    .map(|expr| {
-                        expr.evaluate(&right_data.batch)
-                            .and_then(|v| v.into_array(right_data.batch.num_rows()))
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .collect::<Result<_>>()?;
+        // Use pre-computed build-side aggregate arrays from RightData
+        let right_agg_arrays = &right_data.build_agg_arrays;
 
         while let Some(current_offset) = offset {
             probe_indices_buf.clear();
@@ -721,7 +721,7 @@ impl GroupJoinStream {
     }
 
     fn emit_results(&mut self) -> Result<RecordBatch> {
-        if self.group_values.len() == 0 {
+        if self.group_values.is_empty() {
             return Ok(RecordBatch::new_empty(Arc::clone(&self.schema)));
         }
         let group_columns = self.group_values.emit(EmitTo::All)?;
@@ -766,6 +766,7 @@ async fn collect_right_input(
     right: Arc<dyn ExecutionPlan>,
     on_right: Vec<PhysicalExprRef>,
     right_group_by_exprs: Vec<PhysicalExprRef>,
+    build_agg_exprs: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     random_state: RandomState,
     context: Arc<TaskContext>,
 ) -> Result<Arc<RightData>> {
@@ -793,6 +794,7 @@ async fn collect_right_input(
             batch: empty_batch,
             values: vec![],
             group_by_arrays: vec![],
+            build_agg_arrays: vec![],
         }));
     }
 
@@ -831,11 +833,26 @@ async fn collect_right_input(
     // Evaluate right-side group-by columns on the concatenated batch.
     let group_by_arrays = evaluate_expressions_to_arrays(&right_group_by_exprs, &batch)?;
 
+    // Pre-evaluate build-side aggregate argument arrays once (shared across all probe batches).
+    let build_agg_arrays: Vec<Vec<ArrayRef>> = build_agg_exprs
+        .iter()
+        .map(|exprs| {
+            exprs
+                .iter()
+                .map(|expr| {
+                    expr.evaluate(&batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<_>>()?;
+
     Ok(Arc::new(RightData {
         map: Arc::new(Map::HashMap(hashmap)),
         batch,
         values,
         group_by_arrays,
+        build_agg_arrays,
     }))
 }
 
