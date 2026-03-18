@@ -89,23 +89,20 @@ fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
-enum SoundexChar {
-    Code(char),
-    Separator,
-    Ignored,
+fn classify_char(c: char) -> Option<char> {
+    match c.to_ascii_uppercase() {
+        'B' | 'F' | 'P' | 'V' => Some('1'),
+        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => Some('2'),
+        'D' | 'T' => Some('3'),
+        'L' => Some('4'),
+        'M' | 'N' => Some('5'),
+        'R' => Some('6'),
+        _ => None,
+    }
 }
 
-fn classify_char(c: char) -> SoundexChar {
-    match c.to_ascii_uppercase() {
-        'B' | 'F' | 'P' | 'V' => SoundexChar::Code('1'),
-        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => SoundexChar::Code('2'),
-        'D' | 'T' => SoundexChar::Code('3'),
-        'L' => SoundexChar::Code('4'),
-        'M' | 'N' => SoundexChar::Code('5'),
-        'R' => SoundexChar::Code('6'),
-        'H' | 'W' => SoundexChar::Ignored,
-        _ => SoundexChar::Separator,
-    }
+fn is_separator(c: char) -> bool {
+    !matches!(c.to_ascii_uppercase(), 'A'..='Z')
 }
 
 fn compute_soundex(s: &str) -> String {
@@ -116,36 +113,26 @@ fn compute_soundex(s: &str) -> String {
         _ => return s.to_string(),
     };
 
-    let mut result = String::with_capacity(4);
-    result.push(first_char);
-
-    let mut last_code = match classify_char(first_char) {
-        SoundexChar::Code(c) => Some(c),
-        _ => None,
-    };
+    let mut soundex_code = String::with_capacity(4);
+    soundex_code.push(first_char);
+    let mut last_code = classify_char(first_char);
 
     for c in chars {
-        if result.len() >= 4 {
+        if soundex_code.len() >= 4 {
             break;
         }
 
-        match classify_char(c) {
-            SoundexChar::Code(code) => {
-                if last_code != Some(code) {
-                    result.push(code);
-                }
-                last_code = Some(code);
+        if is_separator(c) {
+            last_code = None;
+            continue;
+        }
+
+        if let Some(code) = classify_char(c) {
+            if last_code != Some(code) {
+                soundex_code.push(code);
             }
-            SoundexChar::Separator => {
-                last_code = None;
-            }
-            SoundexChar::Ignored => {}
+            last_code = Some(code);
         }
     }
-
-    while result.len() < 4 {
-        result.push('0');
-    }
-
-    result
+    format!("{soundex_code:0<4}")
 }
