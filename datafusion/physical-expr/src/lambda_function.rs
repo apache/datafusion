@@ -304,6 +304,9 @@ impl PhysicalExpr for LambdaFunctionExpr {
                                 {
                                     (Arc::clone(field), Arc::clone(column))
                                 } else {
+                                    // To avoid costly copies of uncaptured columns, we swap them with a NullArray
+                                    // while keeping the number of columns on the batch the same
+                                    // so captured columns indices are kept stable across the whole tree.
                                     (
                                         Arc::new(Field::new(
                                             field.name(),
