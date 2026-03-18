@@ -1625,24 +1625,39 @@ fn build_statistics_expr(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let statistics_expr: Arc<dyn PhysicalExpr> = match expr_builder.op() {
         Operator::NotEq => {
-            // column != literal => (min, max) = literal =>
-            // !(min != literal && max != literal) ==>
-            // min != literal || literal != max
-            let min_column_expr = expr_builder.min_column_expr()?;
-            let max_column_expr = expr_builder.max_column_expr()?;
-            Arc::new(phys_expr::BinaryExpr::new(
+            if is_string_min_value(expr_builder.scalar_expr()) {
+                // Special case: column != '' (empty string)
+                // Since '' is the lexicographic minimum for string types,
+                // column != '' is equivalent to column > ''.
+                // This produces a stronger pruning predicate: max > ''
+                // which prunes row groups where all values are empty strings
+                // and enables better fully-matched detection (when min > '',
+                // all rows satisfy the predicate).
                 Arc::new(phys_expr::BinaryExpr::new(
-                    min_column_expr,
-                    Operator::NotEq,
+                    expr_builder.max_column_expr()?,
+                    Operator::Gt,
                     Arc::clone(expr_builder.scalar_expr()),
-                )),
-                Operator::Or,
+                ))
+            } else {
+                // column != literal => (min, max) = literal =>
+                // !(min != literal && max != literal) ==>
+                // min != literal || literal != max
+                let min_column_expr = expr_builder.min_column_expr()?;
+                let max_column_expr = expr_builder.max_column_expr()?;
                 Arc::new(phys_expr::BinaryExpr::new(
-                    Arc::clone(expr_builder.scalar_expr()),
-                    Operator::NotEq,
-                    max_column_expr,
-                )),
-            ))
+                    Arc::new(phys_expr::BinaryExpr::new(
+                        min_column_expr,
+                        Operator::NotEq,
+                        Arc::clone(expr_builder.scalar_expr()),
+                    )),
+                    Operator::Or,
+                    Arc::new(phys_expr::BinaryExpr::new(
+                        Arc::clone(expr_builder.scalar_expr()),
+                        Operator::NotEq,
+                        max_column_expr,
+                    )),
+                ))
+            }
         }
         Operator::Eq => {
             // column = literal => (min, max) = literal => min <= literal && literal <= max
@@ -1924,6 +1939,23 @@ fn increment_utf8(data: &str) -> Option<String> {
 /// If the column is known to be all nulls, then the expression
 /// `x_null_count = x_row_count` will be true, which will cause the
 /// boolean expression to return false. Therefore, prune out the container.
+/// Returns true if the expression is a string literal with the empty string value.
+/// Empty string is the lexicographic minimum for all string types, so
+/// `column != ''` can be optimized to `column > ''` for pruning purposes.
+fn is_string_min_value(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    if let Some(lit) = expr.as_any().downcast_ref::<phys_expr::Literal>() {
+        matches!(
+            lit.value(),
+            ScalarValue::Utf8(Some(s))
+            | ScalarValue::LargeUtf8(Some(s))
+            | ScalarValue::Utf8View(Some(s))
+            if s.is_empty()
+        )
+    } else {
+        false
+    }
+}
+
 fn wrap_null_count_check_expr(
     statistics_expr: Arc<dyn PhysicalExpr>,
     expr_builder: &mut PruningExpressionBuilder,
@@ -2701,6 +2733,62 @@ mod tests {
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_not_eq_empty_string() -> Result<()> {
+        // column != '' should be optimized to use max > '' since '' is the
+        // lexicographic minimum for string types
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, false)]);
+        let expected_expr = "c1_null_count@1 != row_count@2 AND c1_max@0 > ";
+
+        // test column on the left
+        let expr = col("c1").not_eq(lit(""));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit("").not_eq(col("c1"));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // non-empty string should use the general NotEq path
+        let expected_general =
+            "c1_null_count@2 != row_count@3 AND (c1_min@0 != foo OR foo != c1_max@1)";
+        let expr = col("c1").not_eq(lit("foo"));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_general);
+
+        Ok(())
+    }
+
+    #[test]
+    fn prune_not_eq_empty_string() {
+        // Test that column != '' correctly prunes using max > '' semantics
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+
+        let statistics = TestStatistics::new().with(
+            "s",
+            ContainerStats::new_utf8(
+                // Row group 0: min='', max='' (all empty) => prune
+                // Row group 1: min='', max='abc' (some empty, some not) => keep
+                // Row group 2: min='abc', max='xyz' (all non-empty) => keep
+                // Row group 3: min=None, max=None (no stats) => keep
+                vec![Some(""), Some(""), Some("abc"), None],
+                vec![Some(""), Some("abc"), Some("xyz"), None],
+            ),
+        );
+
+        // s != '' should prune row group 0 (where all values are '')
+        prune_with_expr(
+            col("s").not_eq(lit("")),
+            &schema,
+            &statistics,
+            &[false, true, true, true],
+        );
     }
 
     #[test]
