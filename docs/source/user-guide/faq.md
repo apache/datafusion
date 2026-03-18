@@ -63,3 +63,16 @@ when DataFusion might be suitable or unsuitable for your needs:
   database system. Like DataFusion it is also written in Rust and
   utilizes the Apache Arrow memory model, but unlike DataFusion it
   targets end-users rather than developers of other database systems.
+
+## Why do my query results come back in a different order between runs?
+
+DataFusion only guarantees row order when the query includes an `ORDER BY`
+clause.
+
+Without `ORDER BY`, operators such as joins, `GROUP BY`, `UNION`, and
+parallel file scans may emit the same rows in a different order across runs.
+This is normal for a parallel execution engine and does not mean the query
+result is incorrect.
+
+If you need stable output ordering, add an explicit `ORDER BY` clause to the
+outermost query.

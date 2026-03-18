@@ -86,7 +86,13 @@ SELECT a FROM table WHERE a > 10
 
 ## JOIN clause
 
-DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN`, `CROSS JOIN`, `LEFT SEMI JOIN`, `RIGHT SEMI JOIN`, `LEFT ANTI JOIN`, and `RIGHT ANTI JOIN`.
+DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`,
+`FULL OUTER JOIN`, `NATURAL JOIN`, `CROSS JOIN`, `LEFT SEMI JOIN`,
+`RIGHT SEMI JOIN`, `LEFT ANTI JOIN`, and `RIGHT ANTI JOIN`.
+
+Unless you add an `ORDER BY` clause, joins do not guarantee the order of
+the returned rows. DataFusion executes queries in parallel, so the same
+join query may produce the same rows in a different order across runs.
 
 The following examples are based on this table:
 
@@ -246,6 +252,10 @@ Example:
 SELECT a, b, MAX(c) FROM table GROUP BY a, b
 ```
 
+`GROUP BY` determines how rows are grouped for aggregation, but it does not
+determine the order of the output rows. If you need a stable row order, add
+an `ORDER BY` clause to the outer query.
+
 Some aggregation functions accept optional ordering requirement, such as `ARRAY_AGG`. If a requirement is given,
 aggregation is calculated in the order of the requirement.
 
@@ -293,6 +303,11 @@ FROM table2
 
 Orders the results by the referenced expression. By default it uses ascending order (`ASC`).
 This order can be changed to descending by adding `DESC` after the order-by expressions.
+
+Without `ORDER BY`, DataFusion does not guarantee the order of result rows.
+This is especially important for queries involving joins, `GROUP BY`,
+`UNION`, or parallel file scans, where rows may be returned in a different
+order between runs even when the data itself has not changed.
 
 Examples:
 
