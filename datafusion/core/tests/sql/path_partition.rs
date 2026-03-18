@@ -735,6 +735,8 @@ impl ObjectStore for MirroringObjectStore {
                     .map(|mut x| x.next().is_some())
                     .unwrap_or(false);
 
+                #[expect(clippy::result_large_err)]
+                // closure only ever returns Ok; Err type is never constructed
                 filter.then(|| {
                     Ok(ObjectMeta {
                         location,
