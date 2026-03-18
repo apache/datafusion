@@ -157,8 +157,9 @@ fn try_create_group_join(
     hash_join: &HashJoinExec,
     proj_exec: Option<&ProjectionExec>,
 ) -> Result<Option<GroupJoinExec>> {
-    // Only support INNER joins
-    if *hash_join.join_type() != JoinType::Inner {
+    // Only support INNER and LEFT OUTER joins
+    let join_type = *hash_join.join_type();
+    if join_type != JoinType::Inner && join_type != JoinType::Left {
         return Ok(None);
     }
 
@@ -167,11 +168,15 @@ fn try_create_group_join(
         return Ok(None);
     }
 
-    // Only support CollectLeft mode — Partitioned mode has per-partition
-    // semantics that GroupJoinExec (which collects the entire build side) doesn't match.
-    if *hash_join.partition_mode() != PartitionMode::CollectLeft {
-        return Ok(None);
-    }
+    // Support CollectLeft and Partitioned modes.
+    // CollectLeft: build side collected once, shared across all probe partitions.
+    // Partitioned: both sides repartitioned by key, each partition builds independently.
+    let partition_mode = *hash_join.partition_mode();
+    let partitioned = match partition_mode {
+        PartitionMode::CollectLeft => false,
+        PartitionMode::Partitioned => true,
+        _ => return Ok(None),
+    };
 
     let group_by = agg_exec.group_expr();
     if group_by.has_grouping_set() {
@@ -267,6 +272,16 @@ fn try_create_group_join(
         } else {
             return Ok(None);
         }
+    }
+
+    // For LEFT JOIN, all group-by columns must come from the probe side.
+    // Build-side group-by columns would be NULL for unmatched rows, which
+    // complicates group key handling. Q13 (the primary use case) has all
+    // group-by on the probe side, so this restriction is acceptable.
+    if join_type == JoinType::Left
+        && group_by_order.iter().any(|s| *s == GroupBySide::Right)
+    {
+        return Ok(None);
     }
 
     // Classify each aggregate's argument expressions: all must resolve to a single side.
@@ -370,6 +385,8 @@ fn try_create_group_join(
         group_by_order,
         remapped_aggr_exprs,
         aggr_arg_sides,
+        join_type,
+        partitioned,
         Arc::clone(&agg_exec.schema()),
     )
     .map(Some)

@@ -30,7 +30,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
+use arrow::array::{ArrayRef, BooleanArray, RecordBatch, UInt32Array, UInt64Array};
 use arrow::compute;
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
@@ -38,6 +38,7 @@ use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{NullEquality, Result};
+use datafusion_expr::JoinType;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
@@ -123,13 +124,17 @@ pub struct GroupJoinExec {
     aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
     /// For each aggr_expr, which input side provides the argument values
     aggr_arg_sides: Vec<GroupBySide>,
+    /// Join type (Inner or Left)
+    join_type: JoinType,
+    /// Whether to build per-partition (Partitioned mode) or shared (CollectLeft mode)
+    partitioned: bool,
     /// Output schema (matches the original AggregateExec's output)
     schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cached plan properties
     cache: Arc<PlanProperties>,
-    /// Shared right-side hash table — built once, reused by all left partitions
+    /// Shared right-side hash table — built once, reused by all left partitions (CollectLeft mode only)
     right_fut: Arc<OnceAsync<Arc<RightData>>>,
 }
 
@@ -157,6 +162,8 @@ impl GroupJoinExec {
             vec![GroupBySide::Left; n],
             aggr_expr,
             vec![GroupBySide::Right; a],
+            JoinType::Inner,
+            false,
             schema,
         )
     }
@@ -180,6 +187,8 @@ impl GroupJoinExec {
         group_by_order: Vec<GroupBySide>,
         aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
         aggr_arg_sides: Vec<GroupBySide>,
+        join_type: JoinType,
+        partitioned: bool,
         schema: SchemaRef,
     ) -> Result<Self> {
         let cache = Arc::new(Self::compute_properties(
@@ -196,6 +205,8 @@ impl GroupJoinExec {
             group_by_order,
             aggr_expr,
             aggr_arg_sides,
+            join_type,
+            partitioned,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
@@ -261,8 +272,9 @@ impl DisplayAs for GroupJoinExec {
                     .collect();
                 write!(
                     f,
-                    "GroupJoinExec: mode={:?}, on=[{}], group_by=[{}], aggr=[{}]",
+                    "GroupJoinExec: mode={:?}, join_type={:?}, on=[{}], group_by=[{}], aggr=[{}]",
                     self.mode,
+                    self.join_type,
                     on,
                     group_by.join(", "),
                     aggrs.join(", "),
@@ -353,6 +365,8 @@ impl ExecutionPlan for GroupJoinExec {
             self.group_by_order.clone(),
             self.aggr_expr.clone(),
             self.aggr_arg_sides.clone(),
+            self.join_type,
+            self.partitioned,
             Arc::clone(&self.schema),
         )?))
     }
@@ -367,8 +381,7 @@ impl ExecutionPlan for GroupJoinExec {
 
         let left_stream = self.left.execute(partition, Arc::clone(&context))?;
 
-        // Build right-side hash table exactly once, shared across all left partitions.
-        // This mirrors HashJoinExec(CollectLeft) — the build side is computed once.
+        // Build right-side hash table.
         let right_fut: OnceFut<Arc<RightData>> = {
             let right = Arc::clone(&self.right);
             let on_right: Vec<PhysicalExprRef> =
@@ -388,16 +401,32 @@ impl ExecutionPlan for GroupJoinExec {
                 .collect();
             let random_state = RandomState::with_seed(0);
             let ctx = Arc::clone(&context);
-            self.right_fut.try_once(|| {
-                Ok(collect_right_input(
+            if self.partitioned {
+                // Partitioned mode: each partition builds from its own right partition only.
+                let part = partition;
+                OnceFut::new(collect_right_input(
                     right,
+                    Some(part),
                     on_right,
                     right_group_by_exprs,
                     build_agg_exprs,
                     random_state,
                     ctx,
                 ))
-            })?
+            } else {
+                // CollectLeft mode: build once, shared across all left partitions.
+                self.right_fut.try_once(|| {
+                    Ok(collect_right_input(
+                        right,
+                        None, // all partitions
+                        on_right,
+                        right_group_by_exprs,
+                        build_agg_exprs,
+                        random_state,
+                        ctx,
+                    ))
+                })?
+            }
         };
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -440,12 +469,15 @@ impl ExecutionPlan for GroupJoinExec {
 
         let random_state = RandomState::with_seed(0);
 
+        let is_left_join = self.join_type == JoinType::Left;
+
         let stream = GroupJoinStream {
             schema: Arc::clone(&schema),
             on_left,
             right_fut,
             left_stream: Some(left_stream),
             mode,
+            is_left_join,
             left_group_by_exprs,
             group_by_order,
             agg_args,
@@ -494,6 +526,8 @@ struct GroupJoinStream {
     left_stream: Option<SendableRecordBatchStream>,
 
     mode: AggregateMode,
+    /// Whether this is a LEFT OUTER JOIN (unmatched probe rows produce NULL build-side values)
+    is_left_join: bool,
     /// Group-by expressions evaluated against the LEFT (probe) input
     left_group_by_exprs: Vec<PhysicalExprRef>,
     /// Interleave order for group-by output columns
@@ -567,7 +601,25 @@ impl GroupJoinStream {
             )
         })?;
 
+        // Pre-evaluate left-side group-by columns against the current left batch
+        let left_gby_arrays: Vec<ArrayRef> = self
+            .left_group_by_exprs
+            .iter()
+            .map(|expr| {
+                expr.evaluate(left_batch)
+                    .and_then(|v| v.into_array(left_batch.num_rows()))
+            })
+            .collect::<Result<_>>()?;
+
+        // For LEFT JOIN with empty build side: all rows are unmatched
         if right_data.map.is_empty() {
+            if self.is_left_join {
+                self.emit_unmatched_left_rows(
+                    left_batch,
+                    &left_gby_arrays,
+                    &BooleanArray::from(vec![false; left_batch.num_rows()]),
+                )?;
+            }
             return Ok(());
         }
 
@@ -585,18 +637,11 @@ impl GroupJoinStream {
         let mut build_indices_buf: Vec<u64> = Vec::new();
         let mut offset: Option<MapOffset> = Some((0, None));
 
-        // Pre-evaluate left-side group-by columns against the current left batch
-        let left_gby_arrays: Vec<ArrayRef> = self
-            .left_group_by_exprs
-            .iter()
-            .map(|expr| {
-                expr.evaluate(left_batch)
-                    .and_then(|v| v.into_array(left_batch.num_rows()))
-            })
-            .collect::<Result<_>>()?;
-
         // Use pre-computed build-side aggregate arrays from RightData
         let right_agg_arrays = &right_data.build_agg_arrays;
+
+        // For LEFT JOIN, track which probe rows had at least one match
+        let mut matched_probe = vec![false; left_batch.num_rows()];
 
         while let Some(current_offset) = offset {
             probe_indices_buf.clear();
@@ -639,6 +684,11 @@ impl GroupJoinStream {
                 continue;
             }
 
+            // Mark matched probe rows
+            for &idx in probe_indices.values() {
+                matched_probe[idx as usize] = true;
+            }
+
             // Build the ordered group-by array list by interleaving left and right
             let left_taken: Vec<ArrayRef> = left_gby_arrays
                 .iter()
@@ -675,13 +725,11 @@ impl GroupJoinStream {
 
             // Feed matched values to accumulators (left args taken at probe_indices, right at build_indices)
             let mut right_agg_idx = 0;
-            for (acc_idx, (acc, (arg_exprs, side))) in self
+            for (acc, (arg_exprs, side)) in self
                 .accumulators
                 .iter_mut()
                 .zip(self.agg_args.iter())
-                .enumerate()
             {
-                let _ = acc_idx;
                 let values: Vec<ArrayRef> = match side {
                     GroupBySide::Left => arg_exprs
                         .iter()
@@ -716,6 +764,75 @@ impl GroupJoinStream {
 
             offset = next_offset;
         }
+
+        // For LEFT JOIN: emit group entries for unmatched probe rows.
+        // Accumulators are NOT updated for these rows, so they keep default values
+        // (0 for COUNT, NULL for SUM, etc.) which is correct LEFT JOIN semantics.
+        if self.is_left_join {
+            let matched_bitmap = BooleanArray::from(matched_probe);
+            self.emit_unmatched_left_rows(left_batch, &left_gby_arrays, &matched_bitmap)?;
+        }
+
+        Ok(())
+    }
+
+    /// For LEFT JOIN: intern group keys for probe rows that had no matches.
+    /// Accumulators are not updated, so they retain default values (correct for LEFT JOIN).
+    fn emit_unmatched_left_rows(
+        &mut self,
+        _left_batch: &RecordBatch,
+        left_gby_arrays: &[ArrayRef],
+        matched_bitmap: &BooleanArray,
+    ) -> Result<()> {
+        let unmatched: Vec<u32> = matched_bitmap
+            .iter()
+            .enumerate()
+            .filter(|(_, matched)| !matched.unwrap_or(false))
+            .map(|(i, _)| i as u32)
+            .collect();
+
+        if unmatched.is_empty() {
+            return Ok(());
+        }
+
+        let unmatched_indices = UInt32Array::from(unmatched);
+
+        // Build group keys: probe-side taken at unmatched indices, build-side filled with NULLs
+        let unmatched_left_gby: Vec<ArrayRef> = left_gby_arrays
+            .iter()
+            .map(|arr| compute::take(arr.as_ref(), &unmatched_indices, None))
+            .collect::<std::result::Result<_, _>>()?;
+
+        let right_data = self.right_data.as_ref().unwrap();
+        let unmatched_right_gby: Vec<ArrayRef> = right_data
+            .group_by_arrays
+            .iter()
+            .map(|arr| {
+                arrow::array::new_null_array(arr.data_type(), unmatched_indices.len())
+            })
+            .collect();
+
+        let mut left_i = 0;
+        let mut right_i = 0;
+        let group_values: Vec<ArrayRef> = self
+            .group_by_order
+            .iter()
+            .map(|side| match side {
+                GroupBySide::Left => {
+                    let v = Arc::clone(&unmatched_left_gby[left_i]);
+                    left_i += 1;
+                    v
+                }
+                GroupBySide::Right => {
+                    let v = Arc::clone(&unmatched_right_gby[right_i]);
+                    right_i += 1;
+                    v
+                }
+            })
+            .collect();
+
+        self.group_values
+            .intern(&group_values, &mut self.current_group_indices)?;
 
         Ok(())
     }
@@ -764,18 +881,24 @@ impl GroupJoinStream {
 /// via `OnceAsync`, so the right side is collected exactly once.
 async fn collect_right_input(
     right: Arc<dyn ExecutionPlan>,
+    single_partition: Option<usize>,
     on_right: Vec<PhysicalExprRef>,
     right_group_by_exprs: Vec<PhysicalExprRef>,
     build_agg_exprs: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     random_state: RandomState,
     context: Arc<TaskContext>,
 ) -> Result<Arc<RightData>> {
-    let num_partitions = right.output_partitioning().partition_count();
     let schema = right.schema();
 
-    // Execute all right partitions and collect all batches.
+    // Execute right partitions and collect batches.
+    // single_partition=Some(p) collects only partition p (Partitioned mode).
+    // single_partition=None collects all partitions (CollectLeft mode).
     let mut all_batches: Vec<RecordBatch> = Vec::new();
-    for p in 0..num_partitions {
+    let partitions: Vec<usize> = match single_partition {
+        Some(p) => vec![p],
+        None => (0..right.output_partitioning().partition_count()).collect(),
+    };
+    for p in partitions {
         let mut stream = right.execute(p, Arc::clone(&context))?;
         while let Some(batch) = stream.next().await {
             let batch = batch?;
