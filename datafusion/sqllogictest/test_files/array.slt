@@ -7181,6 +7181,64 @@ select 5 <> any(make_array(NULL::INT, NULL::INT));
 ----
 false
 
+# NULL left operand: should return NULL for non-empty arrays
+query B
+select NULL > any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL < any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL >= any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL <= any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL <> any(make_array(1, 2, 3));
+----
+NULL
+
+# NULL left operand with empty array: should return false
+query B
+select NULL > any(make_array());
+----
+false
+
+# NULL array: should return NULL
+query B
+select 5 > any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 < any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 >= any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 <= any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 <> any(NULL::INT[]);
+----
+NULL
+
 statement ok
 DROP TABLE any_op_test;
 

@@ -36,7 +36,7 @@ use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
-    Operator, TryCast, lit,
+    Operator, TryCast, lit, when,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -614,28 +614,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 _ => {
                     let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
                     let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
-                    match compare_op {
-                        BinaryOperator::Eq => Ok(array_has(right_expr, left_expr)),
-                        BinaryOperator::NotEq => Ok(array_min(right_expr.clone())
-                            .not_eq(left_expr.clone())
-                            .or(array_max(right_expr).not_eq(left_expr))
-                            .is_true()),
-                        BinaryOperator::Gt => {
-                            Ok(array_min(right_expr).lt(left_expr).is_true())
-                        }
-                        BinaryOperator::Lt => {
-                            Ok(array_max(right_expr).gt(left_expr).is_true())
-                        }
-                        BinaryOperator::GtEq => {
-                            Ok(array_min(right_expr).lt_eq(left_expr).is_true())
-                        }
-                        BinaryOperator::LtEq => {
-                            Ok(array_max(right_expr).gt_eq(left_expr).is_true())
-                        }
-                        _ => plan_err!(
-                            "Unsupported AnyOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
-                        ),
-                    }
+                    plan_any_op(left_expr, right_expr, &compare_op)
                 }
             },
             SQLExpr::AllOp {
@@ -1261,6 +1240,60 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
                 )
             })
+    }
+}
+
+/// Builds a CASE expression that handles NULL semantics for `x <op> ANY(arr)`:
+///
+/// ```text
+/// CASE
+///   WHEN <min_or_max>(arr) IS NOT NULL THEN <comparison>
+///   WHEN arr IS NOT NULL THEN FALSE          -- empty or all-null array
+///   ELSE NULL                                -- NULL array
+/// END
+/// ```
+fn any_op_with_null_handling(bound: Expr, comparison: Expr, arr: Expr) -> Result<Expr> {
+    when(bound.is_not_null(), comparison)
+        .when(arr.is_not_null(), lit(false))
+        .otherwise(lit(ScalarValue::Boolean(None)))
+}
+
+/// Plans a `<left> <op> ANY(<right>)` expression for non-subquery operands.
+fn plan_any_op(
+    left_expr: Expr,
+    right_expr: Expr,
+    compare_op: &BinaryOperator,
+) -> Result<Expr> {
+    match compare_op {
+        BinaryOperator::Eq => Ok(array_has(right_expr, left_expr)),
+        BinaryOperator::NotEq => {
+            let min = array_min(right_expr.clone());
+            let max = array_max(right_expr.clone());
+            // NOT EQ is true when either bound differs from left
+            let comparison = min
+                .not_eq(left_expr.clone())
+                .or(max.clone().not_eq(left_expr));
+            any_op_with_null_handling(max, comparison, right_expr)
+        }
+        BinaryOperator::Gt => {
+            let min = array_min(right_expr.clone());
+            any_op_with_null_handling(min.clone(), min.lt(left_expr), right_expr)
+        }
+        BinaryOperator::Lt => {
+            let max = array_max(right_expr.clone());
+            any_op_with_null_handling(max.clone(), max.gt(left_expr), right_expr)
+        }
+        BinaryOperator::GtEq => {
+            let min = array_min(right_expr.clone());
+            any_op_with_null_handling(min.clone(), min.lt_eq(left_expr), right_expr)
+        }
+        BinaryOperator::LtEq => {
+            let max = array_max(right_expr.clone());
+            any_op_with_null_handling(max.clone(), max.gt_eq(left_expr), right_expr)
+        }
+        _ => plan_err!(
+            "Unsupported AnyOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
+        ),
     }
 }
 
