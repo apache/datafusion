@@ -72,7 +72,7 @@ make_udf_expr_and_func!(
 +---------------------------------------------------+
 ```"#,
     argument(name = "array1", description = "First array expression."),
-    argument(name = "array_n", description = "Subsequent array expressions.")
+    argument(name = "array_n", description = "Optional additional array expressions.")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArraysZip {
