@@ -219,3 +219,153 @@ impl PhysicalOptimizerRule for ForeignPhysicalOptimizerRule {
         unsafe { (self.0.schema_check)(&self.0) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_common::error::Result;
+    use datafusion_physical_optimizer::PhysicalOptimizerRule;
+    use datafusion_physical_plan::ExecutionPlan;
+
+    use crate::execution_plan::tests::EmptyExec;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct NoOpRule {
+        schema_check: bool,
+    }
+
+    impl PhysicalOptimizerRule for NoOpRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "no_op_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            self.schema_check
+        }
+    }
+
+    fn create_test_plan() -> Arc<dyn ExecutionPlan> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+        Arc::new(EmptyExec::new(schema))
+    }
+
+    #[test]
+    fn test_round_trip_ffi_physical_optimizer_rule() -> Result<()> {
+        for expected_schema_check in [true, false] {
+            let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> = Arc::new(NoOpRule {
+                schema_check: expected_schema_check,
+            });
+
+            let mut ffi_rule = FFI_PhysicalOptimizerRule::new(rule, None);
+            ffi_rule.library_marker_id = crate::mock_foreign_marker_id;
+
+            let foreign_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+                (&ffi_rule).into();
+
+            assert_eq!(foreign_rule.name(), "no_op_rule");
+            assert_eq!(foreign_rule.schema_check(), expected_schema_check);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_optimize() -> Result<()> {
+        let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(NoOpRule { schema_check: true });
+
+        let mut ffi_rule = FFI_PhysicalOptimizerRule::new(rule, None);
+        ffi_rule.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            (&ffi_rule).into();
+
+        let plan = create_test_plan();
+        let config = ConfigOptions::new();
+
+        let optimized = foreign_rule.optimize(plan, &config)?;
+        assert_eq!(optimized.name(), "empty-exec");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_local_bypass() -> Result<()> {
+        let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(NoOpRule { schema_check: true });
+
+        // Without mock marker, local bypass should return the original rule
+        let ffi_rule = FFI_PhysicalOptimizerRule::new(rule, None);
+        let recovered: Arc<dyn PhysicalOptimizerRule + Send + Sync> = (&ffi_rule).into();
+        let any_ref: &dyn std::any::Any = &*recovered;
+        assert!(any_ref.downcast_ref::<NoOpRule>().is_some());
+
+        // With mock marker, should wrap in ForeignPhysicalOptimizerRule
+        let rule2: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(NoOpRule { schema_check: true });
+        let mut ffi_rule2 = FFI_PhysicalOptimizerRule::new(rule2, None);
+        ffi_rule2.library_marker_id = crate::mock_foreign_marker_id;
+        let recovered2: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            (&ffi_rule2).into();
+        let any_ref2: &dyn std::any::Any = &*recovered2;
+        assert!(
+            any_ref2
+                .downcast_ref::<ForeignPhysicalOptimizerRule>()
+                .is_some()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_clone() -> Result<()> {
+        let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(NoOpRule { schema_check: true });
+
+        let ffi_rule = FFI_PhysicalOptimizerRule::new(rule, None);
+        let cloned = ffi_rule.clone();
+
+        assert_eq!(unsafe { (ffi_rule.name)(&ffi_rule).as_str() }, unsafe {
+            (cloned.name)(&cloned).as_str()
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_foreign_rule_rewrap_bypass() -> Result<()> {
+        // When creating an FFI wrapper from a ForeignPhysicalOptimizerRule,
+        // it should return the inner FFI rule rather than double-wrapping.
+        let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(NoOpRule { schema_check: true });
+
+        let mut ffi_rule = FFI_PhysicalOptimizerRule::new(rule, None);
+        ffi_rule.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            (&ffi_rule).into();
+
+        // Now wrap the foreign rule back into FFI - should not double-wrap
+        let re_wrapped = FFI_PhysicalOptimizerRule::new(foreign_rule, None);
+        assert_eq!(
+            unsafe { (re_wrapped.name)(&re_wrapped).as_str() },
+            "no_op_rule"
+        );
+
+        Ok(())
+    }
+}
