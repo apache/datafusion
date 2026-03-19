@@ -50,33 +50,29 @@ macro_rules! make_udlf_expr_and_func {
         make_udlf_expr_and_func!($UDF, $EXPR_FN, $($arg)*, $DOC, $LAMBDA_UDF_FN, $UDF::new);
     };
     ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $LAMBDA_UDF_FN:ident, $CTOR:path) => {
-        paste::paste! {
-            // "fluent expr_fn" style function
-            #[doc = $DOC]
-            pub fn $EXPR_FN($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
-                datafusion_expr::Expr::LambdaFunction(datafusion_expr::expr::LambdaFunction::new(
-                    $LAMBDA_UDF_FN(),
-                    vec![$($arg),*],
-                ))
-            }
-            create_lambda!($UDF, $LAMBDA_UDF_FN, $CTOR);
+        // "fluent expr_fn" style function
+        #[doc = $DOC]
+        pub fn $EXPR_FN($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+            datafusion_expr::Expr::LambdaFunction(datafusion_expr::expr::LambdaFunction::new(
+                $LAMBDA_UDF_FN(),
+                vec![$($arg),*],
+            ))
         }
+        create_lambda!($UDF, $LAMBDA_UDF_FN, $CTOR);
     };
     ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $LAMBDA_UDF_FN:ident) => {
         make_udlf_expr_and_func!($UDF, $EXPR_FN, $DOC, $LAMBDA_UDF_FN, $UDF::new);
     };
     ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $LAMBDA_UDF_FN:ident, $CTOR:path) => {
-        paste::paste! {
-            // "fluent expr_fn" style function
-            #[doc = $DOC]
-            pub fn $EXPR_FN(arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
-                datafusion_expr::Expr::LambdaFunction(datafusion_expr::expr::LambdaFunction::new(
-                    $LAMBDA_UDF_FN(),
-                    arg,
-                ))
-            }
-            create_lambda!($UDF, $LAMBDA_UDF_FN, $CTOR);
+        // "fluent expr_fn" style function
+        #[doc = $DOC]
+        pub fn $EXPR_FN(arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+            datafusion_expr::Expr::LambdaFunction(datafusion_expr::expr::LambdaFunction::new(
+                $LAMBDA_UDF_FN(),
+                arg,
+            ))
         }
+        create_lambda!($UDF, $LAMBDA_UDF_FN, $CTOR);
     };
 }
 
@@ -97,17 +93,15 @@ macro_rules! create_lambda {
         create_lambda!($UDF, $LAMBDA_UDF_FN, $UDF::new);
     };
     ($UDF:ident, $LAMBDA_UDF_FN:ident, $CTOR:path) => {
-        paste::paste! {
-            #[doc = concat!("LambdaFunction that returns a [`LambdaUDF`](datafusion_expr::LambdaUDF) for ")]
-            #[doc = stringify!($UDF)]
-            pub fn $LAMBDA_UDF_FN() -> std::sync::Arc<dyn datafusion_expr::LambdaUDF> {
-                // Singleton instance of [`$UDF`], ensures the UDF is only created once
-                static INSTANCE: std::sync::LazyLock<std::sync::Arc<dyn datafusion_expr::LambdaUDF>> =
-                    std::sync::LazyLock::new(|| {
-                        std::sync::Arc::new($CTOR())
-                    });
-                std::sync::Arc::clone(&INSTANCE)
-            }
+        #[doc = concat!("LambdaFunction that returns a [`LambdaUDF`](datafusion_expr::LambdaUDF) for ")]
+        #[doc = stringify!($UDF)]
+        pub fn $LAMBDA_UDF_FN() -> std::sync::Arc<dyn datafusion_expr::LambdaUDF> {
+            // Singleton instance of [`$UDF`], ensures the UDF is only created once
+            static INSTANCE: std::sync::LazyLock<std::sync::Arc<dyn datafusion_expr::LambdaUDF>> =
+                std::sync::LazyLock::new(|| {
+                    std::sync::Arc::new($CTOR())
+                });
+            std::sync::Arc::clone(&INSTANCE)
         }
     };
 }
