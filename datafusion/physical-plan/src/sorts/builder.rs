@@ -22,7 +22,8 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use log::warn;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -249,6 +250,7 @@ impl BatchBuilder {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 /// Try to grow `reservation` so it covers at least `needed` bytes.
 ///
 /// When a reservation has been pre-loaded with bytes (e.g. via
@@ -265,11 +267,14 @@ pub(crate) fn try_grow_reservation_to_at_least(
     Ok(())
 =======
 /// Returns `true` if the error is an Arrow offset overflow error.
+=======
+/// Returns true if the error is an Arrow offset overflow.
+>>>>>>> a53942d48 (add log)
 fn is_offset_overflow(e: &DataFusionError) -> bool {
     matches!(
         e,
-        DataFusionError::ArrowError(err, _)
-            if matches!(err.as_ref(), ArrowError::OffsetOverflowError(_))
+        DataFusionError::ArrowError(boxed, _)
+            if matches!(boxed.as_ref(), ArrowError::OffsetOverflowError(_))
     )
 >>>>>>> 967cf0a65 (Fix sort merge interleave overflow)
 }
@@ -290,7 +295,9 @@ mod tests {
     use super::*;
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, UnboundedMemoryPool};
+    use datafusion_execution::memory_pool::{
+        MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
 
     /// Test that interleaving string columns whose combined byte length
     /// exceeds i32::MAX does not panic. Arrow's `interleave` panics with
@@ -302,11 +309,7 @@ mod tests {
         // Each string is ~768 MB. Three rows total → ~2.3 GB > i32::MAX.
         let big_str: String = "x".repeat(768 * 1024 * 1024);
 
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "s",
-            DataType::Utf8,
-            false,
-        )]));
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
 
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let reservation = MemoryConsumer::new("test").register(&pool);
@@ -321,8 +324,7 @@ mod tests {
         for stream_idx in 0..3 {
             let array = StringArray::from(vec![big_str.as_str()]);
             let batch =
-                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)])
-                    .unwrap();
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap();
             builder.push_batch(stream_idx, batch).unwrap();
             builder.push_row(stream_idx);
         }
