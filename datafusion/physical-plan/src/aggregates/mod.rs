@@ -1473,11 +1473,12 @@ impl ExecutionPlan for AggregateExec {
         // This optimization is NOT safe for filters on aggregated columns (like filtering on
         // the result of SUM or COUNT), as those require computing all groups first.
 
-        let grouping_columns: HashSet<_> = self
-            .group_by
-            .expr()
-            .iter()
-            .flat_map(|(expr, _)| collect_columns(expr))
+        // Build grouping columns using output indices because parent filters reference the AggregateExec's output schema where grouping
+        // columns in the output schema. The grouping expressions reference
+        // input columns which may not match the output schema.
+        let output_schema = self.schema();
+        let grouping_columns: HashSet<_> = (0..self.group_by.expr().len())
+            .map(|i| Column::new(output_schema.field(i).name(), i))
             .collect();
 
         // Analyze each filter separately to determine if it can be pushed down
@@ -1502,9 +1503,7 @@ impl ExecutionPlan for AggregateExec {
                 let filter_column_indices: Vec<usize> = filter_columns
                     .iter()
                     .filter_map(|filter_col| {
-                        self.group_by.expr().iter().position(|(expr, _)| {
-                            collect_columns(expr).contains(filter_col)
-                        })
+                        grouping_columns.get(filter_col).map(|col| col.index())
                     })
                     .collect();
 
