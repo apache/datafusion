@@ -450,7 +450,6 @@ mod tests {
     use arrow::array::{GenericStringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::ScalarFunctionArgs;
     #[test]
     fn test_regexp_instr() {
         test_case_sensitive_regexp_instr_nulls();

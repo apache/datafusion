@@ -99,7 +99,6 @@ mod tests {
     use arrow::array::{Array, ArrayRef, StringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::ScalarFunctionArgs;
     use std::sync::Arc;
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
