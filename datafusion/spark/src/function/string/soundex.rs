@@ -17,10 +17,10 @@
 
 use arrow::array::{ArrayRef, OffsetSizeTrait, StringArray};
 use arrow::datatypes::DataType;
-use datafusion::logical_expr::{ColumnarValue, Signature, Volatility};
-use datafusion_common::cast::as_generic_string_array;
+use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, exec_err};
+use datafusion_expr::{ColumnarValue, Signature, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
@@ -74,6 +74,7 @@ fn spark_soundex_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     match &array.data_type() {
         DataType::Utf8 => soundex::<i32>(array),
         DataType::LargeUtf8 => soundex::<i64>(array),
+        DataType::Utf8View => soundex_view(array),
         other => {
             exec_err!("unsupported data type {other:?} for function `soundex`")
         }
@@ -87,6 +88,15 @@ fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
         .map(|s| s.map(compute_soundex))
         .collect::<StringArray>();
     Ok(Arc::new(result))
+}
+
+fn soundex_view(str_view: &ArrayRef) -> Result<ArrayRef> {
+    let str_array = as_string_view_array(str_view)?;
+    let result = str_array
+        .iter()
+        .map(|opt_str| opt_str.map(compute_soundex))
+        .collect::<StringArray>();
+    Ok(Arc::new(result) as ArrayRef)
 }
 
 fn classify_char(c: char) -> Option<char> {
