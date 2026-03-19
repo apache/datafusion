@@ -173,36 +173,23 @@ impl BatchBuilder {
             return Ok(None);
         }
 
-        let columns = (0..self.schema.fields.len())
-            .map(|column_idx| {
-                let arrays: Vec<_> = self
-                    .batches
-                    .iter()
-                    .map(|(_, batch)| batch.column(column_idx).as_ref())
-                    .collect();
-                Ok(interleave(&arrays, &self.indices)?)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        self.indices.clear();
-
-        // New cursors are only created once the previous cursor for the stream
-        // is finished. This means all remaining rows from all but the last batch
-        // for each stream have been yielded to the newly created record batch
-        //
-        // We can therefore drop all but the last batch for each stream
-        let mut batch_idx = 0;
-        let mut retained = 0;
-        self.batches.retain(|(stream_idx, batch)| {
-            let stream_cursor = &mut self.cursors[*stream_idx];
-            let retain = stream_cursor.batch_idx == batch_idx;
-            batch_idx += 1;
-
-            if retain {
-                stream_cursor.batch_idx = retained;
-                retained += 1;
-            } else {
-                self.batches_mem_used -= get_record_batch_memory_size(batch);
+        // Try interleaving all indices. On offset overflow, halve and retry.
+        let mut end = self.indices.len();
+        let columns = loop {
+            match self.try_interleave_columns(&self.indices[..end]) {
+                Ok(cols) => break cols,
+                Err(e) if is_offset_overflow(&e) => {
+                    end /= 2;
+                    if end == 0 {
+                        return Err(e);
+                    }
+                    warn!(
+                        "Interleave offset overflow with {} rows, retrying with {}",
+                        self.indices.len(),
+                        end
+                    );
+                }
+                Err(e) => return Err(e),
             }
         };
 
@@ -228,7 +215,7 @@ impl BatchBuilder {
                     stream_cursor.batch_idx = retained;
                     retained += 1;
                 } else {
-                    self.reservation.shrink(get_record_batch_memory_size(batch));
+                    self.batches_mem_used -= get_record_batch_memory_size(batch);
                 }
                 retain
             });
@@ -249,8 +236,6 @@ impl BatchBuilder {
     }
 }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 /// Try to grow `reservation` so it covers at least `needed` bytes.
 ///
 /// When a reservation has been pre-loaded with bytes (e.g. via
@@ -265,18 +250,15 @@ pub(crate) fn try_grow_reservation_to_at_least(
         reservation.try_grow(needed - reservation.size())?;
     }
     Ok(())
-=======
-/// Returns `true` if the error is an Arrow offset overflow error.
-=======
+}
+
 /// Returns true if the error is an Arrow offset overflow.
->>>>>>> a53942d48 (add log)
 fn is_offset_overflow(e: &DataFusionError) -> bool {
     matches!(
         e,
         DataFusionError::ArrowError(boxed, _)
             if matches!(boxed.as_ref(), ArrowError::OffsetOverflowError(_))
     )
->>>>>>> 967cf0a65 (Fix sort merge interleave overflow)
 }
 
 /// Returns true if a caught panic payload looks like an Arrow offset overflow.
