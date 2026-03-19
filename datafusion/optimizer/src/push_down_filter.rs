@@ -412,6 +412,9 @@ fn push_down_all_join(
     on_filter: Vec<Expr>,
 ) -> Result<Transformed<LogicalPlan>> {
     let is_inner_join = join.join_type == JoinType::Inner;
+    let allow_convert_filter_to_join_condition = !join.on.is_empty()
+        || !(matches!(join.left.max_rows(), Some(1))
+            || matches!(join.right.max_rows(), Some(1)));
     // Get pushable predicates from current optimizer state
     let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
 
@@ -431,7 +434,10 @@ fn push_down_all_join(
             left_push.push(predicate);
         } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
-        } else if is_inner_join && can_evaluate_as_join_condition(&predicate)? {
+        } else if is_inner_join
+            && allow_convert_filter_to_join_condition
+            && can_evaluate_as_join_condition(&predicate)?
+        {
             // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
             // and convert to the join on condition
             join_conditions.push(predicate);
@@ -1472,7 +1478,7 @@ mod tests {
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
-    use datafusion_expr::test::function_stub::sum;
+    use datafusion_expr::test::function_stub::{avg, sum};
     use insta::assert_snapshot;
 
     use super::*;
@@ -3570,6 +3576,34 @@ mod tests {
             TableScan: test, full_filters=[test.b > UInt32(1) OR test.c < UInt32(10)]
           Projection: test1.a AS d, test1.a AS e
             TableScan: test1
+        "
+        )
+    }
+
+    #[test]
+    fn cross_join_with_scalar_side_keeps_post_join_filter() -> Result<()> {
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .project(vec![col("a")])?
+            .aggregate(Vec::<Expr>::new(), vec![avg(col("a"))])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(right)?
+            .filter(col("test.b").gt(col("AVG(test1.a)")))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.b > AVG(test1.a)
+          Cross Join:
+            Projection: test.a, test.b
+              TableScan: test
+            Aggregate: groupBy=[[]], aggr=[[avg(test1.a)]]
+              Projection: test1.a
+                TableScan: test1
         "
         )
     }
