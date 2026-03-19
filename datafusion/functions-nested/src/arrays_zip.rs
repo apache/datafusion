@@ -58,21 +58,24 @@ make_udf_expr_and_func!(
     description = "Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.",
     syntax_example = "arrays_zip(array1[, ..., array_n])",
     sql_example = r#"```sql
-> select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
+> select arrays_zip([1, 2, 3]);
 +---------------------------------------------------+
-| arrays_zip([1, 2, 3], ['a', 'b', 'c'])             |
+| arrays_zip([1, 2, 3])                             |
 +---------------------------------------------------+
-| [{1: 1, 2: a}, {1: 2, 2: b}, {1: 3, 2: c}] |
+| [{1: 1}, {1: 2}, {1: 3}]                          |
 +---------------------------------------------------+
 > select arrays_zip([1, 2], [3, 4, 5]);
 +---------------------------------------------------+
-| arrays_zip([1, 2], [3, 4, 5])                       |
+| arrays_zip([1, 2], [3, 4, 5])                     |
 +---------------------------------------------------+
-| [{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]  |
+| [{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]     |
 +---------------------------------------------------+
 ```"#,
     argument(name = "array1", description = "First array expression."),
-    argument(name = "array_n", description = "Optional additional array expressions.")
+    argument(
+        name = "array_n",
+        description = "Optional additional array expressions."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArraysZip {
