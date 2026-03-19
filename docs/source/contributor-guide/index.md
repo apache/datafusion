@@ -103,15 +103,15 @@ Note all commits in a PR are squashed when merged to the `main` branch so there 
 
 ## Before Submitting a PR
 
-Before submitting a PR, run the standard formatting and lint checks and fix any
-issues they report:
+Before submitting a PR, run the standard non-functional checks. PRs must pass
+before merge.
 
 ```bash
-./ci/scripts/rust_fmt.sh
-./ci/scripts/rust_clippy.sh
+./dev/rust_lint.sh
+# use `--write` to automatically fix some formatting and lint errors
+# ./dev/rust_lint.sh --write --allow-dirty
 ```
 
-These scripts are the same checks run in CI for Rust formatting and clippy.
 You should also run any relevant commands from the [testing quick start](testing.md#testing-quick-start).
 
 ## Conventional Commits & Labeling PRs
