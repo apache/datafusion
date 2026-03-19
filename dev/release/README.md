@@ -22,8 +22,8 @@
 For contributor-facing guidance on release branches and backports, see the
 [Contributor Guide Release Management page](../../docs/source/contributor-guide/release_management.md).
 
-The rest of this guide contains the commands for maintainers to create release
-candidates and run the release process.
+This guide is for maintainers to create release candidates and run the release
+process.
 
 ## Release Prerequisites
 
@@ -112,33 +112,34 @@ branch-50:
 First, prepare a PR to update the changelog and versions to reflect the planned
 release. See [#18173](https://github.com/apache/datafusion/pull/18173) for an example.
 
-#### Update Version Numbers
+Notes:
+1. This PR should be the last one merged before creating a release
+   candidate (see below), as it includes the changelog and should include all
+   changes.
+2. If there are any code changes between RCs, create a new PR to update the changelog.
 
-Manually update the DataFusion version in the root `Cargo.toml` to reflect the new release version.
-
-Ensure Cargo.lock is updated accordingly by running:
+**Step 1**: Manually update the DataFusion version in the root `Cargo.toml` to reflect the
+new release version. Ensure `Cargo.lock` is updated accordingly by running:
 
 ```shell
 cargo check -p datafusion
 ```
 
-#### Changelog Generation
+**Step 2**: Update the [changelog]. The changelog is located in `dev/changelog/`
+and has a file for each release, such as `dev/changelog/50.0.0.md`. The
+changelog should be updated to reflect all changes since the last release.
 
-We maintain a [changelog] so our users know what has been changed between releases.
-
-[changelog]: ../changelog
-
-The changelog is generated using a Python script.
-
-To run the script, you will need a GitHub Personal Access Token (described in the prerequisites section) and the `PyGitHub` library. First install the dev dependencies via `uv`:
+The changelog is generated using a Python script, which requires a GitHub
+Personal Access Token (described in the prerequisites section) and the
+`PyGitHub` library. First install the dev dependencies via `uv`:
 
 ```shell
 uv sync
 ```
 
-To generate the changelog, set the `GITHUB_TOKEN` environment variable and then run `./dev/release/generate-changelog.py`
-providing two commit ids or tags followed by the version number of the release being created. For example,
-to generate a change log of all changes between the `50.3.0` tag and `branch-51`, in preparation for release `51.0.0`:
+To generate the changelog, set the `GITHUB_TOKEN` environment variable and then run `./dev/release/generate-changelog.py`,
+providing two commit IDs or tags followed by the version number of the release being created. For example,
+to generate a changelog of all changes between the `50.3.0` tag and `branch-51`, in preparation for release `51.0.0`:
 
 > [!NOTE]
 >
@@ -157,13 +158,11 @@ uv run ./dev/release/generate-changelog.py 50.3.0 branch-51 51.0.0 > dev/changel
 This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
 titles starting with `feat:`, `fix:`, or `docs:`.
 
-Once the change log is generated, run `prettier` to format the document:
+Once the changelog is generated, run `prettier` to format the document:
 
 ```shell
 prettier -w dev/changelog/51.0.0.md
 ```
-
-#### Commit and PR
 
 Then commit the changes and create a PR targeting the release branch.
 
@@ -171,38 +170,32 @@ Then commit the changes and create a PR targeting the release branch.
 git commit -a -m 'Update version'
 ```
 
-Remember to merge any fixes back to `main` branch as well.
+Remember to merge any fixes back to the `main` branch as well.
 
 ### 4. Prepare Release Candidate Artifacts
 
 After the PR gets merged, you are ready to create release artifacts based off the
 merged commit.
 
-(Note you need to be a committer to run these scripts as they upload to the apache svn distribution servers)
+Notes:
+1. You need to be a committer to run these scripts, as they upload to the Apache SVN distribution servers.
+2. If there are any code changes between RCs, create a new PR to update the changelog and merge it before creating the next RC.
 
 #### Pick a Release Candidate (RC) number
 
 Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
-#### Create git Tag for the Release:
+#### Create Git tag for the Release Candidate
 
 While the official release artifacts are signed tarballs and zip files, we also
-tag the commit it was created for convenience and code archaeology. Release tags
-have the format `<version>` (e.g. `38.0.0`), and release candidates have the
-format `<version>-rc<rc>` (e.g. `38.0.0-rc0`). See [the list of existing
+tag the commit it was created from for convenience and code archaeology. Release tags
+look like `38.0.0`, and release candidate tags look like `38.0.0-rc0`. See [the list of existing
 tags].
 
 [the list of existing tags]: https://github.com/apache/datafusion/tags
 
-Using a string such as `38.0.0` as the `<version>`, create and push the rc tag by running these commands:
-
-```shell
-git fetch apache
-git tag <version>-<rc> apache/branch-X # create tag from the release branch
-git push apache <version>-<rc>         # push tag to Github remote
-```
-
-For example, to create the `50.3.0-rc1 tag from `branch-50`:
+Create a tag for the release candidate. For example, to create the `50.3.0-rc1`
+tag from `branch-50`, use these commands:
 
 ```shell
 git fetch apache
@@ -212,7 +205,7 @@ git push apache 50.3.0-rc1
 
 #### Create, Sign, and Upload Artifacts
 
-Run the `create-tarball.sh` script with the `<version>` tag and `<rc>` and you determined in previous steps:
+Run the `create-tarball.sh` script with the `<version>` tag and `<rc>` number you determined in previous steps:
 
 For example, to create the `50.3.0-rc1` artifacts:
 
@@ -227,18 +220,20 @@ The `create-tarball.sh` script
    apache distribution SVN server
 
 2. Provides you an email template to
-   send to dev@datafusion.apache.org for release voting.
+   send to `dev@datafusion.apache.org` for release voting.
 
 ### 5. Vote on Release Candidate Artifacts
 
-Send the email output from the script to dev@datafusion.apache.org.
+Send the email output from the script to `dev@datafusion.apache.org`.
 
-In order to publish the release on crates.io, it must be "official". To become
-official it needs at least three PMC members to vote +1 on it.
+In order to publish the release on crates.io, it must be "official." To become
+official, it needs at least three PMC members to vote +1 on it and no -1 votes.
+The vote must remain open for at least 72 hours to give everyone a chance to
+review the release candidate.
 
 #### Verifying Release Candidates
 
-The `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like:
+`dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like this:
 
 ```shell
 ./dev/release/verify-release-candidate.sh 50.3.0 1
@@ -246,15 +241,17 @@ The `dev/release/verify-release-candidate.sh` is a script in this repository tha
 
 #### If the Release is not Approved
 
-If the release is not approved, fix whatever the problem is, merge changelog
-changes into the release branch and try again with the next RC number.
+If the release is not approved, fix whatever the problem is, make a new release
+candidate and try again.
 
-Remember to merge any fixes back to `main` branch as well.
+Reminders:
+1. Update the changelog and create a new PR if there are any code changes, and merge it before creating the next RC.
+2. Merge any fixes back to the `main` branch as well.
 
 #### If the Release is Approved: Call the Vote
 
 Call the vote on the Arrow dev list by replying to the RC voting thread. The
-reply should have a new subject constructed by adding `[RESULT]` prefix to the
+reply should have a new subject constructed by adding the `[RESULT]` prefix to the
 old subject line.
 
 Sample announcement template:
@@ -372,34 +369,35 @@ The release information is used to generate a template for a board report (see e
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
 
-#### Deleting old release candidates from `dev` svn
-
-Release candidates should be deleted once the release is published.
-
-Get a list of DataFusion release candidates:
+Release candidates should be deleted once the release is published. To get a list of DataFusion release candidates:
 
 ```shell
 svn ls https://dist.apache.org/repos/dist/dev/datafusion
 ```
 
-Delete a release candidate:
+To delete a release candidate:
 
 ```shell
 svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-50.0.0-rc1/
 ```
 
-#### Deleting old releases from `release` svn
 
-Only the latest release should be available. Delete old releases after publishing the new release.
-
-Get a list of DataFusion releases:
+Only the latest release should be available. Delete old releases after publishing the new release. To get a list of DataFusion releases:
 
 ```shell
 svn ls https://dist.apache.org/repos/dist/release/datafusion
 ```
 
-Delete a release:
+To delete a release:
 
 ```shell
 svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-50.0.0
 ```
+
+### 11. Forward-port changelog to `main`
+
+After the release is published, forward port the version update and changelog to
+`main` so that it is up to date for the next release. See [#21053] for an
+example PR that forward-ports the changelog to `main`.
+
+[#21053]:https://github.com/apache/datafusion/pull/21053
