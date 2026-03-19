@@ -81,9 +81,12 @@ static NULL_RESTRICTION_EVAL_MODE: AtomicU8 =
 static NULL_RESTRICTION_EVAL_MODE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn null_restriction_eval_mode() -> NullRestrictionEvalMode {
-    match NULL_RESTRICTION_EVAL_MODE.load(Ordering::Relaxed) {
-        1 => NullRestrictionEvalMode::AuthoritativeOnly,
-        _ => NullRestrictionEvalMode::Auto,
+    if NULL_RESTRICTION_EVAL_MODE.load(Ordering::Relaxed)
+        == NullRestrictionEvalMode::AuthoritativeOnly as u8
+    {
+        NullRestrictionEvalMode::AuthoritativeOnly
+    } else {
+        NullRestrictionEvalMode::Auto
     }
 }
 
@@ -139,28 +142,27 @@ pub fn is_restrict_null_predicate<'a>(
         return Ok(false);
     }
 
-    if null_restriction_eval_mode() == NullRestrictionEvalMode::Auto {
-        if let Some(is_restricting) =
+    if null_restriction_eval_mode() == NullRestrictionEvalMode::Auto
+        && let Some(is_restricting) =
             syntactic_restrict_null_predicate(&predicate, &join_cols)
+    {
+        #[cfg(debug_assertions)]
         {
-            #[cfg(debug_assertions)]
-            {
-                let authoritative = authoritative_restrict_null_predicate(
-                    predicate.clone(),
-                    join_cols.iter().copied(),
-                )?;
-                debug_assert_eq!(
-                    is_restricting, authoritative,
-                    "syntactic fast path disagrees with authoritative null-restriction evaluation for predicate: {predicate}"
-                );
-            }
-            return Ok(is_restricting);
+            let authoritative = authoritative_restrict_null_predicate(
+                predicate.clone(),
+                join_cols.iter().copied(),
+            )?;
+            debug_assert_eq!(
+                is_restricting, authoritative,
+                "syntactic fast path disagrees with authoritative null-restriction evaluation for predicate: {predicate}"
+            );
         }
+        return Ok(is_restricting);
     }
 
     // If result is single `true`, return false;
     // If result is single `NULL` or `false`, return true;
-    authoritative_restrict_null_predicate(predicate, join_cols.into_iter())
+        authoritative_restrict_null_predicate(predicate, join_cols)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,6 +195,27 @@ fn predicate_uses_only_columns(
         .all(|column| allowed_columns.contains(*column))
 }
 
+fn contains_null(
+    values: impl IntoIterator<Item = Option<NullSubstitutionValue>>,
+) -> bool {
+    values
+        .into_iter()
+        .any(|value| matches!(value, Some(NullSubstitutionValue::Null)))
+}
+
+fn null_check_value(
+    value: Option<NullSubstitutionValue>,
+    when_non_null: bool,
+) -> Option<NullSubstitutionValue> {
+    match value {
+        Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Boolean(false)),
+        Some(NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_)) => {
+            Some(NullSubstitutionValue::Boolean(when_non_null))
+        }
+        None => None,
+    }
+}
+
 fn syntactic_null_substitution_value(
     expr: &Expr,
     join_cols: &HashSet<&Column>,
@@ -213,38 +236,20 @@ fn syntactic_null_substitution_value(
         Expr::Not(expr) => {
             sql_not(syntactic_null_substitution_value(expr.as_ref(), join_cols))
         }
-        Expr::IsNull(expr) => {
-            match syntactic_null_substitution_value(expr.as_ref(), join_cols) {
-                Some(NullSubstitutionValue::Null) => {
-                    Some(NullSubstitutionValue::Boolean(true))
-                }
-                Some(
-                    NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_),
-                ) => Some(NullSubstitutionValue::Boolean(false)),
-                None => None,
-            }
-        }
-        Expr::IsNotNull(expr) => {
-            match syntactic_null_substitution_value(expr.as_ref(), join_cols) {
-                Some(NullSubstitutionValue::Null) => {
-                    Some(NullSubstitutionValue::Boolean(false))
-                }
-                Some(
-                    NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_),
-                ) => Some(NullSubstitutionValue::Boolean(true)),
-                None => None,
-            }
-        }
+        Expr::IsNull(expr) => sql_not(null_check_value(
+            syntactic_null_substitution_value(expr.as_ref(), join_cols),
+            true,
+        )),
+        Expr::IsNotNull(expr) => null_check_value(
+            syntactic_null_substitution_value(expr.as_ref(), join_cols),
+            true,
+        ),
         Expr::Between(between) => {
-            let expr =
-                syntactic_null_substitution_value(between.expr.as_ref(), join_cols);
-            let low = syntactic_null_substitution_value(between.low.as_ref(), join_cols);
-            let high =
-                syntactic_null_substitution_value(between.high.as_ref(), join_cols);
-            if matches!(expr, Some(NullSubstitutionValue::Null))
-                || matches!(low, Some(NullSubstitutionValue::Null))
-                || matches!(high, Some(NullSubstitutionValue::Null))
-            {
+            if contains_null([
+                syntactic_null_substitution_value(between.expr.as_ref(), join_cols),
+                syntactic_null_substitution_value(between.low.as_ref(), join_cols),
+                syntactic_null_substitution_value(between.high.as_ref(), join_cols),
+            ]) {
                 Some(NullSubstitutionValue::Null)
             } else {
                 None
@@ -256,12 +261,10 @@ fn syntactic_null_substitution_value(
         }
         Expr::Negative(expr) => strict_null_passthrough(expr.as_ref(), join_cols),
         Expr::Like(like) | Expr::SimilarTo(like) => {
-            let value = syntactic_null_substitution_value(like.expr.as_ref(), join_cols);
-            let pattern =
-                syntactic_null_substitution_value(like.pattern.as_ref(), join_cols);
-            if matches!(value, Some(NullSubstitutionValue::Null))
-                || matches!(pattern, Some(NullSubstitutionValue::Null))
-            {
+            if contains_null([
+                syntactic_null_substitution_value(like.expr.as_ref(), join_cols),
+                syntactic_null_substitution_value(like.pattern.as_ref(), join_cols),
+            ]) {
                 Some(NullSubstitutionValue::Null)
             } else {
                 None
@@ -430,9 +433,7 @@ fn syntactic_binary_value(
         | datafusion_expr::Operator::QuestionAnd
         | datafusion_expr::Operator::QuestionPipe
         | datafusion_expr::Operator::Colon => {
-            if matches!(left, Some(NullSubstitutionValue::Null))
-                || matches!(right, Some(NullSubstitutionValue::Null))
-            {
+            if contains_null([left, right]) {
                 Some(NullSubstitutionValue::Null)
             } else {
                 None

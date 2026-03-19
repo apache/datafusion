@@ -412,9 +412,8 @@ fn push_down_all_join(
     on_filter: Vec<Expr>,
 ) -> Result<Transformed<LogicalPlan>> {
     let is_inner_join = join.join_type == JoinType::Inner;
-    let allow_convert_filter_to_join_condition = !join.on.is_empty()
-        || !(matches!(join.left.max_rows(), Some(1))
-            || matches!(join.right.max_rows(), Some(1)));
+    let allow_convert_filter_to_join_condition =
+        allow_convert_filter_to_join_condition(&join);
     // Get pushable predicates from current optimizer state
     let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
 
@@ -516,6 +515,12 @@ fn push_down_all_join(
         plan
     };
     Ok(Transformed::yes(plan))
+}
+
+fn allow_convert_filter_to_join_condition(join: &Join) -> bool {
+    !join.on.is_empty()
+        || !(matches!(join.left.max_rows(), Some(1))
+            || matches!(join.right.max_rows(), Some(1)))
 }
 
 fn push_down_join(
