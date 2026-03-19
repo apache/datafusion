@@ -75,3 +75,7 @@ harness = false
 [[bench]]
 harness = false
 name = "min_max_bytes"
+
+[[bench]]
+name = "approx_distinct"
+harness = false
