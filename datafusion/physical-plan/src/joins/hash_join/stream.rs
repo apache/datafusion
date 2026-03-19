@@ -42,7 +42,7 @@ use crate::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
-        need_produce_result_in_final,
+        can_skip_probe_on_empty_build_side, need_produce_result_in_final,
     },
 };
 
@@ -406,25 +406,13 @@ impl HashJoinStream {
         }
     }
 
-    /// Returns true when an empty build side fully determines the join result,
-    /// so the probe side does not need to be consumed.
-    fn can_skip_probe_on_empty_build_side(&self) -> bool {
-        self.filter.is_none()
-            && matches!(
-                self.join_type,
-                JoinType::Inner
-                    | JoinType::Left
-                    | JoinType::LeftSemi
-                    | JoinType::LeftAnti
-                    | JoinType::LeftMark
-                    | JoinType::RightSemi
-            )
-    }
-
     /// Returns the next state after the build side has been fully collected
     /// and any required build-side coordination has completed.
     fn next_state_after_build_ready(&self, left_data: &JoinLeftData) -> HashJoinStreamState {
-        if left_data.map().is_empty() && self.can_skip_probe_on_empty_build_side() {
+        if left_data.map().is_empty()
+            && self.filter.is_none()
+            && can_skip_probe_on_empty_build_side(self.join_type)
+        {
             HashJoinStreamState::Completed
         } else {
             HashJoinStreamState::FetchProbeBatch

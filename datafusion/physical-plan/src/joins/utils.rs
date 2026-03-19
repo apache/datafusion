@@ -855,6 +855,20 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
+/// Returns true when an empty build side fully determines the join result,
+/// so the probe side does not need to be consumed.
+pub(crate) fn can_skip_probe_on_empty_build_side(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::Inner
+            | JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::LeftMark
+            | JoinType::RightSemi
+    )
+}
+
 pub(crate) fn get_final_indices_from_shared_bitmap(
     shared_bitmap: &SharedBitmapBuilder,
     join_type: JoinType,
