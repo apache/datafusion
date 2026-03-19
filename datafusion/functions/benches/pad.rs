@@ -447,6 +447,34 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
+        // Utf8 with scalar truncation (str_len > target) and unicode fill
+        let args = create_scalar_pad_args::<i32>(size, 20, 5, "é", false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!(
+                "lpad utf8 scalar truncate [size={size}, str_len=20, target=5, fill='é']"
+            ),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::lpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
         group.finish();
     }
 
@@ -682,6 +710,34 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(
             format!(
                 "rpad utf8 scalar unicode [size={size}, str_len=5, target=20, fill='é']"
+            ),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::rpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // Utf8 with scalar truncation (str_len > target) and unicode fill
+        let args = create_scalar_pad_args::<i32>(size, 20, 5, "é", false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!(
+                "rpad utf8 scalar truncate [size={size}, str_len=20, target=5, fill='é']"
             ),
             |b| {
                 b.iter(|| {

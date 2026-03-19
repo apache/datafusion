@@ -126,7 +126,10 @@ impl ScalarUDFImpl for RPadFunc {
             let target_len: usize = match usize::try_from(target_len) {
                 Ok(n) if n <= i32::MAX as usize => n,
                 Ok(n) => {
-                    return exec_err!("rpad requested length {n} too large");
+                    return exec_err!(
+                        "rpad requested length {n} too large, maximum allowed length is {}",
+                        i32::MAX
+                    );
                 }
                 Err(_) => 0, // negative → 0
             };
@@ -282,7 +285,9 @@ fn rpad_scalar_unicode<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
                 graphemes_buf.extend(string.graphemes(true));
 
                 if target_len < graphemes_buf.len() {
-                    builder.append_value(graphemes_buf[..target_len].concat());
+                    let end: usize =
+                        graphemes_buf[..target_len].iter().map(|g| g.len()).sum();
+                    builder.append_value(&string[..end]);
                 } else if fill_chars.is_empty() {
                     builder.append_value(string);
                 } else {
@@ -331,7 +336,7 @@ fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             length_array,
             &args[2],
         ),
-        (_, _) => unreachable!("rpad"),
+        (len, dt) => unreachable!("rpad: unexpected arg count ({len}) or type ({dt})"),
     }
 }
 
@@ -389,7 +394,10 @@ where
                 (string, target_len, fill)
             {
                 if target_len > i32::MAX as i64 {
-                    return exec_err!("rpad requested length {target_len} too large");
+                    return exec_err!(
+                        "rpad requested length {target_len} too large, maximum allowed length is {}",
+                        i32::MAX
+                    );
                 }
 
                 let target_len = if target_len < 0 {
@@ -432,7 +440,9 @@ where
                     fill_chars_buf.extend(fill.chars());
 
                     if target_len < graphemes_buf.len() {
-                        builder.append_value(graphemes_buf[..target_len].concat());
+                        let end: usize =
+                            graphemes_buf[..target_len].iter().map(|g| g.len()).sum();
+                        builder.append_value(&string[..end]);
                     } else if fill_chars_buf.is_empty() {
                         builder.append_value(string);
                     } else {
@@ -458,7 +468,10 @@ where
         for (string, target_len) in string_array.iter().zip(length_array.iter()) {
             if let (Some(string), Some(target_len)) = (string, target_len) {
                 if target_len > i32::MAX as i64 {
-                    return exec_err!("rpad requested length {target_len} too large");
+                    return exec_err!(
+                        "rpad requested length {target_len} too large, maximum allowed length is {}",
+                        i32::MAX
+                    );
                 }
 
                 let target_len = if target_len < 0 {
@@ -488,7 +501,9 @@ where
                     graphemes_buf.extend(string.graphemes(true));
 
                     if target_len < graphemes_buf.len() {
-                        builder.append_value(graphemes_buf[..target_len].concat());
+                        let end: usize =
+                            graphemes_buf[..target_len].iter().map(|g| g.len()).sum();
+                        builder.append_value(&string[..end]);
                     } else {
                         builder.write_str(string)?;
                         for _ in 0..(target_len - graphemes_buf.len()) {
