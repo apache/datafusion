@@ -22,6 +22,7 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -139,7 +140,22 @@ impl BatchBuilder {
                     .iter()
                     .map(|(_, batch)| batch.column(column_idx).as_ref())
                     .collect();
-                Ok(interleave(&arrays, indices)?)
+                // Arrow's interleave panics on i32 offset overflow with
+                // `.expect("overflow")`. Catch that panic so the caller
+                // can retry with fewer rows.
+                match catch_unwind(AssertUnwindSafe(|| interleave(&arrays, indices))) {
+                    Ok(result) => Ok(result?),
+                    Err(panic_payload) => {
+                        if is_overflow_panic(&panic_payload) {
+                            Err(DataFusionError::ArrowError(
+                                Box::new(ArrowError::OffsetOverflowError(0)),
+                                None,
+                            ))
+                        } else {
+                            std::panic::resume_unwind(panic_payload);
+                        }
+                    }
+                }
             })
             .collect::<Result<Vec<_>>>()
     }
@@ -256,4 +272,70 @@ fn is_offset_overflow(e: &DataFusionError) -> bool {
             if matches!(err.as_ref(), ArrowError::OffsetOverflowError(_))
     )
 >>>>>>> 967cf0a65 (Fix sort merge interleave overflow)
+}
+
+/// Returns true if a caught panic payload looks like an Arrow offset overflow.
+fn is_overflow_panic(payload: &Box<dyn std::any::Any + Send>) -> bool {
+    if let Some(msg) = payload.downcast_ref::<&str>() {
+        return msg.contains("overflow");
+    }
+    if let Some(msg) = payload.downcast_ref::<String>() {
+        return msg.contains("overflow");
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::StringArray;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, UnboundedMemoryPool};
+
+    /// Test that interleaving string columns whose combined byte length
+    /// exceeds i32::MAX does not panic. Arrow's `interleave` panics with
+    /// `.expect("overflow")` in this case; `BatchBuilder` catches the
+    /// panic and retries with fewer rows until the output fits in i32
+    /// offsets.
+    #[test]
+    fn test_interleave_overflow_is_caught() {
+        // Each string is ~768 MB. Three rows total → ~2.3 GB > i32::MAX.
+        let big_str: String = "x".repeat(768 * 1024 * 1024);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8,
+            false,
+        )]));
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        let mut builder = BatchBuilder::new(
+            Arc::clone(&schema),
+            /* stream_count */ 3,
+            /* batch_size */ 16,
+            reservation,
+        );
+
+        // Push one batch per stream, each containing one large string.
+        for stream_idx in 0..3 {
+            let array = StringArray::from(vec![big_str.as_str()]);
+            let batch =
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)])
+                    .unwrap();
+            builder.push_batch(stream_idx, batch).unwrap();
+            builder.push_row(stream_idx);
+        }
+
+        // 3 rows total; interleaving all 3 would overflow i32 offsets.
+        // The retry loop should halve until it succeeds.
+        let batch = builder.build_record_batch().unwrap().unwrap();
+        assert!(batch.num_rows() > 0);
+        assert!(batch.num_rows() < 3);
+
+        // Drain remaining rows.
+        let batch2 = builder.build_record_batch().unwrap().unwrap();
+        assert!(batch2.num_rows() > 0);
+        assert_eq!(batch.num_rows() + batch2.num_rows(), 3);
+    }
 }
