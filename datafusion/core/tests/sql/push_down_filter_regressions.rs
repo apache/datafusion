@@ -19,24 +19,52 @@ use std::sync::Arc;
 
 use super::*;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
+use datafusion_optimizer::utils::{
+    NullRestrictionEvalMode, set_null_restriction_eval_mode_for_test,
+};
+
+const WINDOW_SCALAR_SUBQUERY_SQL: &str = r#"
+    WITH suppliers AS (
+      SELECT *
+      FROM (VALUES (1, 10.0), (1, 20.0)) AS t(nation, acctbal)
+    )
+    SELECT
+      ROW_NUMBER() OVER (PARTITION BY nation ORDER BY acctbal DESC) AS rn
+    FROM suppliers AS s
+    WHERE acctbal > (
+      SELECT AVG(acctbal) FROM suppliers
+    )
+"#;
+
+fn sqllogictest_style_ctx(push_down_filter_enabled: bool) -> SessionContext {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
+    if !push_down_filter_enabled {
+        assert!(ctx.remove_optimizer_rule("push_down_filter"));
+    }
+    ctx
+}
+
+async fn capture_window_scalar_subquery_plans(
+    push_down_filter_enabled: bool,
+    null_restriction_eval_mode: NullRestrictionEvalMode,
+) -> Result<(String, String)> {
+    let _mode_guard = set_null_restriction_eval_mode_for_test(null_restriction_eval_mode);
+    let ctx = sqllogictest_style_ctx(push_down_filter_enabled);
+    let df = ctx.sql(WINDOW_SCALAR_SUBQUERY_SQL).await?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+    let physical_plan = df.create_physical_plan().await?;
+
+    Ok((
+        optimized_plan.display_indent_schema().to_string(),
+        displayable(physical_plan.as_ref()).indent(true).to_string(),
+    ))
+}
 
 #[tokio::test]
 async fn window_scalar_subquery_regression() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = r#"
-        WITH suppliers AS (
-          SELECT *
-          FROM (VALUES (1, 10.0), (1, 20.0)) AS t(nation, acctbal)
-        )
-        SELECT
-          ROW_NUMBER() OVER (PARTITION BY nation ORDER BY acctbal DESC) AS rn
-        FROM suppliers AS s
-        WHERE acctbal > (
-          SELECT AVG(acctbal) FROM suppliers
-        )
-    "#;
-
-    let results = ctx.sql(sql).await?.collect().await?;
+    let results = ctx.sql(WINDOW_SCALAR_SUBQUERY_SQL).await?.collect().await?;
 
     assert_batches_eq!(
         &["+----+", "| rn |", "+----+", "| 1  |", "+----+",],
@@ -165,6 +193,42 @@ async fn natural_join_union_regression() -> Result<()> {
         ],
         &results
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_scalar_subquery_optimizer_delta() -> Result<()> {
+    let (enabled_optimized, enabled_physical) =
+        capture_window_scalar_subquery_plans(true, NullRestrictionEvalMode::Auto).await?;
+    let (disabled_optimized, disabled_physical) =
+        capture_window_scalar_subquery_plans(false, NullRestrictionEvalMode::Auto)
+            .await?;
+    let (authoritative_optimized, authoritative_physical) =
+        capture_window_scalar_subquery_plans(
+            true,
+            NullRestrictionEvalMode::AuthoritativeOnly,
+        )
+        .await?;
+
+    assert!(enabled_optimized.contains(
+        "Inner Join:  Filter: s.acctbal > __scalar_sq_1.avg(suppliers.acctbal)"
+    ));
+    assert!(
+        disabled_optimized
+            .contains("Filter: s.acctbal > __scalar_sq_1.avg(suppliers.acctbal)")
+    );
+    assert!(disabled_optimized.contains("Cross Join:"));
+
+    assert!(enabled_physical.contains("NestedLoopJoinExec: join_type=Inner"));
+    assert!(enabled_physical.contains("filter=acctbal@0 > avg(suppliers.acctbal)@1"));
+    assert!(
+        disabled_physical.contains("FilterExec: acctbal@1 > avg(suppliers.acctbal)@2")
+    );
+    assert!(disabled_physical.contains("CrossJoinExec"));
+
+    assert_eq!(authoritative_optimized, enabled_optimized);
+    assert_eq!(authoritative_physical, enabled_physical);
 
     Ok(())
 }
