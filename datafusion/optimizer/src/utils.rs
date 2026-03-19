@@ -95,27 +95,23 @@ pub fn is_restrict_null_predicate<'a>(
     if let Some(is_restricting) =
         syntactic_restrict_null_predicate(&predicate, &join_cols)
     {
+        #[cfg(debug_assertions)]
+        {
+            let authoritative = authoritative_restrict_null_predicate(
+                predicate.clone(),
+                join_cols.iter().copied(),
+            )?;
+            debug_assert_eq!(
+                is_restricting, authoritative,
+                "syntactic fast path disagrees with authoritative null-restriction evaluation for predicate: {predicate}"
+            );
+        }
         return Ok(is_restricting);
     }
 
     // If result is single `true`, return false;
     // If result is single `NULL` or `false`, return true;
-    Ok(
-        match evaluate_expr_with_null_column(predicate, join_cols.into_iter())? {
-            ColumnarValue::Array(array) => {
-                if array.len() == 1 {
-                    let boolean_array = as_boolean_array(&array)?;
-                    boolean_array.is_null(0) || !boolean_array.value(0)
-                } else {
-                    false
-                }
-            }
-            ColumnarValue::Scalar(scalar) => matches!(
-                scalar,
-                ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
-            ),
-        },
-    )
+    authoritative_restrict_null_predicate(predicate, join_cols.into_iter())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -666,6 +662,28 @@ fn evaluate_expr_with_null_column<'a>(
         .evaluate(&input_batch)
 }
 
+fn authoritative_restrict_null_predicate<'a>(
+    predicate: Expr,
+    join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
+) -> Result<bool> {
+    Ok(
+        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
+            ColumnarValue::Array(array) => {
+                if array.len() == 1 {
+                    let boolean_array = as_boolean_array(&array)?;
+                    boolean_array.is_null(0) || !boolean_array.value(0)
+                } else {
+                    false
+                }
+            }
+            ColumnarValue::Scalar(scalar) => matches!(
+                scalar,
+                ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
+            ),
+        },
+    )
+}
+
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let mut expr_rewrite = TypeCoercionRewriter { schema };
     expr.rewrite(&mut expr_rewrite).data()
@@ -817,6 +835,75 @@ mod tests {
         let actual =
             is_restrict_null_predicate(predicate.clone(), std::iter::once(&column_a))?;
         assert!(!actual, "{predicate}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn syntactic_fast_path_matches_authoritative_evaluator() -> Result<()> {
+        let test_cases = vec![
+            is_null(col("a")),
+            Expr::IsNotNull(Box::new(col("a"))),
+            binary_expr(col("a"), Operator::Gt, lit(8i64)),
+            binary_expr(col("a"), Operator::Eq, lit(ScalarValue::Null)),
+            binary_expr(col("a"), Operator::And, lit(true)),
+            binary_expr(col("a"), Operator::Or, lit(false)),
+            Expr::Not(Box::new(col("a").is_true())),
+            col("a").is_true(),
+            col("a").is_false(),
+            col("a").is_unknown(),
+            col("a").is_not_true(),
+            col("a").is_not_false(),
+            col("a").is_not_unknown(),
+            col("a").between(lit(1i64), lit(10i64)),
+            binary_expr(
+                when(Expr::IsNotNull(Box::new(col("a"))), col("a"))
+                    .otherwise(col("b"))?,
+                Operator::Gt,
+                lit(2i64),
+            ),
+            case(col("a"))
+                .when(lit(1i64), lit(true))
+                .otherwise(lit(false))?,
+            case(col("a"))
+                .when(lit(0i64), lit(false))
+                .otherwise(lit(true))?,
+            binary_expr(
+                case(col("a"))
+                    .when(lit(0i64), lit(true))
+                    .otherwise(lit(false))?,
+                Operator::Or,
+                lit(false),
+            ),
+            binary_expr(
+                case(lit(1i64))
+                    .when(lit(1i64), lit(ScalarValue::Null))
+                    .otherwise(lit(false))?,
+                Operator::IsNotDistinctFrom,
+                lit(true),
+            ),
+        ];
+
+        for predicate in test_cases {
+            let join_cols = predicate.column_refs();
+            if let Some(syntactic) =
+                syntactic_restrict_null_predicate(&predicate, &join_cols)
+            {
+                let authoritative = authoritative_restrict_null_predicate(
+                    predicate.clone(),
+                    join_cols.iter().copied(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "authoritative evaluator failed for predicate `{predicate}`: {error}"
+                    )
+                });
+                assert_eq!(
+                    syntactic, authoritative,
+                    "syntactic fast path disagrees with authoritative evaluator for predicate: {predicate}",
+                );
+            }
+        }
 
         Ok(())
     }
