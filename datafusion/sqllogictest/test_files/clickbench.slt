@@ -1203,8 +1203,8 @@ logical_plan
 02)--SubqueryAlias: hits
 03)----TableScan: hits_raw projection=[HitColor, BrowserLanguage, BrowserCountry]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(DISTINCT hits.HitColor), count(DISTINCT hits.BrowserCountry), count(DISTINCT hits.BrowserLanguage)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[HitColor, BrowserLanguage, BrowserCountry], file_type=parquet
+01)ProjectionExec: expr=[1 as count(DISTINCT hits.HitColor), 1 as count(DISTINCT hits.BrowserCountry), 1 as count(DISTINCT hits.BrowserLanguage)]
+02)--PlaceholderRowExec
 
 query III
 SELECT COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")  FROM hits;

@@ -69,6 +69,8 @@ github:
     # enable updating head branches of pull requests
     allow_update_branch: true
     allow_auto_merge: true
+    # auto-delete head branches after being merged
+    del_branch_on_merge: true
 
 # publishes the content of the `asf-site` branch to
 # https://datafusion.apache.org/

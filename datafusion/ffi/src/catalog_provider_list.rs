@@ -212,6 +212,13 @@ impl FFI_CatalogProviderList {
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
+        if let Some(provider) = provider
+            .as_any()
+            .downcast_ref::<ForeignCatalogProviderList>()
+        {
+            return provider.0.clone();
+        }
+
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
         Self {
