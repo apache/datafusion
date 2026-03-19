@@ -385,16 +385,14 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        unsafe {
-            let children = children
-                .into_iter()
-                .map(|child| FFI_ExecutionPlan::new(child, None))
-                .collect::<RVec<_>>();
-            let new_plan =
-                df_result!((self.plan.with_new_children)(&self.plan, children))?;
+        let children = children
+            .into_iter()
+            .map(|child| FFI_ExecutionPlan::new(child, None))
+            .collect::<RVec<_>>();
+        let new_plan =
+            unsafe { df_result!((self.plan.with_new_children)(&self.plan, children))? };
 
-            (&new_plan).try_into()
-        }
+        (&new_plan).try_into()
     }
 
     fn execute(
