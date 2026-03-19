@@ -208,6 +208,19 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         if self.done {
+            // When `build_record_batch()` hits an i32 offset overflow (e.g.
+            // combined string offsets exceed 2 GB), it emits a partial batch
+            // and keeps the remaining rows in `self.in_progress.indices`.
+            // Drain those leftover rows before terminating the stream,
+            // otherwise they would be silently dropped.
+            // Repeated overflows are fine — each poll emits another partial
+            // batch until `in_progress` is fully drained.
+            if !self.in_progress.is_empty() {
+                let before = self.in_progress.len();
+                let result = self.in_progress.build_record_batch();
+                self.produced += before - self.in_progress.len();
+                return Poll::Ready(result.transpose());
+            }
             return Poll::Ready(None);
         }
         // Once all partitions have set their corresponding cursors for the loser tree,
