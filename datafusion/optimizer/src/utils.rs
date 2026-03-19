@@ -162,7 +162,7 @@ pub fn is_restrict_null_predicate<'a>(
 
     // If result is single `true`, return false;
     // If result is single `NULL` or `false`, return true;
-        authoritative_restrict_null_predicate(predicate, join_cols)
+    authoritative_restrict_null_predicate(predicate, join_cols)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
