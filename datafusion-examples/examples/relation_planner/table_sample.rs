@@ -727,8 +727,8 @@ impl ExecutionPlan for SampleExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let mut stats = self.input.partition_statistics(partition)?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let ratio = self.upper_bound - self.lower_bound;
 
         // Scale statistics by sampling ratio (inexact due to randomness)
@@ -741,7 +741,7 @@ impl ExecutionPlan for SampleExec {
             .map(|n| (n as f64 * ratio) as usize)
             .to_inexact();
 
-        Ok(stats)
+        Ok(Arc::new(stats))
     }
 
     fn apply_expressions(

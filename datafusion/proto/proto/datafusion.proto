@@ -270,6 +270,25 @@ message CopyToNode {
   repeated string partition_by = 7;
 }
 
+// Identifies a built-in file format supported by DataFusion.
+// Used by DefaultLogicalExtensionCodec to serialize/deserialize
+// FileFormatFactory instances (e.g. in CopyTo plans).
+enum FileFormatKind {
+  FILE_FORMAT_KIND_UNSPECIFIED = 0;
+  FILE_FORMAT_KIND_CSV = 1;
+  FILE_FORMAT_KIND_JSON = 2;
+  FILE_FORMAT_KIND_PARQUET = 3;
+  FILE_FORMAT_KIND_ARROW = 4;
+  FILE_FORMAT_KIND_AVRO = 5;
+}
+
+// Wraps a serialized FileFormatFactory with its format kind tag,
+// so the decoder can dispatch to the correct format-specific codec.
+message FileFormatProto {
+  FileFormatKind kind = 1;
+  bytes encoded_file_format = 2;
+}
+
 message DmlNode{
    enum Type {
     UPDATE = 0;
@@ -1022,9 +1041,6 @@ message PhysicalExtensionExprNode {
 message PhysicalHashExprNode {
   repeated PhysicalExprNode on_columns = 1;
   uint64 seed0 = 2;
-  uint64 seed1 = 3;
-  uint64 seed2 = 4;
-  uint64 seed3 = 5;
   string description = 6;
 }
 
@@ -1034,6 +1050,7 @@ message FilterExecNode {
   uint32 default_filter_selectivity = 3;
   repeated uint32 projection = 9;
   uint32 batch_size = 10;
+  optional uint32 fetch = 11;
 }
 
 message FileGroup {
@@ -1333,6 +1350,7 @@ message RepartitionExecNode{
   //   uint64 unknown = 4;
   // }
   Partitioning partitioning = 5;
+  bool preserve_order = 6;
 }
 
 message Partitioning {

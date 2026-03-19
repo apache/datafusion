@@ -600,7 +600,7 @@ impl Alias {
     }
 }
 
-/// Binary expression
+/// Binary expression for [`Expr::BinaryExpr`]
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct BinaryExpr {
     /// Left-hand side of the expression

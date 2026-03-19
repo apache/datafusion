@@ -114,6 +114,8 @@ mod tests {
             let len = bytes.len() as u64;
             let range = 0..len * self.max_iterations;
             let arc = self.iterations_detected.clone();
+            #[expect(clippy::result_large_err)]
+            // closure only ever returns Ok; Err type is never constructed
             let stream = futures::stream::repeat_with(move || {
                 let arc_inner = arc.clone();
                 *arc_inner.lock().unwrap() += 1;

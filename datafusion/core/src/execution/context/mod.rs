@@ -530,19 +530,14 @@ impl SessionContext {
         self.runtime_env().deregister_object_store(url)
     }
 
-    /// Registers the [`RecordBatch`] as the specified table name
+    /// Registers the given [`RecordBatch`] as the specified table reference.
     pub fn register_batch(
         &self,
-        table_name: &str,
+        table_ref: impl Into<TableReference>,
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        self.register_table(
-            TableReference::Bare {
-                table: table_name.into(),
-            },
-            Arc::new(table),
-        )
+        self.register_table(table_ref, Arc::new(table))
     }
 
     /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
@@ -1184,7 +1179,7 @@ impl SessionContext {
                 builder.with_object_list_cache_limit(limit)
             }
             "list_files_cache_ttl" => {
-                let duration = Self::parse_duration(value)?;
+                let duration = Self::parse_duration(variable, value)?;
                 builder.with_object_list_cache_ttl(Some(duration))
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
@@ -1323,34 +1318,64 @@ impl SessionContext {
         }
     }
 
-    fn parse_duration(duration: &str) -> Result<Duration> {
+    fn parse_duration(config_name: &str, duration: &str) -> Result<Duration> {
+        if duration.trim().is_empty() {
+            return Err(plan_datafusion_err!(
+                "Duration should not be empty or blank for '{config_name}'"
+            ));
+        }
+
         let mut minutes = None;
         let mut seconds = None;
 
         for duration in duration.split_inclusive(&['m', 's']) {
             let (number, unit) = duration.split_at(duration.len() - 1);
             let number: u64 = number.parse().map_err(|_| {
-                plan_datafusion_err!("Failed to parse number from duration '{duration}'")
+                plan_datafusion_err!("Failed to parse number from duration '{duration}' for '{config_name}'")
             })?;
 
             match unit {
                 "m" if minutes.is_none() && seconds.is_none() => minutes = Some(number),
                 "s" if seconds.is_none() => seconds = Some(number),
-                _ => plan_err!(
-                    "Invalid duration, unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order"
+                other => plan_err!(
+                    "Invalid duration unit: '{other}'. The unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order for '{config_name}'"
                 )?,
             }
         }
 
-        let duration = Duration::from_secs(
-            minutes.unwrap_or_default() * 60 + seconds.unwrap_or_default(),
-        );
+        let secs = Self::check_overflow(config_name, minutes, 60, seconds)?;
+        let duration = Duration::from_secs(secs);
 
         if duration.is_zero() {
-            return plan_err!("Duration must be greater than 0 seconds");
+            return plan_err!(
+                "Duration must be greater than 0 seconds for '{config_name}'"
+            );
         }
 
         Ok(duration)
+    }
+
+    fn check_overflow(
+        config_name: &str,
+        mins: Option<u64>,
+        multiplier: u64,
+        secs: Option<u64>,
+    ) -> Result<u64> {
+        let first_part_of_secs = mins.unwrap_or_default().checked_mul(multiplier);
+        if first_part_of_secs.is_none() {
+            plan_err!(
+                "Duration has overflowed allowed maximum limit due to 'mins * {multiplier}' when setting '{config_name}'"
+            )?
+        }
+        let second_part_of_secs = first_part_of_secs
+            .unwrap()
+            .checked_add(secs.unwrap_or_default());
+        if second_part_of_secs.is_none() {
+            plan_err!(
+                "Duration has overflowed allowed maximum limit due to 'mins * {multiplier} + secs' when setting '{config_name}'"
+            )?
+        }
+        Ok(second_part_of_secs.unwrap())
     }
 
     async fn create_custom_table(
@@ -1758,15 +1783,14 @@ impl SessionContext {
     /// SQL statements executed against this context.
     pub async fn register_arrow(
         &self,
-        name: &str,
-        table_path: &str,
+        table_ref: impl Into<TableReference>,
+        table_path: impl AsRef<str>,
         options: ArrowReadOptions<'_>,
     ) -> Result<()> {
         let listing_options = options
             .to_listing_options(&self.copied_config(), self.copied_table_options());
-
         self.register_listing_table(
-            name,
+            table_ref,
             table_path,
             listing_options,
             options.schema.map(|s| Arc::new(s.to_owned())),
@@ -2218,7 +2242,9 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow::datatypes::{DataType, TimeUnit};
+    use arrow_schema::FieldRef;
     use datafusion_common::DataFusionError;
+    use datafusion_common::datatype::DataTypeExt;
     use std::error::Error;
     use std::path::PathBuf;
 
@@ -2735,7 +2761,7 @@ mod tests {
     struct MyTypePlanner {}
 
     impl TypePlanner for MyTypePlanner {
-        fn plan_type(&self, sql_type: &ast::DataType) -> Result<Option<DataType>> {
+        fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
             match sql_type {
                 ast::DataType::Datetime(precision) => {
                     let precision = match precision {
@@ -2745,7 +2771,9 @@ mod tests {
                         None | Some(9) => TimeUnit::Nanosecond,
                         _ => unreachable!(),
                     };
-                    Ok(Some(DataType::Timestamp(precision, None)))
+                    Ok(Some(
+                        DataType::Timestamp(precision, None).into_nullable_field_ref(),
+                    ))
                 }
                 _ => Ok(None),
             }
@@ -2799,6 +2827,8 @@ mod tests {
 
     #[test]
     fn test_parse_duration() {
+        const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
+
         // Valid durations
         for (duration, want) in [
             ("1s", Duration::from_secs(1)),
@@ -2806,14 +2836,81 @@ mod tests {
             ("1m0s", Duration::from_secs(60)),
             ("1m1s", Duration::from_secs(61)),
         ] {
-            let have = SessionContext::parse_duration(duration).unwrap();
+            let have =
+                SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
             assert_eq!(want, have);
         }
 
         // Invalid durations
-        for duration in ["0s", "0m", "1s0m", "1s1m"] {
-            let have = SessionContext::parse_duration(duration);
+        for duration in [
+            "0s", "0m", "1s0m", "1s1m", "XYZ", "1h", "XYZm2s", "", " ", "-1m", "1m 1s",
+            "1m1s ", " 1m1s",
+        ] {
+            let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
             assert!(have.is_err());
+            assert!(
+                have.unwrap_err()
+                    .message()
+                    .to_string()
+                    .contains(LIST_FILES_CACHE_TTL)
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_duration_with_overflow_check() {
+        const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
+
+        // Valid durations which are close to max allowed limit
+        for (duration, want) in [
+            (
+                "18446744073709551615s",
+                Duration::from_secs(18446744073709551615),
+            ),
+            (
+                "307445734561825860m",
+                Duration::from_secs(307445734561825860 * 60),
+            ),
+            (
+                "307445734561825860m10s",
+                Duration::from_secs(307445734561825860 * 60 + 10),
+            ),
+            (
+                "1m18446744073709551555s",
+                Duration::from_secs(60 + 18446744073709551555),
+            ),
+        ] {
+            let have =
+                SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration).unwrap();
+            assert_eq!(want, have);
+        }
+
+        // Invalid durations which overflow max allowed limit
+        for (duration, error_message_prefix) in [
+            (
+                "18446744073709551616s",
+                "Failed to parse number from duration",
+            ),
+            (
+                "307445734561825861m",
+                "Duration has overflowed allowed maximum limit due to",
+            ),
+            (
+                "307445734561825860m60s",
+                "Duration has overflowed allowed maximum limit due to",
+            ),
+            (
+                "1m18446744073709551556s",
+                "Duration has overflowed allowed maximum limit due to",
+            ),
+        ] {
+            let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
+            assert!(have.is_err());
+            let error_message = have.unwrap_err().message().to_string();
+            assert!(
+                error_message.contains(error_message_prefix)
+                    && error_message.contains(LIST_FILES_CACHE_TTL)
+            );
         }
     }
 

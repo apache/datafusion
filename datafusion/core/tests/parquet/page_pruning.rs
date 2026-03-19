@@ -366,281 +366,367 @@ async fn prune_date64() {
 }
 
 macro_rules! int_tests {
-    ($bits:expr) => {
-        paste::item! {
-            #[tokio::test]
-            //                      null count  min                                       max
-            // page-0                         0  -5                                        -1
-            // page-1                         0  -4                                        0
-            // page-2                         0  0                                         4
-            // page-3                         0  5                                         9
-            async fn [<prune_int $bits _lt>]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} < 1", $bits),
-                    Some(0),
-                    Some(5),
-                    11,
-                    5,
-                )
-                .await;
-                // result of sql "SELECT * FROM t where i < 1" is same as
-                // "SELECT * FROM t where -i > -1"
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where -i{} > -1", $bits),
-                    Some(0),
-                    Some(5),
-                    11,
-                    5,
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _gt >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} > 8", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5,
-                )
-                .await;
-
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where -i{} < -8", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5,
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _eq >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} = 1", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-            #[tokio::test]
-            async fn [<prune_int $bits _scalar_fun_and_eq >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where abs(i{}) = 1  and i{} = 1", $bits, $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _scalar_fun >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where abs(i{}) = 1", $bits),
-                    Some(0),
-                    Some(0),
-                    3,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _complex_expr>]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{}+1 = 1", $bits),
-                    Some(0),
-                    Some(0),
-                    2,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _complex_expr_subtract >]() {
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where 1-i{} > 1", $bits),
-                    Some(0),
-                    Some(0),
-                    9,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _eq_in_list >]() {
-                // result of sql "SELECT * FROM t where in (1)"
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} in (1)", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_int $bits _eq_in_list_negated >]() {
-                // result of sql "SELECT * FROM t where not in (1)" prune nothing
-                test_prune(
-                    Scenario::Int,
-                    &format!("SELECT * FROM t where i{} not in (1)", $bits),
-                    Some(0),
-                    Some(0),
-                    19,
-                    5
-                )
-                .await;
-            }
+    ($bits:expr, $fn_lt:ident, $fn_gt:ident, $fn_eq:ident, $fn_scalar_fun_and_eq:ident, $fn_scalar_fun:ident, $fn_complex_expr:ident, $fn_complex_expr_subtract:ident, $fn_eq_in_list:ident, $fn_eq_in_list_negated:ident) => {
+        #[tokio::test]
+        //                      null count  min                                       max
+        // page-0                         0  -5                                        -1
+        // page-1                         0  -4                                        0
+        // page-2                         0  0                                         4
+        // page-3                         0  5                                         9
+        async fn $fn_lt() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} < 1", $bits),
+                Some(0),
+                Some(5),
+                11,
+                5,
+            )
+            .await;
+            // result of sql "SELECT * FROM t where i < 1" is same as
+            // "SELECT * FROM t where -i > -1"
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where -i{} > -1", $bits),
+                Some(0),
+                Some(5),
+                11,
+                5,
+            )
+            .await;
         }
-    }
+
+        #[tokio::test]
+        async fn $fn_gt() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} > 8", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where -i{} < -8", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} = 1", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+        #[tokio::test]
+        async fn $fn_scalar_fun_and_eq() {
+            test_prune(
+                Scenario::Int,
+                &format!(
+                    "SELECT * FROM t where abs(i{}) = 1  and i{} = 1",
+                    $bits, $bits
+                ),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_scalar_fun() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where abs(i{}) = 1", $bits),
+                Some(0),
+                Some(0),
+                3,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_complex_expr() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{}+1 = 1", $bits),
+                Some(0),
+                Some(0),
+                2,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_complex_expr_subtract() {
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where 1-i{} > 1", $bits),
+                Some(0),
+                Some(0),
+                9,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq_in_list() {
+            // result of sql "SELECT * FROM t where in (1)"
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} in (1)", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq_in_list_negated() {
+            // result of sql "SELECT * FROM t where not in (1)" prune nothing
+            test_prune(
+                Scenario::Int,
+                &format!("SELECT * FROM t where i{} not in (1)", $bits),
+                Some(0),
+                Some(0),
+                19,
+                5,
+            )
+            .await;
+        }
+    };
 }
 
-int_tests!(8);
-int_tests!(16);
-int_tests!(32);
-int_tests!(64);
+int_tests!(
+    8,
+    prune_int8_lt,
+    prune_int8_gt,
+    prune_int8_eq,
+    prune_int8_scalar_fun_and_eq,
+    prune_int8_scalar_fun,
+    prune_int8_complex_expr,
+    prune_int8_complex_expr_subtract,
+    prune_int8_eq_in_list,
+    prune_int8_eq_in_list_negated
+);
+int_tests!(
+    16,
+    prune_int16_lt,
+    prune_int16_gt,
+    prune_int16_eq,
+    prune_int16_scalar_fun_and_eq,
+    prune_int16_scalar_fun,
+    prune_int16_complex_expr,
+    prune_int16_complex_expr_subtract,
+    prune_int16_eq_in_list,
+    prune_int16_eq_in_list_negated
+);
+int_tests!(
+    32,
+    prune_int32_lt,
+    prune_int32_gt,
+    prune_int32_eq,
+    prune_int32_scalar_fun_and_eq,
+    prune_int32_scalar_fun,
+    prune_int32_complex_expr,
+    prune_int32_complex_expr_subtract,
+    prune_int32_eq_in_list,
+    prune_int32_eq_in_list_negated
+);
+int_tests!(
+    64,
+    prune_int64_lt,
+    prune_int64_gt,
+    prune_int64_eq,
+    prune_int64_scalar_fun_and_eq,
+    prune_int64_scalar_fun,
+    prune_int64_complex_expr,
+    prune_int64_complex_expr_subtract,
+    prune_int64_eq_in_list,
+    prune_int64_eq_in_list_negated
+);
 
 macro_rules! uint_tests {
-    ($bits:expr) => {
-        paste::item! {
-            #[tokio::test]
-            //                      null count  min                                       max
-            // page-0                         0  0                                         4
-            // page-1                         0  1                                         5
-            // page-2                         0  5                                         9
-            // page-3                         0  250                                       254
-            async fn [<prune_uint $bits _lt>]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} < 6", $bits),
-                    Some(0),
-                    Some(5),
-                    11,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _gt >]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} > 253", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq >]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} = 6", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _scalar_fun_and_eq >]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where power(u{}, 2) = 36 and u{} = 6", $bits, $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _scalar_fun >]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where power(u{}, 2) = 25", $bits),
-                    Some(0),
-                    Some(0),
-                    2,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _complex_expr>]() {
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{}+1 = 6", $bits),
-                    Some(0),
-                    Some(0),
-                    2,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq_in_list >]() {
-                // result of sql "SELECT * FROM t where in (1)"
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} in (6)", $bits),
-                    Some(0),
-                    Some(15),
-                    1,
-                    5
-                )
-                .await;
-            }
-
-            #[tokio::test]
-            async fn [<prune_uint $bits _eq_in_list_negated >]() {
-                // result of sql "SELECT * FROM t where not in (6)" prune nothing
-                test_prune(
-                    Scenario::UInt,
-                    &format!("SELECT * FROM t where u{} not in (6)", $bits),
-                    Some(0),
-                    Some(0),
-                    19,
-                    5
-                )
-                .await;
-            }
+    ($bits:expr, $fn_lt:ident, $fn_gt:ident, $fn_eq:ident, $fn_scalar_fun_and_eq:ident, $fn_scalar_fun:ident, $fn_complex_expr:ident, $fn_eq_in_list:ident, $fn_eq_in_list_negated:ident) => {
+        #[tokio::test]
+        //                      null count  min                                       max
+        // page-0                         0  0                                         4
+        // page-1                         0  1                                         5
+        // page-2                         0  5                                         9
+        // page-3                         0  250                                       254
+        async fn $fn_lt() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} < 6", $bits),
+                Some(0),
+                Some(5),
+                11,
+                5,
+            )
+            .await;
         }
-    }
+
+        #[tokio::test]
+        async fn $fn_gt() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} > 253", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} = 6", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_scalar_fun_and_eq() {
+            test_prune(
+                Scenario::UInt,
+                &format!(
+                    "SELECT * FROM t where power(u{}, 2) = 36 and u{} = 6",
+                    $bits, $bits
+                ),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_scalar_fun() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where power(u{}, 2) = 25", $bits),
+                Some(0),
+                Some(0),
+                2,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_complex_expr() {
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{}+1 = 6", $bits),
+                Some(0),
+                Some(0),
+                2,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq_in_list() {
+            // result of sql "SELECT * FROM t where in (1)"
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} in (6)", $bits),
+                Some(0),
+                Some(15),
+                1,
+                5,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn $fn_eq_in_list_negated() {
+            // result of sql "SELECT * FROM t where not in (6)" prune nothing
+            test_prune(
+                Scenario::UInt,
+                &format!("SELECT * FROM t where u{} not in (6)", $bits),
+                Some(0),
+                Some(0),
+                19,
+                5,
+            )
+            .await;
+        }
+    };
 }
 
-uint_tests!(8);
-uint_tests!(16);
-uint_tests!(32);
-uint_tests!(64);
+uint_tests!(
+    8,
+    prune_uint8_lt,
+    prune_uint8_gt,
+    prune_uint8_eq,
+    prune_uint8_scalar_fun_and_eq,
+    prune_uint8_scalar_fun,
+    prune_uint8_complex_expr,
+    prune_uint8_eq_in_list,
+    prune_uint8_eq_in_list_negated
+);
+uint_tests!(
+    16,
+    prune_uint16_lt,
+    prune_uint16_gt,
+    prune_uint16_eq,
+    prune_uint16_scalar_fun_and_eq,
+    prune_uint16_scalar_fun,
+    prune_uint16_complex_expr,
+    prune_uint16_eq_in_list,
+    prune_uint16_eq_in_list_negated
+);
+uint_tests!(
+    32,
+    prune_uint32_lt,
+    prune_uint32_gt,
+    prune_uint32_eq,
+    prune_uint32_scalar_fun_and_eq,
+    prune_uint32_scalar_fun,
+    prune_uint32_complex_expr,
+    prune_uint32_eq_in_list,
+    prune_uint32_eq_in_list_negated
+);
+uint_tests!(
+    64,
+    prune_uint64_lt,
+    prune_uint64_gt,
+    prune_uint64_eq,
+    prune_uint64_scalar_fun_and_eq,
+    prune_uint64_scalar_fun,
+    prune_uint64_complex_expr,
+    prune_uint64_eq_in_list,
+    prune_uint64_eq_in_list_negated
+);
 
 #[tokio::test]
 //                      null count  min                                       max

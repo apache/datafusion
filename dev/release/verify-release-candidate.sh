@@ -22,7 +22,7 @@
 check_dependencies() {
   local missing_deps=0
   local required_deps=("curl" "git" "gpg" "cc" "protoc")
-  
+
   # Either shasum or sha256sum/sha512sum are required
   local has_sha_tools=0
 
@@ -32,7 +32,7 @@ check_dependencies() {
       missing_deps=1
     fi
   done
-  
+
   # Check for either shasum or sha256sum/sha512sum
   if command -v shasum &> /dev/null; then
     has_sha_tools=1
@@ -42,7 +42,7 @@ check_dependencies() {
     echo "Error: Neither shasum nor sha256sum/sha512sum are installed or in PATH"
     missing_deps=1
   fi
-  
+
   if [ $missing_deps -ne 0 ]; then
     echo "Please install missing dependencies and try again"
     exit 1
@@ -163,7 +163,7 @@ test_source_distribution() {
   git clone https://github.com/apache/parquet-testing.git parquet-testing
 
   cargo build
-  cargo test --all --features=avro
+  cargo test --profile=ci --all --features=avro
 
   if ( find -iname 'Cargo.toml' | xargs grep SNAPSHOT ); then
     echo "Cargo.toml version should not contain SNAPSHOT for releases"

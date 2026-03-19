@@ -796,6 +796,19 @@ fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_filter_with_fetch() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let predicate = col("a", &schema)?;
+    let filter = FilterExecBuilder::new(predicate, Arc::new(EmptyExec::new(schema)))
+        .with_fetch(Some(10))
+        .build()?;
+    assert_eq!(filter.fetch(), Some(10));
+    roundtrip_test(Arc::new(filter))
+}
+
+#[test]
 fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
@@ -1769,6 +1782,35 @@ fn roundtrip_union() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_repartition_preserve_order() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+    let sort_exprs: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    // Create two sorted single-partition inputs, then union them to get
+    // a sorted input with 2 partitions.
+    let source1 = SortExec::new(
+        sort_exprs.clone(),
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+    );
+    let source2 = SortExec::new(sort_exprs, Arc::new(EmptyExec::new(schema)));
+    let union = UnionExec::try_new(vec![
+        Arc::new(source1) as Arc<dyn ExecutionPlan>,
+        Arc::new(source2) as Arc<dyn ExecutionPlan>,
+    ])?;
+
+    let repartition = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
+        .with_preserve_order();
+    assert!(repartition.preserve_order());
+
+    roundtrip_test(Arc::new(repartition))
+}
+
+#[test]
 fn roundtrip_interleave() -> Result<()> {
     let field_a = Field::new("col", DataType::Int64, false);
     let schema_left = Schema::new(vec![field_a.clone()]);
@@ -2459,7 +2501,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     let on_columns = vec![datafusion::physical_plan::expressions::col("col", &schema)?];
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
         on_columns,
-        datafusion::physical_plan::joins::SeededRandomState::with_seeds(0, 0, 0, 0),
+        datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
         hash_map,
         "test_lookup".to_string(),
     ));
@@ -2503,7 +2545,7 @@ fn roundtrip_hash_expr() -> Result<()> {
     let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
     let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(HashExpr::new(
         on_columns,
-        SeededRandomState::with_seeds(0, 1, 2, 3), // arbitrary random seeds for testing
+        SeededRandomState::with_seed(0), // arbitrary random seed for testing
         "test_hash".to_string(),
     ));
 
@@ -2517,7 +2559,7 @@ fn roundtrip_hash_expr() -> Result<()> {
 
     // Confirm that the debug string contains the random state seeds
     assert!(
-        format!("{filter:?}").contains("test_hash(a@0, b@1, [0,1,2,3])"),
+        format!("{filter:?}").contains("test_hash(a@0, b@1, [0])"),
         "Debug string missing seeds: {filter:?}"
     );
     roundtrip_test(filter)

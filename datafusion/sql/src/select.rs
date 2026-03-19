@@ -1056,13 +1056,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .iter()
                     .find_map(|select_expr| {
                         // Only consider aliased expressions
-                        if let Expr::Alias(alias) = select_expr
-                            && alias.expr.as_ref() == &rewritten_expr
-                        {
-                            // Use the alias name
-                            return Some(Expr::Column(Column::new_unqualified(
-                                alias.name.clone(),
-                            )));
+                        if let Expr::Alias(alias) = select_expr {
+                            let rewritten_unaliased = match &rewritten_expr {
+                                Expr::Alias(a) => a.expr.as_ref(),
+                                other => other,
+                            };
+                            if alias.expr.as_ref() == rewritten_unaliased {
+                                return Some(Expr::Column(Column::new_unqualified(
+                                    alias.name.clone(),
+                                )));
+                            }
                         }
                         None
                     })

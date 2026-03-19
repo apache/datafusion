@@ -61,8 +61,11 @@ name = "with_hashes"
 harness = false
 name = "scalar_to_array"
 
+[[bench]]
+harness = false
+name = "stats_merge"
+
 [dependencies]
-ahash = { workspace = true }
 apache-avro = { workspace = true, features = [
     "bzip",
     "snappy",
@@ -72,6 +75,7 @@ apache-avro = { workspace = true, features = [
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
 chrono = { workspace = true }
+foldhash = "0.2"
 half = { workspace = true }
 hashbrown = { workspace = true }
 hex = { workspace = true, optional = true }
@@ -81,7 +85,6 @@ libc = "0.2.180"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
-paste = { workspace = true }
 recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true, optional = true }
 tokio = { workspace = true }

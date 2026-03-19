@@ -71,6 +71,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 /// Stream of files get listed from object store
+#[deprecated(
+    since = "54.0.0",
+    note = "This type is unused and will be removed in a future release"
+)]
 pub type PartitionedFileStream =
     Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
