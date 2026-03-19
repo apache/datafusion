@@ -62,7 +62,7 @@ SELECT array_transform([[1, 2]], a -> array_transform(a, a -> a+1))
 query ?
 SELECT array_transform([[[1], [2], [3]]], a -> array_transform(a, b -> array_transform(b, c -> c*2)));
 ----
-[[[4], [6], [8]]]
+[[[2], [4], [6]]]
 
 # parameter shadows unqualified column
 query I?
@@ -74,20 +74,20 @@ SELECT number, array_transform([1, 2], number -> number+1) from t;
 
 # type coercion inside lambda body
 query ?
-SELECT array_transform([1.0, 2.0], v -> v + 3) from t;
+SELECT array_transform([t.number], v -> v + 3.0) from t;
 ----
-[11.0, 12.0]
-[41.0, 42.0]
-[61.0, 62.0]
+[13.0]
+[43.0]
+[63.0]
 
 query TT
-EXPLAIN SELECT array_transform([1.0, 2.0], v -> v + 3) from t;
+EXPLAIN SELECT array_transform([t.number], v -> v + 3.0) from t;
 ----
 logical_plan
-01)Projection: array_transform(List([1.0, 2.0]), (v) -> v + CAST(t.number AS Float64)) AS array_transform(make_array(Float64(1),Float64(2)),(v) -> v + t.number)
+01)Projection: array_transform(make_array(t.number), (v) -> CAST(v AS Float64) + Float64(3))
 02)--TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[array_transform([1.0, 2.0], (v) -> v@ + CAST(number@0 AS Float64)) as array_transform(make_array(Float64(1),Float64(2)),(v) -> v + t.number)]
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> CAST(v@ AS Float64) + 3) as array_transform(make_array(t.number),(v) -> v + Float64(3))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 #cse should not eliminate subtrees containing lambdas
@@ -103,14 +103,16 @@ physical_plan
 
 #cse should not eliminate subtrees containing lambda variables
 query TT
-explain select array_transform([t.number], v -> v*2), array_transform([t.number+1], (v, i) -> v*2) from t;
+explain select array_transform([t.number], v -> v*2), array_transform([t.number], v -> v*2-1) from t;
 ----
 logical_plan
-01)Projection: array_transform(make_array(t.number), (v) -> CAST(v AS Int64) * Int64(2)), array_transform(make_array(CAST(t.number AS Int64) + Int64(1)), (v, i) -> v * Int64(2))
-02)--TableScan: t projection=[number]
+01)Projection: array_transform(__common_expr_1 AS make_array(t.number), (v) -> CAST(v AS Int64) * Int64(2)), array_transform(__common_expr_1 AS make_array(t.number), (v) -> CAST(v AS Int64) * Int64(2) - Int64(1))
+02)--Projection: make_array(t.number) AS __common_expr_1
+03)----TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> CAST(v@ AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(make_array(CAST(number@0 AS Int64) + 1), (v, i) -> v@ * 2) as array_transform(make_array(t.number + Int64(1)),(v, i) -> v * Int64(2))]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[array_transform(__common_expr_1@0, (v) -> CAST(v@ AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(__common_expr_1@0, (v) -> CAST(v@ AS Int64) * 2 - 1) as array_transform(make_array(t.number),(v) -> v * Int64(2) - Int64(1))]
+02)--ProjectionExec: expr=[make_array(number@0) as __common_expr_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 # test that sql planner plans resolved lambda variables, as v[1] planning checks the datatype of lhs
@@ -163,7 +165,7 @@ select array_transform(1, v -> v*2);
 query error DataFusion error: Error during planning: array_transform expects a value followed by a lambda, got Lambda\(\(\)\) and Value\(Field \{ name: "make_array\(Int64\(1\),Int64\(2\)\)", data_type: List\(Field \{ data_type: Int64, nullable: true \}\), nullable: true \}\)
 select array_transform(v -> v*2, [1, 2]);
 
-query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 2
+query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 1
 SELECT array_transform([1, 2], (e, i, j) -> i);
 
 query error DataFusion error: Error during planning: lambda parameters names must be unique, got \(v, v\)
