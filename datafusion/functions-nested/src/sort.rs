@@ -20,7 +20,7 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt32Array, UInt64Array,
-    new_null_array,
+    new_empty_array, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::SortColumn;
@@ -247,7 +247,7 @@ fn array_sort_direct<OffsetSize: OffsetSizeTrait>(
     }
 
     let sorted_values: ArrayRef = if sorted_arrays.is_empty() {
-        values.slice(0, 0)
+        new_empty_array(values.data_type())
     } else {
         let elements: Vec<&dyn Array> =
             sorted_arrays.iter().map(|a| a.as_ref()).collect();
@@ -300,6 +300,7 @@ fn array_sort_batch_indices<OffsetSize: OffsetSizeTrait>(
             indices.extend((start.as_usize()..end.as_usize()).map(OffsetSize::usize_as));
         } else {
             let sliced = values.slice(start.as_usize(), len);
+
             // Arrow's sort kernel does not support Struct arrays, so use
             // lexsort_to_indices instead:
             // https://github.com/apache/arrow-rs/issues/6911#issuecomment-2562928843
@@ -312,18 +313,22 @@ fn array_sort_batch_indices<OffsetSize: OffsetSizeTrait>(
             } else {
                 compute::sort_to_indices(&sliced, sort_options, None)?
             };
-            for &local_idx in sorted_indices.values() {
-                indices.push(start + OffsetSize::usize_as(local_idx as usize));
-            }
+
+            indices.extend(
+                sorted_indices
+                    .values()
+                    .iter()
+                    .map(|&idx| start + OffsetSize::usize_as(idx as usize)),
+            );
         }
 
         new_offsets.push(new_offsets[row_index] + (end - start));
     }
 
     let sorted_values = if indices.is_empty() {
-        values.slice(0, 0)
+        new_empty_array(values.data_type())
     } else {
-        take_by_indices::<OffsetSize>(values, &indices)?
+        take_by_indices::<OffsetSize>(values, indices)?
     };
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
@@ -335,23 +340,22 @@ fn array_sort_batch_indices<OffsetSize: OffsetSizeTrait>(
 }
 
 /// Select elements from `values` at the given `indices` using `compute::take`.
+/// We consume `indices` in order to avoid an intermediate copy.
 fn take_by_indices<OffsetSize: OffsetSizeTrait>(
     values: &ArrayRef,
-    indices: &[OffsetSize],
+    indices: Vec<OffsetSize>,
 ) -> Result<ArrayRef> {
+    let len = indices.len();
+    let buffer = arrow::buffer::Buffer::from_vec(indices);
     let indices_array: ArrayRef = if OffsetSize::IS_LARGE {
-        Arc::new(UInt64Array::from(
-            indices
-                .iter()
-                .map(|i| i.as_usize() as u64)
-                .collect::<Vec<_>>(),
+        Arc::new(UInt64Array::new(
+            arrow::buffer::ScalarBuffer::new(buffer, 0, len),
+            None,
         ))
     } else {
-        Arc::new(UInt32Array::from(
-            indices
-                .iter()
-                .map(|i| i.as_usize() as u32)
-                .collect::<Vec<_>>(),
+        Arc::new(UInt32Array::new(
+            arrow::buffer::ScalarBuffer::new(buffer, 0, len),
+            None,
         ))
     };
     Ok(compute::take(values.as_ref(), &indices_array, None)?)
