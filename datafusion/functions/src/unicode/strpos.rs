@@ -231,7 +231,12 @@ where
                         if ascii_only {
                             T::Native::from_usize(byte_offset + 1)
                         } else {
-                            // SAFETY: haystack_bytes is valid UTF-8
+                            // SAFETY: byte_offset is at a UTF-8 char boundary
+                            // because both haystack and needle are valid UTF-8,
+                            // and UTF-8 is self-synchronizing: a valid needle
+                            // byte sequence can only match starting at a char
+                            // boundary in a valid haystack.
+                            debug_assert!(haystack.is_char_boundary(byte_offset));
                             let prefix = unsafe {
                                 std::str::from_utf8_unchecked(
                                     &haystack_bytes[..byte_offset],
@@ -318,7 +323,12 @@ where
                         if ascii_haystack {
                             T::Native::from_usize(byte_offset + 1)
                         } else {
-                            // SAFETY: haystack_bytes is valid UTF-8
+                            // SAFETY: byte_offset is at a UTF-8 char boundary
+                            // because both haystack and needle are valid UTF-8,
+                            // and UTF-8 is self-synchronizing: a valid needle
+                            // byte sequence can only match starting at a char
+                            // boundary in a valid haystack.
+                            debug_assert!(string.is_char_boundary(byte_offset));
                             let prefix = unsafe {
                                 std::str::from_utf8_unchecked(
                                     &haystack_bytes[..byte_offset],
