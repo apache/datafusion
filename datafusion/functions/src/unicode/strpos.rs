@@ -152,9 +152,7 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
                     $haystack,
                     $args[1].as_string_view(),
                 ),
-                other => exec_err!(
-                    "Unsupported data type {other:?} for function strpos needle"
-                ),
+                other => exec_err!("Unsupported data type {other:?} for strpos needle"),
             }
         };
     }
@@ -166,7 +164,7 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::Utf8View => dispatch_needle!(args[0].as_string_view(), Int32Type, args),
         other => {
-            exec_err!("Unsupported data type {other:?} for function strpos haystack")
+            exec_err!("Unsupported data type {other:?} for strpos haystack")
         }
     }
 }
@@ -263,7 +261,8 @@ fn strpos_scalar_needle(
 ) -> Result<ColumnarValue> {
     let Some(needle_str) = needle_scalar.try_as_str() else {
         return exec_err!(
-            "Unsupported data type {needle_scalar:?} for function strpos needle"
+            "Unsupported data type {:?} for strpos needle",
+            needle_scalar.data_type()
         );
     };
 
@@ -275,9 +274,10 @@ fn strpos_scalar_needle(
                     PrimitiveArray::<Int64Type>::new_null(haystack_array.len()),
                 )))
             }
-            _ => Ok(ColumnarValue::Array(Arc::new(
+            DataType::Utf8 | DataType::Utf8View => Ok(ColumnarValue::Array(Arc::new(
                 PrimitiveArray::<Int32Type>::new_null(haystack_array.len()),
             ))),
+            other => exec_err!("Unsupported data type {other:?} for strpos haystack"),
         };
     };
 
@@ -295,7 +295,7 @@ fn strpos_scalar_needle(
             needle_str,
         ),
         other => {
-            exec_err!("Unsupported data type {other:?} for function strpos")
+            exec_err!("Unsupported data type {other:?} for strpos haystack")
         }
     }?;
     Ok(ColumnarValue::Array(result))

@@ -2225,7 +2225,8 @@ CREATE TABLE strpos_table AS VALUES
   ('数据融合📊🔥', '📊'),
   ('数据融合📊🔥', '融合'),
   (NULL, 'abc'),
-  ('hello', NULL);
+  ('hello', NULL),
+  ('ab', 'abcd');
 
 # Array haystack + array needle
 query I
@@ -2242,6 +2243,7 @@ SELECT strpos(column1, column2) FROM strpos_table;
 3
 NULL
 NULL
+0
 
 # Array haystack + scalar ASCII needle
 query I
@@ -2258,6 +2260,7 @@ SELECT strpos(column1, 'o') FROM strpos_table;
 0
 NULL
 5
+0
 
 # Array haystack + scalar Unicode needle
 query I
@@ -2273,6 +2276,7 @@ SELECT strpos(column1, '📊') FROM strpos_table;
 5
 5
 NULL
+0
 0
 
 # Array haystack + scalar empty needle
@@ -2290,11 +2294,13 @@ SELECT strpos(column1, '') FROM strpos_table;
 1
 NULL
 1
+1
 
 # Array haystack + scalar null needle
 query I
 SELECT strpos(column1, arrow_cast(null, 'Utf8')) FROM strpos_table;
 ----
+NULL
 NULL
 NULL
 NULL

@@ -100,12 +100,13 @@ fn make_array_needle_args(
 }
 
 /// Returns haystack array with a fixed scalar needle inserted into each row.
-/// `utf8_density` fraction of rows contain non-ASCII characters.
-/// The needle must be ASCII.
+/// Around `null_density` fraction of rows are null and `utf8_density` fraction
+/// contain non-ASCII characters. The needle must be ASCII.
 fn make_scalar_needle_args(
     rng: &mut StdRng,
     str_len_chars: usize,
     needle: &str,
+    null_density: f32,
     utf8_density: f32,
     is_string_view: bool,
 ) -> Vec<ColumnarValue> {
@@ -117,8 +118,10 @@ fn make_scalar_needle_args(
 
     let mut haystacks: Vec<Option<String>> = Vec::with_capacity(N_ROWS);
     for _ in 0..N_ROWS {
-        let ascii = rng.random::<f32>() >= utf8_density;
-        if ascii {
+        let r = rng.random::<f32>();
+        if r < null_density {
+            haystacks.push(None);
+        } else if r >= null_density + utf8_density {
             let mut value: Vec<u8> = (&mut *rng)
                 .sample_iter(&Alphanumeric)
                 .take(str_len_chars)
@@ -146,6 +149,12 @@ fn make_scalar_needle_args(
 /// Extracts a random contiguous substring from `s`.
 fn random_substring(rng: &mut StdRng, s: &str) -> String {
     let count = s.chars().count();
+
+    assert!(count > 0, "random_substring requires a non-empty string");
+    if count == 1 {
+        return s.to_string();
+    }
+
     let start = rng.random_range(0..count - 1);
     let end = rng.random_range(start + 1..count);
     s.chars().skip(start).take(end - start).collect()
@@ -204,8 +213,14 @@ fn criterion_benchmark(c: &mut Criterion) {
             ("StringViewArray_scalar_needle_ascii", 0.0, true),
             ("StringViewArray_scalar_needle_utf8", 0.5, true),
         ] {
-            let args =
-                make_scalar_needle_args(&mut rng, str_len, needle, utf8_density, is_view);
+            let args = make_scalar_needle_args(
+                &mut rng,
+                str_len,
+                needle,
+                0.1,
+                utf8_density,
+                is_view,
+            );
             bench_strpos(
                 c,
                 &format!("strpos_{label}_str_len_{str_len}"),
