@@ -53,6 +53,14 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// `fetch` limit.
     done: bool,
 
+    /// Whether buffered rows should be drained after `done` is set.
+    ///
+    /// This is enabled when we stop because the `fetch` limit has been
+    /// reached, allowing partial batches left over after overflow handling to
+    /// be emitted on subsequent polls. It remains disabled for terminal
+    /// errors so the stream does not yield data after returning `Err`.
+    drain_in_progress_on_done: bool,
+
     /// A loser tree that always produces the minimum cursor
     ///
     /// Node 0 stores the top winner, Nodes 1..num_streams store
@@ -164,6 +172,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             streams,
             metrics,
             done: false,
+            drain_in_progress_on_done: false,
             cursors: (0..stream_count).map(|_| None).collect(),
             prev_cursors: (0..stream_count).map(|_| None).collect(),
             round_robin_tie_breaker_mode: false,
@@ -215,7 +224,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // otherwise they would be silently dropped.
             // Repeated overflows are fine — each poll emits another partial
             // batch until `in_progress` is fully drained.
-            if !self.in_progress.is_empty() {
+            if self.drain_in_progress_on_done && !self.in_progress.is_empty() {
                 let before = self.in_progress.len();
                 let result = self.in_progress.build_record_batch();
                 self.produced += before - self.in_progress.len();
@@ -296,6 +305,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // stop sorting if fetch has been reached
                 if self.fetch_reached() {
                     self.done = true;
+                    self.drain_in_progress_on_done = true;
                 } else if self.in_progress.len() < self.batch_size {
                     continue;
                 }
