@@ -72,8 +72,8 @@ impl ScalarUDFImpl for SparkSoundex {
 fn spark_soundex_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("soundex", arg)?;
     match &array.data_type() {
-        DataType::Utf8 => soundex::<i32>(array),
-        DataType::LargeUtf8 => soundex::<i64>(array),
+        DataType::Utf8 => soundex_array::<i32>(array),
+        DataType::LargeUtf8 => soundex_array::<i64>(array),
         DataType::Utf8View => soundex_view(array),
         other => {
             exec_err!("unsupported data type {other:?} for function `soundex`")
@@ -81,7 +81,7 @@ fn spark_soundex_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn soundex<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
+fn soundex_array<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     let str_array = as_generic_string_array::<T>(array)?;
     let result = str_array
         .iter()
