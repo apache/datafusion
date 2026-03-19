@@ -35,8 +35,7 @@ to files in `datafusion-optimizer/src`, run the corresponding crate tests:
 cargo test -p datafusion-optimizer
 ```
 
-Then, run the `sqllogictest` suite, which is the main regression suite for SQL
-behavior and covers most DataFusion features.
+Then, run the `sqllogictest` suite, which provides a strong speed–coverage tradeoff for development: it runs quickly while offering broad regression coverage across most SQL behavior in DataFusion.
 
 ```shell
 cargo test --profile=ci --test sqllogictests
