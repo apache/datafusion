@@ -2275,6 +2275,28 @@ mod tests {
         )
     }
 
+    fn empty_build_with_probe_error_inputs() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>, JoinOn) {
+        let left_batch = build_table_i32(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
+        let left_schema = left_batch.schema();
+        let left: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&[vec![left_batch]], left_schema.clone(), None)
+                .unwrap();
+
+        let err = exec_err!("bad data error");
+        let right_batch =
+            build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+        let right_schema = right_batch.schema();
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left_schema).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right_schema).unwrap()) as _,
+        )];
+        let right: Arc<dyn ExecutionPlan> = Arc::new(
+            MockExec::new(vec![Ok(right_batch), err], right_schema).with_use_task(false),
+        );
+
+        (left, right, on)
+    }
+
     async fn join_collect(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -4985,26 +5007,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_does_not_consume_probe_when_empty_build_fixes_output() {
-        let left_batch =
-            build_table_i32(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
-        let left_schema = left_batch.schema();
-
-        let err = exec_err!("bad data error");
-        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
-
-        let on = vec![(
-            Arc::new(Column::new_with_schema("b1", &left_schema).unwrap()) as _,
-            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
-        )];
-        let schema = right.schema();
-        let right_input =
-            Arc::new(MockExec::new(vec![Ok(right), err], schema).with_use_task(false));
-        let left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
-            &[vec![left_batch]],
-            Arc::clone(&left_schema),
-            None,
-        )
-        .unwrap();
+        let (left, right_input, on) = empty_build_with_probe_error_inputs();
 
         let join_types = vec![
             JoinType::Inner,
@@ -5018,7 +5021,7 @@ mod tests {
         for join_type in join_types {
             let join = join(
                 Arc::clone(&left),
-                Arc::clone(&right_input) as Arc<dyn ExecutionPlan>,
+                Arc::clone(&right_input),
                 on.clone(),
                 &join_type,
                 NullEquality::NullEqualsNothing,
@@ -5038,26 +5041,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_still_consumes_probe_when_empty_build_needs_probe_rows() {
-        let left_batch =
-            build_table_i32(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
-        let left_schema = left_batch.schema();
-
-        let err = exec_err!("bad data error");
-        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
-
-        let on = vec![(
-            Arc::new(Column::new_with_schema("b1", &left_schema).unwrap()) as _,
-            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
-        )];
-        let schema = right.schema();
-        let right_input =
-            Arc::new(MockExec::new(vec![Ok(right), err], schema).with_use_task(false));
-        let left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
-            &[vec![left_batch]],
-            Arc::clone(&left_schema),
-            None,
-        )
-        .unwrap();
+        let (left, right_input, on) = empty_build_with_probe_error_inputs();
 
         let join_types = vec![
             JoinType::Right,
@@ -5069,7 +5053,7 @@ mod tests {
         for join_type in join_types {
             let join = join(
                 Arc::clone(&left),
-                Arc::clone(&right_input) as Arc<dyn ExecutionPlan>,
+                Arc::clone(&right_input),
                 on.clone(),
                 &join_type,
                 NullEquality::NullEqualsNothing,
