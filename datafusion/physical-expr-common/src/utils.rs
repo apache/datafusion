@@ -151,7 +151,7 @@ fn scatter_native<T: ArrowNativeType>(
     mask: &BooleanBuffer,
     output_len: usize,
     selectivity: f64,
-) -> Buffer {
+) -> ScalarBuffer<T> {
     let mut output = vec![T::default(); output_len];
     let mut src_offset = 0;
 
@@ -168,7 +168,7 @@ fn scatter_native<T: ArrowNativeType>(
         }
     }
 
-    output.into()
+    ScalarBuffer::from(output)
 }
 
 fn scatter_bits(
@@ -176,7 +176,7 @@ fn scatter_bits(
     mask: &BooleanBuffer,
     output_len: usize,
     selectivity: f64,
-) -> Buffer {
+) -> BooleanBuffer {
     let mut builder = BooleanBufferBuilder::new(output_len);
     builder.advance(output_len);
     let mut src_offset = 0;
@@ -199,7 +199,7 @@ fn scatter_bits(
         }
     }
 
-    builder.finish().into_inner()
+    builder.finish()
 }
 
 fn scatter_null_mask(
@@ -207,7 +207,7 @@ fn scatter_null_mask(
     mask: &BooleanBuffer,
     output_len: usize,
     selectivity: f64,
-) -> Option<(usize, Buffer)> {
+) -> Option<NullBuffer> {
     let false_count = output_len - mask.count_set_bits();
     let src_null_count = src_nulls.map(|n| n.null_count()).unwrap_or(0);
 
@@ -215,18 +215,12 @@ fn scatter_null_mask(
         if false_count == 0 {
             None
         } else {
-            Some((false_count, mask.inner().clone()))
+            Some(NullBuffer::new(mask.clone()))
         }
     } else {
         let src_nulls = src_nulls.unwrap();
         let scattered = scatter_bits(src_nulls.inner(), mask, output_len, selectivity);
-        let valid_count = scattered.count_set_bits_offset(0, output_len);
-        let null_count = output_len - valid_count;
-        if null_count == 0 {
-            None
-        } else {
-            Some((null_count, scattered))
-        }
+        Some(NullBuffer::new(scattered)).filter(|n| n.null_count() > 0)
     }
 }
 
@@ -237,9 +231,7 @@ fn scatter_primitive<T: ArrowPrimitiveType>(
     selectivity: f64,
 ) -> PrimitiveArray<T> {
     let values = scatter_native(truthy.values(), mask, output_len, selectivity);
-    let values = ScalarBuffer::new(values, 0, output_len);
-    let nulls = scatter_null_mask(truthy.nulls(), mask, output_len, selectivity)
-        .map(|(_, buf)| NullBuffer::new(BooleanBuffer::new(buf, 0, output_len)));
+    let nulls = scatter_null_mask(truthy.nulls(), mask, output_len, selectivity);
 
     PrimitiveArray::new(values, nulls).with_data_type(truthy.data_type().clone())
 }
@@ -251,9 +243,7 @@ fn scatter_boolean(
     selectivity: f64,
 ) -> BooleanArray {
     let values = scatter_bits(truthy.values(), mask, output_len, selectivity);
-    let values = BooleanBuffer::new(values, 0, output_len);
-    let nulls = scatter_null_mask(truthy.nulls(), mask, output_len, selectivity)
-        .map(|(_, buf)| NullBuffer::new(BooleanBuffer::new(buf, 0, output_len)));
+    let nulls = scatter_null_mask(truthy.nulls(), mask, output_len, selectivity);
 
     BooleanArray::new(values, nulls)
 }
@@ -287,20 +277,18 @@ fn scatter_bytes<T: ByteArrayType>(
     let byte_end = src_offsets[src_idx].as_usize();
     let dst_data: Buffer = src_data[byte_start..byte_end].into();
 
+    let nulls = scatter_null_mask(truthy.nulls(), mask, output_len, selectivity);
+
     let offsets_buffer: Buffer = dst_offsets.into();
-    let mut builder = ArrayDataBuilder::new(truthy.data_type().clone())
-        .len(output_len)
-        .add_buffer(offsets_buffer)
-        .add_buffer(dst_data);
-
-    if let Some((null_count, nulls)) =
-        scatter_null_mask(truthy.nulls(), mask, output_len, selectivity)
-    {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
-    }
-
     // SAFETY: offsets and data buffers are constructed consistently for `output_len`
-    let data = unsafe { builder.build_unchecked() };
+    let data = unsafe {
+        ArrayDataBuilder::new(truthy.data_type().clone())
+            .len(output_len)
+            .add_buffer(offsets_buffer)
+            .add_buffer(dst_data)
+            .nulls(nulls)
+            .build_unchecked()
+    };
     GenericByteArray::from(data)
 }
 
@@ -311,20 +299,16 @@ fn scatter_byte_view<T: ByteViewType>(
     selectivity: f64,
 ) -> GenericByteViewArray<T> {
     let new_views = scatter_native(truthy.views(), mask, output_len, selectivity);
-
-    let mut builder = ArrayDataBuilder::new(T::DATA_TYPE)
-        .len(output_len)
-        .add_buffer(new_views)
-        .add_buffers(truthy.data_buffers().to_vec());
-
-    if let Some((null_count, nulls)) =
-        scatter_null_mask(truthy.nulls(), mask, output_len, selectivity)
-    {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
-    }
+    let nulls = scatter_null_mask(truthy.nulls(), mask, output_len, selectivity);
 
     // SAFETY: views and data buffers are copied from a valid source array
-    GenericByteViewArray::from(unsafe { builder.build_unchecked() })
+    unsafe {
+        GenericByteViewArray::new_unchecked(
+            new_views,
+            truthy.data_buffers().to_vec(),
+            nulls,
+        )
+    }
 }
 
 fn scatter_fixed_size_binary(
@@ -354,8 +338,7 @@ fn scatter_fixed_size_binary(
             src_idx += 1;
         }
     }
-    let nulls = scatter_null_mask(truthy.nulls(), mask, output_len, selectivity)
-        .map(|(_, buf)| NullBuffer::new(BooleanBuffer::new(buf, 0, output_len)));
+    let nulls = scatter_null_mask(truthy.nulls(), mask, output_len, selectivity);
 
     FixedSizeBinaryArray::new(truthy.value_length(), Buffer::from(output), nulls)
 }
