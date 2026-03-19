@@ -4727,6 +4727,14 @@ fn test_custom_type_plan() -> Result<()> {
     "#
     );
 
+    let plan = plan_sql("SELECT UUID '00010203-0405-0607-0809-000102030506'");
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CAST(Utf8("00010203-0405-0607-0809-000102030506") AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>)
+      EmptyRelation: rows=1
+    "#
+    );
     Ok(())
 }
 

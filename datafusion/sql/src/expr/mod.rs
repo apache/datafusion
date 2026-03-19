@@ -292,15 +292,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("CAST with format is not supported: {format}");
                 }
 
-                Ok(Expr::TryCast(TryCast::new(
+                Ok(Expr::TryCast(TryCast::new_from_field(
                     Box::new(self.sql_expr_to_logical_expr(
                         *expr,
                         schema,
                         planner_context,
                     )?),
-                    self.convert_data_type_to_field(&data_type)?
-                        .data_type()
-                        .clone(),
+                    self.convert_data_type_to_field(&data_type)?,
                 )))
             }
 
@@ -308,11 +306,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 data_type,
                 value,
                 uses_odbc_syntax: _,
-            }) => Ok(Expr::Cast(Cast::new(
+            }) => Ok(Expr::Cast(Cast::new_from_field(
                 Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type_to_field(&data_type)?
-                    .data_type()
-                    .clone(),
+                self.convert_data_type_to_field(&data_type)?,
             ))),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
@@ -1061,12 +1057,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => expr,
         };
 
-        // Currently drops metadata attached to the type
-        // https://github.com/apache/datafusion/issues/18060
-        Ok(Expr::Cast(Cast::new(
-            Box::new(expr),
-            dt.data_type().clone(),
-        )))
+        Ok(Expr::Cast(Cast::new_from_field(Box::new(expr), dt)))
     }
 
     /// Extracts the root expression and access chain from a compound expression.
@@ -1342,46 +1333,42 @@ mod tests {
     }
 
     macro_rules! test_stack_overflow {
-        ($num_expr:expr) => {
-            paste::item! {
-                #[test]
-                fn [<test_stack_overflow_ $num_expr>]() {
-                    let schema = DFSchema::empty();
-                    let mut planner_context = PlannerContext::default();
+        ($name:ident, $num_expr:expr) => {
+            #[test]
+            fn $name() {
+                let schema = DFSchema::empty();
+                let mut planner_context = PlannerContext::default();
 
-                    let expr_str = (0..$num_expr)
-                        .map(|i| format!("column1 = 'value{:?}'", i))
-                        .collect::<Vec<String>>()
-                        .join(" OR ");
+                let expr_str = (0..$num_expr)
+                    .map(|i| format!("column1 = 'value{:?}'", i))
+                    .collect::<Vec<String>>()
+                    .join(" OR ");
 
-                    let dialect = GenericDialect{};
-                    let mut parser = Parser::new(&dialect)
-                        .try_with_sql(expr_str.as_str())
-                        .unwrap();
-                    let sql_expr = parser.parse_expr().unwrap();
+                let dialect = GenericDialect {};
+                let mut parser = Parser::new(&dialect)
+                    .try_with_sql(expr_str.as_str())
+                    .unwrap();
+                let sql_expr = parser.parse_expr().unwrap();
 
-                    let context_provider = TestContextProvider::new();
-                    let sql_to_rel = SqlToRel::new(&context_provider);
+                let context_provider = TestContextProvider::new();
+                let sql_to_rel = SqlToRel::new(&context_provider);
 
-                    // Should not stack overflow
-                    sql_to_rel.sql_expr_to_logical_expr(
-                        sql_expr,
-                        &schema,
-                        &mut planner_context,
-                    ).unwrap();
-                }
+                // Should not stack overflow
+                sql_to_rel
+                    .sql_expr_to_logical_expr(sql_expr, &schema, &mut planner_context)
+                    .unwrap();
             }
         };
     }
 
-    test_stack_overflow!(64);
-    test_stack_overflow!(128);
-    test_stack_overflow!(256);
-    test_stack_overflow!(512);
-    test_stack_overflow!(1024);
-    test_stack_overflow!(2048);
-    test_stack_overflow!(4096);
-    test_stack_overflow!(8192);
+    test_stack_overflow!(test_stack_overflow_64, 64);
+    test_stack_overflow!(test_stack_overflow_128, 128);
+    test_stack_overflow!(test_stack_overflow_256, 256);
+    test_stack_overflow!(test_stack_overflow_512, 512);
+    test_stack_overflow!(test_stack_overflow_1024, 1024);
+    test_stack_overflow!(test_stack_overflow_2048, 2048);
+    test_stack_overflow!(test_stack_overflow_4096, 4096);
+    test_stack_overflow!(test_stack_overflow_8192, 8192);
     #[test]
     fn test_sql_to_expr_with_alias() {
         let schema = DFSchema::empty();

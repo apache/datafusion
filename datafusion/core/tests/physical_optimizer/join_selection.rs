@@ -1191,12 +1191,12 @@ impl ExecutionPlan for StatisticsExec {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        Ok(if partition.is_some() {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(if partition.is_some() {
             Statistics::new_unknown(&self.schema)
         } else {
             self.stats.clone()
-        })
+        }))
     }
 
     fn apply_expressions(

@@ -436,8 +436,7 @@ enum BatchPartitionerState {
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
 /// executions and runs.
-pub const REPARTITION_RANDOM_STATE: SeededRandomState =
-    SeededRandomState::with_seeds(0, 0, 0, 0);
+pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
@@ -1102,11 +1101,11 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             let partition_count = self.partitioning().partition_count();
             if partition_count == 0 {
-                return Ok(Statistics::new_unknown(&self.schema()));
+                return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
             }
 
             assert_or_internal_err!(
@@ -1116,7 +1115,7 @@ impl ExecutionPlan for RepartitionExec {
                 partition_count
             );
 
-            let mut stats = self.input.partition_statistics(None)?;
+            let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
 
             // Distribute statistics across partitions
             stats.num_rows = stats
@@ -1137,7 +1136,7 @@ impl ExecutionPlan for RepartitionExec {
                 .map(|_| ColumnStatistics::new_unknown())
                 .collect();
 
-            Ok(stats)
+            Ok(Arc::new(stats))
         } else {
             self.input.partition_statistics(None)
         }

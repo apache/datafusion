@@ -87,8 +87,9 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
 }
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
-const AGGREGATION_HASH_SEED: ahash::RandomState =
-    ahash::RandomState::with_seeds('A' as u64, 'G' as u64, 'G' as u64, 'R' as u64);
+const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
+    // This seed is chosen to be a large 64-bit number
+    datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
 
 /// Whether an aggregate stage consumes raw input data or intermediate
 /// accumulator state from a previous aggregation stage.
@@ -1447,9 +1448,9 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let child_statistics = self.input().partition_statistics(partition)?;
-        self.statistics_inner(&child_statistics)
+        Ok(Arc::new(self.statistics_inner(&child_statistics)?))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -2538,16 +2539,19 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             if partition.is_some() {
-                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+                return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             let (_, batches) = some_data();
-            Ok(common::compute_record_batch_statistics(
+            Ok(Arc::new(common::compute_record_batch_statistics(
                 &[batches],
                 &self.schema(),
                 None,
-            ))
+            )))
         }
     }
 

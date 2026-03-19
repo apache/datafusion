@@ -43,7 +43,7 @@ use prost::Message;
 use std::sync::Arc;
 use substrait::proto;
 use substrait::proto::expression::Literal;
-use substrait::proto::expression::literal::user_defined::Val;
+use substrait::proto::expression::literal::user_defined::{TypeAnchorType, Val};
 use substrait::proto::expression::literal::{
     IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, LiteralType,
     interval_day_to_second,
@@ -474,11 +474,17 @@ pub(crate) fn from_substrait_literal(
                     )))
                 };
 
-            if let Some(name) = consumer
-                .get_extensions()
-                .types
-                .get(&user_defined.type_reference)
-            {
+            let type_ref = match user_defined.type_anchor_type {
+                Some(TypeAnchorType::TypeReference(ref_val)) => ref_val,
+                Some(TypeAnchorType::TypeAliasReference(_)) => {
+                    return not_impl_err!(
+                        "Type alias references in user-defined literals are not yet supported"
+                    );
+                }
+                None => 0,
+            };
+
+            if let Some(name) = consumer.get_extensions().types.get(&type_ref) {
                 match name.as_ref() {
                     FLOAT_16_TYPE_NAME => {
                         // Rules for encoding fp16 Substrait literals are defined as part of Arrow here:
@@ -518,14 +524,14 @@ pub(crate) fn from_substrait_literal(
                     _ => {
                         return not_impl_err!(
                             "Unsupported Substrait user defined type with ref {} and name {}",
-                            user_defined.type_reference,
+                            type_ref,
                             name
                         );
                     }
                 }
             } else {
                 #[expect(deprecated)]
-                match user_defined.type_reference {
+                match type_ref {
                     // Kept for backwards compatibility, producers should useIntervalYearToMonth instead
                     INTERVAL_YEAR_MONTH_TYPE_REF => {
                         let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
@@ -568,7 +574,7 @@ pub(crate) fn from_substrait_literal(
                     _ => {
                         return not_impl_err!(
                             "Unsupported Substrait user defined type literal with ref {}",
-                            user_defined.type_reference
+                            type_ref
                         );
                     }
                 }

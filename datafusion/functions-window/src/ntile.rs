@@ -40,6 +40,7 @@ define_udwf_and_expr!(
     Ntile,
     ntile,
     [arg],
+    ntile_udwf,
     "Integer ranging from 1 to the argument value, dividing the partition as equally as possible."
 );
 
