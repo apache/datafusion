@@ -408,7 +408,10 @@ impl HashJoinStream {
 
     /// Returns the next state after the build side has been fully collected
     /// and any required build-side coordination has completed.
-    fn next_state_after_build_ready(&self, left_data: &JoinLeftData) -> HashJoinStreamState {
+    fn next_state_after_build_ready(
+        &self,
+        left_data: &JoinLeftData,
+    ) -> HashJoinStreamState {
         if left_data.map().is_empty()
             && self.filter.is_none()
             && can_skip_probe_on_empty_build_side(self.join_type)
