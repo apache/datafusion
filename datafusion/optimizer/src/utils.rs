@@ -116,20 +116,9 @@ pub fn is_restrict_null_predicate<'a>(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NullSubstitutionValue {
-    Unknown,
     Null,
     NonNull,
     Boolean(bool),
-}
-
-impl NullSubstitutionValue {
-    fn is_null(self) -> bool {
-        matches!(self, Self::Null)
-    }
-
-    fn is_definitely_non_null(self) -> bool {
-        matches!(self, Self::NonNull | Self::Boolean(_))
-    }
 }
 
 fn syntactic_restrict_null_predicate(
@@ -137,9 +126,11 @@ fn syntactic_restrict_null_predicate(
     join_cols: &HashSet<&Column>,
 ) -> Option<bool> {
     match syntactic_null_substitution_value(predicate, join_cols) {
-        NullSubstitutionValue::Boolean(true) => Some(false),
-        NullSubstitutionValue::Boolean(false) | NullSubstitutionValue::Null => Some(true),
-        NullSubstitutionValue::Unknown | NullSubstitutionValue::NonNull => None,
+        Some(NullSubstitutionValue::Boolean(true)) => Some(false),
+        Some(NullSubstitutionValue::Boolean(false) | NullSubstitutionValue::Null) => {
+            Some(true)
+        }
+        Some(NullSubstitutionValue::NonNull) | None => None,
     }
 }
 
@@ -156,87 +147,43 @@ fn predicate_uses_only_columns(
 fn syntactic_null_substitution_value(
     expr: &Expr,
     join_cols: &HashSet<&Column>,
-) -> NullSubstitutionValue {
+) -> Option<NullSubstitutionValue> {
     match expr {
         Expr::Alias(alias) => {
             syntactic_null_substitution_value(alias.expr.as_ref(), join_cols)
         }
         Expr::Column(column) => {
             if join_cols.contains(column) {
-                NullSubstitutionValue::Null
+                Some(NullSubstitutionValue::Null)
             } else {
-                NullSubstitutionValue::Unknown
+                None
             }
         }
-        Expr::Literal(value, _) => scalar_to_null_substitution_value(value),
+        Expr::Literal(value, _) => Some(scalar_to_null_substitution_value(value)),
         Expr::BinaryExpr(binary_expr) => syntactic_binary_value(binary_expr, join_cols),
         Expr::Not(expr) => {
             sql_not(syntactic_null_substitution_value(expr.as_ref(), join_cols))
         }
         Expr::IsNull(expr) => {
             match syntactic_null_substitution_value(expr.as_ref(), join_cols) {
-                NullSubstitutionValue::Null => NullSubstitutionValue::Boolean(true),
-                NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_) => {
-                    NullSubstitutionValue::Boolean(false)
+                Some(NullSubstitutionValue::Null) => {
+                    Some(NullSubstitutionValue::Boolean(true))
                 }
-                NullSubstitutionValue::Unknown => NullSubstitutionValue::Unknown,
+                Some(
+                    NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_),
+                ) => Some(NullSubstitutionValue::Boolean(false)),
+                None => None,
             }
         }
         Expr::IsNotNull(expr) => {
             match syntactic_null_substitution_value(expr.as_ref(), join_cols) {
-                NullSubstitutionValue::Null => NullSubstitutionValue::Boolean(false),
-                NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_) => {
-                    NullSubstitutionValue::Boolean(true)
+                Some(NullSubstitutionValue::Null) => {
+                    Some(NullSubstitutionValue::Boolean(false))
                 }
-                NullSubstitutionValue::Unknown => NullSubstitutionValue::Unknown,
-            }
-        }
-        Expr::IsTrue(expr) => boolean_test_result(
-            syntactic_null_substitution_value(expr.as_ref(), join_cols),
-            false,
-        ),
-        Expr::IsFalse(expr) => {
-            match syntactic_null_substitution_value(expr.as_ref(), join_cols) {
-                NullSubstitutionValue::Boolean(value) => {
-                    NullSubstitutionValue::Boolean(!value)
-                }
-                NullSubstitutionValue::Null => NullSubstitutionValue::Boolean(false),
-                NullSubstitutionValue::Unknown | NullSubstitutionValue::NonNull => {
-                    NullSubstitutionValue::Unknown
-                }
-            }
-        }
-        Expr::IsUnknown(expr) => {
-            match syntactic_null_substitution_value(expr.as_ref(), join_cols) {
-                NullSubstitutionValue::Null => NullSubstitutionValue::Boolean(true),
-                NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_) => {
-                    NullSubstitutionValue::Boolean(false)
-                }
-                NullSubstitutionValue::Unknown => NullSubstitutionValue::Unknown,
-            }
-        }
-        Expr::IsNotTrue(expr) => boolean_test_result(
-            syntactic_null_substitution_value(expr.as_ref(), join_cols),
-            true,
-        ),
-        Expr::IsNotFalse(expr) => {
-            match syntactic_null_substitution_value(expr.as_ref(), join_cols) {
-                NullSubstitutionValue::Boolean(value) => {
-                    NullSubstitutionValue::Boolean(value)
-                }
-                NullSubstitutionValue::Null => NullSubstitutionValue::Boolean(true),
-                NullSubstitutionValue::Unknown | NullSubstitutionValue::NonNull => {
-                    NullSubstitutionValue::Unknown
-                }
-            }
-        }
-        Expr::IsNotUnknown(expr) => {
-            match syntactic_null_substitution_value(expr.as_ref(), join_cols) {
-                NullSubstitutionValue::Null => NullSubstitutionValue::Boolean(false),
-                NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_) => {
-                    NullSubstitutionValue::Boolean(true)
-                }
-                NullSubstitutionValue::Unknown => NullSubstitutionValue::Unknown,
+                Some(
+                    NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_),
+                ) => Some(NullSubstitutionValue::Boolean(true)),
+                None => None,
             }
         }
         Expr::Between(between) => {
@@ -245,13 +192,15 @@ fn syntactic_null_substitution_value(
             let low = syntactic_null_substitution_value(between.low.as_ref(), join_cols);
             let high =
                 syntactic_null_substitution_value(between.high.as_ref(), join_cols);
-            if expr.is_null() || low.is_null() || high.is_null() {
-                NullSubstitutionValue::Null
+            if matches!(expr, Some(NullSubstitutionValue::Null))
+                || matches!(low, Some(NullSubstitutionValue::Null))
+                || matches!(high, Some(NullSubstitutionValue::Null))
+            {
+                Some(NullSubstitutionValue::Null)
             } else {
-                NullSubstitutionValue::Unknown
+                None
             }
         }
-        Expr::Case(case) => syntactic_case_value(case, join_cols),
         Expr::Cast(cast) => strict_null_passthrough(cast.expr.as_ref(), join_cols),
         Expr::TryCast(try_cast) => {
             strict_null_passthrough(try_cast.expr.as_ref(), join_cols)
@@ -261,14 +210,13 @@ fn syntactic_null_substitution_value(
             let value = syntactic_null_substitution_value(like.expr.as_ref(), join_cols);
             let pattern =
                 syntactic_null_substitution_value(like.pattern.as_ref(), join_cols);
-            if value.is_null() || pattern.is_null() {
-                NullSubstitutionValue::Null
+            if matches!(value, Some(NullSubstitutionValue::Null))
+                || matches!(pattern, Some(NullSubstitutionValue::Null))
+            {
+                Some(NullSubstitutionValue::Null)
             } else {
-                NullSubstitutionValue::Unknown
+                None
             }
-        }
-        Expr::ScalarFunction(function) => {
-            syntactic_scalar_function_value(function.name(), &function.args, join_cols)
         }
         Expr::Exists { .. }
         | Expr::InList(_)
@@ -280,11 +228,19 @@ fn syntactic_null_substitution_value(
         | Expr::ScalarVariable(_, _)
         | Expr::Unnest(_)
         | Expr::GroupingSet(_)
-        | Expr::WindowFunction(_) => NullSubstitutionValue::Unknown,
-        Expr::AggregateFunction(_) => NullSubstitutionValue::Unknown,
+        | Expr::WindowFunction(_)
+        | Expr::ScalarFunction(_)
+        | Expr::Case(_)
+        | Expr::IsTrue(_)
+        | Expr::IsFalse(_)
+        | Expr::IsUnknown(_)
+        | Expr::IsNotTrue(_)
+        | Expr::IsNotFalse(_)
+        | Expr::IsNotUnknown(_) => None,
+        Expr::AggregateFunction(_) => None,
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
-        Expr::Wildcard { .. } => NullSubstitutionValue::Unknown,
+        Expr::Wildcard { .. } => None,
     }
 }
 
@@ -301,59 +257,47 @@ fn scalar_to_null_substitution_value(value: &ScalarValue) -> NullSubstitutionVal
 fn strict_null_passthrough(
     expr: &Expr,
     join_cols: &HashSet<&Column>,
-) -> NullSubstitutionValue {
-    if syntactic_null_substitution_value(expr, join_cols).is_null() {
-        NullSubstitutionValue::Null
+) -> Option<NullSubstitutionValue> {
+    if matches!(
+        syntactic_null_substitution_value(expr, join_cols),
+        Some(NullSubstitutionValue::Null)
+    ) {
+        Some(NullSubstitutionValue::Null)
     } else {
-        NullSubstitutionValue::Unknown
+        None
     }
 }
 
-fn boolean_test_result(
-    value: NullSubstitutionValue,
-    default_for_null: bool,
-) -> NullSubstitutionValue {
+fn sql_not(value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
     match value {
-        NullSubstitutionValue::Boolean(value) => NullSubstitutionValue::Boolean(value),
-        NullSubstitutionValue::Null => NullSubstitutionValue::Boolean(default_for_null),
-        NullSubstitutionValue::Unknown | NullSubstitutionValue::NonNull => {
-            NullSubstitutionValue::Unknown
+        Some(NullSubstitutionValue::Boolean(value)) => {
+            Some(NullSubstitutionValue::Boolean(!value))
         }
-    }
-}
-
-fn sql_not(value: NullSubstitutionValue) -> NullSubstitutionValue {
-    match value {
-        NullSubstitutionValue::Boolean(value) => NullSubstitutionValue::Boolean(!value),
-        NullSubstitutionValue::Null => NullSubstitutionValue::Null,
-        NullSubstitutionValue::Unknown | NullSubstitutionValue::NonNull => {
-            NullSubstitutionValue::Unknown
-        }
+        Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Null),
+        Some(NullSubstitutionValue::NonNull) | None => None,
     }
 }
 
 fn sql_and(
-    left: NullSubstitutionValue,
-    right: NullSubstitutionValue,
-) -> NullSubstitutionValue {
-    if matches!(left, NullSubstitutionValue::Boolean(false))
-        || matches!(right, NullSubstitutionValue::Boolean(false))
+    left: Option<NullSubstitutionValue>,
+    right: Option<NullSubstitutionValue>,
+) -> Option<NullSubstitutionValue> {
+    if matches!(left, Some(NullSubstitutionValue::Boolean(false)))
+        || matches!(right, Some(NullSubstitutionValue::Boolean(false)))
     {
-        return NullSubstitutionValue::Boolean(false);
+        return Some(NullSubstitutionValue::Boolean(false));
     }
 
     match (left, right) {
-        (NullSubstitutionValue::Boolean(true), value)
-        | (value, NullSubstitutionValue::Boolean(true)) => value,
-        (NullSubstitutionValue::Null, NullSubstitutionValue::Null) => {
-            NullSubstitutionValue::Null
+        (Some(NullSubstitutionValue::Boolean(true)), value)
+        | (value, Some(NullSubstitutionValue::Boolean(true))) => value,
+        (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
+            Some(NullSubstitutionValue::Null)
         }
-        (NullSubstitutionValue::Null, NullSubstitutionValue::Unknown)
-        | (NullSubstitutionValue::Unknown, NullSubstitutionValue::Null)
-        | (NullSubstitutionValue::Unknown, _)
-        | (_, NullSubstitutionValue::Unknown)
-        | (NullSubstitutionValue::NonNull, _)
-        | (_, NullSubstitutionValue::NonNull) => NullSubstitutionValue::Unknown,
+        (Some(NullSubstitutionValue::NonNull), _)
+        | (_, Some(NullSubstitutionValue::NonNull))
+        | (None, _)
+        | (_, None) => None,
         (left, right) => {
             debug_assert_eq!(left, right);
             left
@@ -362,27 +306,25 @@ fn sql_and(
 }
 
 fn sql_or(
-    left: NullSubstitutionValue,
-    right: NullSubstitutionValue,
-) -> NullSubstitutionValue {
-    if matches!(left, NullSubstitutionValue::Boolean(true))
-        || matches!(right, NullSubstitutionValue::Boolean(true))
+    left: Option<NullSubstitutionValue>,
+    right: Option<NullSubstitutionValue>,
+) -> Option<NullSubstitutionValue> {
+    if matches!(left, Some(NullSubstitutionValue::Boolean(true)))
+        || matches!(right, Some(NullSubstitutionValue::Boolean(true)))
     {
-        return NullSubstitutionValue::Boolean(true);
+        return Some(NullSubstitutionValue::Boolean(true));
     }
 
     match (left, right) {
-        (NullSubstitutionValue::Boolean(false), value)
-        | (value, NullSubstitutionValue::Boolean(false)) => value,
-        (NullSubstitutionValue::Null, NullSubstitutionValue::Null) => {
-            NullSubstitutionValue::Null
+        (Some(NullSubstitutionValue::Boolean(false)), value)
+        | (value, Some(NullSubstitutionValue::Boolean(false))) => value,
+        (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
+            Some(NullSubstitutionValue::Null)
         }
-        (NullSubstitutionValue::Null, NullSubstitutionValue::Unknown)
-        | (NullSubstitutionValue::Unknown, NullSubstitutionValue::Null)
-        | (NullSubstitutionValue::Unknown, _)
-        | (_, NullSubstitutionValue::Unknown)
-        | (NullSubstitutionValue::NonNull, _)
-        | (_, NullSubstitutionValue::NonNull) => NullSubstitutionValue::Unknown,
+        (Some(NullSubstitutionValue::NonNull), _)
+        | (_, Some(NullSubstitutionValue::NonNull))
+        | (None, _)
+        | (_, None) => None,
         (left, right) => {
             debug_assert_eq!(left, right);
             left
@@ -393,19 +335,13 @@ fn sql_or(
 fn syntactic_binary_value(
     binary_expr: &datafusion_expr::BinaryExpr,
     join_cols: &HashSet<&Column>,
-) -> NullSubstitutionValue {
+) -> Option<NullSubstitutionValue> {
     let left = syntactic_null_substitution_value(binary_expr.left.as_ref(), join_cols);
     let right = syntactic_null_substitution_value(binary_expr.right.as_ref(), join_cols);
 
     match binary_expr.op {
         datafusion_expr::Operator::And => sql_and(left, right),
         datafusion_expr::Operator::Or => sql_or(left, right),
-        datafusion_expr::Operator::IsDistinctFrom => {
-            syntactic_is_distinct_from(left, right)
-        }
-        datafusion_expr::Operator::IsNotDistinctFrom => {
-            sql_not(syntactic_is_distinct_from(left, right))
-        }
         datafusion_expr::Operator::Eq
         | datafusion_expr::Operator::NotEq
         | datafusion_expr::Operator::Lt
@@ -445,174 +381,17 @@ fn syntactic_binary_value(
         | datafusion_expr::Operator::QuestionAnd
         | datafusion_expr::Operator::QuestionPipe
         | datafusion_expr::Operator::Colon => {
-            if left.is_null() || right.is_null() {
-                NullSubstitutionValue::Null
+            if matches!(left, Some(NullSubstitutionValue::Null))
+                || matches!(right, Some(NullSubstitutionValue::Null))
+            {
+                Some(NullSubstitutionValue::Null)
             } else {
-                NullSubstitutionValue::Unknown
+                None
             }
         }
+        datafusion_expr::Operator::IsDistinctFrom
+        | datafusion_expr::Operator::IsNotDistinctFrom => None,
     }
-}
-
-fn syntactic_is_distinct_from(
-    left: NullSubstitutionValue,
-    right: NullSubstitutionValue,
-) -> NullSubstitutionValue {
-    match (left, right) {
-        (NullSubstitutionValue::Null, NullSubstitutionValue::Null) => {
-            NullSubstitutionValue::Boolean(false)
-        }
-        (NullSubstitutionValue::Null, value) | (value, NullSubstitutionValue::Null) => {
-            if value.is_definitely_non_null() {
-                NullSubstitutionValue::Boolean(true)
-            } else {
-                NullSubstitutionValue::Unknown
-            }
-        }
-        (NullSubstitutionValue::Boolean(left), NullSubstitutionValue::Boolean(right)) => {
-            NullSubstitutionValue::Boolean(left != right)
-        }
-        _ => NullSubstitutionValue::Unknown,
-    }
-}
-
-fn syntactic_case_value(
-    case: &datafusion_expr::expr::Case,
-    join_cols: &HashSet<&Column>,
-) -> NullSubstitutionValue {
-    if let Some(base_expr) = case.expr.as_deref() {
-        let base_value = syntactic_null_substitution_value(base_expr, join_cols);
-        let mut saw_indeterminate_comparison = false;
-        if base_value.is_null() {
-            return case
-                .else_expr
-                .as_deref()
-                .map_or(NullSubstitutionValue::Null, |expr| {
-                    syntactic_null_substitution_value(expr, join_cols)
-                });
-        }
-
-        for (when_expr, then_expr) in &case.when_then_expr {
-            let when_value = syntactic_null_substitution_value(when_expr, join_cols);
-            match syntactic_equals(base_value, when_value) {
-                Some(true) => {
-                    return syntactic_null_substitution_value(
-                        then_expr.as_ref(),
-                        join_cols,
-                    );
-                }
-                Some(false) => continue,
-                None => {
-                    saw_indeterminate_comparison = true;
-                    continue;
-                }
-            }
-        }
-
-        if saw_indeterminate_comparison {
-            return NullSubstitutionValue::Unknown;
-        }
-
-        return case
-            .else_expr
-            .as_deref()
-            .map_or(NullSubstitutionValue::Null, |expr| {
-                syntactic_null_substitution_value(expr, join_cols)
-            });
-    }
-
-    for (when_expr, then_expr) in &case.when_then_expr {
-        match syntactic_null_substitution_value(when_expr.as_ref(), join_cols) {
-            NullSubstitutionValue::Boolean(true) => {
-                return syntactic_null_substitution_value(then_expr.as_ref(), join_cols);
-            }
-            NullSubstitutionValue::Boolean(false) | NullSubstitutionValue::Null => {}
-            NullSubstitutionValue::Unknown | NullSubstitutionValue::NonNull => {
-                return NullSubstitutionValue::Unknown;
-            }
-        }
-    }
-
-    case.else_expr
-        .as_deref()
-        .map_or(NullSubstitutionValue::Null, |expr| {
-            syntactic_null_substitution_value(expr, join_cols)
-        })
-}
-
-fn syntactic_equals(
-    left: NullSubstitutionValue,
-    right: NullSubstitutionValue,
-) -> Option<bool> {
-    match (left, right) {
-        (NullSubstitutionValue::Null, _) | (_, NullSubstitutionValue::Null) => None,
-        (NullSubstitutionValue::Boolean(left), NullSubstitutionValue::Boolean(right)) => {
-            Some(left == right)
-        }
-        _ => None,
-    }
-}
-
-fn syntactic_scalar_function_value(
-    name: &str,
-    args: &[Expr],
-    join_cols: &HashSet<&Column>,
-) -> NullSubstitutionValue {
-    if name.eq_ignore_ascii_case("coalesce") {
-        return syntactic_coalesce_value(args, join_cols);
-    }
-
-    let arg_values = args
-        .iter()
-        .map(|expr| syntactic_null_substitution_value(expr, join_cols))
-        .collect::<Vec<_>>();
-
-    if arg_values.iter().any(|value| value.is_null())
-        && is_null_propagating_scalar_function(name)
-    {
-        NullSubstitutionValue::Null
-    } else {
-        NullSubstitutionValue::Unknown
-    }
-}
-
-fn syntactic_coalesce_value(
-    args: &[Expr],
-    join_cols: &HashSet<&Column>,
-) -> NullSubstitutionValue {
-    let mut saw_unknown = false;
-
-    for expr in args {
-        match syntactic_null_substitution_value(expr, join_cols) {
-            NullSubstitutionValue::Null => continue,
-            NullSubstitutionValue::NonNull => return NullSubstitutionValue::NonNull,
-            NullSubstitutionValue::Boolean(value) => {
-                return NullSubstitutionValue::Boolean(value);
-            }
-            NullSubstitutionValue::Unknown => saw_unknown = true,
-        }
-    }
-
-    if saw_unknown {
-        NullSubstitutionValue::Unknown
-    } else {
-        NullSubstitutionValue::Null
-    }
-}
-
-fn is_null_propagating_scalar_function(name: &str) -> bool {
-    matches!(
-        name,
-        "btrim"
-            | "char_length"
-            | "length"
-            | "lower"
-            | "regexp_like"
-            | "regexp_replace"
-            | "to_timestamp"
-            | "trim"
-            | "upper"
-    )
 }
 
 /// Determines if an expression will always evaluate to null.
