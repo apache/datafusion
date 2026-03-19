@@ -328,7 +328,7 @@ fn array_sort_batch_indices<OffsetSize: OffsetSizeTrait>(
     let sorted_values = if indices.is_empty() {
         new_empty_array(values.data_type())
     } else {
-        take_by_indices::<OffsetSize>(values, indices)?
+        take_by_indices(values, indices)?
     };
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
