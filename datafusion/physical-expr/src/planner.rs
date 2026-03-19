@@ -295,12 +295,32 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
-            create_physical_expr(expr, input_dfschema, execution_props)?,
-            input_schema,
-            Arc::clone(field),
-            None,
-        ),
+        Expr::Cast(Cast { expr, field }) => {
+
+            // This is where we cast
+
+            // Need to figure out what happened here
+
+
+            if !field.metadata().is_empty() {
+                let (_, src_field) = expr.to_field(input_dfschema)?;
+                return plan_err!(
+                    "Cast from {} to {} is not supported",
+                    format_type_and_metadata(
+                        src_field.data_type(),
+                        Some(src_field.metadata()),
+                    ),
+                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
+                );
+            }
+
+            expressions::cast_with_target_field(
+                create_physical_expr(expr, input_dfschema, execution_props)?,
+                input_schema,
+                Arc::clone(field),
+                None,
+            )
+        }
         Expr::TryCast(TryCast { expr, field }) => {
             if !field.metadata().is_empty() {
                 let (_, src_field) = expr.to_field(input_dfschema)?;

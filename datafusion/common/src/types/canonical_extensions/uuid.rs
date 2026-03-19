@@ -17,8 +17,10 @@
 
 use crate::Result;
 use crate::error::_internal_err;
+use crate::types::CastExtension;
 use crate::types::extension::DFExtensionType;
-use arrow::array::{Array, FixedSizeBinaryArray};
+use arrow::array::{Array, ArrayRef, FixedSizeBinaryArray};
+use arrow::compute::CastOptions;
 use arrow::datatypes::DataType;
 use arrow::util::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
 use arrow_schema::extension::{ExtensionType, Uuid};
@@ -74,6 +76,22 @@ impl DFExtensionType for DFUuid {
             options.safe(),
         )))
     }
+
+    fn create_cast_extension(
+        &self,
+        other: &Field,
+    ) -> crate::Result<Option<Arc<dyn CastExtension>>> {
+        if other.extension_type_name().is_some() {
+            return Ok(None);
+        }
+
+        match other.data_type() {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                Ok(Some(Arc::new(UuidCastExtension {})))
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 /// Pretty printer for binary UUID values.
@@ -95,6 +113,41 @@ impl DisplayIndex for UuidValueDisplayIndex<'_> {
         let uuid = uuid::Uuid::from_bytes(bytes);
         write!(f, "{uuid}")?;
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct UuidCastExtension {}
+
+impl CastExtension for UuidCastExtension {
+    fn can_cast(&self, to: &Field, options: CastOptions<'static>) -> crate::Result<bool> {
+        todo!()
+    }
+
+    fn cast(
+        &self,
+        value: ArrayRef,
+        to: &Field,
+        options: CastOptions<'static>,
+    ) -> crate::Result<ArrayRef> {
+        todo!()
+    }
+
+    fn can_cast_from(
+        &self,
+        from: &Field,
+        options: CastOptions<'static>,
+    ) -> crate::Result<bool> {
+        todo!()
+    }
+
+    fn cast_from(
+        &self,
+        value: ArrayRef,
+        to: &Field,
+        options: CastOptions<'static>,
+    ) -> crate::Result<ArrayRef> {
+        todo!()
     }
 }
 

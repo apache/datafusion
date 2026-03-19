@@ -16,9 +16,10 @@
 // under the License.
 
 use crate::error::Result;
-use arrow::array::Array;
+use arrow::array::{Array, ArrayRef};
+use arrow::compute::CastOptions;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -87,4 +88,36 @@ pub trait DFExtensionType: Debug + Send + Sync {
     ) -> Result<Option<ArrayFormatter<'fmt>>> {
         Ok(None)
     }
+
+    // None for "not handled by this extension type" (could be handled by the other)
+    fn create_cast_extension(
+        &self,
+        _other: &Field,
+    ) -> Result<Option<Arc<dyn CastExtension>>> {
+        Ok(None)
+    }
+}
+
+pub trait CastExtension: Debug + Send + Sync {
+    fn can_cast(&self, to: &Field, options: CastOptions<'static>)
+    -> Result<bool>;
+
+    // None for fallback
+    fn cast(
+        &self,
+        value: ArrayRef,
+        to: &Field,
+        options: CastOptions<'static>,
+    ) -> Result<ArrayRef>;
+
+    fn can_cast_from(&self, from: &Field, options: CastOptions<'static>)
+    -> Result<bool>;
+
+    // None for fallback
+    fn cast_from(
+        &self,
+        value: ArrayRef,
+        to: &Field,
+        options: CastOptions<'static>,
+    ) -> Result<ArrayRef>;
 }

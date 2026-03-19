@@ -63,6 +63,7 @@ pub struct CastExpr {
     target_field: FieldRef,
     /// Cast options
     cast_options: CastOptions<'static>,
+    // CastExtension might go here
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
