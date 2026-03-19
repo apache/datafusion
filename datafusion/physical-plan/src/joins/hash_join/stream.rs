@@ -42,7 +42,7 @@ use crate::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
-        can_skip_probe_on_empty_build_side, need_produce_result_in_final,
+        empty_build_side_produces_empty_result, need_produce_result_in_final,
     },
 };
 
@@ -414,7 +414,7 @@ impl HashJoinStream {
     ) -> HashJoinStreamState {
         if left_data.map().is_empty()
             && self.filter.is_none()
-            && can_skip_probe_on_empty_build_side(self.join_type)
+            && empty_build_side_produces_empty_result(self.join_type)
         {
             HashJoinStreamState::Completed
         } else {
