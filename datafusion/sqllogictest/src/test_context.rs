@@ -245,10 +245,15 @@ fn register_strict_schema_provider(ctx: &SessionContext) {
         orders: Arc::new(orders),
     });
 
-    ctx.catalog("datafusion")
+    let previous = ctx
+        .catalog("datafusion")
         .expect("default catalog should exist")
         .register_schema("strict_schema", schema_provider)
-        .unwrap();
+        .expect("strict schema registration should succeed");
+    assert!(
+        previous.is_none(),
+        "strict_schema unexpectedly already existed in datafusion catalog"
+    );
 }
 
 #[cfg(feature = "avro")]
