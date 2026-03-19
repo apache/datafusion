@@ -4984,6 +4984,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn join_does_not_consume_probe_when_empty_build_fixes_output() {
+        let left_batch =
+            build_table_i32(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
+        let left_schema = left_batch.schema();
+
+        let err = exec_err!("bad data error");
+        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left_schema).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
+        )];
+        let schema = right.schema();
+        let right_input =
+            Arc::new(MockExec::new(vec![Ok(right), err], schema).with_use_task(false));
+        let left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[vec![left_batch]],
+            Arc::clone(&left_schema),
+            None,
+        )
+        .unwrap();
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::LeftMark,
+            JoinType::RightSemi,
+        ];
+
+        for join_type in join_types {
+            let join = join(
+                Arc::clone(&left),
+                Arc::clone(&right_input) as Arc<dyn ExecutionPlan>,
+                on.clone(),
+                &join_type,
+                NullEquality::NullEqualsNothing,
+            )
+            .unwrap();
+            let task_ctx = Arc::new(TaskContext::default());
+
+            let stream = join.execute(0, task_ctx).unwrap();
+            let batches = common::collect(stream).await.unwrap();
+
+            assert!(
+                batches.is_empty(),
+                "expected no output batches for {join_type}, got {batches:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn join_still_consumes_probe_when_empty_build_needs_probe_rows() {
+        let left_batch =
+            build_table_i32(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
+        let left_schema = left_batch.schema();
+
+        let err = exec_err!("bad data error");
+        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left_schema).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
+        )];
+        let schema = right.schema();
+        let right_input =
+            Arc::new(MockExec::new(vec![Ok(right), err], schema).with_use_task(false));
+        let left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[vec![left_batch]],
+            Arc::clone(&left_schema),
+            None,
+        )
+        .unwrap();
+
+        let join_types = vec![
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::RightAnti,
+            JoinType::RightMark,
+        ];
+
+        for join_type in join_types {
+            let join = join(
+                Arc::clone(&left),
+                Arc::clone(&right_input) as Arc<dyn ExecutionPlan>,
+                on.clone(),
+                &join_type,
+                NullEquality::NullEqualsNothing,
+            )
+            .unwrap();
+            let task_ctx = Arc::new(TaskContext::default());
+
+            let stream = join.execute(0, task_ctx).unwrap();
+            let result_string = common::collect(stream).await.unwrap_err().to_string();
+            assert!(
+                result_string.contains("bad data error"),
+                "actual: {result_string}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn join_split_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3, 4]),
