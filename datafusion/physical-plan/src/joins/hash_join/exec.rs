@@ -5595,6 +5595,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_hash_join_skips_probe_on_empty_build_after_partition_bounds_report(
+    ) -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let (left, right, on) = empty_build_with_probe_error_inputs();
+
+        // Keep an extra consumer reference so execute() enables dynamic filter pushdown
+        // and enters the WaitPartitionBoundsReport path before deciding whether to poll
+        // the probe side.
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
+
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: dynamic_filter,
+            build_accumulator: OnceLock::new(),
+        });
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+        assert!(batches.is_empty());
+
+        dynamic_filter_clone.wait_complete().await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_perfect_hash_join_with_negative_numbers() -> Result<()> {
         let task_ctx = prepare_task_ctx(8192, true);
         let (left_schema, right_schema, on) = build_schema_and_on()?;
