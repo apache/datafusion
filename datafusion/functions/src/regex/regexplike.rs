@@ -26,8 +26,8 @@ use datafusion_common::{
     Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature,
-    TypeSignature, TypeSignatureClass, Volatility, binary_expr, cast,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility, binary_expr, cast,
 };
 use datafusion_macros::user_doc;
 
@@ -126,10 +126,7 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         })
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         match args.as_slice() {
             [ColumnarValue::Scalar(value), ColumnarValue::Scalar(pattern)] => {

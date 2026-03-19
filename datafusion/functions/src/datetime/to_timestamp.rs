@@ -33,7 +33,8 @@ use arrow::datatypes::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarType, ScalarValue, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -405,11 +406,8 @@ impl ScalarUDFImpl for ToTimestampFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -518,11 +516,8 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -594,11 +589,8 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -670,11 +662,8 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -746,11 +735,8 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(

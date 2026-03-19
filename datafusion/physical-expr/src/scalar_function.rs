@@ -375,7 +375,7 @@ mod tests {
     use super::*;
     use crate::expressions::Column;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::{ScalarUDF, ScalarUDFImpl, Signature};
+    use datafusion_expr::{ScalarUDFImpl, Signature};
     use datafusion_physical_expr_common::physical_expr::is_volatile;
     use std::any::Any;
 

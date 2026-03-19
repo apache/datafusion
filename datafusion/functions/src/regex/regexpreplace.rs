@@ -36,7 +36,9 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::function::Hint;
-use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use regex::Regex;
 use std::any::Any;
@@ -149,10 +151,7 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
         })
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
 
         let len = args

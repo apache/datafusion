@@ -20,7 +20,8 @@ use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -95,10 +96,7 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
         Ok(DataType::Int64)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let arg_args = &args.args;
         if arg_args.is_empty() {
             return exec_err!("to_unixtime function requires 1 or more arguments, got 0");

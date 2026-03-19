@@ -48,8 +48,8 @@ use datafusion_common::exec_err;
 use datafusion_common::types::logical_string;
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, Coercion, ColumnarValue,
-    Documentation, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass,
-    Volatility,
+    Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
@@ -147,10 +147,7 @@ impl ScalarUDFImpl for ArrayToString {
         Ok(Utf8)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_to_string_inner)(&args.args)
     }
 
@@ -244,10 +241,7 @@ impl ScalarUDFImpl for StringToArray {
         ))))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(string_to_array_inner::<i32>)(args),

@@ -28,8 +28,8 @@ use arrow::datatypes::{
 use datafusion_common::types::logical_string;
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use memchr::memchr;
@@ -110,10 +110,7 @@ impl ScalarUDFImpl for StrposFunc {
         )
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(strpos, vec![])(&args.args)
     }
 
