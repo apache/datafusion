@@ -421,6 +421,16 @@ impl HashJoinStream {
             )
     }
 
+    /// Returns the next state after the build side has been fully collected
+    /// and any required build-side coordination has completed.
+    fn next_state_after_build_ready(&self, left_data: &JoinLeftData) -> HashJoinStreamState {
+        if left_data.map().is_empty() && self.can_skip_probe_on_empty_build_side() {
+            HashJoinStreamState::Completed
+        } else {
+            HashJoinStreamState::FetchProbeBatch
+        }
+    }
+
     /// Separate implementation function that unpins the [`HashJoinStream`] so
     /// that partial borrows work correctly
     fn poll_next_impl(
@@ -485,13 +495,7 @@ impl HashJoinStream {
             ready!(fut.get_shared(cx))?;
         }
         let build_side = self.build_side.try_as_ready()?;
-        self.state = if build_side.left_data.map().is_empty()
-            && self.can_skip_probe_on_empty_build_side()
-        {
-            HashJoinStreamState::Completed
-        } else {
-            HashJoinStreamState::FetchProbeBatch
-        };
+        self.state = self.next_state_after_build_ready(build_side.left_data.as_ref());
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
@@ -562,13 +566,7 @@ impl HashJoinStream {
             }));
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;
         } else {
-            self.state = if left_data.map().is_empty()
-                && self.can_skip_probe_on_empty_build_side()
-            {
-                HashJoinStreamState::Completed
-            } else {
-                HashJoinStreamState::FetchProbeBatch
-            };
+            self.state = self.next_state_after_build_ready(left_data.as_ref());
         }
 
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
