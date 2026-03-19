@@ -112,22 +112,22 @@ branch-50:
 First, prepare a PR to update the changelog and versions to reflect the planned
 release. See [#18173](https://github.com/apache/datafusion/pull/18173) for an example.
 
-Notes:
-1. This PR should be the last one merged before creating a release
-   candidate (see below), as it includes the changelog and should include all
-   changes.
-2. If there are any code changes between RCs, create a new PR to update the changelog.
+- This PR should be the last one merged before creating a release
+  candidate, so the changelog includes all changes.
+- If there are code changes between RCs, create and merge a new PR to update
+  the changelog before creating the next RC.
 
-**Step 1**: Manually update the DataFusion version in the root `Cargo.toml` to reflect the
-new release version. Ensure `Cargo.lock` is updated accordingly by running:
+**Step 1**: Manually update the DataFusion version in the root `Cargo.toml` to
+reflect the new release version. Ensure `Cargo.lock` is updated accordingly by
+running:
 
 ```shell
 cargo check -p datafusion
 ```
 
-**Step 2**: Update the [changelog]. The changelog is located in `dev/changelog/`
-and has a file for each release, such as `dev/changelog/50.0.0.md`. The
-changelog should be updated to reflect all changes since the last release.
+**Step 2**: Update the [changelog] in `dev/changelog/`. Each release has its
+own file, such as `dev/changelog/50.0.0.md`, which should include all changes
+since the previous release.
 
 The changelog is generated using a Python script, which requires a GitHub
 Personal Access Token (described in the prerequisites section) and the
@@ -137,9 +137,10 @@ Personal Access Token (described in the prerequisites section) and the
 uv sync
 ```
 
-To generate the changelog, set the `GITHUB_TOKEN` environment variable and then run `./dev/release/generate-changelog.py`,
-providing two commit IDs or tags followed by the version number of the release being created. For example,
-to generate a changelog of all changes between the `50.3.0` tag and `branch-51`, in preparation for release `51.0.0`:
+To generate the changelog, set the `GITHUB_TOKEN` environment variable and run
+`./dev/release/generate-changelog.py` with two commit IDs or tags followed by
+the release version. For example, to generate a changelog of all changes
+between the `50.3.0` tag and `branch-51` for release `51.0.0`:
 
 > [!NOTE]
 >
@@ -177,9 +178,10 @@ Remember to merge any fixes back to the `main` branch as well.
 After the PR gets merged, you are ready to create release artifacts based off the
 merged commit.
 
-Notes:
-1. You need to be a committer to run these scripts, as they upload to the Apache SVN distribution servers.
-2. If there are any code changes between RCs, create a new PR to update the changelog and merge it before creating the next RC.
+- You must be a committer to run these scripts because they upload to the
+  Apache SVN distribution servers.
+- If there are code changes between RCs, create and merge a changelog PR before
+  creating the next RC.
 
 #### Pick a Release Candidate (RC) number
 
@@ -194,8 +196,15 @@ tags].
 
 [the list of existing tags]: https://github.com/apache/datafusion/tags
 
-Create a tag for the release candidate. For example, to create the `50.3.0-rc1`
-tag from `branch-50`, use these commands:
+Create and push the RC tag:
+
+```shell
+git fetch apache
+git tag <version>-rc<rc> apache/branch-X
+git push apache <version>-rc<rc>
+```
+
+For example, to create the `50.3.0-rc1` tag from `branch-50`, use:
 
 ```shell
 git fetch apache
@@ -245,10 +254,11 @@ If the release is not approved, fix whatever the problem is, make a new release
 candidate and try again.
 
 Reminders:
+
 1. Update the changelog and create a new PR if there are any code changes, and merge it before creating the next RC.
 2. Merge any fixes back to the `main` branch as well.
 
-#### If the Release is Approved: Call the Vote
+#### If the Vote Passes: Announce the Result
 
 Call the vote on the Arrow dev list by replying to the RC voting thread. The
 reply should have a new subject constructed by adding the `[RESULT]` prefix to the
@@ -364,12 +374,14 @@ the examples from previous releases.
 The release information is used to generate a template for a board report (see example from Apache Arrow project
 [here](https://github.com/apache/arrow/pull/14357)).
 
-### 10: Delete old RCs and Releases
+### 10: Delete Old RCs and Releases
 
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
 
-Release candidates should be deleted once the release is published. To get a list of DataFusion release candidates:
+Release candidates should be deleted once the release is published.
+
+To get a list of DataFusion release candidates:
 
 ```shell
 svn ls https://dist.apache.org/repos/dist/dev/datafusion
@@ -381,8 +393,12 @@ To delete a release candidate:
 svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-50.0.0-rc1/
 ```
 
+#### Delete old releases from `release` SVN
 
-Only the latest release should be available. Delete old releases after publishing the new release. To get a list of DataFusion releases:
+Only the latest release should be available. Delete old releases after
+publishing the new release.
+
+To get a list of DataFusion releases:
 
 ```shell
 svn ls https://dist.apache.org/repos/dist/release/datafusion
@@ -400,4 +416,4 @@ After the release is published, forward port the version update and changelog to
 `main` so that it is up to date for the next release. See [#21053] for an
 example PR that forward-ports the changelog to `main`.
 
-[#21053]:https://github.com/apache/datafusion/pull/21053
+[#21053]: https://github.com/apache/datafusion/pull/21053
