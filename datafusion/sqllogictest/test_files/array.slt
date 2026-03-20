@@ -7187,8 +7187,244 @@ select count(*) from arrays where 'X'=any(column3);
 ----
 0
 
-query error DataFusion error: Error during planning: Unsupported AnyOp: '>', only '=' is supported
-select count(*) from arrays where 'X'>any(column3);
+# any operator with comparison operators
+# Use inline arrays so the test data is visible and the needle (5)
+# falls within the range of some arrays but not others.
+statement ok
+CREATE TABLE any_op_test AS VALUES
+  (1, make_array(1, 2, 3)),
+  (2, make_array(4, 5, 6)),
+  (3, make_array(7, 8, 9)),
+  (4, make_array(3, 5, 7));
+
+# 5 > ANY(arr): true when array_min < 5
+# row1: min=1 < 5 ✓, row2: min=4 < 5 ✓, row3: min=7 < 5 ✗, row4: min=3 < 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 > any(column2) order by column1;
+----
+1 [1, 2, 3]
+2 [4, 5, 6]
+4 [3, 5, 7]
+
+# 5 >= ANY(arr): true when array_min <= 5
+# row1: min=1 <= 5 ✓, row2: min=4 <= 5 ✓, row3: min=7 <= 5 ✗, row4: min=3 <= 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 >= any(column2) order by column1;
+----
+1 [1, 2, 3]
+2 [4, 5, 6]
+4 [3, 5, 7]
+
+# 5 < ANY(arr): true when array_max > 5
+# row1: max=3 > 5 ✗, row2: max=6 > 5 ✓, row3: max=9 > 5 ✓, row4: max=7 > 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 < any(column2) order by column1;
+----
+2 [4, 5, 6]
+3 [7, 8, 9]
+4 [3, 5, 7]
+
+# 5 <= ANY(arr): true when array_max >= 5
+# row1: max=3 >= 5 ✗, row2: max=6 >= 5 ✓, row3: max=9 >= 5 ✓, row4: max=7 >= 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 <= any(column2) order by column1;
+----
+2 [4, 5, 6]
+3 [7, 8, 9]
+4 [3, 5, 7]
+
+# 5 <> ANY(arr): true when array_min != 5 OR array_max != 5
+# row1: [1,2,3] min=1!=5 ✓, row2: [4,5,6] min=4!=5 ✓, row3: [7,8,9] min=7!=5 ✓, row4: [3,5,7] min=3!=5 ✓
+query I?
+select column1, column2 from any_op_test where 5 <> any(column2) order by column1;
+----
+1 [1, 2, 3]
+2 [4, 5, 6]
+3 [7, 8, 9]
+4 [3, 5, 7]
+
+# For a single-element array where the element equals the needle, <> should return false
+query B
+select 5 <> any(make_array(5));
+----
+false
+
+# For a uniform array [5,5,5], <> should also return false
+query B
+select 5 <> any(make_array(5, 5, 5));
+----
+false
+
+# Empty array: all operators should return false (no elements satisfy the condition)
+query B
+select 5 = any(make_array());
+----
+false
+
+query B
+select 5 <> any(make_array());
+----
+false
+
+query B
+select 5 > any(make_array());
+----
+false
+
+query B
+select 5 < any(make_array());
+----
+false
+
+query B
+select 5 >= any(make_array());
+----
+false
+
+query B
+select 5 <= any(make_array());
+----
+false
+
+# Mixed NULL + non-NULL array where no non-NULL element satisfies the condition
+# These return false (NULLs are skipped by array_min/array_max)
+query B
+select 5 > any(make_array(6, NULL));
+----
+false
+
+query B
+select 5 < any(make_array(3, NULL));
+----
+false
+
+query B
+select 5 >= any(make_array(6, NULL));
+----
+false
+
+query B
+select 5 <= any(make_array(3, NULL));
+----
+false
+
+# Mixed NULL + non-NULL array where a non-NULL element satisfies the condition
+query B
+select 5 > any(make_array(3, NULL));
+----
+true
+
+query B
+select 5 < any(make_array(6, NULL));
+----
+true
+
+query B
+select 5 >= any(make_array(5, NULL));
+----
+true
+
+query B
+select 5 <= any(make_array(5, NULL));
+----
+true
+
+query B
+select 5 <> any(make_array(3, NULL));
+----
+true
+
+query B
+select 5 <> any(make_array(5, NULL));
+----
+false
+
+# All-NULL array: all operators should return false
+query B
+select 5 > any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 < any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 >= any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 <= any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 <> any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+# NULL left operand: should return NULL for non-empty arrays
+query B
+select NULL > any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL < any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL >= any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL <= any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL <> any(make_array(1, 2, 3));
+----
+NULL
+
+# NULL left operand with empty array: should return false
+query B
+select NULL > any(make_array());
+----
+false
+
+# NULL array: should return NULL
+query B
+select 5 > any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 < any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 >= any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 <= any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 <> any(NULL::INT[]);
+----
+NULL
+
+statement ok
+DROP TABLE any_op_test;
 
 ## array_distinct
 
