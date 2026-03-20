@@ -18,7 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use crate::hyperloglog::{HLL_HASH_STATE, HyperLogLog};
-use arrow::array::{Array, BinaryArray, StringViewArray};
+use arrow::array::{Array, BinaryArray, ByteView, StringViewArray};
 use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
@@ -213,16 +213,43 @@ impl Accumulator for StringViewHLLAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array: &StringViewArray = downcast_value!(values[0], StringViewArray);
 
-        // When all strings are stored inline in the StringView (≤ 12 bytes),
-        // hash the raw u128 view directly instead of materializing a &str.
+        // When strings are stored inline in the StringView (≤ 12 bytes), hash
+        // the raw u128 view directly.  Whether a string is inline is determined
+        // solely by its length, so the same value always takes the same code
+        // path and gets the same hash.
         if array.data_buffers().is_empty() {
+            // All strings are inline — skip per-element length check
             for (i, &view) in array.views().iter().enumerate() {
                 if !array.is_null(i) {
                     self.hll.add_hashed(HLL_HASH_STATE.hash_one(view));
                 }
             }
         } else {
-            self.hll.extend(array.iter().flatten());
+            // At least some strings stored out-of-line
+            let buffers = array.data_buffers();
+            for (i, &view) in array.views().iter().enumerate() {
+                if array.is_null(i) {
+                    continue;
+                }
+                let view_len = view as u32;
+                if view_len <= 12 {
+                    self.hll.add_hashed(HLL_HASH_STATE.hash_one(view));
+                } else {
+                    // For out-of-line strings, it is faster to hash the bytes
+                    // in the appropriate data buffer directly, rather than
+                    // constructing a &str to call self.hll.add()
+                    let bv = ByteView::from(view);
+                    let offset = bv.offset as usize;
+                    // SAFETY: view came from the array so buffer_index
+                    // and offset..offset+len are in bounds.
+                    let bytes = unsafe {
+                        buffers
+                            .get_unchecked(bv.buffer_index as usize)
+                            .get_unchecked(offset..offset + view_len as usize)
+                    };
+                    self.hll.add_hashed(HLL_HASH_STATE.hash_one(bytes));
+                }
+            }
         }
 
         Ok(())
