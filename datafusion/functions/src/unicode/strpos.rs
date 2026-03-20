@@ -198,6 +198,28 @@ fn find_substring_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     None
 }
 
+/// Converts a byte offset within a haystack to a 1-based character position.
+/// For ASCII data, byte offset == char offset so we just add 1. For non-ASCII,
+/// we count UTF-8 characters in the prefix before the match.
+#[inline]
+fn byte_offset_to_char_pos<T: ArrowPrimitiveType>(
+    haystack: &str,
+    byte_offset: usize,
+    ascii_only: bool,
+) -> Option<T::Native> {
+    if ascii_only {
+        return T::Native::from_usize(byte_offset + 1);
+    }
+    // SAFETY: byte_offset is at a UTF-8 char boundary because both haystack
+    // and needle are valid UTF-8, and UTF-8 is self-synchronizing: a valid
+    // needle byte sequence can only match starting at a char boundary in a
+    // valid haystack.
+    debug_assert!(haystack.is_char_boundary(byte_offset));
+    let prefix =
+        unsafe { std::str::from_utf8_unchecked(&haystack.as_bytes()[..byte_offset]) };
+    T::Native::from_usize(prefix.chars().count() + 1)
+}
+
 /// Fallback strpos implementation for when both haystack and needle are arrays.
 /// Building a new `memmem::Finder` for every row is too expensive; it is faster
 /// to use `memchr::memchr`.
@@ -223,22 +245,7 @@ where
                 match find_substring_bytes(haystack_bytes, needle_bytes) {
                     None => T::Native::from_usize(0),
                     Some(byte_offset) => {
-                        if ascii_only {
-                            T::Native::from_usize(byte_offset + 1)
-                        } else {
-                            // SAFETY: byte_offset is at a UTF-8 char boundary
-                            // because both haystack and needle are valid UTF-8,
-                            // and UTF-8 is self-synchronizing: a valid needle
-                            // byte sequence can only match starting at a char
-                            // boundary in a valid haystack.
-                            debug_assert!(haystack.is_char_boundary(byte_offset));
-                            let prefix = unsafe {
-                                std::str::from_utf8_unchecked(
-                                    &haystack_bytes[..byte_offset],
-                                )
-                            };
-                            T::Native::from_usize(prefix.chars().count() + 1)
-                        }
+                        byte_offset_to_char_pos::<T>(haystack, byte_offset, ascii_only)
                     }
                 }
             }
@@ -317,22 +324,7 @@ where
                 match finder.find(haystack_bytes) {
                     None => T::Native::from_usize(0),
                     Some(byte_offset) => {
-                        if ascii_haystack {
-                            T::Native::from_usize(byte_offset + 1)
-                        } else {
-                            // SAFETY: byte_offset is at a UTF-8 char boundary
-                            // because both haystack and needle are valid UTF-8,
-                            // and UTF-8 is self-synchronizing: a valid needle
-                            // byte sequence can only match starting at a char
-                            // boundary in a valid haystack.
-                            debug_assert!(string.is_char_boundary(byte_offset));
-                            let prefix = unsafe {
-                                std::str::from_utf8_unchecked(
-                                    &haystack_bytes[..byte_offset],
-                                )
-                            };
-                            T::Native::from_usize(prefix.chars().count() + 1)
-                        }
+                        byte_offset_to_char_pos::<T>(string, byte_offset, ascii_haystack)
                     }
                 }
             }
