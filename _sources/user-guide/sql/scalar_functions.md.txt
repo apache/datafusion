@@ -4274,29 +4274,28 @@ _Alias of [array_has_any](#array_has_any)._
 Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.
 
 ```sql
-arrays_zip(array1, array2[, ..., array_n])
+arrays_zip(array1[, ..., array_n])
 ```
 
 #### Arguments
 
 - **array1**: First array expression.
-- **array2**: Second array expression.
-- **array_n**: Subsequent array expressions.
+- **array_n**: Optional additional array expressions.
 
 #### Example
 
 ```sql
-> select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
+> select arrays_zip([1, 2, 3]);
 +---------------------------------------------------+
-| arrays_zip([1, 2, 3], ['a', 'b', 'c'])             |
+| arrays_zip([1, 2, 3])                             |
 +---------------------------------------------------+
-| [{c0: 1, c1: a}, {c0: 2, c1: b}, {c0: 3, c1: c}] |
+| [{1: 1}, {1: 2}, {1: 3}]                          |
 +---------------------------------------------------+
 > select arrays_zip([1, 2], [3, 4, 5]);
 +---------------------------------------------------+
-| arrays_zip([1, 2], [3, 4, 5])                       |
+| arrays_zip([1, 2], [3, 4, 5])                     |
 +---------------------------------------------------+
-| [{c0: 1, c1: 3}, {c0: 2, c1: 4}, {c0: , c1: 5}]  |
+| [{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]     |
 +---------------------------------------------------+
 ```
 
