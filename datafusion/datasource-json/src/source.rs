@@ -286,8 +286,12 @@ impl FileOpener for JsonOpener {
             let location = &partitioned_file.object_meta.location;
 
             if let Some(file_range) = partitioned_file.range.as_ref() {
-                let raw_start = file_range.start as u64;
-                let raw_end = file_range.end as u64;
+                let raw_start: u64 = file_range.start.try_into().map_err(|_| {
+                    exec_datafusion_err!("Expected start range to fit in u64, got {}", file_range.start)
+            })?;
+                let raw_end: u64 = file_range.end.try_into().map_err(|_| {
+                    exec_datafusion_err!("Expected end range to fit in u64, got {}", file_range.end)
+            })?;
 
                 if raw_start >= raw_end || raw_start >= file_size {
                     return Ok(
