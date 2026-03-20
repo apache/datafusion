@@ -355,7 +355,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: test.column1_utf8view LIKE Utf8View("äöüß%") AS c1, CASE test.column1_utf8view IS NOT NULL WHEN Boolean(true) THEN Boolean(true) END AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
+01)Projection: test.column1_utf8view LIKE Utf8View("äöüß%") ESCAPE '\' AS c1, CASE test.column1_utf8view IS NOT NULL WHEN Boolean(true) THEN Boolean(true) END AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Test STARTS_WITH is rewitten to LIKE when the pattern is a constant
@@ -370,7 +370,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: test.column1_utf8 LIKE Utf8("foo\%%") AS c1, test.column1_large_utf8 LIKE LargeUtf8("foo\%%") AS c2, test.column1_utf8view LIKE Utf8View("foo\%%") AS c3, test.column1_utf8 LIKE Utf8("f\_o%") AS c4, test.column1_large_utf8 LIKE LargeUtf8("f\_o%") AS c5, test.column1_utf8view LIKE Utf8View("f\_o%") AS c6
+01)Projection: test.column1_utf8 LIKE Utf8("foo\%%") ESCAPE '\' AS c1, test.column1_large_utf8 LIKE LargeUtf8("foo\%%") ESCAPE '\' AS c2, test.column1_utf8view LIKE Utf8View("foo\%%") ESCAPE '\' AS c3, test.column1_utf8 LIKE Utf8("f\_o%") ESCAPE '\' AS c4, test.column1_large_utf8 LIKE LargeUtf8("f\_o%") ESCAPE '\' AS c5, test.column1_utf8view LIKE Utf8View("f\_o%") ESCAPE '\' AS c6
 02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column1_utf8view]
 
 ## Test STARTS_WITH works with column arguments
@@ -950,7 +950,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: test.column1_utf8view LIKE Utf8View("foo%") AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: test.column1_utf8view LIKE Utf8View("foo%") ESCAPE '\' AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for TRANSLATE
