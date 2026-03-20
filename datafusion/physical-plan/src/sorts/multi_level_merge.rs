@@ -380,9 +380,9 @@ impl MultiLevelMergeBuilder {
         let mut total_needed: usize = 0;
 
         for spill in &self.sorted_spill_files {
-            let per_spill = get_reserved_byte_for_record_batch_size(
-                spill.max_record_batch_memory,
-            ) * buffer_len;
+            let per_spill =
+                get_reserved_byte_for_record_batch_size(spill.max_record_batch_memory)
+                    * buffer_len;
             total_needed += per_spill;
 
             // For memory pools that are not shared this is good, for other
