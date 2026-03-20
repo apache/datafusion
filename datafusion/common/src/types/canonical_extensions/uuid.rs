@@ -16,15 +16,20 @@
 // under the License.
 
 use crate::Result;
+use crate::cast::{as_fixed_size_binary_array, as_string_array};
 use crate::error::_internal_err;
 use crate::types::CastExtension;
 use crate::types::extension::DFExtensionType;
-use arrow::array::{Array, ArrayRef, FixedSizeBinaryArray};
-use arrow::compute::CastOptions;
+use arrow::array::{
+    Array, ArrayRef, FixedSizeBinaryArray, StringBuilder, builder::FixedSizeBinaryBuilder,
+};
+use arrow::compute::{CastOptions, cast};
 use arrow::datatypes::DataType;
 use arrow::util::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
+use arrow_schema::Field;
 use arrow_schema::extension::{ExtensionType, Uuid};
 use std::fmt::Write;
+use std::sync::Arc;
 use uuid::Bytes;
 
 /// Defines the extension type logic for the canonical `arrow.uuid` extension type. This extension
@@ -80,7 +85,7 @@ impl DFExtensionType for DFUuid {
     fn create_cast_extension(
         &self,
         other: &Field,
-    ) -> crate::Result<Option<Arc<dyn CastExtension>>> {
+    ) -> Result<Option<Arc<dyn CastExtension>>> {
         if other.extension_type_name().is_some() {
             return Ok(None);
         }
@@ -120,8 +125,29 @@ impl DisplayIndex for UuidValueDisplayIndex<'_> {
 struct UuidCastExtension {}
 
 impl CastExtension for UuidCastExtension {
-    fn can_cast(&self, to: &Field, options: CastOptions<'static>) -> crate::Result<bool> {
-        todo!()
+    fn can_cast(&self, to: &Field, options: CastOptions<'static>) -> Result<bool> {
+        if to.extension_type_name().is_some() {
+            return Ok(false);
+        }
+
+        match to.data_type() {
+            // Only explicit casts to string
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                if options.safe {
+                    Ok(false)
+                } else {
+                    Ok(true)
+                }
+            }
+            // Can implicitly cast to storage
+            DataType::FixedSizeBinary(16) => Ok(true),
+            _ => Ok(false),
+        }
+    }
+
+    fn can_cast_from(&self, from: &Field, options: CastOptions<'static>) -> Result<bool> {
+        // Symmetric behaviour between cast from and cast to
+        self.can_cast(from, options)
     }
 
     fn cast(
@@ -129,25 +155,77 @@ impl CastExtension for UuidCastExtension {
         value: ArrayRef,
         to: &Field,
         options: CastOptions<'static>,
-    ) -> crate::Result<ArrayRef> {
-        todo!()
-    }
+    ) -> Result<ArrayRef> {
+        if !self.can_cast(to, options)? {
+            return _internal_err!("Unhandled cast");
+        }
 
-    fn can_cast_from(
-        &self,
-        from: &Field,
-        options: CastOptions<'static>,
-    ) -> crate::Result<bool> {
-        todo!()
+        let storage = as_fixed_size_binary_array(&value)?;
+        match to.data_type() {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                let mut builder =
+                    StringBuilder::with_capacity(storage.len(), storage.len() * 36);
+                for bytes_opt in storage {
+                    match bytes_opt {
+                        Some(bytes) => {
+                            let bytes16 = Bytes::try_from(bytes).map_err(|e| {
+                                crate::DataFusionError::Execution(e.to_string())
+                            })?;
+                            let uuid = uuid::Uuid::from_bytes(bytes16);
+                            write!(builder, "{uuid}")?;
+                            builder.append_value("");
+                        }
+                        None => builder.append_null(),
+                    }
+                }
+
+                let string_array = Arc::new(builder.finish()) as ArrayRef;
+                return Ok(cast(&string_array, to.data_type())?);
+            }
+            DataType::FixedSizeBinary(16) => return Ok(value),
+            _ => {}
+        }
+
+        _internal_err!("Unexpected difference between can_cast()")
     }
 
     fn cast_from(
         &self,
         value: ArrayRef,
-        to: &Field,
+        from: &Field,
         options: CastOptions<'static>,
-    ) -> crate::Result<ArrayRef> {
-        todo!()
+    ) -> Result<ArrayRef> {
+        if !self.can_cast_from(from, options)? {
+            return _internal_err!("Unhandled cast");
+        }
+
+        match from.data_type() {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                let string_array_ref = cast(&value, &DataType::Utf8)?;
+                let string_array = as_string_array(&string_array_ref)?;
+                let mut builder = FixedSizeBinaryBuilder::new(16);
+                for string_opt in string_array {
+                    match string_opt {
+                        Some(string) => {
+                            let uuid = uuid::Uuid::try_parse(string).map_err(|_| {
+                                crate::DataFusionError::Execution(format!(
+                                    "Failed to parsed string '{string}' as UUID"
+                                ))
+                            })?;
+                            builder.append_value(uuid.as_bytes())?;
+                        }
+                        None => {
+                            builder.append_null();
+                        }
+                    }
+                }
+            }
+            // Can implicitly cast from storage
+            DataType::FixedSizeBinary(16) => return Ok(value),
+            _ => {}
+        }
+
+        _internal_err!("Unexpected difference between can_cast_from()")
     }
 }
 
