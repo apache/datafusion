@@ -31,13 +31,14 @@ use datafusion_common::plan_err;
 use datafusion_common::{Result, exec_err, not_impl_err, utils::take_function_args};
 
 use crate::Volatility::Immutable;
-use crate::type_coercion::aggregates::NUMERICS;
 use crate::{
-    Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
+    Accumulator, AggregateUDFImpl, Coercion, Expr, GroupsAccumulator, ReversedUDAF,
+    Signature, TypeSignature, TypeSignatureClass,
     expr::AggregateFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::AggregateOrderSensitivity,
 };
+use datafusion_common::types::{NativeType, logical_float64};
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
@@ -462,9 +463,25 @@ pub struct Avg {
 
 impl Avg {
     pub fn new() -> Self {
+        let signature = Signature::one_of(
+            vec![
+                TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignatureClass::Decimal,
+                )]),
+                TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignatureClass::Duration,
+                )]),
+                TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_float64()),
+                    vec![TypeSignatureClass::Integer, TypeSignatureClass::Float],
+                    NativeType::Float64,
+                )]),
+            ],
+            Immutable,
+        );
         Self {
             aliases: vec![String::from("mean")],
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Immutable),
+            signature,
         }
     }
 }
