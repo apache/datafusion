@@ -182,14 +182,25 @@ enum StreamState {
     Error,
 }
 
-impl FileStream {
-    /// Create a new `FileStream` using the give `FileOpener` to scan underlying files
+/// Builder for constructing a [`FileStream`].
+pub struct FileStreamBuilder<'a> {
+    config: &'a FileScanConfig,
+    partition: usize,
+    morselizer: Box<dyn Morselizer>,
+    metrics: &'a ExecutionPlanMetricsSet,
+    on_error: OnError,
+    preserve_order: bool,
+    shared_file_stream_state: Option<SharedFileStreamState>,
+}
+
+impl<'a> FileStreamBuilder<'a> {
+    /// Create a new builder using a legacy [`FileOpener`].
     pub fn new(
-        config: &FileScanConfig,
+        config: &'a FileScanConfig,
         partition: usize,
         file_opener: Arc<dyn FileOpener>,
-        metrics: &ExecutionPlanMetricsSet,
-    ) -> Result<Self> {
+        metrics: &'a ExecutionPlanMetricsSet,
+    ) -> Self {
         Self::new_with_morselizer(
             config,
             partition,
@@ -198,75 +209,75 @@ impl FileStream {
         )
     }
 
-    /// Create a new FileStream from morsels
+    /// Create a new builder using a [`Morselizer`].
     pub fn new_with_morselizer(
-        config: &FileScanConfig,
+        config: &'a FileScanConfig,
         partition: usize,
         morselizer: Box<dyn Morselizer>,
-        metrics: &ExecutionPlanMetricsSet,
-    ) -> Result<Self> {
-        let shared_file_stream_state = default_shared_file_stream_state(config);
-        let projected_schema = config.projected_schema()?;
+        metrics: &'a ExecutionPlanMetricsSet,
+    ) -> Self {
+        Self {
+            config,
+            partition,
+            morselizer,
+            on_error: OnError::Fail,
+            preserve_order: config.preserve_order,
+            metrics,
+            shared_file_stream_state: None,
+        }
+    }
 
-        let file_group = config.file_groups[partition].clone();
+    /// Configure the behavior when opening or scanning a file fails.
+    pub fn with_on_error(mut self, on_error: OnError) -> Self {
+        self.on_error = on_error;
+        self
+    }
 
-        Ok(Self {
+    /// Configure whether this stream should preserve logical planner order.
+    pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
+        self.preserve_order = preserve_order;
+        self
+    }
+
+    /// Use the provided shared scheduler state instead of the default one.
+    pub fn with_shared_state(
+        mut self,
+        shared_file_stream_state: SharedFileStreamState,
+    ) -> Self {
+        self.shared_file_stream_state = Some(shared_file_stream_state);
+        self
+    }
+
+    /// Build the configured [`FileStream`].
+    pub fn build(self) -> Result<FileStream> {
+        let shared_file_stream_state = self
+            .shared_file_stream_state
+            .unwrap_or_else(|| default_shared_file_stream_state(self.config));
+        let projected_schema = self.config.projected_schema()?;
+        let file_group = self.config.file_groups[self.partition].clone();
+        let stream_id = shared_file_stream_state.register_stream();
+
+        Ok(FileStream {
             file_iter: file_group.into_inner().into_iter().collect(),
             ready_planners: VecDeque::new(),
             waiting_planners: VecDeque::new(),
             morsels: VecDeque::new(),
             reader: None,
             projected_schema,
-            remain: config.limit,
-            morselizer,
-            file_stream_metrics: FileStreamMetrics::new(metrics, partition),
-            baseline_metrics: BaselineMetrics::new(metrics, partition),
-            on_error: OnError::Fail,
-            preserve_order: config.preserve_order,
-            shared_file_stream_state: shared_file_stream_state.clone(),
-            stream_id: None,
+            remain: self.config.limit,
+            morselizer: self.morselizer,
+            file_stream_metrics: FileStreamMetrics::new(self.metrics, self.partition),
+            baseline_metrics: BaselineMetrics::new(self.metrics, self.partition),
+            on_error: self.on_error,
+            preserve_order: self.preserve_order,
+            shared_file_stream_state,
+            stream_id: Some(stream_id),
             state: StreamState::Active,
         })
-        .map(|stream| stream.with_shared_state(shared_file_stream_state))
     }
-    /// Specify the behavior when an error occurs opening or scanning a file
-    ///
-    /// If `OnError::Skip` the stream will skip files which encounter an error and continue
-    /// If `OnError:Fail` (default) the stream will fail and stop processing when an error occurs
-    pub fn with_on_error(mut self, on_error: OnError) -> Self {
-        self.on_error = on_error;
-        self
-    }
+}
 
-    /// Specify whether this `FileStream` should preserve the logical output
-    /// order implied by `MorselPlan`s.
-    pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
-        self.preserve_order = preserve_order;
-        self
-    }
-
-    /// Replace the shared scheduler state used by this stream before it has
-    /// been registered with any shared-state instance.
-    ///
-    /// This is intended for callers such as `DataSourceExec` that want several
-    /// sibling streams to coordinate against the same shared I/O budget.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the stream has already registered itself with a shared state.
-    pub fn with_shared_state(
-        mut self,
-        shared_file_stream_state: SharedFileStreamState,
-    ) -> Self {
-        assert!(
-            self.stream_id.is_none(),
-            "cannot replace shared state after the stream has registered itself"
-        );
-        self.shared_file_stream_state = shared_file_stream_state;
-        self.stream_id = Some(self.shared_file_stream_state.register_stream());
-        self
-    }
-
+impl FileStream {
     /// Return this stream's registered shared-state id.
     fn stream_id(&self) -> Result<FileStreamId> {
         self.stream_id.ok_or_else(|| {
@@ -831,7 +842,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
+    use crate::file_stream::{FileOpenFuture, FileOpener, FileStreamBuilder, OnError};
     use crate::test_util::MockSource;
     use arrow::array::{Array, AsArray, RecordBatch};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -960,10 +971,15 @@ mod tests {
             .with_limit(self.limit)
             .build();
             let metrics_set = ExecutionPlanMetricsSet::new();
-            let file_stream =
-                FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)
-                    .unwrap()
-                    .with_on_error(on_error);
+            let file_stream = FileStreamBuilder::new(
+                &config,
+                0,
+                Arc::new(self.opener),
+                &metrics_set,
+            )
+            .with_on_error(on_error)
+            .build()
+            .unwrap();
 
             file_stream
                 .collect::<Vec<_>>()
@@ -1059,12 +1075,13 @@ mod tests {
 
             let config = self.test_config();
             let metrics_set = ExecutionPlanMetricsSet::new();
-            let mut stream = FileStream::new_with_morselizer(
+            let mut stream = FileStreamBuilder::new_with_morselizer(
                 &config,
                 0,
                 Box::new(self.morselizer),
                 &metrics_set,
-            )?;
+            )
+            .build()?;
 
             let mut stream_contents = Vec::new();
             while let Some(result) = stream.next().await {

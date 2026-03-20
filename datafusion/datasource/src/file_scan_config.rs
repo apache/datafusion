@@ -21,7 +21,7 @@
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType, file_stream::FileStream,
+    file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
     source::DataSource, statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
@@ -588,12 +588,13 @@ impl DataSource for FileScanConfig {
 
         let morselizer = source.create_morselizer(object_store, self, partition)?;
 
-        let stream = FileStream::new_with_morselizer(
+        let stream = FileStreamBuilder::new_with_morselizer(
             self,
             partition,
             morselizer,
             source.metrics(),
-        )?;
+        )
+        .build()?;
         Ok(Box::pin(cooperative(stream)))
     }
 
