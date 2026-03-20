@@ -7340,12 +7340,8 @@ select arrays_zip(b) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6],
 NULL
 
 # No input
-query error
+query error Error during planning: 'arrays_zip' does not support zero arguments
 select arrays_zip();
-----
-DataFusion error: Error during planning: 'arrays_zip' does not support zero arguments. No function matches the given name and argument types 'arrays_zip()'. You might need to add explicit type casts.
-	Candidate functions:
-	arrays_zip(Any, .., Any)
 
 # Non-array input
 query error DataFusion error: Execution error: arrays_zip expects array arguments, got Int64
