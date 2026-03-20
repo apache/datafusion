@@ -695,7 +695,21 @@ impl ExecutionPlan for FilterExec {
         let filter_input = Arc::clone(self.input());
         let new_predicate = conjunction(unhandled_filters);
         let updated_node = if new_predicate.eq(&lit(true)) {
-            // FilterExec is no longer needed, but we may need to leave a projection in place
+            // FilterExec is no longer needed, but we may need to leave a projection in place.
+            // If this FilterExec had a fetch limit, propagate it to the child.
+            // When the child also has a fetch, use the minimum of both to preserve
+            // the tighter constraint.
+            let filter_input = if let Some(outer_fetch) = self.fetch {
+                let effective_fetch = match filter_input.fetch() {
+                    Some(inner_fetch) => outer_fetch.min(inner_fetch),
+                    None => outer_fetch,
+                };
+                filter_input
+                    .with_fetch(Some(effective_fetch))
+                    .unwrap_or(filter_input)
+            } else {
+                filter_input
+            };
             match self.projection().as_ref() {
                 Some(projection_indices) => {
                     let filter_child_schema = filter_input.schema();
