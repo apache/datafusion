@@ -18,8 +18,7 @@
 //! Utility functions leveraged by the query optimizer rules
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::Arc;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use arrow::array::{Array, RecordBatch, new_null_array};
@@ -69,55 +68,6 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
     trace!("{description}::\n{}\n", plan.display_indent_schema());
 }
 
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NullRestrictionEvalMode {
-    Auto = 0,
-    AuthoritativeOnly = 1,
-}
-
-static NULL_RESTRICTION_EVAL_MODE: AtomicU8 =
-    AtomicU8::new(NullRestrictionEvalMode::Auto as u8);
-static NULL_RESTRICTION_EVAL_MODE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn null_restriction_eval_mode() -> NullRestrictionEvalMode {
-    if NULL_RESTRICTION_EVAL_MODE.load(Ordering::Relaxed)
-        == NullRestrictionEvalMode::AuthoritativeOnly as u8
-    {
-        NullRestrictionEvalMode::AuthoritativeOnly
-    } else {
-        NullRestrictionEvalMode::Auto
-    }
-}
-
-#[doc(hidden)]
-pub struct NullRestrictionEvalModeGuard {
-    previous_mode: NullRestrictionEvalMode,
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl Drop for NullRestrictionEvalModeGuard {
-    fn drop(&mut self) {
-        NULL_RESTRICTION_EVAL_MODE.store(self.previous_mode as u8, Ordering::Relaxed);
-    }
-}
-
-#[doc(hidden)]
-pub fn set_null_restriction_eval_mode_for_test(
-    mode: NullRestrictionEvalMode,
-) -> NullRestrictionEvalModeGuard {
-    let lock = NULL_RESTRICTION_EVAL_MODE_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("null restriction mode lock poisoned");
-    let previous_mode = null_restriction_eval_mode();
-    NULL_RESTRICTION_EVAL_MODE.store(mode as u8, Ordering::Relaxed);
-    NullRestrictionEvalModeGuard {
-        previous_mode,
-        _lock: lock,
-    }
-}
-
 /// Determine whether a predicate can restrict NULLs. e.g.
 /// `c0 > 8` return true;
 /// `c0 IS NULL` return false.
@@ -142,9 +92,8 @@ pub fn is_restrict_null_predicate<'a>(
         return Ok(false);
     }
 
-    if null_restriction_eval_mode() == NullRestrictionEvalMode::Auto
-        && let Some(is_restricting) =
-            syntactic_restrict_null_predicate(&predicate, &join_cols)
+    if let Some(is_restricting) =
+        syntactic_restrict_null_predicate(&predicate, &join_cols)
     {
         #[cfg(debug_assertions)]
         {

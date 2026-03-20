@@ -19,9 +19,6 @@ use std::sync::Arc;
 
 use super::*;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion_optimizer::utils::{
-    NullRestrictionEvalMode, set_null_restriction_eval_mode_for_test,
-};
 
 const WINDOW_SCALAR_SUBQUERY_SQL: &str = r#"
     WITH suppliers AS (
@@ -47,9 +44,7 @@ fn sqllogictest_style_ctx(push_down_filter_enabled: bool) -> SessionContext {
 
 async fn capture_window_scalar_subquery_plans(
     push_down_filter_enabled: bool,
-    null_restriction_eval_mode: NullRestrictionEvalMode,
 ) -> Result<(String, String)> {
-    let _mode_guard = set_null_restriction_eval_mode_for_test(null_restriction_eval_mode);
     let ctx = sqllogictest_style_ctx(push_down_filter_enabled);
     let df = ctx.sql(WINDOW_SCALAR_SUBQUERY_SQL).await?;
     let optimized_plan = df.clone().into_optimized_plan()?;
@@ -213,16 +208,9 @@ async fn natural_join_union_regression() -> Result<()> {
 #[tokio::test(flavor = "current_thread")]
 async fn window_scalar_subquery_optimizer_delta() -> Result<()> {
     let (enabled_optimized, enabled_physical) =
-        capture_window_scalar_subquery_plans(true, NullRestrictionEvalMode::Auto).await?;
+        capture_window_scalar_subquery_plans(true).await?;
     let (disabled_optimized, disabled_physical) =
-        capture_window_scalar_subquery_plans(false, NullRestrictionEvalMode::Auto)
-            .await?;
-    let (authoritative_optimized, authoritative_physical) =
-        capture_window_scalar_subquery_plans(
-            true,
-            NullRestrictionEvalMode::AuthoritativeOnly,
-        )
-        .await?;
+        capture_window_scalar_subquery_plans(false).await?;
 
     assert!(
         enabled_optimized
@@ -246,8 +234,6 @@ async fn window_scalar_subquery_optimizer_delta() -> Result<()> {
 
     assert_eq!(enabled_optimized, disabled_optimized);
     assert_eq!(enabled_physical, disabled_physical);
-    assert_eq!(authoritative_optimized, enabled_optimized);
-    assert_eq!(authoritative_physical, enabled_physical);
 
     Ok(())
 }
