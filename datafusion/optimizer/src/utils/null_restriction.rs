@@ -32,87 +32,6 @@ enum NullSubstitutionValue {
     Boolean(bool),
 }
 
-/// Evaluates a subset of SQL three-valued logic over null substitution values.
-///
-/// Lattice used by the syntactic fast path:
-/// - `Boolean(true|false)`: exact logical value
-/// - `Null`: exact SQL unknown/null value
-/// - `NonNull`: known to be not null, but exact value is unknown
-///
-/// `NonNull` is intentionally conservative for logical operators. For example,
-/// `NonNull AND true` could be either `true` or `false`, so the result remains
-/// unknown to the syntactic evaluator (`None`) rather than pretending to know.
-#[derive(Default)]
-struct SqlThreeValuedEvaluator;
-
-impl SqlThreeValuedEvaluator {
-    fn not(&self, value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
-        match value {
-            Some(NullSubstitutionValue::Boolean(value)) => {
-                Some(NullSubstitutionValue::Boolean(!value))
-            }
-            Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Null),
-            Some(NullSubstitutionValue::NonNull) | None => None,
-        }
-    }
-
-    fn and(
-        &self,
-        left: Option<NullSubstitutionValue>,
-        right: Option<NullSubstitutionValue>,
-    ) -> Option<NullSubstitutionValue> {
-        if matches!(left, Some(NullSubstitutionValue::Boolean(false)))
-            || matches!(right, Some(NullSubstitutionValue::Boolean(false)))
-        {
-            return Some(NullSubstitutionValue::Boolean(false));
-        }
-
-        match (left, right) {
-            (Some(NullSubstitutionValue::Boolean(true)), value)
-            | (value, Some(NullSubstitutionValue::Boolean(true))) => value,
-            (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
-                Some(NullSubstitutionValue::Null)
-            }
-            (Some(NullSubstitutionValue::NonNull), _)
-            | (_, Some(NullSubstitutionValue::NonNull))
-            | (None, _)
-            | (_, None) => None,
-            (left, right) => {
-                debug_assert_eq!(left, right);
-                left
-            }
-        }
-    }
-
-    fn or(
-        &self,
-        left: Option<NullSubstitutionValue>,
-        right: Option<NullSubstitutionValue>,
-    ) -> Option<NullSubstitutionValue> {
-        if matches!(left, Some(NullSubstitutionValue::Boolean(true)))
-            || matches!(right, Some(NullSubstitutionValue::Boolean(true)))
-        {
-            return Some(NullSubstitutionValue::Boolean(true));
-        }
-
-        match (left, right) {
-            (Some(NullSubstitutionValue::Boolean(false)), value)
-            | (value, Some(NullSubstitutionValue::Boolean(false))) => value,
-            (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
-                Some(NullSubstitutionValue::Null)
-            }
-            (Some(NullSubstitutionValue::NonNull), _)
-            | (_, Some(NullSubstitutionValue::NonNull))
-            | (None, _)
-            | (_, None) => None,
-            (left, right) => {
-                debug_assert_eq!(left, right);
-                left
-            }
-        }
-    }
-}
-
 pub(super) fn syntactic_restrict_null_predicate(
     predicate: &Expr,
     join_cols: &HashSet<&Column>,
@@ -144,75 +63,104 @@ fn contains_null(
         .any(|value| matches!(value, Some(NullSubstitutionValue::Null)))
 }
 
+fn not(value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
+    match value {
+        Some(NullSubstitutionValue::Boolean(value)) => {
+            Some(NullSubstitutionValue::Boolean(!value))
+        }
+        Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Null),
+        Some(NullSubstitutionValue::NonNull) | None => None,
+    }
+}
+
+fn binary_boolean_value(
+    left: Option<NullSubstitutionValue>,
+    right: Option<NullSubstitutionValue>,
+    when_short_circuit: bool,
+) -> Option<NullSubstitutionValue> {
+    let short_circuit = Some(NullSubstitutionValue::Boolean(when_short_circuit));
+    let identity = Some(NullSubstitutionValue::Boolean(!when_short_circuit));
+
+    if left == short_circuit || right == short_circuit {
+        return short_circuit;
+    }
+
+    match (left, right) {
+        (value, other) if value == identity => other,
+        (other, value) if value == identity => other,
+        (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
+            Some(NullSubstitutionValue::Null)
+        }
+        (Some(NullSubstitutionValue::NonNull), _)
+        | (_, Some(NullSubstitutionValue::NonNull))
+        | (None, _)
+        | (_, None) => None,
+        (left, right) => {
+            debug_assert_eq!(left, right);
+            left
+        }
+    }
+}
+
 fn null_check_value(
     value: Option<NullSubstitutionValue>,
-    when_non_null: bool,
+    is_not_null: bool,
 ) -> Option<NullSubstitutionValue> {
     match value {
-        Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Boolean(false)),
+        Some(NullSubstitutionValue::Null) => {
+            Some(NullSubstitutionValue::Boolean(!is_not_null))
+        }
         Some(NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_)) => {
-            Some(NullSubstitutionValue::Boolean(when_non_null))
+            Some(NullSubstitutionValue::Boolean(is_not_null))
         }
         None => None,
     }
+}
+
+fn null_if_contains_null(
+    values: impl IntoIterator<Item = Option<NullSubstitutionValue>>,
+) -> Option<NullSubstitutionValue> {
+    contains_null(values).then_some(NullSubstitutionValue::Null)
 }
 
 fn syntactic_null_substitution_value(
     expr: &Expr,
     join_cols: &HashSet<&Column>,
 ) -> Option<NullSubstitutionValue> {
-    let evaluator = SqlThreeValuedEvaluator;
-
     match expr {
         Expr::Alias(alias) => {
             syntactic_null_substitution_value(alias.expr.as_ref(), join_cols)
         }
-        Expr::Column(column) => {
-            if join_cols.contains(column) {
-                Some(NullSubstitutionValue::Null)
-            } else {
-                None
-            }
-        }
+        Expr::Column(column) => join_cols
+            .contains(column)
+            .then_some(NullSubstitutionValue::Null),
         Expr::Literal(value, _) => Some(scalar_to_null_substitution_value(value)),
         Expr::BinaryExpr(binary_expr) => syntactic_binary_value(binary_expr, join_cols),
         Expr::Not(expr) => {
-            evaluator.not(syntactic_null_substitution_value(expr.as_ref(), join_cols))
+            not(syntactic_null_substitution_value(expr.as_ref(), join_cols))
         }
-        Expr::IsNull(expr) => evaluator.not(null_check_value(
+        Expr::IsNull(expr) => null_check_value(
             syntactic_null_substitution_value(expr.as_ref(), join_cols),
-            true,
-        )),
+            false,
+        ),
         Expr::IsNotNull(expr) => null_check_value(
             syntactic_null_substitution_value(expr.as_ref(), join_cols),
             true,
         ),
-        Expr::Between(between) => {
-            if contains_null([
-                syntactic_null_substitution_value(between.expr.as_ref(), join_cols),
-                syntactic_null_substitution_value(between.low.as_ref(), join_cols),
-                syntactic_null_substitution_value(between.high.as_ref(), join_cols),
-            ]) {
-                Some(NullSubstitutionValue::Null)
-            } else {
-                None
-            }
-        }
+        Expr::Between(between) => null_if_contains_null([
+            syntactic_null_substitution_value(between.expr.as_ref(), join_cols),
+            syntactic_null_substitution_value(between.low.as_ref(), join_cols),
+            syntactic_null_substitution_value(between.high.as_ref(), join_cols),
+        ]),
         Expr::Cast(cast) => strict_null_passthrough(cast.expr.as_ref(), join_cols),
         Expr::TryCast(try_cast) => {
             strict_null_passthrough(try_cast.expr.as_ref(), join_cols)
         }
         Expr::Negative(expr) => strict_null_passthrough(expr.as_ref(), join_cols),
-        Expr::Like(like) | Expr::SimilarTo(like) => {
-            if contains_null([
-                syntactic_null_substitution_value(like.expr.as_ref(), join_cols),
-                syntactic_null_substitution_value(like.pattern.as_ref(), join_cols),
-            ]) {
-                Some(NullSubstitutionValue::Null)
-            } else {
-                None
-            }
-        }
+        Expr::Like(like) | Expr::SimilarTo(like) => null_if_contains_null([
+            syntactic_null_substitution_value(like.expr.as_ref(), join_cols),
+            syntactic_null_substitution_value(like.pattern.as_ref(), join_cols),
+        ]),
         Expr::Exists { .. }
         | Expr::InList(_)
         | Expr::InSubquery(_)
@@ -240,12 +188,10 @@ fn syntactic_null_substitution_value(
 }
 
 fn scalar_to_null_substitution_value(value: &ScalarValue) -> NullSubstitutionValue {
-    if value.is_null() {
-        NullSubstitutionValue::Null
-    } else if let ScalarValue::Boolean(Some(value)) = value {
-        NullSubstitutionValue::Boolean(*value)
-    } else {
-        NullSubstitutionValue::NonNull
+    match value {
+        _ if value.is_null() => NullSubstitutionValue::Null,
+        ScalarValue::Boolean(Some(value)) => NullSubstitutionValue::Boolean(*value),
+        _ => NullSubstitutionValue::NonNull,
     }
 }
 
@@ -253,14 +199,11 @@ fn strict_null_passthrough(
     expr: &Expr,
     join_cols: &HashSet<&Column>,
 ) -> Option<NullSubstitutionValue> {
-    if matches!(
+    matches!(
         syntactic_null_substitution_value(expr, join_cols),
         Some(NullSubstitutionValue::Null)
-    ) {
-        Some(NullSubstitutionValue::Null)
-    } else {
-        None
-    }
+    )
+    .then_some(NullSubstitutionValue::Null)
 }
 
 fn syntactic_binary_value(
@@ -269,11 +212,10 @@ fn syntactic_binary_value(
 ) -> Option<NullSubstitutionValue> {
     let left = syntactic_null_substitution_value(binary_expr.left.as_ref(), join_cols);
     let right = syntactic_null_substitution_value(binary_expr.right.as_ref(), join_cols);
-    let evaluator = SqlThreeValuedEvaluator;
 
     match binary_expr.op {
-        Operator::And => evaluator.and(left, right),
-        Operator::Or => evaluator.or(left, right),
+        Operator::And => binary_boolean_value(left, right, false),
+        Operator::Or => binary_boolean_value(left, right, true),
         Operator::Eq
         | Operator::NotEq
         | Operator::Lt
@@ -312,13 +254,7 @@ fn syntactic_binary_value(
         | Operator::Question
         | Operator::QuestionAnd
         | Operator::QuestionPipe
-        | Operator::Colon => {
-            if contains_null([left, right]) {
-                Some(NullSubstitutionValue::Null)
-            } else {
-                None
-            }
-        }
+        | Operator::Colon => null_if_contains_null([left, right]),
         Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => None,
     }
 }

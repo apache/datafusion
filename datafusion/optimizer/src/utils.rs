@@ -124,35 +124,31 @@ pub fn is_restrict_null_predicate<'a>(
         return Ok(false);
     }
 
-    let mode = null_restriction_eval_mode();
-
-    match mode {
-        NullRestrictionEvalMode::AuthoritativeOnly => {
-            authoritative_restrict_null_predicate(predicate, join_cols)
-        }
-        NullRestrictionEvalMode::Auto => {
-            if let Some(is_restricting) =
-                null_restriction::syntactic_restrict_null_predicate(
-                    &predicate, &join_cols,
-                )
-            {
-                #[cfg(debug_assertions)]
-                {
-                    let authoritative = authoritative_restrict_null_predicate(
-                        predicate.clone(),
-                        join_cols.iter().copied(),
-                    )?;
-                    debug_assert_eq!(
-                        is_restricting, authoritative,
-                        "syntactic fast path disagrees with authoritative null-restriction evaluation for predicate: {predicate}"
-                    );
-                }
-                Ok(is_restricting)
-            } else {
-                authoritative_restrict_null_predicate(predicate, join_cols)
-            }
-        }
+    if matches!(
+        null_restriction_eval_mode(),
+        NullRestrictionEvalMode::AuthoritativeOnly
+    ) {
+        return authoritative_restrict_null_predicate(predicate, join_cols);
     }
+
+    if let Some(is_restricting) =
+        null_restriction::syntactic_restrict_null_predicate(&predicate, &join_cols)
+    {
+        #[cfg(debug_assertions)]
+        {
+            let authoritative = authoritative_restrict_null_predicate(
+                predicate.clone(),
+                join_cols.iter().copied(),
+            )?;
+            debug_assert_eq!(
+                is_restricting, authoritative,
+                "syntactic fast path disagrees with authoritative null-restriction evaluation for predicate: {predicate}"
+            );
+        }
+        return Ok(is_restricting);
+    }
+
+    authoritative_restrict_null_predicate(predicate, join_cols)
 }
 
 /// Determines if an expression will always evaluate to null.
