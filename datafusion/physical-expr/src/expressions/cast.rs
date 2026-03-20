@@ -55,7 +55,7 @@ fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> bool {
 }
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone)]
 pub struct CastExpr {
     /// The expression to cast
     pub expr: Arc<dyn PhysicalExpr>,
@@ -63,7 +63,8 @@ pub struct CastExpr {
     target_field: FieldRef,
     /// Cast options
     cast_options: CastOptions<'static>,
-    // CastExtension might go here
+    // CastExtension
+    cast_extension: Option<Arc<dyn CastExtension>>,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
@@ -82,6 +83,8 @@ impl Hash for CastExpr {
         self.cast_options.hash(state);
     }
 }
+
+impl Eq for CastExpr {}
 
 impl CastExpr {
     /// Create a new `CastExpr` using only a `DataType`.
@@ -128,6 +131,17 @@ impl CastExpr {
             expr,
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            cast_extension: None,
+        }
+    }
+
+    pub fn with_cast_extension(
+        self,
+        cast_extension: Option<Arc<dyn CastExtension>>,
+    ) -> Self {
+        Self {
+            cast_extension,
+            ..self
         }
     }
 
@@ -246,7 +260,35 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        value.cast_to(self.cast_type(), Some(&self.cast_options))
+        if let Some(cast_extension) = &self.cast_extension {
+            let from_field = self.expr.return_field(&batch.schema())?;
+            let to_field = self.return_field(&batch.schema())?;
+            match value {
+                ColumnarValue::Array(array) => {
+                    Ok(ColumnarValue::Array(cast_extension.cast(
+                        array,
+                        &from_field,
+                        &to_field,
+                        &self.cast_options,
+                    )?))
+                }
+                ColumnarValue::Scalar(scalar_value) => {
+                    let array = scalar_value.to_array()?;
+                    let array_result = cast_extension.cast(
+                        array,
+                        &from_field,
+                        &to_field,
+                        &self.cast_options,
+                    )?;
+                    Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                        &array_result,
+                        0,
+                    )?))
+                }
+            }
+        } else {
+            value.cast_to(self.cast_type(), Some(&self.cast_options))
+        }
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
@@ -371,6 +413,17 @@ pub fn cast(
     cast_type: DataType,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     cast_with_options(expr, input_schema, cast_type, None)
+}
+
+pub fn cast_with_extension(
+    expr: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+    cast_type: DataType,
+    cast_extension: Arc<dyn CastExtension>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(
+        CastExpr::new(expr, cast_type, None).with_cast_extension(Some(cast_extension)),
+    ))
 }
 
 #[cfg(test)]

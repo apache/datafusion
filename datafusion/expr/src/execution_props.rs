@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::registry::ExtensionTypeRegistry;
 use crate::var_provider::{VarProvider, VarType};
 use chrono::{DateTime, Utc};
 use datafusion_common::HashMap;
@@ -69,6 +70,7 @@ pub struct ExecutionProps {
     /// Shared results container for uncorrelated scalar subquery values.
     /// Populated at execution time by `ScalarSubqueryExec`.
     pub subquery_results: ScalarSubqueryResults,
+    pub extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
 }
 
 impl Default for ExecutionProps {
@@ -87,6 +89,7 @@ impl ExecutionProps {
             var_providers: None,
             subquery_indexes: HashMap::new(),
             subquery_results: ScalarSubqueryResults::default(),
+            extension_types: None,
         }
     }
 

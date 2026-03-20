@@ -82,20 +82,16 @@ impl DFExtensionType for DFUuid {
         )))
     }
 
-    fn create_cast_extension(
+    fn cast_from(
         &self,
-        other: &Field,
-    ) -> Result<Option<Arc<dyn CastExtension>>> {
-        if other.extension_type_name().is_some() {
-            return Ok(None);
-        }
+    ) -> Result<Arc<dyn CastExtension>> {
+        Ok(Arc::new(CastToUuid {}))
+    }
 
-        match other.data_type() {
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-                Ok(Some(Arc::new(UuidCastExtension {})))
-            }
-            _ => Ok(None),
-        }
+    fn cast_to(
+        &self,
+    ) -> Result<Arc<dyn CastExtension>> {
+        Ok(Arc::new(CastFromUuid {}))
     }
 }
 
@@ -122,10 +118,15 @@ impl DisplayIndex for UuidValueDisplayIndex<'_> {
 }
 
 #[derive(Debug)]
-struct UuidCastExtension {}
+struct CastFromUuid {}
 
-impl CastExtension for UuidCastExtension {
-    fn can_cast(&self, to: &Field, options: CastOptions<'static>) -> Result<bool> {
+impl CastExtension for CastFromUuid {
+    fn can_cast(
+        &self,
+        _from: &Field,
+        to: &Field,
+        options: &CastOptions,
+    ) -> Result<bool> {
         if to.extension_type_name().is_some() {
             return Ok(false);
         }
@@ -145,18 +146,14 @@ impl CastExtension for UuidCastExtension {
         }
     }
 
-    fn can_cast_from(&self, from: &Field, options: CastOptions<'static>) -> Result<bool> {
-        // Symmetric behaviour between cast from and cast to
-        self.can_cast(from, options)
-    }
-
     fn cast(
         &self,
         value: ArrayRef,
+        from: &Field,
         to: &Field,
-        options: CastOptions<'static>,
+        options: &CastOptions,
     ) -> Result<ArrayRef> {
-        if !self.can_cast(to, options)? {
+        if !self.can_cast(from, to, options)? {
             return _internal_err!("Unhandled cast");
         }
 
@@ -188,14 +185,29 @@ impl CastExtension for UuidCastExtension {
 
         _internal_err!("Unexpected difference between can_cast()")
     }
+}
 
-    fn cast_from(
+#[derive(Debug)]
+struct CastToUuid {}
+
+impl CastExtension for CastToUuid {
+    fn can_cast(
+        &self,
+        from: &Field,
+        to: &Field,
+        options: &CastOptions,
+    ) -> Result<bool> {
+        CastFromUuid {}.can_cast(to, from, options)
+    }
+
+    fn cast(
         &self,
         value: ArrayRef,
         from: &Field,
-        options: CastOptions<'static>,
+        to: &Field,
+        options: &CastOptions,
     ) -> Result<ArrayRef> {
-        if !self.can_cast_from(from, options)? {
+        if !self.can_cast(from, to, options)? {
             return _internal_err!("Unhandled cast");
         }
 

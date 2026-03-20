@@ -25,6 +25,7 @@ use crate::{
     expressions::{self, Column, Literal, binary, like, similar_to},
 };
 
+use arrow::compute::CastOptions;
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::FieldExt;
@@ -296,14 +297,35 @@ pub fn create_physical_expr(
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
         Expr::Cast(Cast { expr, field }) => {
-
-            // This is where we cast
+            let (_, src_field) = expr.to_field(input_dfschema)?;
+            const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
+                safe: false,
+                format_options: DEFAULT_FORMAT_OPTIONS,
+            };
 
             // Need to figure out what happened here
 
 
             if !field.metadata().is_empty() {
-                let (_, src_field) = expr.to_field(input_dfschema)?;
+                if let Some(registry) = &execution_props.extension_types
+                    && let Some(extension_type) =
+                        registry.create_extension_type_for_field(&field)?
+                {
+                    let cast_extension = extension_type.cast_from()?;
+                    if cast_extension.can_cast(
+                        &src_field,
+                        &field,
+                        &DEFAULT_CAST_OPTIONS,
+                    )? {
+                        return expressions::cast_with_extension(
+                            create_physical_expr(expr, input_dfschema, execution_props)?,
+                            input_schema,
+                            field.data_type().clone(),
+                            cast_extension,
+                        );
+                    }
+                }
+
                 return plan_err!(
                     "Cast from {} to {} is not supported",
                     format_type_and_metadata(
@@ -312,6 +334,31 @@ pub fn create_physical_expr(
                     ),
                     format_type_and_metadata(field.data_type(), Some(field.metadata()))
                 );
+            } else if let Some(registry) = &execution_props.extension_types
+                && let Some(extension_type) =
+                    registry.create_extension_type_for_field(&src_field)?
+            {
+                let cast_extension = extension_type.cast_to()?;
+                if cast_extension.can_cast(&src_field, &field, &DEFAULT_CAST_OPTIONS)? {
+                    return expressions::cast_with_extension(
+                        create_physical_expr(expr, input_dfschema, execution_props)?,
+                        input_schema,
+                        field.data_type().clone(),
+                        cast_extension,
+                    );
+                } else {
+                    return plan_err!(
+                        "Cast from {} to {} is not supported",
+                        format_type_and_metadata(
+                            src_field.data_type(),
+                            Some(src_field.metadata()),
+                        ),
+                        format_type_and_metadata(
+                            field.data_type(),
+                            Some(field.metadata())
+                        )
+                    );
+                }
             }
 
             expressions::cast_with_target_field(

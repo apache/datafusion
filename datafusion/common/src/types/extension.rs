@@ -89,35 +89,43 @@ pub trait DFExtensionType: Debug + Send + Sync {
         Ok(None)
     }
 
-    // None for "not handled by this extension type" (could be handled by the other)
-    fn create_cast_extension(
-        &self,
-        _other: &Field,
-    ) -> Result<Option<Arc<dyn CastExtension>>> {
-        Ok(None)
+    fn cast_from(&self) -> Result<Arc<dyn CastExtension>> {
+        Ok(Arc::new(DefaultExtensionCast {}))
+    }
+
+    fn cast_to(&self) -> Result<Arc<dyn CastExtension>> {
+        Ok(Arc::new(DefaultExtensionCast {}))
     }
 }
 
 pub trait CastExtension: Debug + Send + Sync {
-    fn can_cast(&self, to: &Field, options: CastOptions<'static>)
-    -> Result<bool>;
+    fn can_cast(&self, from: &Field, to: &Field, options: &CastOptions) -> Result<bool>;
 
     // None for fallback
     fn cast(
         &self,
         value: ArrayRef,
+        from: &Field,
         to: &Field,
-        options: CastOptions<'static>,
+        options: &CastOptions,
     ) -> Result<ArrayRef>;
+}
 
-    fn can_cast_from(&self, from: &Field, options: CastOptions<'static>)
-    -> Result<bool>;
+#[derive(Debug)]
+struct DefaultExtensionCast {}
 
-    // None for fallback
-    fn cast_from(
+impl CastExtension for DefaultExtensionCast {
+    fn can_cast(&self, from: &Field, to: &Field, _options: &CastOptions) -> Result<bool> {
+        Ok(from.data_type() == to.data_type())
+    }
+
+    fn cast(
         &self,
         value: ArrayRef,
-        to: &Field,
-        options: CastOptions<'static>,
-    ) -> Result<ArrayRef>;
+        _from: &Field,
+        _to: &Field,
+        _options: &CastOptions,
+    ) -> Result<ArrayRef> {
+        Ok(value)
+    }
 }
