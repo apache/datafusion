@@ -105,7 +105,7 @@ async fn create_cast_uuid_to_char() -> Result<()> {
     let batches = df.collect().await?;
 
     assert_batches_eq!(
-        vec![
+        [
             "+--------------------------------------+",
             "| test.my_uuids                        |",
             "+--------------------------------------+",
@@ -132,7 +132,7 @@ async fn create_cast_char_to_uuid() -> Result<()> {
         .await?;
     let batches = df.collect().await?;
     assert_batches_eq!(
-        vec![
+        [
             "+----------------------------------+",
             "| uuid                             |",
             "+----------------------------------+",
