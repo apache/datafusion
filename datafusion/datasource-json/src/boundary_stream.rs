@@ -90,7 +90,7 @@ async fn get_stream(
     range: std::ops::Range<u64>,
 ) -> object_store::Result<BoxStream<'static, object_store::Result<Bytes>>> {
     let opts = GetOptions {
-        range: Some(GetRange::Bounded(range.clone())),
+        range: Some(GetRange::Bounded(range)),
         ..Default::default()
     };
     let result = store.get_opts(&location, opts).await?;
