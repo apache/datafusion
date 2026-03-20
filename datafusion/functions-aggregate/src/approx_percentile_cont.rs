@@ -30,17 +30,17 @@ use arrow::{
     },
     datatypes::{DataType, Field},
 };
+use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
     plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{DEFAULT_MAX_SIZE, TDigest};
 use datafusion_macros::user_doc;
@@ -133,22 +133,45 @@ impl Default for ApproxPercentileCont {
 impl ApproxPercentileCont {
     /// Create a new [`ApproxPercentileCont`] aggregate function.
     pub fn new() -> Self {
-        let mut variants = Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
         // Accept any numeric value paired with a float64 percentile
-        for num in NUMERICS {
-            variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
-            // Additionally accept an integer number of centroids for T-Digest
-            for int in INTEGERS {
-                variants.push(TypeSignature::Exact(vec![
-                    num.clone(),
-                    DataType::Float64,
-                    int.clone(),
-                ]))
-            }
-        }
-        Self {
-            signature: Signature::one_of(variants, Volatility::Immutable),
-        }
+        // Additionally accept an integer number of centroids for T-Digest
+        let signature = Signature::one_of(
+            vec![
+                // 2 args - numeric, percentile (float)
+                TypeSignature::Coercible(vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                ]),
+                // 3 args - numeric, percentile (float), centroid (integer)
+                TypeSignature::Coercible(vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Float64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Integer,
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Int64,
+                    ),
+                ]),
+            ],
+            Volatility::Immutable,
+        );
+        Self { signature }
     }
 
     pub(crate) fn create_accumulator(
