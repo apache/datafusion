@@ -1,0 +1,301 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Syntactic null-restriction evaluator used by optimizer fast paths.
+
+use std::collections::HashSet;
+
+use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::{BinaryExpr, Expr, Operator};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NullSubstitutionValue {
+    Null,
+    NonNull,
+    Boolean(bool),
+}
+
+pub(super) fn syntactic_restrict_null_predicate(
+    predicate: &Expr,
+    join_cols: &HashSet<&Column>,
+) -> Option<bool> {
+    match syntactic_null_substitution_value(predicate, join_cols) {
+        Some(NullSubstitutionValue::Boolean(true)) => Some(false),
+        Some(NullSubstitutionValue::Boolean(false) | NullSubstitutionValue::Null) => {
+            Some(true)
+        }
+        Some(NullSubstitutionValue::NonNull) | None => None,
+    }
+}
+
+pub(super) fn predicate_uses_only_columns(
+    predicate: &Expr,
+    allowed_columns: &HashSet<&Column>,
+) -> bool {
+    predicate
+        .column_refs()
+        .iter()
+        .all(|column| allowed_columns.contains(*column))
+}
+
+fn contains_null(
+    values: impl IntoIterator<Item = Option<NullSubstitutionValue>>,
+) -> bool {
+    values
+        .into_iter()
+        .any(|value| matches!(value, Some(NullSubstitutionValue::Null)))
+}
+
+fn null_check_value(
+    value: Option<NullSubstitutionValue>,
+    when_non_null: bool,
+) -> Option<NullSubstitutionValue> {
+    match value {
+        Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Boolean(false)),
+        Some(NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_)) => {
+            Some(NullSubstitutionValue::Boolean(when_non_null))
+        }
+        None => None,
+    }
+}
+
+fn syntactic_null_substitution_value(
+    expr: &Expr,
+    join_cols: &HashSet<&Column>,
+) -> Option<NullSubstitutionValue> {
+    match expr {
+        Expr::Alias(alias) => {
+            syntactic_null_substitution_value(alias.expr.as_ref(), join_cols)
+        }
+        Expr::Column(column) => {
+            if join_cols.contains(column) {
+                Some(NullSubstitutionValue::Null)
+            } else {
+                None
+            }
+        }
+        Expr::Literal(value, _) => Some(scalar_to_null_substitution_value(value)),
+        Expr::BinaryExpr(binary_expr) => syntactic_binary_value(binary_expr, join_cols),
+        Expr::Not(expr) => {
+            sql_not(syntactic_null_substitution_value(expr.as_ref(), join_cols))
+        }
+        Expr::IsNull(expr) => sql_not(null_check_value(
+            syntactic_null_substitution_value(expr.as_ref(), join_cols),
+            true,
+        )),
+        Expr::IsNotNull(expr) => null_check_value(
+            syntactic_null_substitution_value(expr.as_ref(), join_cols),
+            true,
+        ),
+        Expr::Between(between) => {
+            if contains_null([
+                syntactic_null_substitution_value(between.expr.as_ref(), join_cols),
+                syntactic_null_substitution_value(between.low.as_ref(), join_cols),
+                syntactic_null_substitution_value(between.high.as_ref(), join_cols),
+            ]) {
+                Some(NullSubstitutionValue::Null)
+            } else {
+                None
+            }
+        }
+        Expr::Cast(cast) => strict_null_passthrough(cast.expr.as_ref(), join_cols),
+        Expr::TryCast(try_cast) => {
+            strict_null_passthrough(try_cast.expr.as_ref(), join_cols)
+        }
+        Expr::Negative(expr) => strict_null_passthrough(expr.as_ref(), join_cols),
+        Expr::Like(like) | Expr::SimilarTo(like) => {
+            if contains_null([
+                syntactic_null_substitution_value(like.expr.as_ref(), join_cols),
+                syntactic_null_substitution_value(like.pattern.as_ref(), join_cols),
+            ]) {
+                Some(NullSubstitutionValue::Null)
+            } else {
+                None
+            }
+        }
+        Expr::Exists { .. }
+        | Expr::InList(_)
+        | Expr::InSubquery(_)
+        | Expr::SetComparison(_)
+        | Expr::ScalarSubquery(_)
+        | Expr::OuterReferenceColumn(_, _)
+        | Expr::Placeholder(_)
+        | Expr::ScalarVariable(_, _)
+        | Expr::Unnest(_)
+        | Expr::GroupingSet(_)
+        | Expr::WindowFunction(_)
+        | Expr::ScalarFunction(_)
+        | Expr::Case(_)
+        | Expr::IsTrue(_)
+        | Expr::IsFalse(_)
+        | Expr::IsUnknown(_)
+        | Expr::IsNotTrue(_)
+        | Expr::IsNotFalse(_)
+        | Expr::IsNotUnknown(_) => None,
+        Expr::AggregateFunction(_) => None,
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
+        Expr::Wildcard { .. } => None,
+    }
+}
+
+fn scalar_to_null_substitution_value(value: &ScalarValue) -> NullSubstitutionValue {
+    if value.is_null() {
+        NullSubstitutionValue::Null
+    } else if let ScalarValue::Boolean(Some(value)) = value {
+        NullSubstitutionValue::Boolean(*value)
+    } else {
+        NullSubstitutionValue::NonNull
+    }
+}
+
+fn strict_null_passthrough(
+    expr: &Expr,
+    join_cols: &HashSet<&Column>,
+) -> Option<NullSubstitutionValue> {
+    if matches!(
+        syntactic_null_substitution_value(expr, join_cols),
+        Some(NullSubstitutionValue::Null)
+    ) {
+        Some(NullSubstitutionValue::Null)
+    } else {
+        None
+    }
+}
+
+fn sql_not(value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
+    match value {
+        Some(NullSubstitutionValue::Boolean(value)) => {
+            Some(NullSubstitutionValue::Boolean(!value))
+        }
+        Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Null),
+        Some(NullSubstitutionValue::NonNull) | None => None,
+    }
+}
+
+fn sql_and(
+    left: Option<NullSubstitutionValue>,
+    right: Option<NullSubstitutionValue>,
+) -> Option<NullSubstitutionValue> {
+    if matches!(left, Some(NullSubstitutionValue::Boolean(false)))
+        || matches!(right, Some(NullSubstitutionValue::Boolean(false)))
+    {
+        return Some(NullSubstitutionValue::Boolean(false));
+    }
+
+    match (left, right) {
+        (Some(NullSubstitutionValue::Boolean(true)), value)
+        | (value, Some(NullSubstitutionValue::Boolean(true))) => value,
+        (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
+            Some(NullSubstitutionValue::Null)
+        }
+        (Some(NullSubstitutionValue::NonNull), _)
+        | (_, Some(NullSubstitutionValue::NonNull))
+        | (None, _)
+        | (_, None) => None,
+        (left, right) => {
+            debug_assert_eq!(left, right);
+            left
+        }
+    }
+}
+
+fn sql_or(
+    left: Option<NullSubstitutionValue>,
+    right: Option<NullSubstitutionValue>,
+) -> Option<NullSubstitutionValue> {
+    if matches!(left, Some(NullSubstitutionValue::Boolean(true)))
+        || matches!(right, Some(NullSubstitutionValue::Boolean(true)))
+    {
+        return Some(NullSubstitutionValue::Boolean(true));
+    }
+
+    match (left, right) {
+        (Some(NullSubstitutionValue::Boolean(false)), value)
+        | (value, Some(NullSubstitutionValue::Boolean(false))) => value,
+        (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
+            Some(NullSubstitutionValue::Null)
+        }
+        (Some(NullSubstitutionValue::NonNull), _)
+        | (_, Some(NullSubstitutionValue::NonNull))
+        | (None, _)
+        | (_, None) => None,
+        (left, right) => {
+            debug_assert_eq!(left, right);
+            left
+        }
+    }
+}
+
+fn syntactic_binary_value(
+    binary_expr: &BinaryExpr,
+    join_cols: &HashSet<&Column>,
+) -> Option<NullSubstitutionValue> {
+    let left = syntactic_null_substitution_value(binary_expr.left.as_ref(), join_cols);
+    let right = syntactic_null_substitution_value(binary_expr.right.as_ref(), join_cols);
+
+    match binary_expr.op {
+        Operator::And => sql_and(left, right),
+        Operator::Or => sql_or(left, right),
+        Operator::Eq
+        | Operator::NotEq
+        | Operator::Lt
+        | Operator::LtEq
+        | Operator::Gt
+        | Operator::GtEq
+        | Operator::Plus
+        | Operator::Minus
+        | Operator::Multiply
+        | Operator::Divide
+        | Operator::Modulo
+        | Operator::RegexMatch
+        | Operator::RegexIMatch
+        | Operator::RegexNotMatch
+        | Operator::RegexNotIMatch
+        | Operator::LikeMatch
+        | Operator::ILikeMatch
+        | Operator::NotLikeMatch
+        | Operator::NotILikeMatch
+        | Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseXor
+        | Operator::BitwiseShiftRight
+        | Operator::BitwiseShiftLeft
+        | Operator::StringConcat
+        | Operator::AtArrow
+        | Operator::ArrowAt
+        | Operator::Arrow
+        | Operator::LongArrow
+        | Operator::HashArrow
+        | Operator::HashLongArrow
+        | Operator::AtAt
+        | Operator::IntegerDivide
+        | Operator::HashMinus
+        | Operator::AtQuestion
+        | Operator::Question
+        | Operator::QuestionAnd
+        | Operator::QuestionPipe
+        | Operator::Colon => {
+            if contains_null([left, right]) {
+                Some(NullSubstitutionValue::Null)
+            } else {
+                None
+            }
+        }
+        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => None,
+    }
+}
