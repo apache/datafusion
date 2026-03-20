@@ -114,7 +114,7 @@ impl AlignedBoundaryStream {
         file_size: u64,
         terminator: u8,
     ) -> object_store::Result<Self> {
-        if raw_start >= raw_end {
+        if raw_start >= raw_end || raw_start >= file_size {
             return Ok(Self {
                 inner: futures::stream::empty().boxed(),
                 terminator,

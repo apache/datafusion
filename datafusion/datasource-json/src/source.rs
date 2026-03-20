@@ -300,12 +300,6 @@ impl FileOpener for JsonOpener {
                     )
                 })?;
 
-                if raw_start >= raw_end || raw_start >= file_size {
-                    return Ok(
-                        futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                    );
-                }
-
                 let aligned_stream = AlignedBoundaryStream::new(
                     Arc::clone(&store),
                     location.clone(),
