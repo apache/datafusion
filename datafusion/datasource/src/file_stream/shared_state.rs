@@ -327,7 +327,7 @@ impl SharedFileStreamStateInner {
     }
 
     fn fair_share_for(&self, stream_id: FileStreamId) -> usize {
-        let active_streams = self.streams.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        let active_streams = self.streams.keys().collect::<Vec<_>>();
 
         if active_streams.is_empty() {
             return 0;
@@ -339,7 +339,7 @@ impl SharedFileStreamStateInner {
 
         let position = active_streams
             .iter()
-            .position(|id| *id == stream_id)
+            .position(|id| **id == stream_id)
             .expect("stream should be active");
 
         base_share + usize::from(position < remainder)
