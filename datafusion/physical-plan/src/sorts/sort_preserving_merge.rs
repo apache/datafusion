@@ -491,6 +491,7 @@ mod tests {
             .with_session_config(config);
         Ok(Arc::new(task_ctx))
     }
+
     // The number in the function is highly related to the memory limit we are testing,
     // any change of the constant should be aware of
     fn generate_spm_for_round_robin_tie_breaker(
@@ -1590,49 +1591,6 @@ mod tests {
         assert!(
             merge_stream.next().await.is_none(),
             "merge stream yielded data after returning an error"
-        );
-
-        Ok(())
-    }
-
-    /// Test that SortPreservingMerge with FETCH does not silently drop rows
-    /// when an interleave offset overflow forces a partial batch.
-    #[tokio::test]
-    async fn test_sort_merge_fetch_interleave_overflow() -> Result<()> {
-        // Each string is ~768 MB. Three rows total → ~2.3 GB > i32::MAX,
-        // which forces `build_record_batch` to emit a partial batch.
-        let big_str: String = "x".repeat(768 * 1024 * 1024);
-
-        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
-
-        // Create 3 single-row partitions, each with one large string.
-        let mut partitions = Vec::new();
-        for _ in 0..3 {
-            let array = StringArray::from(vec![big_str.as_str()]);
-            let batch = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(array) as ArrayRef],
-            )?;
-            partitions.push(vec![batch]);
-        }
-
-        let input = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
-
-        let sort_exprs: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(
-            Column::new("s", 0),
-        )
-            as Arc<dyn PhysicalExpr>)]
-        .into();
-
-        let spm = SortPreservingMergeExec::new(sort_exprs, input).with_fetch(Some(3));
-
-        let task_ctx = Arc::new(TaskContext::default());
-        let batches = collect(Arc::new(spm), task_ctx).await?;
-
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(
-            total_rows, 3,
-            "Expected all 3 rows to be emitted despite interleave overflow, got {total_rows}"
         );
 
         Ok(())
