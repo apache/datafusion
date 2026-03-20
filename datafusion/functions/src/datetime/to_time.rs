@@ -26,7 +26,8 @@ use arrow::datatypes::DataType::*;
 use chrono::NaiveTime;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -116,10 +117,7 @@ impl ScalarUDFImpl for ToTimeFunc {
         Ok(Time64(arrow::datatypes::TimeUnit::Nanosecond))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         if args.is_empty() {
             return exec_err!("to_time function requires 1 or more arguments, got 0");

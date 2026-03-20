@@ -918,13 +918,18 @@ CREATE EXTERNAL TABLE dict_filter_bug
 STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet_filter_pushdown/dict_filter_bug.parquet';
 
-query error Can't compare arrays of different types
+query TR
 SELECT t.tag1, t.value
 FROM dict_filter_bug t
 JOIN (VALUES ('A'), ('B')) AS v(c1)
 ON t.tag1 = v.c1
 ORDER BY t.tag1, t.value
 LIMIT 4;
+----
+A 0
+A 26
+A 52
+A 78
 
 # Cleanup
 statement ok

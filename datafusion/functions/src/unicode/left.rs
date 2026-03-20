@@ -24,7 +24,8 @@ use datafusion_common::Result;
 use datafusion_common::exec_err;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -92,10 +93,7 @@ impl ScalarUDFImpl for LeftFunc {
     /// left('abcde', 2) = 'ab'
     /// left('abcde', -2) = 'abc'
     /// The implementation uses UTF-8 code points as characters
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {

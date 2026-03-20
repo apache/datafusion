@@ -5404,3 +5404,26 @@ DROP TABLE t1;
 
 statement count 0
 DROP TABLE t2;
+
+statement ok
+CREATE TABLE t1(a INT, b INT) AS VALUES 
+  (NULL, 1), (NULL, 2), (NULL, 3), (NULL, 4), (NULL, 5);
+
+statement ok
+CREATE TABLE t2(c INT) AS VALUES (1), (2);
+
+# This query panicked before the fix: the ORDER BY forces a SortExec,
+# the LIMIT gets pushed into SortExec.fetch, and the HashJoinExec
+# calls partition_statistics() on the SortExec child during execution.
+query II
+SELECT sub.a, sub.b FROM (
+  SELECT * FROM t1 ORDER BY b LIMIT 1
+) sub 
+JOIN t2 ON sub.a = t2.c;
+----
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
