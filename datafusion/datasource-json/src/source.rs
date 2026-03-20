@@ -29,6 +29,7 @@ use crate::utils::{ChannelReader, JsonArrayToNdjsonReader};
 use crate::boundary_stream::AlignedBoundaryStream;
 
 use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::exec_datafusion_err;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
@@ -287,11 +288,17 @@ impl FileOpener for JsonOpener {
 
             if let Some(file_range) = partitioned_file.range.as_ref() {
                 let raw_start: u64 = file_range.start.try_into().map_err(|_| {
-                    exec_datafusion_err!("Expected start range to fit in u64, got {}", file_range.start)
-            })?;
+                    exec_datafusion_err!(
+                        "Expected start range to fit in u64, got {}",
+                        file_range.start
+                    )
+                })?;
                 let raw_end: u64 = file_range.end.try_into().map_err(|_| {
-                    exec_datafusion_err!("Expected end range to fit in u64, got {}", file_range.end)
-            })?;
+                    exec_datafusion_err!(
+                        "Expected end range to fit in u64, got {}",
+                        file_range.end
+                    )
+                })?;
 
                 if raw_start >= raw_end || raw_start >= file_size {
                     return Ok(
