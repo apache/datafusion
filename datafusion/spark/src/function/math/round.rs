@@ -41,7 +41,7 @@ use datafusion_expr::{
 ///
 /// - `round(expr)` rounds to 0 decimal places (default scale = 0)
 /// - `round(expr, scale)` rounds to `scale` decimal places
-/// - For integer types with negative scale: `round(25, -1)` → `20`
+/// - For integer types with negative scale: `round(25, -1)` → `30`
 /// - Uses HALF_UP rounding: 2.5 → 3, -2.5 → -3 (away from zero)
 ///
 /// Supported types: Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
@@ -191,7 +191,7 @@ fn get_scale(args: &[ColumnarValue]) -> Result<Option<i32>> {
 /// round_float(1.4,  0) →  1.0
 /// round_float(125.0, -1) → 130.0
 /// ```
-fn round_float<T: bigdecimal::num_traits::Float>(value: T, scale: i32) -> T {
+fn round_float<T: num_traits::Float>(value: T, scale: i32) -> T {
     if scale >= 0 {
         let factor = T::from(10.0f64.powi(scale)).unwrap_or_else(T::infinity);
         if factor.is_infinite() {
