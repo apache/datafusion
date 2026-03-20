@@ -209,7 +209,7 @@ impl ScalarUDFImpl for StartsWithFunc {
                     negated: false,
                     expr: Box::new(expr),
                     pattern: Box::new(pattern),
-                    escape_char: None,
+                    escape_char: Some('\\'),
                     case_insensitive: false,
                 })));
             }
