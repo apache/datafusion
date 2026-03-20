@@ -27,7 +27,8 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 use std::sync::Arc;
@@ -85,10 +86,7 @@ impl ScalarUDFImpl for MapFromArrays {
         Ok(Arc::new(Field::new(self.name(), map_type, nullable)))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(map_from_arrays_inner, vec![])(&args.args)
     }
 }

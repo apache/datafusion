@@ -51,8 +51,8 @@ use datafusion_common::{
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility, interval_arithmetic,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility, interval_arithmetic,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -183,10 +183,7 @@ impl ScalarUDFImpl for DatePartFunc {
             )
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         let [part, array] = take_function_args(self.name(), args)?;
 
