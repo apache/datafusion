@@ -2280,9 +2280,12 @@ mod tests {
         let left_batch =
             build_table_i32(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
         let left_schema = left_batch.schema();
-        let left: Arc<dyn ExecutionPlan> =
-            TestMemoryExec::try_new_exec(&[vec![left_batch]], left_schema.clone(), None)
-                .unwrap();
+        let left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[vec![left_batch]],
+            Arc::clone(&left_schema),
+            None,
+        )
+        .unwrap();
 
         let err = exec_err!("bad data error");
         let right_batch =
