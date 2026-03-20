@@ -261,6 +261,7 @@ strip = false            # Retain debug info for flamegraphs
 [profile.ci-optimized]
 inherits = "release"
 codegen-units = 16
+debug-assertions = true
 lto = "thin"
 strip = true
 
