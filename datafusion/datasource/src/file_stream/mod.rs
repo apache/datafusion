@@ -21,6 +21,10 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
+pub mod shared_state;
+
+pub use shared_state::{OutstandingIoPermit, SharedFileStreamState};
+
 use std::collections::VecDeque;
 use std::mem;
 use std::pin::Pin;
