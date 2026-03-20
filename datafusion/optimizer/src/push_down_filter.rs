@@ -3592,21 +3592,21 @@ mod tests {
             .build()?;
         let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
             .project(vec![col("a")])?
-            .aggregate(Vec::<Expr>::new(), vec![avg(col("a"))])?
+            .aggregate(Vec::<Expr>::new(), vec![avg(col("a")).alias("avg_a")])?
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .cross_join(right)?
-            .filter(col("test.b").gt(col("AVG(test1.a)")))?
+            .filter(col("test.b").gt(col("avg_a")))?
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Filter: test.b > AVG(test1.a)
+        Filter: test.b > avg_a
           Cross Join:
             Projection: test.a, test.b
               TableScan: test
-            Aggregate: groupBy=[[]], aggr=[[avg(test1.a)]]
+            Aggregate: groupBy=[[]], aggr=[[avg(test1.a) AS avg_a]]
               Projection: test1.a
                 TableScan: test1
         "
