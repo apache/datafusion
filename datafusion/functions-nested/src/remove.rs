@@ -30,7 +30,7 @@ use datafusion_common::utils::ListCoercion;
 use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -110,10 +110,7 @@ impl ScalarUDFImpl for ArrayRemove {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_inner)(&args.args)
     }
 
@@ -205,10 +202,7 @@ impl ScalarUDFImpl for ArrayRemoveN {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_n_inner)(&args.args)
     }
 
@@ -289,10 +283,7 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_all_inner)(&args.args)
     }
 
