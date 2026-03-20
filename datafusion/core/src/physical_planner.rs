@@ -1097,12 +1097,23 @@ impl DefaultPhysicalPlanner {
                     input_schema.as_arrow(),
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
-                        FilterExecBuilder::new(
+                        let builder = FilterExecBuilder::new(
                             Arc::clone(&runtime_expr[0]),
                             physical_input,
                         )
-                        .with_batch_size(session_state.config().batch_size())
-                        .build()?
+                        .with_batch_size(session_state.config().batch_size());
+                        let builder = if session_state
+                            .config_options()
+                            .optimizer
+                            .enable_expression_analyzer
+                        {
+                            builder.with_expression_analyzer_registry(Arc::clone(
+                                session_state.expression_analyzer_registry(),
+                            ))
+                        } else {
+                            builder
+                        };
+                        builder.build()?
                     }
                     PlanAsyncExpr::Async(
                         async_map,
@@ -1112,7 +1123,7 @@ impl DefaultPhysicalPlanner {
                             async_map.async_exprs,
                             physical_input,
                         )?;
-                        FilterExecBuilder::new(
+                        let builder = FilterExecBuilder::new(
                             Arc::clone(&runtime_expr[0]),
                             Arc::new(async_exec),
                         )
@@ -1121,8 +1132,19 @@ impl DefaultPhysicalPlanner {
                         .apply_projection(Some(
                             (0..input.schema().fields().len()).collect::<Vec<_>>(),
                         ))?
-                        .with_batch_size(session_state.config().batch_size())
-                        .build()?
+                        .with_batch_size(session_state.config().batch_size());
+                        let builder = if session_state
+                            .config_options()
+                            .optimizer
+                            .enable_expression_analyzer
+                        {
+                            builder.with_expression_analyzer_registry(Arc::clone(
+                                session_state.expression_analyzer_registry(),
+                            ))
+                        } else {
+                            builder
+                        };
+                        builder.build()?
                     }
                     _ => {
                         return internal_err!(
@@ -2898,7 +2920,17 @@ impl DefaultPhysicalPlanner {
                     .into_iter()
                     .map(|(expr, alias)| ProjectionExpr { expr, alias })
                     .collect();
-                Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input_exec)?))
+                let mut proj_exec = ProjectionExec::try_new(proj_exprs, input_exec)?;
+                if session_state
+                    .config_options()
+                    .optimizer
+                    .enable_expression_analyzer
+                {
+                    proj_exec = proj_exec.with_expression_analyzer_registry(Arc::clone(
+                        session_state.expression_analyzer_registry(),
+                    ));
+                }
+                Ok(Arc::new(proj_exec))
             }
             PlanAsyncExpr::Async(
                 async_map,
@@ -2910,8 +2942,17 @@ impl DefaultPhysicalPlanner {
                     .into_iter()
                     .map(|(expr, alias)| ProjectionExpr { expr, alias })
                     .collect();
-                let new_proj_exec =
+                let mut new_proj_exec =
                     ProjectionExec::try_new(proj_exprs, Arc::new(async_exec))?;
+                if session_state
+                    .config_options()
+                    .optimizer
+                    .enable_expression_analyzer
+                {
+                    new_proj_exec = new_proj_exec.with_expression_analyzer_registry(
+                        Arc::clone(session_state.expression_analyzer_registry()),
+                    );
+                }
                 Ok(Arc::new(new_proj_exec))
             }
             _ => internal_err!("Unexpected PlanAsyncExpressions variant"),

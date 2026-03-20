@@ -67,6 +67,7 @@ use datafusion_optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerRule,
 };
 use datafusion_physical_expr::create_physical_expr;
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -167,6 +168,8 @@ pub struct SessionState {
     extension_types: ExtensionTypeRegistryRef,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
+    /// Registry for expression-level statistics analyzers (NDV, selectivity, etc.)
+    expression_analyzer_registry: Arc<ExpressionAnalyzerRegistry>,
     /// Holds registered external FileFormat implementations
     file_formats: HashMap<String, Arc<dyn FileFormatFactory>>,
     /// Session configuration
@@ -191,6 +194,8 @@ pub struct SessionState {
     ///
     /// It will be invoked on `CREATE FUNCTION` statements.
     /// thus, changing dialect o PostgreSql is required
+    /// Registry for expression-level statistics analyzers (NDV, selectivity, etc.)
+    expression_analyzer_registry: Arc<ExpressionAnalyzerRegistry>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
     /// Optional statistics registry for pluggable statistics providers.
@@ -225,6 +230,10 @@ impl Debug for SessionState {
             .field("runtime_env", &self.runtime_env)
             .field("catalog_list", &self.catalog_list)
             .field("serializer_registry", &self.serializer_registry)
+            .field(
+                "expression_analyzer_registry",
+                &self.expression_analyzer_registry,
+            )
             .field("file_formats", &self.file_formats)
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.table_options)
@@ -944,6 +953,11 @@ impl SessionState {
         &self.serializer_registry
     }
 
+    /// Return the [`ExpressionAnalyzerRegistry`] for expression-level statistics
+    pub fn expression_analyzer_registry(&self) -> &Arc<ExpressionAnalyzerRegistry> {
+        &self.expression_analyzer_registry
+    }
+
     /// Return version of the cargo package that produced this query
     pub fn version(&self) -> &str {
         env!("CARGO_PKG_VERSION")
@@ -1024,6 +1038,7 @@ pub struct SessionStateBuilder {
     window_functions: Option<Vec<Arc<WindowUDF>>>,
     extension_types: Option<ExtensionTypeRegistryRef>,
     serializer_registry: Option<Arc<dyn SerializerRegistry>>,
+    expression_analyzer_registry: Option<Arc<ExpressionAnalyzerRegistry>>,
     file_formats: Option<Vec<Arc<dyn FileFormatFactory>>>,
     config: Option<SessionConfig>,
     table_options: Option<TableOptions>,
@@ -1066,6 +1081,7 @@ impl SessionStateBuilder {
             window_functions: None,
             extension_types: None,
             serializer_registry: None,
+            expression_analyzer_registry: None,
             file_formats: None,
             table_options: None,
             config: None,
@@ -1123,6 +1139,7 @@ impl SessionStateBuilder {
             window_functions: Some(existing.window_functions.into_values().collect_vec()),
             extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
+            expression_analyzer_registry: Some(existing.expression_analyzer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
             config: Some(new_config),
             table_options: Some(existing.table_options),
@@ -1381,6 +1398,15 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set the [`ExpressionAnalyzerRegistry`] for expression-level statistics
+    pub fn with_expression_analyzer_registry(
+        mut self,
+        expression_analyzer_registry: Arc<ExpressionAnalyzerRegistry>,
+    ) -> Self {
+        self.expression_analyzer_registry = Some(expression_analyzer_registry);
+        self
+    }
+
     /// Set the map of [`FileFormatFactory`]s
     pub fn with_file_formats(
         mut self,
@@ -1522,6 +1548,7 @@ impl SessionStateBuilder {
             window_functions,
             extension_types,
             serializer_registry,
+            expression_analyzer_registry,
             file_formats,
             table_options,
             config,
@@ -1561,6 +1588,8 @@ impl SessionStateBuilder {
             extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
             serializer_registry: serializer_registry
                 .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
+            expression_analyzer_registry: expression_analyzer_registry
+                .unwrap_or_else(|| Arc::new(ExpressionAnalyzerRegistry::new())),
             file_formats: HashMap::new(),
             table_options: table_options.unwrap_or_else(|| {
                 TableOptions::default_from_session_config(config.options())
@@ -1748,6 +1777,13 @@ impl SessionStateBuilder {
         &mut self.serializer_registry
     }
 
+    /// Returns the current expression_analyzer_registry value
+    pub fn expression_analyzer_registry(
+        &mut self,
+    ) -> &mut Option<Arc<ExpressionAnalyzerRegistry>> {
+        &mut self.expression_analyzer_registry
+    }
+
     /// Returns the current file_formats value
     pub fn file_formats(&mut self) -> &mut Option<Vec<Arc<dyn FileFormatFactory>>> {
         &mut self.file_formats
@@ -1823,6 +1859,10 @@ impl Debug for SessionStateBuilder {
             .field("runtime_env", &self.runtime_env)
             .field("catalog_list", &self.catalog_list)
             .field("serializer_registry", &self.serializer_registry)
+            .field(
+                "expression_analyzer_registry",
+                &self.expression_analyzer_registry,
+            )
             .field("file_formats", &self.file_formats)
             .field("execution_props", &self.execution_props)
             .field("table_options", &self.table_options)

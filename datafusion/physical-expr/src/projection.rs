@@ -21,6 +21,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expression_analyzer::ExpressionAnalyzerRegistry;
 use crate::expressions::{Column, Literal};
 use crate::scalar_function::ScalarFunctionExpr;
 use crate::utils::collect_columns;
@@ -125,11 +126,21 @@ impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
 ///
 /// See [`ProjectionExprs::from_indices`] to select a subset of columns by
 /// indices.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ProjectionExprs {
     /// [`Arc`] used for a cheap clone, which improves physical plan optimization performance.
     exprs: Arc<[ProjectionExpr]>,
+    /// Optional expression analyzer registry for statistics estimation
+    expression_analyzer_registry: Option<Arc<ExpressionAnalyzerRegistry>>,
 }
+
+impl PartialEq for ProjectionExprs {
+    fn eq(&self, other: &Self) -> bool {
+        self.exprs == other.exprs
+    }
+}
+
+impl Eq for ProjectionExprs {}
 
 impl std::fmt::Display for ProjectionExprs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -142,6 +153,7 @@ impl From<Vec<ProjectionExpr>> for ProjectionExprs {
     fn from(value: Vec<ProjectionExpr>) -> Self {
         Self {
             exprs: value.into(),
+            expression_analyzer_registry: None,
         }
     }
 }
@@ -150,6 +162,7 @@ impl From<&[ProjectionExpr]> for ProjectionExprs {
     fn from(value: &[ProjectionExpr]) -> Self {
         Self {
             exprs: value.iter().cloned().collect(),
+            expression_analyzer_registry: None,
         }
     }
 }
@@ -158,6 +171,7 @@ impl FromIterator<ProjectionExpr> for ProjectionExprs {
     fn from_iter<T: IntoIterator<Item = ProjectionExpr>>(exprs: T) -> Self {
         Self {
             exprs: exprs.into_iter().collect(),
+            expression_analyzer_registry: None,
         }
     }
 }
@@ -173,6 +187,7 @@ impl ProjectionExprs {
     pub fn new(exprs: impl IntoIterator<Item = ProjectionExpr>) -> Self {
         Self {
             exprs: exprs.into_iter().collect(),
+            expression_analyzer_registry: None,
         }
     }
 
@@ -180,7 +195,24 @@ impl ProjectionExprs {
     pub fn from_expressions(exprs: impl Into<Arc<[ProjectionExpr]>>) -> Self {
         Self {
             exprs: exprs.into(),
+            expression_analyzer_registry: None,
         }
+    }
+
+    /// Set the expression analyzer registry for statistics estimation.
+    ///
+    /// The physical planner injects the registry from [`SessionState`] when
+    /// creating projections. Projections created later by optimizer rules
+    /// do not receive the registry and fall back to
+    /// [`DefaultExpressionAnalyzer`]. Propagating the registry to all
+    /// operator construction sites requires an operator-level statistics
+    /// registry, which is orthogonal to this work.
+    pub fn with_expression_analyzer_registry(
+        mut self,
+        registry: Arc<ExpressionAnalyzerRegistry>,
+    ) -> Self {
+        self.expression_analyzer_registry = Some(registry);
+        self
     }
 
     /// Creates a [`ProjectionExpr`] from a list of column indices.
@@ -713,9 +745,35 @@ impl ProjectionExprs {
                         byte_size,
                     }
                 }
+            } else if let Some(registry) = &self.expression_analyzer_registry {
+                // Use ExpressionAnalyzer to estimate statistics for arbitrary expressions
+                let distinct_count = registry
+                    .get_distinct_count(expr, &stats)
+                    .map(Precision::Inexact)
+                    .unwrap_or(Precision::Absent);
+                let (min_value, max_value) = registry
+                    .get_min_max(expr, &stats)
+                    .map(|(min, max)| (Precision::Inexact(min), Precision::Inexact(max)))
+                    .unwrap_or((Precision::Absent, Precision::Absent));
+                let null_count = registry
+                    .get_null_fraction(expr, &stats)
+                    .and_then(|frac| {
+                        stats
+                            .num_rows
+                            .get_value()
+                            .map(|&rows| (rows as f64 * frac).ceil() as usize)
+                    })
+                    .map(Precision::Inexact)
+                    .unwrap_or(Precision::Absent);
+
+                ColumnStatistics {
+                    distinct_count,
+                    min_value,
+                    max_value,
+                    null_count,
+                    ..ColumnStatistics::new_unknown()
+                }
             } else {
-                // TODO stats: estimate more statistics from expressions
-                // (expressions should compute their statistics themselves)
                 ColumnStatistics::new_unknown()
             };
             column_statistics.push(col_stats);
@@ -805,6 +863,14 @@ impl Projector {
 
     pub fn projection(&self) -> &ProjectionExprs {
         &self.projection
+    }
+
+    /// Set the expression analyzer registry on the underlying projection
+    pub fn set_expression_analyzer_registry(
+        &mut self,
+        registry: Arc<ExpressionAnalyzerRegistry>,
+    ) {
+        self.projection.expression_analyzer_registry = Some(registry);
     }
 }
 
@@ -2772,7 +2838,7 @@ pub(crate) mod tests {
         // Should have 2 column statistics
         assert_eq!(output_stats.column_statistics.len(), 2);
 
-        // First column (expression) should have unknown statistics
+        // First column (col0 + 1): no registry set, so statistics are unknown
         assert_eq!(
             output_stats.column_statistics[0].distinct_count,
             Precision::Absent
@@ -2783,6 +2849,49 @@ pub(crate) mod tests {
         );
 
         // Second column (col1) should preserve statistics
+        assert_eq!(
+            output_stats.column_statistics[1].distinct_count,
+            Precision::Exact(1)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_with_expression_analyzer() -> Result<()> {
+        let input_stats = get_stats();
+        let input_schema = get_schema();
+
+        // Same projection as test_project_statistics_with_expressions,
+        // but with the analyzer registry enabled
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("col0", 0)),
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+                )),
+                alias: "incremented".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col1", 1)),
+                alias: "text".to_string(),
+            },
+        ])
+        .with_expression_analyzer_registry(Arc::new(ExpressionAnalyzerRegistry::new()));
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        // With analyzer: col0 + 1 is injective, NDV preserved from col0 (= 5)
+        assert_eq!(
+            output_stats.column_statistics[0].distinct_count,
+            Precision::Inexact(5)
+        );
+
+        // Second column (col1) still preserves exact statistics
         assert_eq!(
             output_stats.column_statistics[1].distinct_count,
             Precision::Exact(1)

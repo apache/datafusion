@@ -177,6 +177,18 @@ impl ProjectionExec {
         &self.input
     }
 
+    /// Set the expression analyzer registry for statistics estimation.
+    /// The registry is stored on the underlying [`ProjectionExprs`].
+    pub fn with_expression_analyzer_registry(
+        mut self,
+        registry: Arc<
+            datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry,
+        >,
+    ) -> Self {
+        self.projector.set_expression_analyzer_registry(registry);
+        self
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
