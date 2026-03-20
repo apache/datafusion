@@ -2321,6 +2321,116 @@ fn test_filter_pushdown_through_union_does_not_support() {
     );
 }
 
+#[test]
+fn test_filter_with_fetch_fully_pushed_through_union() {
+    // When a FilterExec with fetch wraps a UnionExec and all predicates are
+    // pushed down, UnionExec does not support with_fetch, so a LocalLimitExec
+    // should be inserted to preserve the fetch limit.
+    let scan1 = TestScanBuilder::new(schema()).with_support(true).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(true).build();
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, union)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=10
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - LocalLimitExec: fetch=10
+          -   UnionExec
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_and_projection_fully_pushed_through_union() {
+    // When a FilterExec with both fetch and projection wraps a UnionExec and
+    // all predicates are pushed down, we should get a ProjectionExec on top of
+    // a LocalLimitExec wrapping the UnionExec.
+    let scan1 = TestScanBuilder::new(schema()).with_support(true).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(true).build();
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+    let projection = vec![1, 0];
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, union)
+            .with_fetch(Some(5))
+            .apply_projection(Some(projection))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, projection=[b@1, a@0], fetch=5
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - ProjectionExec: expr=[b@1 as b, a@0 as a]
+          -   LocalLimitExec: fetch=5
+          -     UnionExec
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_not_fully_pushed_through_union() {
+    // When a FilterExec with fetch wraps a UnionExec but children don't support
+    // pushdown, the FilterExec remains with its fetch — no LocalLimitExec needed.
+    let scan1 = TestScanBuilder::new(schema()).with_support(false).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(false).build();
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, union)
+            .with_fetch(Some(8))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=8
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - LocalLimitExec: fetch=8
+          -   UnionExec
+          -     FilterExec: a@0 = foo
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     FilterExec: a@0 = foo
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
 /// Schema:
 /// a: String
 /// b: String

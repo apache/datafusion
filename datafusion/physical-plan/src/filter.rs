@@ -35,6 +35,7 @@ use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
 };
+use crate::limit::LocalLimitExec;
 use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
     EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
@@ -704,9 +705,10 @@ impl ExecutionPlan for FilterExec {
                     Some(inner_fetch) => outer_fetch.min(inner_fetch),
                     None => outer_fetch,
                 };
-                filter_input
-                    .with_fetch(Some(effective_fetch))
-                    .unwrap_or(filter_input)
+                match filter_input.with_fetch(Some(effective_fetch)) {
+                    Some(node) => node,
+                    None => Arc::new(LocalLimitExec::new(filter_input, effective_fetch)),
+                }
             } else {
                 filter_input
             };
