@@ -27,7 +27,9 @@ use datafusion::{
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
-        physical_plan::{CsvSource, FileSource, FileStream, JsonOpener, JsonSource},
+        physical_plan::{
+            CsvSource, FileSource, FileStreamBuilder, JsonOpener, JsonSource,
+        },
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
@@ -81,7 +83,8 @@ async fn csv_opener() -> Result<()> {
 
     let mut result = vec![];
     let mut stream =
-        FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())?;
+        FileStreamBuilder::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())
+            .build()?;
     while let Some(batch) = stream.next().await.transpose()? {
         result.push(batch);
     }
@@ -137,12 +140,13 @@ async fn json_opener() -> Result<()> {
     .with_file(PartitionedFile::new(path.to_string(), 10))
     .build();
 
-    let mut stream = FileStream::new(
+    let mut stream = FileStreamBuilder::new(
         &scan_config,
         0,
         Arc::new(opener),
         &ExecutionPlanMetricsSet::new(),
-    )?;
+    )
+    .build()?;
     let mut result = vec![];
     while let Some(batch) = stream.next().await.transpose()? {
         result.push(batch);

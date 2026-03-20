@@ -306,6 +306,19 @@ impl<'a> FileStreamBuilder<'a> {
 }
 
 impl FileStream {
+    /// Create a new [`FileStream`] using a legacy [`FileOpener`].
+    ///
+    /// Prefer [`FileStreamBuilder`] for new code.
+    #[deprecated(since = "52.3.0", note = "use FileStreamBuilder instead")]
+    pub fn new(
+        config: &FileScanConfig,
+        partition: usize,
+        file_opener: Arc<dyn FileOpener>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Self> {
+        FileStreamBuilder::new(config, partition, file_opener, metrics).build()
+    }
+
     /// Return this stream's registered shared-state id.
     fn stream_id(&self) -> Result<FileStreamId> {
         self.stream_id.ok_or_else(|| {
