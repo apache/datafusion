@@ -1888,7 +1888,8 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'avg' function: coercion from Utf8 to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64]) failed"));
+        assert!(err.contains("Function 'avg' failed to match any signature"));
+        assert!(err.contains("Error during planning: Function 'avg' requires Float64, but received String (DataType: Utf8)"));
         Ok(())
     }
 
