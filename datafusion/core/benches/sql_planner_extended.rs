@@ -18,7 +18,10 @@
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit::Nanosecond;
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{
+    BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
+    measurement::WallTime,
+};
 use datafusion::prelude::{DataFrame, SessionContext};
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
@@ -309,10 +312,11 @@ fn build_non_case_left_join_query(
     query
 }
 
-fn build_non_case_left_join_df_with_push_down_filter(
+fn build_left_join_df_with_push_down_filter(
     rt: &Runtime,
+    query_builder: impl Fn(usize, usize) -> String,
     predicate_count: usize,
-    nesting_depth: usize,
+    depth: usize,
     push_down_filter_enabled: bool,
 ) -> DataFrame {
     let ctx = SessionContext::new();
@@ -325,8 +329,38 @@ fn build_non_case_left_join_df_with_push_down_filter(
         );
     }
 
-    let query = build_non_case_left_join_query(predicate_count, nesting_depth);
+    let query = query_builder(predicate_count, depth);
     rt.block_on(async { ctx.sql(&query).await.unwrap() })
+}
+
+fn build_case_heavy_left_join_df_with_push_down_filter(
+    rt: &Runtime,
+    predicate_count: usize,
+    case_depth: usize,
+    push_down_filter_enabled: bool,
+) -> DataFrame {
+    build_left_join_df_with_push_down_filter(
+        rt,
+        build_case_heavy_left_join_query,
+        predicate_count,
+        case_depth,
+        push_down_filter_enabled,
+    )
+}
+
+fn build_non_case_left_join_df_with_push_down_filter(
+    rt: &Runtime,
+    predicate_count: usize,
+    nesting_depth: usize,
+    push_down_filter_enabled: bool,
+) -> DataFrame {
+    build_left_join_df_with_push_down_filter(
+        rt,
+        build_non_case_left_join_query,
+        predicate_count,
+        nesting_depth,
+        push_down_filter_enabled,
+    )
 }
 
 fn include_full_push_down_filter_sweep() -> bool {
@@ -347,6 +381,48 @@ fn push_down_filter_sweep_points() -> Vec<(usize, usize)> {
             .collect()
     } else {
         DEFAULT_SWEEP_POINTS.to_vec()
+    }
+}
+
+fn bench_push_down_filter_ab<BuildFn>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    rt: &Runtime,
+    sweep_points: &[(usize, usize)],
+    build_df: BuildFn,
+) where
+    BuildFn: Fn(&Runtime, usize, usize, bool) -> DataFrame,
+{
+    for &(predicate_count, depth) in sweep_points {
+        let with_push_down_filter = build_df(rt, predicate_count, depth, true);
+        let without_push_down_filter = build_df(rt, predicate_count, depth, false);
+
+        let input_label = format!("predicates={predicate_count},nesting_depth={depth}");
+
+        group.bench_with_input(
+            BenchmarkId::new("with_push_down_filter", &input_label),
+            &with_push_down_filter,
+            |b, df| {
+                b.iter(|| {
+                    let df_clone = df.clone();
+                    black_box(
+                        rt.block_on(async { df_clone.into_optimized_plan().unwrap() }),
+                    );
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("without_push_down_filter", &input_label),
+            &without_push_down_filter,
+            |b, df| {
+                b.iter(|| {
+                    let df_clone = df.clone();
+                    black_box(
+                        rt.block_on(async { df_clone.into_optimized_plan().unwrap() }),
+                    );
+                })
+            },
+        );
     }
 }
 
@@ -376,98 +452,39 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let sweep_points = push_down_filter_sweep_points();
+
     let mut hotspot_group =
         c.benchmark_group("push_down_filter_hotspot_case_heavy_left_join_ab");
-    for &(predicate_count, case_depth) in &sweep_points {
-        let with_push_down_filter = build_case_heavy_left_join_df_with_push_down_filter(
-            &rt,
-            predicate_count,
-            case_depth,
-            true,
-        );
-        let without_push_down_filter =
+    bench_push_down_filter_ab(
+        &mut hotspot_group,
+        &rt,
+        &sweep_points,
+        |rt, predicate_count, depth, enable| {
             build_case_heavy_left_join_df_with_push_down_filter(
-                &rt,
+                rt,
                 predicate_count,
-                case_depth,
-                false,
-            );
-
-        let input_label = format!("predicates={predicate_count},case_depth={case_depth}");
-        // A/B interpretation:
-        // - with_push_down_filter: default optimizer path (rule enabled)
-        // - without_push_down_filter: control path with the rule removed
-        // Compare both IDs at the same sweep point to isolate rule impact.
-        hotspot_group.bench_with_input(
-            BenchmarkId::new("with_push_down_filter", &input_label),
-            &with_push_down_filter,
-            |b, df| {
-                b.iter(|| {
-                    let df_clone = df.clone();
-                    black_box(
-                        rt.block_on(async { df_clone.into_optimized_plan().unwrap() }),
-                    );
-                })
-            },
-        );
-        hotspot_group.bench_with_input(
-            BenchmarkId::new("without_push_down_filter", &input_label),
-            &without_push_down_filter,
-            |b, df| {
-                b.iter(|| {
-                    let df_clone = df.clone();
-                    black_box(
-                        rt.block_on(async { df_clone.into_optimized_plan().unwrap() }),
-                    );
-                })
-            },
-        );
-    }
+                depth,
+                enable,
+            )
+        },
+    );
     hotspot_group.finish();
 
     let mut control_group =
         c.benchmark_group("push_down_filter_control_non_case_left_join_ab");
-    for &(predicate_count, nesting_depth) in &sweep_points {
-        let with_push_down_filter = build_non_case_left_join_df_with_push_down_filter(
-            &rt,
-            predicate_count,
-            nesting_depth,
-            true,
-        );
-        let without_push_down_filter = build_non_case_left_join_df_with_push_down_filter(
-            &rt,
-            predicate_count,
-            nesting_depth,
-            false,
-        );
-
-        let input_label =
-            format!("predicates={predicate_count},nesting_depth={nesting_depth}");
-        control_group.bench_with_input(
-            BenchmarkId::new("with_push_down_filter", &input_label),
-            &with_push_down_filter,
-            |b, df| {
-                b.iter(|| {
-                    let df_clone = df.clone();
-                    black_box(
-                        rt.block_on(async { df_clone.into_optimized_plan().unwrap() }),
-                    );
-                })
-            },
-        );
-        control_group.bench_with_input(
-            BenchmarkId::new("without_push_down_filter", &input_label),
-            &without_push_down_filter,
-            |b, df| {
-                b.iter(|| {
-                    let df_clone = df.clone();
-                    black_box(
-                        rt.block_on(async { df_clone.into_optimized_plan().unwrap() }),
-                    );
-                })
-            },
-        );
-    }
+    bench_push_down_filter_ab(
+        &mut control_group,
+        &rt,
+        &sweep_points,
+        |rt, predicate_count, depth, enable| {
+            build_non_case_left_join_df_with_push_down_filter(
+                rt,
+                predicate_count,
+                depth,
+                enable,
+            )
+        },
+    );
     control_group.finish();
 }
 
