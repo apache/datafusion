@@ -408,13 +408,14 @@ impl HashJoinStream {
 
     /// Returns the next state after the build side has been fully collected
     /// and any required build-side coordination has completed.
-    fn next_state_after_build_ready(
-        &self,
+    fn state_after_build_ready(
+        has_filter: bool,
+        join_type: JoinType,
         left_data: &JoinLeftData,
     ) -> HashJoinStreamState {
-        if left_data.map().is_empty()
-            && self.filter.is_none()
-            && empty_build_side_produces_empty_result(self.join_type)
+        if !has_filter
+            && left_data.map().is_empty()
+            && empty_build_side_produces_empty_result(join_type)
         {
             HashJoinStreamState::Completed
         } else {
@@ -486,7 +487,11 @@ impl HashJoinStream {
             ready!(fut.get_shared(cx))?;
         }
         let build_side = self.build_side.try_as_ready()?;
-        self.state = self.next_state_after_build_ready(build_side.left_data.as_ref());
+        self.state = Self::state_after_build_ready(
+            self.filter.is_some(),
+            self.join_type,
+            build_side.left_data.as_ref(),
+        );
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
@@ -557,7 +562,11 @@ impl HashJoinStream {
             }));
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;
         } else {
-            self.state = self.next_state_after_build_ready(left_data.as_ref());
+            self.state = Self::state_after_build_ready(
+                self.filter.is_some(),
+                self.join_type,
+                left_data.as_ref(),
+            );
         }
 
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
