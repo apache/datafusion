@@ -66,7 +66,7 @@ pub struct AlignedBoundaryStream {
     terminator: u8,
     /// Effective end boundary. Set to `u64::MAX` when `end >= file_size`
     /// (last partition), so `FetchingChunks` never transitions to
-    /// `ScanningLastTerminator` and simply streams to EOF.
+    /// `ScanningLastTerminator` and simply streams until EOF is reached.
     end: u64,
     /// Cumulative bytes consumed from `inner` (relative to `fetch_start`).
     bytes_consumed: u64,
@@ -144,7 +144,7 @@ impl AlignedBoundaryStream {
         )
         .await?;
 
-        // Last partition reads to EOF — no end-boundary scanning needed.
+        // Last partition reads until EOF is reached — no end-boundary scanning needed.
         let end = if raw_end >= file_size {
             u64::MAX
         } else {
@@ -248,7 +248,7 @@ impl Stream for AlignedBoundaryStream {
                     let pos_after = this.abs_pos();
 
                     // When end == u64::MAX (last partition), this is always
-                    // true and we stream straight through to EOF.
+                    // true and we stream straight through until EOF is reached.
                     if pos_after < this.end {
                         return Poll::Ready(Some(Ok(chunk)));
                     }
@@ -744,8 +744,8 @@ mod tests {
     #[tokio::test]
     async fn test_no_trailing_newline() {
         // Last partition of a file that does not end with a newline.
-        // end >= file_size → this.end = u64::MAX, so Passthrough streams
-        // straight to EOF and yields the final incomplete line as-is.
+        // end >= file_size → this.end = u64::MAX, so Passthrough streams straight
+        // until EOF is reached and yields the final incomplete line as-is.
         static DATA: &[u8] = b"line1\nline2"; // 11 bytes, no trailing '\n'
         for &cs in CHUNK_SIZES {
             let (store, path) = make_chunked_store(DATA, cs).await;
