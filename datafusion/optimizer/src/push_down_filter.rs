@@ -412,8 +412,8 @@ fn push_down_all_join(
     on_filter: Vec<Expr>,
 ) -> Result<Transformed<LogicalPlan>> {
     let is_inner_join = join.join_type == JoinType::Inner;
-    let allow_convert_filter_to_join_condition =
-        allow_convert_filter_to_join_condition(&join);
+    let can_promote_post_join_filter_to_join_condition =
+        can_promote_post_join_filter_to_join_condition(&join);
     // Get pushable predicates from current optimizer state
     let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
 
@@ -434,7 +434,7 @@ fn push_down_all_join(
         } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
         } else if is_inner_join
-            && allow_convert_filter_to_join_condition
+            && can_promote_post_join_filter_to_join_condition
             && can_evaluate_as_join_condition(&predicate)?
         {
             // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
@@ -517,7 +517,15 @@ fn push_down_all_join(
     Ok(Transformed::yes(plan))
 }
 
-fn allow_convert_filter_to_join_condition(join: &Join) -> bool {
+/// Returns true when post-join filters are allowed to be promoted to join conditions.
+///
+/// Protection is necessary for scalar-side joins and cross joins to avoid incorrectly
+/// rewriting a post-join filter into the join condition when one side is empty or
+/// limited to at most one row (`max_rows() == Some(1)`).
+///
+/// - `join.on` non-empty means existing join predicates already exist; promotion is safe.
+/// - if neither side is scalar (`max_rows() == Some(1)`), promotion is safe.
+fn can_promote_post_join_filter_to_join_condition(join: &Join) -> bool {
     !join.on.is_empty()
         || !(matches!(join.left.max_rows(), Some(1))
             || matches!(join.right.max_rows(), Some(1)))
