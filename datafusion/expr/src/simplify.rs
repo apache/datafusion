@@ -24,6 +24,7 @@ use chrono::{DateTime, Utc};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 
+use crate::registry::ExtensionTypeRegistry;
 use crate::{Expr, ExprSchemable};
 
 /// Provides simplification information based on schema, query execution time,
@@ -38,6 +39,7 @@ pub struct SimplifyContext {
     schema: DFSchemaRef,
     query_execution_start_time: Option<DateTime<Utc>>,
     config_options: Arc<ConfigOptions>,
+    extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
 }
 
 /// Builder for [`SimplifyContext`].
@@ -54,6 +56,7 @@ impl Default for SimplifyContext {
             schema: Arc::new(DFSchema::empty()),
             query_execution_start_time: None,
             config_options: Arc::new(ConfigOptions::default()),
+            extension_types: None,
         }
     }
 }
@@ -107,6 +110,14 @@ impl SimplifyContext {
         self
     }
 
+    pub fn with_extension_types(
+        mut self,
+        extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
+    ) -> Self {
+        self.extension_types = extension_types;
+        self
+    }
+
     /// Returns the schema
     pub fn schema(&self) -> &DFSchemaRef {
         &self.schema
@@ -136,6 +147,10 @@ impl SimplifyContext {
     /// Returns the configuration options for the session.
     pub fn config_options(&self) -> &Arc<ConfigOptions> {
         &self.config_options
+    }
+
+    pub fn extension_types(&self) -> Option<&Arc<dyn ExtensionTypeRegistry>> {
+        self.extension_types.as_ref()
     }
 }
 

@@ -2315,6 +2315,10 @@ impl OptimizerConfig for SessionState {
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
         Some(self)
     }
+
+    fn extension_types(&self) -> Option<Arc<dyn ExtensionTypeRegistry>> {
+        Some(self.extension_types.clone())
+    }
 }
 
 /// Create a new task context instance from SessionState

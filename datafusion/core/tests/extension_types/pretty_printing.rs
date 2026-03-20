@@ -81,7 +81,7 @@ async fn test_pretty_print_extension_type_formatter() -> Result<()> {
 }
 
 #[tokio::test]
-async fn create_cast_uuid_sql() -> Result<()> {
+async fn create_cast_uuid_to_char() -> Result<()> {
     let schema = test_schema();
 
     // define data.
@@ -102,11 +102,45 @@ async fn create_cast_uuid_sql() -> Result<()> {
     ctx.register_batch("test", batch)?;
 
     let df = ctx.sql("SELECT my_uuids::VARCHAR FROM test").await?;
-    println!("{}", df.clone().explain(false, false)?.to_string().await?);
-
     let batches = df.collect().await?;
 
-    assert_batches_eq!(vec![""], &batches);
+    assert_batches_eq!(
+        vec![
+            "+--------------------------------------+",
+            "| test.my_uuids                        |",
+            "+--------------------------------------+",
+            "| 00000000-0000-0000-0000-000000000000 |",
+            "| 00010203-0405-0607-0809-000102030506 |",
+            "+--------------------------------------+",
+        ],
+        &batches
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_cast_char_to_uuid() -> Result<()> {
+    let state = SessionStateBuilder::default()
+        .with_canonical_extension_types()?
+        .with_type_planner(Arc::new(CustomTypePlanner {}))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
+
+    let df = ctx
+        .sql("SELECT '00010203-0405-0607-0809-000102030506'::UUID AS uuid")
+        .await?;
+    let batches = df.collect().await?;
+    assert_batches_eq!(
+        vec![
+            "+----------------------------------+",
+            "| uuid                             |",
+            "+----------------------------------+",
+            "| 00010203040506070809000102030506 |",
+            "+----------------------------------+",
+        ],
+        &batches
+    );
 
     Ok(())
 }

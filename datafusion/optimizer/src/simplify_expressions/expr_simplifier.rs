@@ -43,6 +43,7 @@ use datafusion_expr::expr::HigherOrderFunction;
 use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
     and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
+    registry::ExtensionTypeRegistry,
 };
 use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
@@ -211,7 +212,10 @@ impl ExprSimplifier {
     ) -> Result<(Transformed<Expr>, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
         let config_options = Some(Arc::clone(self.info.config_options()));
-        let mut const_evaluator = ConstEvaluator::try_new(config_options)?;
+        let mut const_evaluator = ConstEvaluator::try_new(
+            config_options,
+            self.info.extension_types().cloned(),
+        )?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let guarantees_map: HashMap<&Expr, &NullableInterval> =
             self.guarantees.iter().map(|(k, v)| (k, v)).collect();
@@ -597,12 +601,16 @@ impl ConstEvaluator {
     ///
     /// The `config_options` parameter is used to pass session configuration
     /// (like timezone) to scalar functions during constant evaluation.
-    pub fn try_new(config_options: Option<Arc<ConfigOptions>>) -> Result<Self> {
+    pub fn try_new(
+        config_options: Option<Arc<ConfigOptions>>,
+        extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
+    ) -> Result<Self> {
         // The dummy column name is unused and doesn't matter as only
         // expressions without column references can be evaluated
 
         let mut execution_props = ExecutionProps::new();
         execution_props.config_options = config_options;
+        execution_props.extension_types = extension_types;
 
         Ok(Self {
             can_evaluate: vec![],

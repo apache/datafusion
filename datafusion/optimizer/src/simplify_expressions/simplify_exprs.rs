@@ -102,6 +102,7 @@ impl SimplifyExpressions {
             .with_schema(schema)
             .with_config_options(config.options())
             .with_query_execution_start_time(config.query_execution_start_time())
+            .with_extension_types(config.extension_types().clone())
             .build();
 
         // Inputs have already been rewritten (due to bottom-up traversal handled by Optimizer)
