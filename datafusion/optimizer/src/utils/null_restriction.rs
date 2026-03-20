@@ -24,9 +24,93 @@ use datafusion_expr::{BinaryExpr, Expr, Operator};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NullSubstitutionValue {
+    /// SQL NULL after substituting join columns with NULL.
     Null,
+    /// Known to be non-null, but value is otherwise unknown.
     NonNull,
+    /// A known boolean outcome from SQL three-valued logic.
     Boolean(bool),
+}
+
+/// Evaluates a subset of SQL three-valued logic over null substitution values.
+///
+/// Lattice used by the syntactic fast path:
+/// - `Boolean(true|false)`: exact logical value
+/// - `Null`: exact SQL unknown/null value
+/// - `NonNull`: known to be not null, but exact value is unknown
+///
+/// `NonNull` is intentionally conservative for logical operators. For example,
+/// `NonNull AND true` could be either `true` or `false`, so the result remains
+/// unknown to the syntactic evaluator (`None`) rather than pretending to know.
+#[derive(Default)]
+struct SqlThreeValuedEvaluator;
+
+impl SqlThreeValuedEvaluator {
+    fn not(&self, value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
+        match value {
+            Some(NullSubstitutionValue::Boolean(value)) => {
+                Some(NullSubstitutionValue::Boolean(!value))
+            }
+            Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Null),
+            Some(NullSubstitutionValue::NonNull) | None => None,
+        }
+    }
+
+    fn and(
+        &self,
+        left: Option<NullSubstitutionValue>,
+        right: Option<NullSubstitutionValue>,
+    ) -> Option<NullSubstitutionValue> {
+        if matches!(left, Some(NullSubstitutionValue::Boolean(false)))
+            || matches!(right, Some(NullSubstitutionValue::Boolean(false)))
+        {
+            return Some(NullSubstitutionValue::Boolean(false));
+        }
+
+        match (left, right) {
+            (Some(NullSubstitutionValue::Boolean(true)), value)
+            | (value, Some(NullSubstitutionValue::Boolean(true))) => value,
+            (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
+                Some(NullSubstitutionValue::Null)
+            }
+            (Some(NullSubstitutionValue::NonNull), _)
+            | (_, Some(NullSubstitutionValue::NonNull))
+            | (None, _)
+            | (_, None) => None,
+            (left, right) => {
+                debug_assert_eq!(left, right);
+                left
+            }
+        }
+    }
+
+    fn or(
+        &self,
+        left: Option<NullSubstitutionValue>,
+        right: Option<NullSubstitutionValue>,
+    ) -> Option<NullSubstitutionValue> {
+        if matches!(left, Some(NullSubstitutionValue::Boolean(true)))
+            || matches!(right, Some(NullSubstitutionValue::Boolean(true)))
+        {
+            return Some(NullSubstitutionValue::Boolean(true));
+        }
+
+        match (left, right) {
+            (Some(NullSubstitutionValue::Boolean(false)), value)
+            | (value, Some(NullSubstitutionValue::Boolean(false))) => value,
+            (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
+                Some(NullSubstitutionValue::Null)
+            }
+            (Some(NullSubstitutionValue::NonNull), _)
+            | (_, Some(NullSubstitutionValue::NonNull))
+            | (None, _)
+            | (_, None) => None,
+            (left, right) => {
+                debug_assert_eq!(left, right);
+                left
+            }
+        }
+    }
 }
 
 pub(super) fn syntactic_restrict_null_predicate(
@@ -77,6 +161,8 @@ fn syntactic_null_substitution_value(
     expr: &Expr,
     join_cols: &HashSet<&Column>,
 ) -> Option<NullSubstitutionValue> {
+    let evaluator = SqlThreeValuedEvaluator;
+
     match expr {
         Expr::Alias(alias) => {
             syntactic_null_substitution_value(alias.expr.as_ref(), join_cols)
@@ -91,9 +177,9 @@ fn syntactic_null_substitution_value(
         Expr::Literal(value, _) => Some(scalar_to_null_substitution_value(value)),
         Expr::BinaryExpr(binary_expr) => syntactic_binary_value(binary_expr, join_cols),
         Expr::Not(expr) => {
-            sql_not(syntactic_null_substitution_value(expr.as_ref(), join_cols))
+            evaluator.not(syntactic_null_substitution_value(expr.as_ref(), join_cols))
         }
-        Expr::IsNull(expr) => sql_not(null_check_value(
+        Expr::IsNull(expr) => evaluator.not(null_check_value(
             syntactic_null_substitution_value(expr.as_ref(), join_cols),
             true,
         )),
@@ -177,80 +263,17 @@ fn strict_null_passthrough(
     }
 }
 
-fn sql_not(value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
-    match value {
-        Some(NullSubstitutionValue::Boolean(value)) => {
-            Some(NullSubstitutionValue::Boolean(!value))
-        }
-        Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Null),
-        Some(NullSubstitutionValue::NonNull) | None => None,
-    }
-}
-
-fn sql_and(
-    left: Option<NullSubstitutionValue>,
-    right: Option<NullSubstitutionValue>,
-) -> Option<NullSubstitutionValue> {
-    if matches!(left, Some(NullSubstitutionValue::Boolean(false)))
-        || matches!(right, Some(NullSubstitutionValue::Boolean(false)))
-    {
-        return Some(NullSubstitutionValue::Boolean(false));
-    }
-
-    match (left, right) {
-        (Some(NullSubstitutionValue::Boolean(true)), value)
-        | (value, Some(NullSubstitutionValue::Boolean(true))) => value,
-        (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
-            Some(NullSubstitutionValue::Null)
-        }
-        (Some(NullSubstitutionValue::NonNull), _)
-        | (_, Some(NullSubstitutionValue::NonNull))
-        | (None, _)
-        | (_, None) => None,
-        (left, right) => {
-            debug_assert_eq!(left, right);
-            left
-        }
-    }
-}
-
-fn sql_or(
-    left: Option<NullSubstitutionValue>,
-    right: Option<NullSubstitutionValue>,
-) -> Option<NullSubstitutionValue> {
-    if matches!(left, Some(NullSubstitutionValue::Boolean(true)))
-        || matches!(right, Some(NullSubstitutionValue::Boolean(true)))
-    {
-        return Some(NullSubstitutionValue::Boolean(true));
-    }
-
-    match (left, right) {
-        (Some(NullSubstitutionValue::Boolean(false)), value)
-        | (value, Some(NullSubstitutionValue::Boolean(false))) => value,
-        (Some(NullSubstitutionValue::Null), Some(NullSubstitutionValue::Null)) => {
-            Some(NullSubstitutionValue::Null)
-        }
-        (Some(NullSubstitutionValue::NonNull), _)
-        | (_, Some(NullSubstitutionValue::NonNull))
-        | (None, _)
-        | (_, None) => None,
-        (left, right) => {
-            debug_assert_eq!(left, right);
-            left
-        }
-    }
-}
-
 fn syntactic_binary_value(
     binary_expr: &BinaryExpr,
     join_cols: &HashSet<&Column>,
 ) -> Option<NullSubstitutionValue> {
     let left = syntactic_null_substitution_value(binary_expr.left.as_ref(), join_cols);
     let right = syntactic_null_substitution_value(binary_expr.right.as_ref(), join_cols);
+    let evaluator = SqlThreeValuedEvaluator;
 
     match binary_expr.op {
-        Operator::And => sql_and(left, right),
-        Operator::Or => sql_or(left, right),
+        Operator::And => evaluator.and(left, right),
+        Operator::Or => evaluator.or(left, right),
         Operator::Eq
         | Operator::NotEq
         | Operator::Lt
