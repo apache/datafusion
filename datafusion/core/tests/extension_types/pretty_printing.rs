@@ -17,7 +17,8 @@
 
 use arrow::array::{FixedSizeBinaryArray, RecordBatch};
 use arrow_schema::extension::Uuid;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
+use datafusion::assert_batches_eq;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::SessionStateBuilder;
@@ -58,6 +59,8 @@ async fn create_test_table() -> Result<DataFrame> {
     ctx.table("test").await
 }
 
+// Test here
+
 #[tokio::test]
 async fn test_pretty_print_extension_type_formatter() -> Result<()> {
     let result = create_test_table().await?.to_string().await?;
@@ -75,4 +78,55 @@ async fn test_pretty_print_extension_type_formatter() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn create_cast_uuid_sql() -> Result<()> {
+    let schema = test_schema();
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(FixedSizeBinaryArray::from(vec![
+            &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 5, 6],
+        ]))],
+    )?;
+
+    let state = SessionStateBuilder::default()
+        .with_canonical_extension_types()?
+        .with_type_planner(Arc::new(CustomTypePlanner {}))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
+
+    ctx.register_batch("test", batch)?;
+
+    let df = ctx.sql("SELECT my_uuids::VARCHAR FROM test").await?;
+    println!("{}", df.clone().explain(false, false)?.to_string().await?);
+
+    let batches = df.collect().await?;
+
+    assert_batches_eq!(vec![""], &batches);
+
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct CustomTypePlanner {}
+
+impl TypePlanner for CustomTypePlanner {
+    fn plan_type_field(
+        &self,
+        sql_type: &sqlparser::ast::DataType,
+    ) -> Result<Option<FieldRef>> {
+        match sql_type {
+            sqlparser::ast::DataType::Uuid => Ok(Some(Arc::new(
+                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
+                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
+                        .into(),
+                ),
+            ))),
+            _ => Ok(None),
+        }
+    }
 }

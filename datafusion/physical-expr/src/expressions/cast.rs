@@ -417,12 +417,13 @@ pub fn cast(
 
 pub fn cast_with_extension(
     expr: Arc<dyn PhysicalExpr>,
-    input_schema: &Schema,
+    _input_schema: &Schema,
     cast_type: DataType,
     cast_extension: Arc<dyn CastExtension>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(
-        CastExpr::new(expr, cast_type, None).with_cast_extension(Some(cast_extension)),
+        CastExpr::new(expr, cast_type, Some(DEFAULT_CAST_OPTIONS))
+            .with_cast_extension(Some(cast_extension)),
     ))
 }
 
