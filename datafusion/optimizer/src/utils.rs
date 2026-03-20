@@ -22,7 +22,37 @@ mod null_restriction;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+#[cfg(test)]
+use std::sync::Mutex;
+
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
+
+/// Null restriction evaluation mode for optimizer tests.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NullRestrictionEvalMode {
+    Auto,
+    AuthoritativeOnly,
+}
+
+#[cfg(test)]
+static NULL_RESTRICTION_EVAL_MODE: Mutex<NullRestrictionEvalMode> =
+    Mutex::new(NullRestrictionEvalMode::Auto);
+
+#[cfg(test)]
+pub(crate) fn set_null_restriction_eval_mode_for_test(mode: NullRestrictionEvalMode) {
+    *NULL_RESTRICTION_EVAL_MODE.lock().unwrap() = mode;
+}
+
+fn null_restriction_eval_mode() -> NullRestrictionEvalMode {
+    #[cfg(test)]
+    {
+        *NULL_RESTRICTION_EVAL_MODE.lock().unwrap()
+    }
+    #[cfg(not(test))]
+    {
+        NullRestrictionEvalMode::Auto
+    }
+}
 use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::cast::as_boolean_array;
@@ -94,26 +124,35 @@ pub fn is_restrict_null_predicate<'a>(
         return Ok(false);
     }
 
-    if let Some(is_restricting) =
-        null_restriction::syntactic_restrict_null_predicate(&predicate, &join_cols)
-    {
-        #[cfg(debug_assertions)]
-        {
-            let authoritative = authoritative_restrict_null_predicate(
-                predicate.clone(),
-                join_cols.iter().copied(),
-            )?;
-            debug_assert_eq!(
-                is_restricting, authoritative,
-                "syntactic fast path disagrees with authoritative null-restriction evaluation for predicate: {predicate}"
-            );
-        }
-        return Ok(is_restricting);
-    }
+    let mode = null_restriction_eval_mode();
 
-    // If result is single `true`, return false;
-    // If result is single `NULL` or `false`, return true;
-    authoritative_restrict_null_predicate(predicate, join_cols)
+    match mode {
+        NullRestrictionEvalMode::AuthoritativeOnly => {
+            authoritative_restrict_null_predicate(predicate, join_cols)
+        }
+        NullRestrictionEvalMode::Auto => {
+            if let Some(is_restricting) =
+                null_restriction::syntactic_restrict_null_predicate(
+                    &predicate, &join_cols,
+                )
+            {
+                #[cfg(debug_assertions)]
+                {
+                    let authoritative = authoritative_restrict_null_predicate(
+                        predicate.clone(),
+                        join_cols.iter().copied(),
+                    )?;
+                    debug_assert_eq!(
+                        is_restricting, authoritative,
+                        "syntactic fast path disagrees with authoritative null-restriction evaluation for predicate: {predicate}"
+                    );
+                }
+                Ok(is_restricting)
+            } else {
+                authoritative_restrict_null_predicate(predicate, join_cols)
+            }
+        }
+    }
 }
 
 /// Determines if an expression will always evaluate to null.
@@ -405,6 +444,30 @@ mod tests {
                 );
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn null_restriction_eval_mode_auto_vs_authoritative_only() -> Result<()> {
+        let predicate = binary_expr(col("a"), Operator::Gt, lit(8i64));
+        let join_cols_of_predicate = predicate.column_refs();
+
+        set_null_restriction_eval_mode_for_test(NullRestrictionEvalMode::Auto);
+        let auto_result = is_restrict_null_predicate(
+            predicate.clone(),
+            join_cols_of_predicate.iter().copied(),
+        )?;
+
+        set_null_restriction_eval_mode_for_test(
+            NullRestrictionEvalMode::AuthoritativeOnly,
+        );
+        let authoritative_result = is_restrict_null_predicate(
+            predicate.clone(),
+            join_cols_of_predicate.iter().copied(),
+        )?;
+
+        assert_eq!(auto_result, authoritative_result);
 
         Ok(())
     }
