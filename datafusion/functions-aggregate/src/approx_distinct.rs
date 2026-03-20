@@ -240,9 +240,8 @@ impl Accumulator for StringViewHLLAccumulator {
                     // constructing a &str to call self.hll.add()
                     let bv = ByteView::from(view);
                     let offset = bv.offset as usize;
-                    // SAFETY: StringViewArray guarantees that each view's
-                    // buffer_index is a valid index into data_buffers(), and
-                    // offset..offset+len falls within that buffer.
+                    // SAFETY: view came from the array so buffer_index
+                    // and offset..offset+len are in bounds.
                     let bytes = unsafe {
                         buffers
                             .get_unchecked(bv.buffer_index as usize)
