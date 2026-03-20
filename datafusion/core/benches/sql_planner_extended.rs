@@ -260,26 +260,6 @@ fn build_case_heavy_left_join_query(predicate_count: usize, case_depth: usize) -
     query
 }
 
-fn build_case_heavy_left_join_df_with_push_down_filter(
-    rt: &Runtime,
-    predicate_count: usize,
-    case_depth: usize,
-    push_down_filter_enabled: bool,
-) -> DataFrame {
-    let ctx = SessionContext::new();
-    register_string_table(&ctx, 100, 1000);
-    if !push_down_filter_enabled {
-        let removed = ctx.remove_optimizer_rule("push_down_filter");
-        assert!(
-            removed,
-            "push_down_filter rule should be present in the default optimizer"
-        );
-    }
-
-    let query = build_case_heavy_left_join_query(predicate_count, case_depth);
-    rt.block_on(async { ctx.sql(&query).await.unwrap() })
-}
-
 fn build_non_case_left_join_query(
     predicate_count: usize,
     nesting_depth: usize,
