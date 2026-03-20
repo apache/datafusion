@@ -1889,7 +1889,9 @@ mod test {
             .unwrap()
             .strip_backtrace();
         assert!(err.contains("Function 'avg' failed to match any signature"));
-        assert!(err.contains("Function 'avg' requires Float64, but received String (DataType: Utf8)"));
+        assert!(err.contains(
+            "Function 'avg' requires Float64, but received String (DataType: Utf8)"
+        ));
         Ok(())
     }
 
