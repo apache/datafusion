@@ -309,12 +309,12 @@ pub fn create_physical_expr(
             if !field.metadata().is_empty() {
                 if let Some(registry) = &execution_props.extension_types
                     && let Some(extension_type) =
-                        registry.create_extension_type_for_field(&field)?
+                        registry.create_extension_type_for_field(field)?
                 {
                     let cast_extension = extension_type.cast_from()?;
                     if cast_extension.can_cast(
                         &src_field,
-                        &field,
+                        field,
                         &DEFAULT_CAST_OPTIONS,
                     )? {
                         return expressions::cast_with_extension(
@@ -339,7 +339,7 @@ pub fn create_physical_expr(
                     registry.create_extension_type_for_field(&src_field)?
             {
                 let cast_extension = extension_type.cast_to()?;
-                if cast_extension.can_cast(&src_field, &field, &DEFAULT_CAST_OPTIONS)? {
+                if cast_extension.can_cast(&src_field, field, &DEFAULT_CAST_OPTIONS)? {
                     return expressions::cast_with_extension(
                         create_physical_expr(expr, input_dfschema, execution_props)?,
                         input_schema,
