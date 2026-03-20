@@ -22,7 +22,7 @@
 //! resources such as:
 //!
 //! - the total number of outstanding planner I/O operations
-//! - future work-stealing state
+//! - ready morsels and planners that may be stolen by idle siblings
 //!
 //! [`SharedFileStreamState`] is that shared home.
 //!
@@ -40,11 +40,27 @@
 //!   issue I/O. This prevents a subset of streams from consuming the full budget
 //!   and is intended for scans that require stable cross-stream ordering.
 //!
+//! # Ready Work Stealing
+//!
+//! In unordered mode, sibling streams may also exchange CPU-ready work through
+//! this shared state:
+//!
+//! - ready morsels may be published into a shared morsel queue
+//! - ready planners may be published into a shared planner queue
+//! - idle siblings will try to steal a ready morsel first, then a ready
+//!   planner
+//!
+//! In preserve-order mode, streams keep their ready morsels and planners on
+//! their local per-stream queues so later siblings cannot overtake earlier
+//! output.
+//!
 //! Streams can call [`SharedFileStreamState::unregister_stream`] once they know
 //! they will never need another I/O permit. Unregistered streams are removed
 //! from future fairness calculations so their share of the budget can be
 //! redistributed.
 
+use super::MorselQueue;
+use crate::morsel::{Morsel, MorselPlanner};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::task::Waker;
@@ -71,6 +87,8 @@ pub struct FileStreamId(usize);
 /// Create one `SharedFileStreamState` for the whole `DataSourceExec` and clone
 /// it into each sibling `FileStream`.
 ///
+/// # IO Behavior
+///
 /// Each stream should register itself with [`Self::register_stream`] and then:
 ///
 /// 1. call [`Self::try_acquire_io_permit`] before moving a planner into a
@@ -80,6 +98,17 @@ pub struct FileStreamId(usize);
 /// 3. call [`Self::unregister_stream`] once the stream knows it will never need
 ///    another I/O permit
 ///
+/// # Ready Work Behavior
+///
+/// In unordered mode, streams may also publish ready morsels and planners into
+/// the shared queues via [`Self::push_ready_morsel`] and
+/// [`Self::push_ready_planner`]. Idle siblings can then steal that ready work
+/// with [`Self::pop_ready_morsel`] and [`Self::pop_ready_planner`].
+///
+/// In preserve-order mode, streams should keep ready morsels and planners on
+/// their local per-stream queues rather than publishing them into the shared
+/// queues.
+///
 /// If no permit is available, the caller should typically:
 ///
 /// 1. keep the planner in a CPU-ready state locally
@@ -87,7 +116,7 @@ pub struct FileStreamId(usize);
 /// 3. return `Poll::Pending`
 ///
 /// The shared state will wake waiting tasks whenever shared capacity may have
-/// become available again.
+/// become available again, or when new shared ready work is published.
 #[derive(Clone, Debug)]
 pub struct SharedFileStreamState {
     inner: Arc<Mutex<SharedFileStreamStateInner>>,
@@ -95,12 +124,27 @@ pub struct SharedFileStreamState {
 
 #[derive(Debug)]
 struct SharedFileStreamStateInner {
-    mode: SharedFileStreamMode,
-    outstanding_ios: usize,
-    max_outstanding_ios: usize,
-    next_stream_id: usize,
-    streams: BTreeMap<FileStreamId, StreamIOState>,
+    /// Shared outstanding-I/O accounting and fairness state.
+    io_state: IoState,
+    /// Shared ready-work queues used for unordered morsel stealing.
+    shared_ready_work: MorselQueue,
+    /// Tasks waiting to be woken when shared capacity or ready work appears.
     waiters: VecDeque<Waker>,
+}
+
+/// Shared outstanding-I/O accounting and fairness state for sibling streams.
+#[derive(Debug)]
+struct IoState {
+    /// Shared scheduling policy for sibling streams.
+    mode: SharedFileStreamMode,
+    /// Total number of planner I/O phases currently in flight.
+    outstanding_ios: usize,
+    /// Global cap on outstanding planner I/O phases across sibling streams.
+    max_outstanding_ios: usize,
+    /// Monotonic counter used to assign stable `FileStreamId`s.
+    next_stream_id: usize,
+    /// Per-stream scheduling state for each registered sibling stream.
+    streams: BTreeMap<FileStreamId, StreamIOState>,
 }
 
 #[derive(Debug, Default)]
@@ -118,11 +162,14 @@ impl SharedFileStreamState {
     pub fn new(max_outstanding_ios: usize, mode: SharedFileStreamMode) -> Self {
         Self {
             inner: Arc::new(Mutex::new(SharedFileStreamStateInner {
-                mode,
-                outstanding_ios: 0,
-                max_outstanding_ios,
-                next_stream_id: 0,
-                streams: BTreeMap::new(),
+                io_state: IoState {
+                    mode,
+                    outstanding_ios: 0,
+                    max_outstanding_ios,
+                    next_stream_id: 0,
+                    streams: BTreeMap::new(),
+                },
+                shared_ready_work: MorselQueue::new(VecDeque::new()),
                 waiters: VecDeque::new(),
             })),
         }
@@ -135,10 +182,7 @@ impl SharedFileStreamState {
             .lock()
             .expect("shared file stream state poisoned");
 
-        let id = FileStreamId(inner.next_stream_id);
-        inner.next_stream_id += 1;
-        inner.streams.insert(id, StreamIOState::default());
-        id
+        inner.io_state.register_stream()
     }
 
     /// Returns the configured shared scheduling mode.
@@ -146,7 +190,18 @@ impl SharedFileStreamState {
         self.inner
             .lock()
             .expect("shared file stream state poisoned")
+            .io_state
             .mode
+    }
+
+    /// Returns the number of currently registered sibling streams.
+    pub fn registered_stream_count(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("shared file stream state poisoned")
+            .io_state
+            .streams
+            .len()
     }
 
     /// Returns the maximum number of outstanding planner I/O operations
@@ -155,6 +210,7 @@ impl SharedFileStreamState {
         self.inner
             .lock()
             .expect("shared file stream state poisoned")
+            .io_state
             .max_outstanding_ios
     }
 
@@ -164,6 +220,7 @@ impl SharedFileStreamState {
         self.inner
             .lock()
             .expect("shared file stream state poisoned")
+            .io_state
             .outstanding_ios
     }
 
@@ -179,7 +236,7 @@ impl SharedFileStreamState {
                 .inner
                 .lock()
                 .expect("shared file stream state poisoned");
-            if let Some(stream) = inner.streams.remove(&stream_id) {
+            if let Some(stream) = inner.io_state.streams.remove(&stream_id) {
                 assert_eq!(
                     stream.outstanding_ios, 0,
                     "stream must not unregister while it still holds I/O permits"
@@ -203,7 +260,7 @@ impl SharedFileStreamState {
             .expect("shared file stream state poisoned");
 
         inner.waiters.push_back(waker.clone());
-        if let Some(stream) = inner.streams.get_mut(&stream_id) {
+        if let Some(stream) = inner.io_state.streams.get_mut(&stream_id) {
             stream.waker = Some(waker.clone());
         }
     }
@@ -221,16 +278,11 @@ impl SharedFileStreamState {
             .lock()
             .expect("shared file stream state poisoned");
 
-        if !inner.can_issue_io(stream_id) {
+        if !inner.io_state.can_issue_io(stream_id) {
             return None;
         }
 
-        inner.outstanding_ios += 1;
-        inner
-            .streams
-            .get_mut(&stream_id)
-            .expect("unregistered file stream")
-            .outstanding_ios += 1;
+        inner.io_state.acquire_io(stream_id);
         drop(inner);
 
         Some(OutstandingIoPermit {
@@ -239,27 +291,57 @@ impl SharedFileStreamState {
         })
     }
 
+    /// Publish one ready morsel into the shared queue.
+    pub fn push_ready_morsel(&self, morsel: Box<dyn Morsel>) {
+        let waiters = {
+            let mut inner = self
+                .inner
+                .lock()
+                .expect("shared file stream state poisoned");
+            inner.shared_ready_work.push_morsel(morsel);
+            Self::take_waiters_locked(&mut inner)
+        };
+        Self::wake_waiters(waiters);
+    }
+
+    /// Publish one ready planner into the shared queue.
+    pub fn push_ready_planner(&self, planner: Box<dyn MorselPlanner>) {
+        let waiters = {
+            let mut inner = self
+                .inner
+                .lock()
+                .expect("shared file stream state poisoned");
+            inner.shared_ready_work.push_ready_planner(planner);
+            Self::take_waiters_locked(&mut inner)
+        };
+        Self::wake_waiters(waiters);
+    }
+
+    /// Try to steal one ready morsel from the shared queue.
+    pub fn pop_ready_morsel(&self) -> Option<Box<dyn Morsel>> {
+        self.inner
+            .lock()
+            .expect("shared file stream state poisoned")
+            .shared_ready_work
+            .pop_morsel()
+    }
+
+    /// Try to steal one ready planner from the shared queue.
+    pub fn pop_ready_planner(&self) -> Option<Box<dyn MorselPlanner>> {
+        self.inner
+            .lock()
+            .expect("shared file stream state poisoned")
+            .shared_ready_work
+            .pop_ready_planner()
+    }
+
     fn release_io_permit(&self, stream_id: FileStreamId) {
         let waiters = {
             let mut inner = self
                 .inner
                 .lock()
                 .expect("shared file stream state poisoned");
-            inner.outstanding_ios = inner
-                .outstanding_ios
-                .checked_sub(1)
-                .expect("outstanding I/O count underflow");
-            inner
-                .streams
-                .get_mut(&stream_id)
-                .expect("unregistered file stream")
-                .outstanding_ios = inner
-                .streams
-                .get(&stream_id)
-                .expect("unregistered file stream")
-                .outstanding_ios
-                .checked_sub(1)
-                .expect("per-stream outstanding I/O count underflow");
+            inner.io_state.release_io(stream_id);
             Self::take_waiters_locked(&mut inner)
         };
 
@@ -268,7 +350,7 @@ impl SharedFileStreamState {
 
     fn take_waiters_locked(inner: &mut SharedFileStreamStateInner) -> Vec<Waker> {
         let mut waiters = inner.waiters.drain(..).collect::<Vec<_>>();
-        for stream in inner.streams.values_mut() {
+        for stream in inner.io_state.streams.values_mut() {
             if let Some(waker) = stream.waker.take() {
                 waiters.push(waker);
             }
@@ -283,7 +365,14 @@ impl SharedFileStreamState {
     }
 }
 
-impl SharedFileStreamStateInner {
+impl IoState {
+    fn register_stream(&mut self) -> FileStreamId {
+        let id = FileStreamId(self.next_stream_id);
+        self.next_stream_id += 1;
+        self.streams.insert(id, StreamIOState::default());
+        id
+    }
+
     fn can_issue_io(&self, stream_id: FileStreamId) -> bool {
         if self.outstanding_ios >= self.max_outstanding_ios {
             return false;
@@ -295,10 +384,33 @@ impl SharedFileStreamStateInner {
 
         match self.mode {
             SharedFileStreamMode::Unordered => self.can_issue_unordered(stream_id),
-            SharedFileStreamMode::PreserveOrder => {
-                self.can_issue_preserve_order(stream_id)
-            }
+            SharedFileStreamMode::PreserveOrder => self.can_issue_preserve_order(stream_id),
         }
+    }
+
+    fn acquire_io(&mut self, stream_id: FileStreamId) {
+        self.outstanding_ios += 1;
+        self.streams
+            .get_mut(&stream_id)
+            .expect("unregistered file stream")
+            .outstanding_ios += 1;
+    }
+
+    fn release_io(&mut self, stream_id: FileStreamId) {
+        self.outstanding_ios = self
+            .outstanding_ios
+            .checked_sub(1)
+            .expect("outstanding I/O count underflow");
+        self.streams
+            .get_mut(&stream_id)
+            .expect("unregistered file stream")
+            .outstanding_ios = self
+            .streams
+            .get(&stream_id)
+            .expect("unregistered file stream")
+            .outstanding_ios
+            .checked_sub(1)
+            .expect("per-stream outstanding I/O count underflow");
     }
 
     fn can_issue_unordered(&self, stream_id: FileStreamId) -> bool {

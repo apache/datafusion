@@ -28,7 +28,6 @@ pub use shared_state::{
 };
 
 use std::collections::VecDeque;
-use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -175,7 +174,8 @@ enum StreamState {
 /// The flow is:
 /// 1. Read each file  and turn it into morsels (potentially in parallel)
 /// 2. Read each morsel individually and produce `RecordBatch`es for processing
-struct MorselQueue {
+#[derive(Debug)]
+pub(super) struct MorselQueue {
     /// Input files that have not yet been morselized.
     file_iter: VecDeque<PartitionedFile>,
     /// Planners that are currently waiting on an outstanding I/O phase.
@@ -188,7 +188,7 @@ struct MorselQueue {
 
 impl MorselQueue {
     /// Create an empty queue set for one file group.
-    fn new(file_iter: VecDeque<PartitionedFile>) -> Self {
+    pub(super) fn new(file_iter: VecDeque<PartitionedFile>) -> Self {
         Self {
             file_iter,
             waiting_planners: VecDeque::new(),
@@ -198,18 +198,91 @@ impl MorselQueue {
     }
 
     /// Clear all planner and morsel work currently owned by this stream.
-    fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         self.waiting_planners.clear();
         self.ready_planners.clear();
         self.morsels.clear();
     }
 
     /// Return true if the stream has no remaining queued file or morsel work.
-    fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.file_iter.is_empty()
             && self.waiting_planners.is_empty()
             && self.ready_planners.is_empty()
             && self.morsels.is_empty()
+    }
+
+    /// Return the number of queued ready morsels.
+    pub(super) fn morsel_len(&self) -> usize {
+        self.morsels.len()
+    }
+
+    /// Return true if there is at least one queued ready morsel.
+    pub(super) fn has_morsels(&self) -> bool {
+        !self.morsels.is_empty()
+    }
+
+    /// Return true if there is at least one queued ready planner.
+    pub(super) fn has_ready_planners(&self) -> bool {
+        !self.ready_planners.is_empty()
+    }
+
+    /// Return true if there is at least one queued waiting planner.
+    pub(super) fn has_waiting_planners(&self) -> bool {
+        !self.waiting_planners.is_empty()
+    }
+
+    /// Return the total number of queued ready and waiting planners.
+    pub(super) fn planner_count(&self) -> usize {
+        self.waiting_planners.len() + self.ready_planners.len()
+    }
+
+    /// Push one CPU-ready planner into the local queue.
+    pub(super) fn push_ready_planner(&mut self, planner: Box<dyn MorselPlanner>) {
+        self.ready_planners.push_back(planner);
+    }
+
+    /// Extend the local queue with CPU-ready planners.
+    pub(super) fn extend_ready_planners(
+        &mut self,
+        planners: impl IntoIterator<Item = Box<dyn MorselPlanner>>,
+    ) {
+        self.ready_planners.extend(planners);
+    }
+
+    /// Pop the next CPU-ready planner from the local queue.
+    pub(super) fn pop_ready_planner(&mut self) -> Option<Box<dyn MorselPlanner>> {
+        self.ready_planners.pop_front()
+    }
+
+    /// Push one waiting planner into the local queue.
+    fn push_waiting_planner(&mut self, planner: WaitingPlanner) {
+        self.waiting_planners.push_back(planner);
+    }
+
+    /// Drain all waiting planners from the queue.
+    fn take_waiting_planners(&mut self) -> VecDeque<WaitingPlanner> {
+        std::mem::take(&mut self.waiting_planners)
+    }
+
+    /// Push one ready morsel into the local queue.
+    pub(super) fn push_morsel(&mut self, morsel: Box<dyn Morsel>) {
+        self.morsels.push_back(morsel);
+    }
+
+    /// Extend the local queue with ready morsels.
+    pub(super) fn extend_morsels(&mut self, morsels: impl IntoIterator<Item = Box<dyn Morsel>>) {
+        self.morsels.extend(morsels);
+    }
+
+    /// Pop the next ready morsel from the local queue.
+    pub(super) fn pop_morsel(&mut self) -> Option<Box<dyn Morsel>> {
+        self.morsels.pop_front()
+    }
+
+    /// Pop the next input file from the local queue.
+    pub(super) fn pop_file(&mut self) -> Option<PartitionedFile> {
+        self.file_iter.pop_front()
     }
 }
 
@@ -306,6 +379,67 @@ impl<'a> FileStreamBuilder<'a> {
 }
 
 impl FileStream {
+    /// Return true if this stream may publish and steal ready work from the
+    /// shared queue.
+    fn can_share_ready_work(&self) -> bool {
+        // Only enable shared ready-work queues when there are actual sibling
+        // streams. Sending work through shared state in the single-stream case
+        // changes local scheduling behavior without enabling any useful
+        // stealing.
+        !self.preserve_order && self.shared_file_stream_state.registered_stream_count() > 1
+    }
+
+    /// Enqueue ready planners either locally or into the shared queue.
+    fn push_ready_planners(
+        &mut self,
+        planners: impl IntoIterator<Item = Box<dyn MorselPlanner>>,
+    ) {
+        if self.can_share_ready_work() {
+            for planner in planners {
+                self.shared_file_stream_state.push_ready_planner(planner);
+            }
+        } else {
+            self.queues.extend_ready_planners(planners);
+        }
+    }
+
+    /// Enqueue ready morsels either locally or into the shared queue.
+    fn push_ready_morsels(&mut self, morsels: impl IntoIterator<Item = Box<dyn Morsel>>) {
+        if self.can_share_ready_work() {
+            for morsel in morsels {
+                self.shared_file_stream_state.push_ready_morsel(morsel);
+            }
+        } else {
+            self.queues.extend_morsels(morsels);
+        }
+    }
+
+    /// Try to steal one ready morsel or planner from the shared queue and place
+    /// them in the local queue.
+    ///
+    /// Morsels are preferred because they are already fully prepared CPU work.
+    fn try_steal_ready_work(&mut self) -> bool {
+        if !self.can_share_ready_work()
+            || self.reader.is_some()
+            || self.queues.has_morsels()
+            || self.queues.has_ready_planners()
+        {
+            return false;
+        }
+
+        if let Some(morsel) = self.shared_file_stream_state.pop_ready_morsel() {
+            self.queues.push_morsel(morsel);
+            return true;
+        }
+
+        if let Some(planner) = self.shared_file_stream_state.pop_ready_planner() {
+            self.queues.push_ready_planner(planner);
+            return true;
+        }
+
+        false
+    }
+
     /// Create a new [`FileStream`] using a legacy [`FileOpener`].
     ///
     /// Prefer [`FileStreamBuilder`] for new code.
@@ -346,10 +480,10 @@ impl FileStream {
         let max_buffered_morsels = max_buffered_morsels();
         let mut io_permit = Some(io_permit);
         while let Some(mut plan) = planner.plan()? {
-            self.queues.morsels.extend(plan.take_morsels());
-            self.queues.ready_planners.extend(plan.take_planners());
+            self.push_ready_morsels(plan.take_morsels());
+            self.push_ready_planners(plan.take_planners());
             if let Some(io_future) = plan.take_io_future() {
-                self.queues.waiting_planners.push_back(WaitingPlanner::new(
+            self.queues.push_waiting_planner(WaitingPlanner::new(
                     planner,
                     io_future,
                     io_permit
@@ -359,8 +493,8 @@ impl FileStream {
                 break;
             }
 
-            if self.queues.morsels.len() >= max_buffered_morsels {
-                self.queues.ready_planners.push_back(planner);
+            if self.queues.morsel_len() >= max_buffered_morsels {
+                self.push_ready_planners(std::iter::once(planner));
                 break;
             }
         }
@@ -374,7 +508,7 @@ impl FileStream {
     /// acquired a shared permit to potentially issue another outstanding I/O.
     fn morselize_next_file(&mut self, file: PartitionedFile) -> Result<()> {
         for planner in self.morselizer.morselize(file)? {
-            self.queues.ready_planners.push_back(planner);
+            self.push_ready_planners(std::iter::once(planner));
         }
         Ok(())
     }
@@ -389,25 +523,23 @@ impl FileStream {
         let max_buffered_morsels = max_buffered_morsels();
         let local_planner_target =
             self.shared_file_stream_state.max_outstanding_ios().max(1);
-        while (self.queues.waiting_planners.len() + self.queues.ready_planners.len())
-            < local_planner_target
-        {
+        while self.queues.planner_count() < local_planner_target {
             // In ordered mode, do not admit later files while there is any
             // earlier file work still buffered, waiting on I/O, or actively
             // being scanned. This keeps file-level planning from introducing
             // later output ahead of earlier files.
             if self.preserve_order
                 && (self.reader.is_some()
-                    || !self.queues.morsels.is_empty()
-                    || !self.queues.ready_planners.is_empty()
-                    || !self.queues.waiting_planners.is_empty())
+                    || self.queues.has_morsels()
+                    || self.queues.has_ready_planners()
+                    || self.queues.has_waiting_planners())
             {
                 break;
             }
-            if self.queues.morsels.len() >= max_buffered_morsels {
+            if self.queues.morsel_len() >= max_buffered_morsels {
                 break;
             }
-            let Some(file) = self.queues.file_iter.pop_front() else {
+            let Some(file) = self.queues.pop_file() else {
                 break;
             };
             self.morselize_next_file(file)?;
@@ -421,13 +553,11 @@ impl FileStream {
     /// again and is moved back to `ready_planners`. Failed futures are handled
     /// according to `OnError`.
     fn check_io(&mut self, cx: &mut Context<'_>) -> Result<()> {
-        for mut waiting_planner in mem::take(&mut self.queues.waiting_planners) {
+        for mut waiting_planner in self.queues.take_waiting_planners() {
             match waiting_planner.io_future.poll_unpin(cx) {
                 Poll::Ready(Ok(())) => {
                     self.file_stream_metrics.files_opened.add(1);
-                    self.queues
-                        .ready_planners
-                        .push_back(waiting_planner.planner);
+                    self.push_ready_planners(std::iter::once(waiting_planner.planner));
                 }
                 Poll::Ready(Err(e)) => {
                     self.file_stream_metrics.file_open_errors.add(1);
@@ -438,7 +568,7 @@ impl FileStream {
                         OnError::Fail => return Err(e),
                     }
                 }
-                Poll::Pending => self.queues.waiting_planners.push_back(waiting_planner),
+                Poll::Pending => self.queues.push_waiting_planner(waiting_planner),
             }
         }
         Ok(())
@@ -451,7 +581,7 @@ impl FileStream {
     /// to produce batches.
     fn start_next_morsel(&mut self) {
         if self.reader.is_none()
-            && let Some(morsel) = self.queues.morsels.pop_front()
+            && let Some(morsel) = self.queues.pop_morsel()
         {
             self.reader = Some(morsel.into_stream());
             self.file_stream_metrics.time_scanning_until_data.start();
@@ -495,18 +625,24 @@ impl FileStream {
                 return Poll::Ready(Some(Err(e)));
             }
 
+            // Opportunistically refill the local queues from shared ready work
+            // before spending more CPU locally. We intentionally ignore the
+            // return value here because this is only a best-effort steal: the
+            // normal scheduler flow below will observe any newly queued work.
+            let _ = self.try_steal_ready_work();
+
             // Give ready planners CPU whenever there is buffer space, even if a
             // reader is currently active. This avoids starving planner work
             // behind a reader that is itself waiting on I/O.
-            while self.queues.morsels.len() < max_buffered_morsels() {
+            while self.queues.morsel_len() < max_buffered_morsels() {
                 // In ordered mode, once an earlier planner has produced a
                 // morsel or is blocked on I/O, do not advance later sibling
                 // planners yet. This preserves the logical `MorselPlan` order:
                 // direct morsels first, then child planners in API order.
                 if self.preserve_order
                     && (self.reader.is_some()
-                        || !self.queues.morsels.is_empty()
-                        || !self.queues.waiting_planners.is_empty())
+                        || self.queues.has_morsels()
+                        || self.queues.has_waiting_planners())
                 {
                     break;
                 }
@@ -527,7 +663,7 @@ impl FileStream {
                         .register_waker(stream_id, cx.waker());
                     break;
                 };
-                let Some(planner) = self.queues.ready_planners.pop_front() else {
+                let Some(planner) = self.queues.pop_ready_planner() else {
                     drop(io_permit);
                     break;
                 };
@@ -541,7 +677,7 @@ impl FileStream {
                 // Once a morsel is buffered and a reader is already active,
                 // return to the scan side of the scheduler rather than
                 // continuing to spend CPU on planning in this poll.
-                if self.reader.is_some() && !self.queues.morsels.is_empty() {
+                if self.reader.is_some() && self.queues.has_morsels() {
                     break;
                 }
             }
@@ -557,19 +693,25 @@ impl FileStream {
                 return Poll::Ready(Some(Err(e)));
             }
 
+            // After polling I/O, see if a sibling published newly ready work.
+            // The boolean result is ignored because this is only an
+            // opportunistic prefetch into the local queues; the subsequent
+            // checks for local planners/morsels will handle any stolen work.
+            let _ = self.try_steal_ready_work();
+
             // The second I/O poll may have completed planner work discovered
             // during this same call to `poll_inner`. Loop back so newly ready
             // planners get CPU time before we consider returning `Pending`.
-            if !self.queues.ready_planners.is_empty()
-                && self.queues.morsels.len() < max_buffered_morsels()
+            if self.queues.has_ready_planners()
+                && self.queues.morsel_len() < max_buffered_morsels()
                 // In ordered mode, only loop back for more planner CPU when
                 // there is no earlier reader, buffered morsel, or waiting I/O
                 // that should be drained first. Otherwise, drop to
                 // `start_next_morsel()` so output is produced in order.
                 && (!self.preserve_order
                     || (self.reader.is_none()
-                        && self.queues.morsels.is_empty()
-                        && self.queues.waiting_planners.is_empty()))
+                        && !self.queues.has_morsels()
+                        && !self.queues.has_waiting_planners()))
             {
                 continue;
             }
@@ -634,6 +776,28 @@ impl FileStream {
                 return Poll::Ready(None);
             }
 
+            // try and find more work if possible, but if not,wait on the waker
+            if !self.try_steal_ready_work()
+                && self.can_share_ready_work()
+                && self.reader.is_none()
+                && !self.queues.has_morsels()
+                && !self.queues.has_ready_planners()
+            {
+                let stream_id = match self.stream_id() {
+                    Ok(stream_id) => stream_id,
+                    Err(e) => {
+                        self.queues.clear();
+                        self.state = StreamState::Error;
+                        self.unregister_stream_if_needed();
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                };
+                self.shared_file_stream_state
+                    .register_waker(stream_id, cx.waker());
+            } else if self.queues.has_morsels() || self.queues.has_ready_planners() {
+                continue;
+            }
+
             return Poll::Pending;
         }
     }
@@ -660,11 +824,17 @@ impl WaitingPlanner {
     }
 }
 
+impl std::fmt::Debug for WaitingPlanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WaitingPlanner").finish_non_exhaustive()
+    }
+}
+
 impl Drop for FileStream {
     fn drop(&mut self) {
         // Release any outstanding permits before unregistering this stream
         // from the shared scheduler.
-        self.queues.waiting_planners.clear();
+        self.queues.take_waiting_planners();
         self.unregister_stream_if_needed();
     }
 }
@@ -856,9 +1026,10 @@ impl FileStreamMetrics {
 mod tests {
     use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
     use crate::morsel::test_utils::{
-        IoFutureId, MockMorselSpec, MockMorselizer, MockPlanner, MorselId, PlannerId,
-        ReturnPlanBuilder,
+        IoFutureId, MockMorselSpec, MockMorselizer, MockPlanner, MorselId,
+        MorselObserver, PlannerId, ReturnPlanBuilder,
     };
+    use crate::file_groups::FileGroup;
     use crate::tests::make_partition;
     use crate::{PartitionedFile, TableSchema};
     use arrow::datatypes::Int32Type;
@@ -868,7 +1039,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::file_stream::{FileOpenFuture, FileOpener, FileStreamBuilder, OnError};
+    use crate::file_stream::{
+        FileOpenFuture, FileOpener, FileStream, FileStreamBuilder, OnError,
+        SharedFileStreamMode, SharedFileStreamState,
+    };
     use crate::test_util::MockSource;
     use arrow::array::{Array, AsArray, RecordBatch};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1138,6 +1312,135 @@ mod tests {
             parts.push(events);
             Ok(parts.join("\n"))
         }
+    }
+
+    /// Helper for multi-stream morsel tests that share one
+    /// [`SharedFileStreamState`].
+    #[derive(Clone)]
+    struct SiblingMorselTest {
+        /// Shared mock morselizer used by all sibling streams in the test.
+        morselizer: MockMorselizer,
+        /// Per-partition file assignments used to build one sibling
+        /// `FileStream` per partition.
+        partitions: Vec<Vec<String>>,
+    }
+
+    impl SiblingMorselTest {
+        /// Create a sibling-stream test harness with `num_partitions`
+        /// independent `FileStream`s.
+        fn new(num_partitions: usize) -> Self {
+            Self {
+                morselizer: MockMorselizer::new(),
+                partitions: vec![vec![]; num_partitions],
+            }
+        }
+
+        /// Add one file and its root planner to a specific sibling stream.
+        ///
+        /// This lets tests control which stream owns the original file-local
+        /// work before stealing redistributes ready morsels or planners.
+        fn with_file_in_partition(
+            mut self,
+            partition: usize,
+            path: impl Into<String>,
+            planner: MockPlanner,
+        ) -> Self {
+            let path = path.into();
+            self.morselizer = self.morselizer.with_file(path.clone(), planner);
+            self.partitions[partition].push(path);
+            self
+        }
+
+        /// Build a multi-partition `FileScanConfig` matching the configured
+        /// sibling test layout.
+        fn test_config(&self) -> FileScanConfig {
+            let table_schema = TableSchema::new(
+                Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)])),
+                vec![],
+            );
+            let mut builder = FileScanConfigBuilder::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                Arc::new(MockSource::new(table_schema)),
+            );
+            for file_group in &self.partitions {
+                let file_group = file_group
+                    .iter()
+                    .map(|name| PartitionedFile::new(name, 10))
+                    .collect::<Vec<_>>();
+                builder = builder.with_file_group(FileGroup::new(file_group));
+            }
+            builder.build()
+        }
+
+        /// Build one `FileStream` per configured partition, all sharing the
+        /// same `SharedFileStreamState`.
+        ///
+        /// This is the core helper for stealing tests: separate streams have
+        /// distinct local queues, but share the same outstanding-I/O budget
+        /// and shared ready-work queues.
+        fn build_streams(self) -> Result<(MorselObserver, Vec<FileStream>)> {
+            let observer = self.morselizer.observer().clone();
+            observer.clear();
+
+            let config = self.test_config();
+            let shared_state =
+                SharedFileStreamState::new(2, SharedFileStreamMode::Unordered);
+            let metrics_set = ExecutionPlanMetricsSet::new();
+            let streams = (0..self.partitions.len())
+                .map(|partition| {
+                    FileStreamBuilder::new_with_morselizer(
+                        &config,
+                        partition,
+                        Box::new(self.morselizer.clone()),
+                        &metrics_set,
+                    )
+                    .with_shared_state(shared_state.clone())
+                    .build()
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok((observer, streams))
+        }
+    }
+
+    /// Read the next single-row batch from a test stream and return its batch
+    /// id.
+    async fn next_batch_id(stream: &mut FileStream) -> Result<Option<i32>> {
+        let batch = stream.next().await.transpose()?;
+        Ok(batch.map(|batch| {
+            let col = batch.column(0).as_primitive::<Int32Type>();
+            assert_eq!(col.len(), 1);
+            assert!(col.is_valid(0));
+            col.value(0)
+        }))
+    }
+
+    /// Format the outputs of two sibling streams plus the shared scheduler
+    /// event trace into one snapshot string.
+    fn format_sibling_outputs(
+        stream_0: &[i32],
+        stream_1: &[i32],
+        observer: &MorselObserver,
+    ) -> String {
+        [
+            "----- Stream 0 Output -----".to_string(),
+            stream_0
+                .iter()
+                .map(|batch_id| format!("Batch: {batch_id}"))
+                .chain(std::iter::once("Done".to_string()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            "----- Stream 1 Output -----".to_string(),
+            stream_1
+                .iter()
+                .map(|batch_id| format!("Batch: {batch_id}"))
+                .chain(std::iter::once("Done".to_string()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            "----- File Stream Events -----".to_string(),
+            observer.format_summary_events(),
+        ]
+        .join("\n")
     }
 
     /// Verifies the simplest morsel-driven flow: one planner produces one
@@ -1530,6 +1833,130 @@ mod tests {
         morsel_stream_batch_produced: MorselId(11), BatchId(43)
         morsel_stream_finished: MorselId(11)
         ");
+
+        Ok(())
+    }
+
+    /// Verifies that an idle sibling stream can steal ready morsels even when
+    /// it has no local files of its own.
+    #[tokio::test]
+    async fn morsel_framework_sibling_stream_steals_when_only_one_has_files() -> Result<()> {
+        let test = SiblingMorselTest::new(2).with_file_in_partition(
+            0,
+            "file1.parquet",
+            MockPlanner::builder()
+                .with_id(PlannerId(0))
+                .return_plan(
+                    ReturnPlanBuilder::new()
+                        .with_morsel(MockMorselSpec::single_batch(MorselId(10), 41))
+                        .with_morsel(MockMorselSpec::single_batch(MorselId(11), 42)),
+                )
+                .return_none()
+                .build(),
+        );
+
+        let (observer, mut streams) = test.build_streams()?;
+        let mut stream_0 = vec![];
+        let mut stream_1 = vec![];
+
+        stream_0.push(next_batch_id(&mut streams[0]).await?.unwrap());
+        stream_1.push(next_batch_id(&mut streams[1]).await?.unwrap());
+        assert_eq!(next_batch_id(&mut streams[0]).await?, None);
+        assert_eq!(next_batch_id(&mut streams[1]).await?, None);
+
+        insta::assert_snapshot!(
+            format_sibling_outputs(&stream_0, &stream_1, &observer),
+            @r"
+        ----- Stream 0 Output -----
+        Batch: 41
+        Done
+        ----- Stream 1 Output -----
+        Batch: 42
+        Done
+        ----- File Stream Events -----
+        morselize_file: file1.parquet
+        planner_created: PlannerId(0)
+        morsel_produced: PlannerId(0), MorselId(10)
+        morsel_produced: PlannerId(0), MorselId(11)
+        morsel_stream_batch_produced: MorselId(10), BatchId(41)
+        morsel_stream_batch_produced: MorselId(11), BatchId(42)
+        "
+        );
+
+        Ok(())
+    }
+
+    /// Verifies that a sibling stream waiting on its own file's I/O can steal
+    /// ready work from a faster sibling and continue making progress.
+    #[tokio::test]
+    async fn morsel_framework_sibling_stream_steals_while_own_file_waits_on_io(
+    ) -> Result<()> {
+        let test = SiblingMorselTest::new(2)
+            .with_file_in_partition(
+                0,
+                "fast.parquet",
+                MockPlanner::builder()
+                    .with_id(PlannerId(0))
+                    .return_plan(
+                        ReturnPlanBuilder::new()
+                            .with_morsel(MockMorselSpec::single_batch(
+                                MorselId(10),
+                                41,
+                            ))
+                            .with_morsel(MockMorselSpec::single_batch(
+                                MorselId(11),
+                                42,
+                            )),
+                    )
+                    .return_none()
+                    .build(),
+            )
+            .with_file_in_partition(
+                1,
+                "slow.parquet",
+                MockPlanner::builder()
+                    .with_id(PlannerId(1))
+                    .return_plan(ReturnPlanBuilder::new().with_io(IoFutureId(100), 2))
+                    .return_morsel(MorselId(12), 51)
+                    .return_none()
+                    .build(),
+            );
+
+        let (observer, mut streams) = test.build_streams()?;
+        let mut stream_0 = vec![];
+        let mut stream_1 = vec![];
+
+        stream_0.push(next_batch_id(&mut streams[0]).await?.unwrap());
+        stream_1.push(next_batch_id(&mut streams[1]).await?.unwrap());
+        stream_0.push(next_batch_id(&mut streams[0]).await?.unwrap());
+        assert_eq!(next_batch_id(&mut streams[1]).await?, None);
+        assert_eq!(next_batch_id(&mut streams[0]).await?, None);
+
+        insta::assert_snapshot!(
+            format_sibling_outputs(&stream_0, &stream_1, &observer),
+            @r"
+        ----- Stream 0 Output -----
+        Batch: 41
+        Batch: 51
+        Done
+        ----- Stream 1 Output -----
+        Batch: 42
+        Done
+        ----- File Stream Events -----
+        morselize_file: fast.parquet
+        planner_created: PlannerId(0)
+        morsel_produced: PlannerId(0), MorselId(10)
+        morsel_produced: PlannerId(0), MorselId(11)
+        morsel_stream_batch_produced: MorselId(10), BatchId(41)
+        morselize_file: slow.parquet
+        planner_created: PlannerId(1)
+        morsel_stream_batch_produced: MorselId(11), BatchId(42)
+        io_future_created: PlannerId(1), IoFutureId(100)
+        io_future_resolved: PlannerId(1), IoFutureId(100)
+        morsel_produced: PlannerId(1), MorselId(12)
+        morsel_stream_batch_produced: MorselId(12), BatchId(51)
+        "
+        );
 
         Ok(())
     }
