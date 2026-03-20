@@ -28,6 +28,7 @@ use std::sync::Mutex;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 
 /// Null restriction evaluation mode for optimizer tests.
+#[cfg(test)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NullRestrictionEvalMode {
     Auto,
@@ -43,15 +44,9 @@ pub(crate) fn set_null_restriction_eval_mode_for_test(mode: NullRestrictionEvalM
     *NULL_RESTRICTION_EVAL_MODE.lock().unwrap() = mode;
 }
 
+#[cfg(test)]
 fn null_restriction_eval_mode() -> NullRestrictionEvalMode {
-    #[cfg(test)]
-    {
-        *NULL_RESTRICTION_EVAL_MODE.lock().unwrap()
-    }
-    #[cfg(not(test))]
-    {
-        NullRestrictionEvalMode::Auto
-    }
+    *NULL_RESTRICTION_EVAL_MODE.lock().unwrap()
 }
 use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -124,6 +119,7 @@ pub fn is_restrict_null_predicate<'a>(
         return Ok(false);
     }
 
+    #[cfg(test)]
     if matches!(
         null_restriction_eval_mode(),
         NullRestrictionEvalMode::AuthoritativeOnly
