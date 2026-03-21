@@ -22,7 +22,9 @@ use arrow::array::{ArrayRef, BooleanBufferBuilder, Int32Array, ListArray, String
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion_functions_nested::sort::array_sort_inner;
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_functions_nested::sort::ArraySort;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -116,10 +118,24 @@ fn create_string_list_array(num_rows: usize, elements_per_row: usize) -> ArrayRe
     ))
 }
 
+fn invoke_array_sort(udf: &ArraySort, array: &ArrayRef) -> ColumnarValue {
+    udf.invoke_with_args(ScalarFunctionArgs {
+        args: vec![ColumnarValue::Array(Arc::clone(array))],
+        arg_fields: vec![
+            Field::new("arr", array.data_type().clone(), true).into(),
+        ],
+        number_rows: array.len(),
+        return_field: Field::new("result", array.data_type().clone(), true).into(),
+        config_options: Arc::new(ConfigOptions::default()),
+    })
+    .unwrap()
+}
+
 /// Vary elements_per_row over [5, 20, 100, 1000]: for small arrays, per-row
 /// overhead dominates, whereas for larger arrays the sort kernel dominates.
 fn bench_array_sort(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_sort");
+    let udf = ArraySort::new();
 
     // Int32 arrays
     for &elements_per_row in &[5, 20, 100, 1000] {
@@ -129,7 +145,7 @@ fn bench_array_sort(c: &mut Criterion) {
             &elements_per_row,
             |b, _| {
                 b.iter(|| {
-                    black_box(array_sort_inner(std::slice::from_ref(&array)).unwrap());
+                    black_box(invoke_array_sort(&udf, &array));
                 });
             },
         );
@@ -140,7 +156,7 @@ fn bench_array_sort(c: &mut Criterion) {
         let array = create_int32_list_array(NUM_ROWS, 50, true);
         group.bench_function("int32_with_nulls", |b| {
             b.iter(|| {
-                black_box(array_sort_inner(std::slice::from_ref(&array)).unwrap());
+                black_box(invoke_array_sort(&udf, &array));
             });
         });
     }
@@ -154,7 +170,7 @@ fn bench_array_sort(c: &mut Criterion) {
             &elements_per_row,
             |b, _| {
                 b.iter(|| {
-                    black_box(array_sort_inner(std::slice::from_ref(&array)).unwrap());
+                    black_box(invoke_array_sort(&udf, &array));
                 });
             },
         );
@@ -168,7 +184,7 @@ fn bench_array_sort(c: &mut Criterion) {
             &elements_per_row,
             |b, _| {
                 b.iter(|| {
-                    black_box(array_sort_inner(std::slice::from_ref(&array)).unwrap());
+                    black_box(invoke_array_sort(&udf, &array));
                 });
             },
         );
