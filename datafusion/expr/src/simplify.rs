@@ -45,7 +45,7 @@ impl Default for SimplifyContext {
         Self {
             schema: Arc::new(DFSchema::empty()),
             query_execution_start_time: None,
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         }
     }
 }

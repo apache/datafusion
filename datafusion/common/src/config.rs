@@ -36,6 +36,7 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 #[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -1382,10 +1383,19 @@ impl ConfigField for ConfigOptions {
 /// (FFI) based configuration extensions.
 pub const DATAFUSION_FFI_CONFIG_NAMESPACE: &str = "datafusion_ffi";
 
+/// Global default configuration options
+static DEFAULT_CONFIG: LazyLock<Arc<ConfigOptions>> =
+    LazyLock::new(|| Arc::new(ConfigOptions::new()));
+
 impl ConfigOptions {
     /// Creates a new [`ConfigOptions`] with default values
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Return a reference to the default configuration options
+    pub fn default_arc() -> Arc<Self> {
+        Arc::clone(&DEFAULT_CONFIG)
     }
 
     /// Set extensions to provided value
