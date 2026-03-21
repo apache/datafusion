@@ -36,6 +36,9 @@ use datafusion_physical_plan::{
 use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
+use crate::file_stream::{
+    FileStreamBuilder, SharedFileStreamState, shared_file_stream_state_for,
+};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, Result, Statistics};
@@ -43,6 +46,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -266,6 +270,179 @@ pub struct DataSourceExec {
     cache: Arc<PlanProperties>,
 }
 
+/// `FileScanConfig` wrapper that shares one `SharedFileStreamState` across all
+/// sibling `FileStream`s opened by the same `DataSourceExec`.
+///
+/// This keeps cross-partition I/O budgeting and ready-work stealing truly
+/// shared at runtime instead of each partition constructing its own fallback
+/// local scheduler state.
+#[derive(Clone, Debug)]
+struct SharedStateFileScanConfig {
+    config: FileScanConfig,
+    shared_file_stream_state: SharedFileStreamState,
+}
+
+impl SharedStateFileScanConfig {
+    fn new(config: FileScanConfig) -> Self {
+        let shared_file_stream_state = shared_file_stream_state_for(&config);
+        Self {
+            config,
+            shared_file_stream_state,
+        }
+    }
+}
+
+impl DisplayAs for SharedStateFileScanConfig {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        DataSource::fmt_as(&self.config, t, f)
+    }
+}
+
+impl DataSource for SharedStateFileScanConfig {
+    fn open(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.config.object_store_url)?;
+        let batch_size = self
+            .config
+            .batch_size
+            .unwrap_or_else(|| context.session_config().batch_size());
+
+        let source = self.config.file_source.with_batch_size(batch_size);
+        let morselizer =
+            source.create_morselizer(object_store, &self.config, partition)?;
+
+        let stream = FileStreamBuilder::new_with_morselizer(
+            &self.config,
+            partition,
+            morselizer,
+            source.metrics(),
+        )
+        .with_shared_state(self.shared_file_stream_state.clone())
+        .build()?;
+        Ok(Box::pin(cooperative(stream)))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        DataSource::fmt_as(&self.config, t, f)
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+        output_ordering: Option<LexOrdering>,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        Ok(self
+            .config
+            .repartitioned(
+                target_partitions,
+                repartition_file_min_size,
+                output_ordering,
+            )?
+            .map(wrap_file_scan_shared_state))
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        self.config.output_partitioning()
+    }
+
+    fn eq_properties(&self) -> EquivalenceProperties {
+        self.config.eq_properties()
+    }
+
+    fn scheduling_type(&self) -> SchedulingType {
+        self.config.scheduling_type()
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        self.config.partition_statistics(partition)
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
+        self.config
+            .with_fetch(limit)
+            .map(wrap_file_scan_shared_state)
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.config.fetch()
+    }
+
+    fn metrics(&self) -> ExecutionPlanMetricsSet {
+        self.config.metrics()
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        Ok(self
+            .config
+            .try_swapping_with_projection(projection)?
+            .map(wrap_file_scan_shared_state))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        let result = self.config.try_pushdown_filters(filters, config)?;
+        Ok(FilterPushdownPropagation {
+            filters: result.filters,
+            updated_node: result.updated_node.map(wrap_file_scan_shared_state),
+        })
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        self.config
+            .try_pushdown_sort(order)?
+            .try_map(|data_source| Ok(wrap_file_scan_shared_state(data_source)))
+    }
+
+    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
+        self.config
+            .with_preserve_order(preserve_order)
+            .map(wrap_file_scan_shared_state)
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.config.apply_expressions(f)
+    }
+
+    fn with_new_state(
+        &self,
+        state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn DataSource>> {
+        self.config
+            .with_new_state(state)
+            .map(wrap_file_scan_shared_state)
+    }
+}
+
+fn wrap_file_scan_shared_state(data_source: Arc<dyn DataSource>) -> Arc<dyn DataSource> {
+    if let Some(config) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+        Arc::new(SharedStateFileScanConfig::new(config.clone()))
+    } else {
+        data_source
+    }
+}
+
 impl DisplayAs for DataSourceExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         match t {
@@ -469,6 +646,7 @@ impl DataSourceExec {
 
     // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
+        let data_source = wrap_file_scan_shared_state(data_source);
         let cache = Self::compute_properties(&data_source);
         Self {
             data_source,
@@ -482,6 +660,7 @@ impl DataSourceExec {
     }
 
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
+        let data_source = wrap_file_scan_shared_state(data_source);
         self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
         self

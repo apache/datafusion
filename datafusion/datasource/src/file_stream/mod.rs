@@ -82,7 +82,9 @@ fn target_datasource_outstanding_ios(num_partitions: usize) -> usize {
 
 /// Build a default shared state object for streams created directly from a
 /// `FileScanConfig`.
-fn default_shared_file_stream_state(config: &FileScanConfig) -> SharedFileStreamState {
+pub(crate) fn shared_file_stream_state_for(
+    config: &FileScanConfig,
+) -> SharedFileStreamState {
     SharedFileStreamState::new(
         target_datasource_outstanding_ios(config.file_groups.len()),
         if config.preserve_order {
@@ -363,7 +365,7 @@ impl<'a> FileStreamBuilder<'a> {
     pub fn build(self) -> Result<FileStream> {
         let shared_file_stream_state = self
             .shared_file_stream_state
-            .unwrap_or_else(|| default_shared_file_stream_state(self.config));
+            .unwrap_or_else(|| shared_file_stream_state_for(self.config));
         let projected_schema = self.config.projected_schema()?;
         let file_group = self.config.file_groups[self.partition].clone();
         let stream_id = shared_file_stream_state.register_stream();
@@ -553,8 +555,11 @@ impl FileStream {
     /// while formats that need metadata I/O will populate `waiting_planners`.
     fn start_next_files(&mut self) -> Result<()> {
         let max_buffered_morsels = max_buffered_morsels();
-        let local_planner_target =
-            self.shared_file_stream_state.max_outstanding_ios().max(1);
+        // Keep local file admission bounded per stream. The shared state
+        // controls the total outstanding I/O budget across sibling streams,
+        // but using that global budget as a per-stream admission target causes
+        // each stream to eagerly admit far too many files and planners.
+        let local_planner_target = DEFAULT_OUTSTANDING_IOS_PER_PARTITION.max(1);
         while self.queues.planner_count() < local_planner_target {
             // In ordered mode, do not admit later files while there is any
             // earlier file work still buffered, waiting on I/O, or actively
