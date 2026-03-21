@@ -18,7 +18,7 @@
 //! End-to-end SQL tests for the multi-`COUNT(DISTINCT)` logical optimizer rewrite.
 
 use super::*;
-use arrow::array::{Int32Array, StringArray};
+use arrow::array::{Float64Array, Int32Array, StringArray};
 use datafusion::common::test_util::batches_to_sort_string;
 use datafusion_catalog::MemTable;
 
@@ -128,6 +128,80 @@ async fn multi_count_distinct_two_group_keys_matches_expected() -> Result<()> {
          | 1  | 1  | 1  | 2  |\n\
          | 1  | 2  | 1  | 1  |\n\
          +----+----+----+----+"
+    );
+    Ok(())
+}
+
+/// `COUNT(DISTINCT lower(b))` with `'Abc'` / `'aBC'`: distinct is on the **lowered** value (one bucket).
+/// Two `COUNT(DISTINCT …)` so the rewrite applies; semantics match plain aggregation.
+#[tokio::test]
+async fn multi_count_distinct_lower_matches_expected_case_collapsing() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("g", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1])),
+            Arc::new(StringArray::from(vec!["Abc", "aBC"])),
+            Arc::new(StringArray::from(vec!["x", "y"])),
+        ],
+    )?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let sql = "SELECT g, COUNT(DISTINCT lower(b)) AS lb, COUNT(DISTINCT c) AS cc \
+               FROM t GROUP BY g";
+    let batches = ctx.sql(sql).await?.collect().await?;
+    let out = batches_to_sort_string(&batches);
+
+    assert_eq!(
+        out,
+        "+---+----+----+\n\
+         | g | lb | cc |\n\
+         +---+----+----+\n\
+         | 1 | 1  | 2  |\n\
+         +---+----+----+"
+    );
+    Ok(())
+}
+
+/// `COUNT(DISTINCT CAST(x AS INT))` with `1.2` and `1.3`: both truncate to `1` → one distinct.
+/// Exercises the same “expression in distinct, not raw column” path as `CAST` in the rule.
+#[tokio::test]
+async fn multi_count_distinct_cast_float_to_int_collapses_nearby_values() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("g", DataType::Int32, false),
+        Field::new("x", DataType::Float64, false),
+        Field::new("y", DataType::Float64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1])),
+            Arc::new(Float64Array::from(vec![1.2, 1.3])),
+            Arc::new(Float64Array::from(vec![10.0, 20.0])),
+        ],
+    )?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let sql = "SELECT g, COUNT(DISTINCT CAST(x AS INT)) AS cx, COUNT(DISTINCT CAST(y AS INT)) AS cy \
+               FROM t GROUP BY g";
+    let batches = ctx.sql(sql).await?.collect().await?;
+    let out = batches_to_sort_string(&batches);
+
+    assert_eq!(
+        out,
+        "+---+----+----+\n\
+         | g | cx | cy |\n\
+         +---+----+----+\n\
+         | 1 | 1  | 2  |\n\
+         +---+----+----+"
     );
     Ok(())
 }
