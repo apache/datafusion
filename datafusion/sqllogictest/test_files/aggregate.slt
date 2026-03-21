@@ -2292,7 +2292,7 @@ SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FRO
 a 73
 b 68
 c 122
-d 124
+d 125
 e 115
 
 
@@ -2303,7 +2303,7 @@ SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GR
 a 73
 b 68
 c 122
-d 124
+d 125
 e 115
 
 
@@ -2314,7 +2314,7 @@ SELECT c1, approx_percentile_cont(c2, 0.95) AS c2, approx_percentile_cont(c3, 0.
 a 5 73
 b 5 68
 c 5 122
-d 5 124
+d 5 125
 e 5 115
 
 # error is unique to this UDAF
@@ -2345,7 +2345,7 @@ SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3
 a 73
 b 68
 c 122
-d 124
+d 125
 e 115
 
 # csv_query_approx_percentile_cont_with_weight alternate syntax
@@ -2355,7 +2355,7 @@ SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggreg
 a 73
 b 68
 c 122
-d 124
+d 125
 e 115
 
 
@@ -2375,7 +2375,7 @@ SELECT c1, approx_percentile_cont(0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p9
 a 73
 b 68
 c 122
-d 124
+d 125
 e 115
 
 query TI

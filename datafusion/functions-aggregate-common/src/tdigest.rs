@@ -443,6 +443,19 @@ impl TDigest {
                 return self.max();
             }
 
+            // If rank falls in the upper half of the last centroid, return max directly.
+            // Without this, interpolation at the last centroid boundary can
+            // produce p90 > p99 on sparse data with heavy compression (small max_size).
+            // Guard against infinite count (e.g. +Inf weights with NaN values)
+            // where this comparison would incorrectly short-circuit NaN propagation.
+            if self.count.is_finite() {
+                let last_weight =
+                    self.centroids.last().map(|c| c.weight()).unwrap_or(0.0);
+                if rank >= self.count - last_weight / 2.0 {
+                    return self.max();
+                }
+            }
+
             pos = 0;
             t = self.count;
 
@@ -733,6 +746,27 @@ mod tests {
         assert_error_bounds!(t, quantile = 0.0, want = 1.0);
         assert_error_bounds!(t, quantile = 0.5, want = 500.0);
         assert_state_roundtrip!(t);
+    }
+
+    // On sparse data, higher quantiles must not return lower values than lower quantiles.
+    #[test]
+    fn test_sparse_dataset_quantile_ordering() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 50.0, 100.0, 1000.0];
+        let t = TDigest::new(100);
+        let t = t.merge_unsorted_f64(values);
+
+        let p50 = t.estimate_quantile(0.5);
+        let p90 = t.estimate_quantile(0.9);
+        let p99 = t.estimate_quantile(0.99);
+
+        assert!(p50 <= p90, "p50 ({p50}) should be <= p90 ({p90})");
+        assert!(p90 <= p99, "p90 ({p90}) should be <= p99 ({p99})");
+        assert_eq!(p50, 6.25, "p50 should interpolate between 5 and 10");
+        assert_eq!(p90, 550.0, "p90 should interpolate between 100 and 1000");
+        assert_eq!(
+            p99, 1000.0,
+            "p99 rank exceeds upper half of last centroid, should return max"
+        );
     }
 
     #[test]
