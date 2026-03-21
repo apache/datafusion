@@ -151,10 +151,11 @@ mod tests {
             Some(tz.to_string())
         };
         let schema = Arc::new(DFSchema::empty());
-        SimplifyContext::default()
+        SimplifyContext::builder()
             .with_schema(schema)
             .with_config_options(Arc::new(config))
             .with_query_execution_start_time(Some(start_time))
+            .build()
     }
 
     #[test]
