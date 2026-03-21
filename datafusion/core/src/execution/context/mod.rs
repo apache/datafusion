@@ -3012,23 +3012,20 @@ mod tests {
     }
 
     impl PlanObserver for TestPlanObserver {
-        fn plan_created(&self, _id: String, sql: Option<String>) -> Result<()> {
-            let Some(sql) = sql else {
-                return Ok(());
-            };
-            let fd = &mut fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.output)?;
-            writeln!(fd, "QUERY: {sql}")?;
+        fn plan_created(
+            &self,
+            _id: &str,
+            _logical_plan: &LogicalPlan,
+            _physical_plan: &Arc<dyn ExecutionPlan>,
+        ) -> Result<()> {
             Ok(())
         }
 
         fn plan_executed(
             &self,
-            _id: String,
+            _id: &str,
             explain_result: RecordBatch,
-            _duration_nanos: u128,
+            _duration: Duration,
         ) -> Result<()> {
             let analyze = arrow::util::pretty::pretty_format_batches(&[explain_result])?
                 .to_string();
@@ -3099,11 +3096,9 @@ mod tests {
         // the first output comes from the "set" query
         assert_snapshot!(fs::read_to_string(&output_path)?,
         @r"
-        QUERY: SELECT *
         EXPLAIN:
          EmptyExec
 
-        QUERY: SELECT t.k, t.v FROM t WHERE ((t.k = 1) OR (t.k = 2)) ORDER BY t.v DESC NULLS FIRST LIMIT 5
         EXPLAIN:
          SortExec
            FilterExec
@@ -3119,17 +3114,14 @@ mod tests {
             .await?;
         assert_snapshot!(fs::read_to_string(&output_path)?,
         @r"
-        QUERY: SELECT *
         EXPLAIN:
          EmptyExec
 
-        QUERY: SELECT t.k, t.v FROM t WHERE ((t.k = 1) OR (t.k = 2)) ORDER BY t.v DESC NULLS FIRST LIMIT 5
         EXPLAIN:
          SortExec
            FilterExec
              DataSourceExec
 
-        QUERY: SELECT t.k FROM t WHERE (t.v < 11)
         EXPLAIN:
          FilterExec
            DataSourceExec
@@ -3146,17 +3138,14 @@ mod tests {
             .await?;
         assert_snapshot!(fs::read_to_string(&output_path)?,
         @r"
-        QUERY: SELECT *
         EXPLAIN:
          EmptyExec
 
-        QUERY: SELECT t.k, t.v FROM t WHERE ((t.k = 1) OR (t.k = 2)) ORDER BY t.v DESC NULLS FIRST LIMIT 5
         EXPLAIN:
          SortExec
            FilterExec
              DataSourceExec
 
-        QUERY: SELECT t.k FROM t WHERE (t.v < 11)
         EXPLAIN:
          FilterExec
            DataSourceExec

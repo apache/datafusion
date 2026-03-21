@@ -1208,8 +1208,10 @@ config_namespace! {
         pub analyze_level: ExplainAnalyzeLevel, default = ExplainAnalyzeLevel::Dev
 
         /// Whether to enable the `auto_explain` mode. In this mode, the callbacks defined by the
-        /// [`PlanObserver`] are called. By default, the [`SessionContext`] uses the
-        /// [`DefaultPlanObserver`] implementation.
+        /// `PlanObserver` are called. By default, the `SessionContext` uses the
+        /// `DefaultPlanObserver` implementation, which logs the EXPLAIN ANALYZE output using the
+        /// `log` crate or a file path provided by the user. The implementation used can be set
+        /// using the `SessionContext::with_plan_observer` method.
         pub auto_explain: bool, default = false
     }
 }

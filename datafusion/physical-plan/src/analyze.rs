@@ -35,7 +35,6 @@ use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_execution::plan_observer::PlanObserver;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -56,10 +55,25 @@ pub struct AnalyzeExec {
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
     cache: Arc<PlanProperties>,
-    /// Observer to call when the plan is executed (only set for the auto explain mode).
-    plan_observer: Option<Arc<dyn PlanObserver>>,
-    /// Identifier to pass when calling the plan observer.
-    plan_id: Option<String>,
+    /// If Some, passes the output of the analyze once it completes, as well as the duration.
+    callback: Option<AnalyzeCallback>,
+    /// If true, returns the inner batches instead of the analyze result.
+    /// Can be used together with the `callback` to keep track of the analyze result without
+    /// having to return it as the plan's output.
+    return_inner: bool,
+}
+
+/// Optionally used by the `AnalyzeExec` operator to callback it with the result.
+#[derive(Clone)]
+pub struct AnalyzeCallback {
+    pub callback:
+        Arc<dyn Fn(RecordBatch, std::time::Duration) -> Result<()> + Send + Sync>,
+}
+
+impl std::fmt::Debug for AnalyzeCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AnalyzeCallback")
+    }
 }
 
 impl AnalyzeExec {
@@ -79,8 +93,8 @@ impl AnalyzeExec {
             input,
             schema,
             cache: Arc::new(cache),
-            plan_observer: None,
-            plan_id: None,
+            callback: None,
+            return_inner: false,
         }
     }
 
@@ -112,15 +126,16 @@ impl AnalyzeExec {
         )
     }
 
-    /// Enables the auto explain mode. In this mode, the result of this Analyze operator is passed
-    /// to the [`PlanObserver`] received, while the child's output batches are returned instead.
-    pub fn enable_auto_explain(
-        &mut self,
-        plan_observer: Arc<dyn PlanObserver>,
-        plan_id: String,
-    ) {
-        self.plan_observer = Some(plan_observer);
-        self.plan_id = Some(plan_id);
+    /// Sets a function to call after the analyze has been computed, passing the result and the
+    /// duration.
+    pub fn set_callback(&mut self, callback: AnalyzeCallback) {
+        self.callback = Some(callback);
+    }
+
+    /// Sets whether to return the inner batches (true) or return the analyze's batches (false;
+    /// default).
+    pub fn set_return_inner(&mut self, return_inner: bool) {
+        self.return_inner = return_inner;
     }
 }
 
@@ -183,9 +198,9 @@ impl ExecutionPlan for AnalyzeExec {
             Arc::clone(&self.schema),
         );
 
-        if self.plan_observer.is_some() {
-            plan.plan_observer = self.plan_observer.clone();
-            plan.plan_id = self.plan_id.clone();
+        plan.return_inner = self.return_inner;
+        if self.callback.is_some() {
+            plan.callback.clone_from(&self.callback);
         }
 
         Ok(Arc::new(plan))
@@ -231,16 +246,16 @@ impl ExecutionPlan for AnalyzeExec {
         let mut input_stream = builder.build();
 
         let inner_schema = Arc::clone(&self.input.schema());
-        let plan_observer = self.plan_observer.clone();
-        let plan_id = self.plan_id.clone();
+        let callback = self.callback.clone();
+        let return_inner = self.return_inner;
 
         let output = async move {
             let mut batches = vec![];
             let mut total_rows = 0;
             while let Some(batch) = input_stream.next().await.transpose()? {
                 total_rows += batch.num_rows();
-                // in the auto_explain mode, store the input batches to later return them
-                if plan_observer.is_some() {
+                // when return_inner is true, store the inner batches to later return them
+                if return_inner {
                     batches.push(batch);
                 }
             }
@@ -256,19 +271,18 @@ impl ExecutionPlan for AnalyzeExec {
                 &metric_types,
             )?;
 
-            if let Some(plan_observer) = plan_observer {
-                plan_observer.plan_executed(
-                    plan_id.unwrap_or_else(|| "".to_owned()),
-                    out,
-                    duration.as_nanos(),
-                )?;
+            if let Some(callback) = callback {
+                (callback.callback)(out.clone(), duration)?;
+            }
+
+            if return_inner {
                 concat_batches(&inner_schema, &batches).map_err(DataFusionError::from)
             } else {
                 Ok(out)
             }
         };
 
-        let output_schema = if self.plan_observer.is_some() {
+        let output_schema = if self.return_inner {
             &self.input.schema()
         } else {
             &self.schema

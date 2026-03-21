@@ -20,6 +20,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
@@ -97,6 +98,7 @@ use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::analyze::AnalyzeCallback;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
@@ -107,7 +109,6 @@ use datafusion_physical_plan::unnest::ListUnnest;
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
-use datafusion_sql::unparser::Unparser;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{Itertools, multiunzip};
 use log::debug;
@@ -282,15 +283,12 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         if session_state.config().options().explain.auto_explain
             && let Some(plan_observer) = &session_state.plan_observer()
         {
-            let id = uuid::Uuid::new_v4().to_string();
-            let sql = if let Ok(stmt) = Unparser::default().plan_to_sql(logical_plan) {
-                Some(stmt.to_string())
-            } else {
-                None
-            };
-            plan_observer.plan_created(id.clone(), sql)?;
-            plan =
-                self.add_auto_explain(plan, session_state, Arc::clone(plan_observer), id);
+            plan = self.setup_auto_explain(
+                plan,
+                logical_plan,
+                session_state,
+                plan_observer,
+            )?;
         }
 
         Ok(plan)
@@ -1854,13 +1852,16 @@ impl DefaultPhysicalPlanner {
     }
 
     /// Returns a new plan wrapped in an `AnalyzeExec` auto_explain operator.
-    fn add_auto_explain(
+    fn setup_auto_explain(
         &self,
-        plan: Arc<dyn ExecutionPlan>,
+        physical_plan: Arc<dyn ExecutionPlan>,
+        logical_plan: &LogicalPlan,
         session_state: &SessionState,
-        plan_observer: Arc<dyn PlanObserver>,
-        id: String,
-    ) -> Arc<dyn ExecutionPlan> {
+        plan_observer: &Arc<dyn PlanObserver>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let id = uuid::Uuid::new_v4().to_string();
+        plan_observer.plan_created(id.as_str(), logical_plan, &physical_plan)?;
+
         let options = session_state.config().options();
         let show_statistics = options.explain.show_statistics;
         let analyze_level = options.explain.analyze_level;
@@ -1868,16 +1869,24 @@ impl DefaultPhysicalPlanner {
             ExplainAnalyzeLevel::Summary => vec![MetricType::SUMMARY],
             ExplainAnalyzeLevel::Dev => vec![MetricType::SUMMARY, MetricType::DEV],
         };
-
         let mut plan = AnalyzeExec::new(
             false,
             show_statistics,
             metric_types,
-            plan,
+            physical_plan,
             LogicalPlan::explain_schema(),
         );
-        plan.enable_auto_explain(plan_observer, id);
-        Arc::new(plan)
+
+        let plan_observer = Arc::clone(plan_observer);
+        let callback = AnalyzeCallback {
+            callback: Arc::new(move |explain_result: RecordBatch, duration: Duration| {
+                plan_observer.plan_executed(id.as_str(), explain_result, duration)
+            }),
+        };
+        plan.set_callback(callback);
+        plan.set_return_inner(true);
+
+        Ok(Arc::new(plan))
     }
 }
 
