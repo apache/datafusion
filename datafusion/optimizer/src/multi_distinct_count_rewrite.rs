@@ -192,19 +192,26 @@ impl OptimizerRule for MultiDistinctCountRewrite {
                 e.clone().alias_qualified(q.cloned(), f.name())
             })
             .collect();
-        let base_plan = LogicalPlan::Aggregate(Aggregate::try_new(
-            Arc::clone(&input),
-            group_expr.clone(),
-            base_aggr_exprs,
-        )?);
 
-        let base_alias = config.alias_generator().next("mdc_base");
-        let base_aliased = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-            Arc::new(base_plan),
-            &base_alias,
-        )?);
+        // `Aggregate` must have at least one of grouping exprs or aggregate exprs.
+        // Global multi-`COUNT(DISTINCT)` (no GROUP BY, no other aggs) has neither — skip a base node.
+        let base_plan_opt: Option<Arc<LogicalPlan>> =
+            if group_expr.is_empty() && other_list.is_empty() {
+                None
+            } else {
+                let base_plan = LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::clone(&input),
+                    group_expr.clone(),
+                    base_aggr_exprs,
+                )?);
+                let base_alias = config.alias_generator().next("mdc_base");
+                Some(Arc::new(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                    Arc::new(base_plan),
+                    &base_alias,
+                )?)))
+            };
 
-        let mut current = Arc::new(base_aliased);
+        let mut current = base_plan_opt;
 
         for (distinct_arg, schema_aggr_idx, _) in distinct_list.iter() {
             // COUNT(DISTINCT x) ignores NULLs; filter before grouping by x.
@@ -247,32 +254,38 @@ impl OptimizerRule for MultiDistinctCountRewrite {
                 &alias_name,
             )?);
 
-            let left_schema = current.schema();
-            let right_schema = branch_aliased.schema();
-            let join_keys: Vec<(Expr, Expr)> = (0..group_size)
-                .map(|i| {
-                    let (lq, lf) = left_schema.qualified_field(i);
-                    let (rq, rf) = right_schema.qualified_field(i);
-                    (
-                        Expr::Column(Column::new(lq.cloned(), lf.name())),
-                        Expr::Column(Column::new(rq.cloned(), rf.name())),
-                    )
-                })
-                .collect();
+            current = match current {
+                None => Some(Arc::new(branch_aliased)),
+                Some(prev) => {
+                    let left_schema = prev.schema();
+                    let right_schema = branch_aliased.schema();
+                    let join_keys: Vec<(Expr, Expr)> = (0..group_size)
+                        .map(|i| {
+                            let (lq, lf) = left_schema.qualified_field(i);
+                            let (rq, rf) = right_schema.qualified_field(i);
+                            (
+                                Expr::Column(Column::new(lq.cloned(), lf.name())),
+                                Expr::Column(Column::new(rq.cloned(), rf.name())),
+                            )
+                        })
+                        .collect();
 
-            let join = Join::try_new(
-                current,
-                Arc::new(branch_aliased),
-                join_keys,
-                None,
-                JoinType::Inner,
-                JoinConstraint::On,
-                NullEquality::NullEqualsNothing,
-                false,
-            )?;
-            current = Arc::new(LogicalPlan::Join(join));
+                    let join = Join::try_new(
+                        prev,
+                        Arc::new(branch_aliased),
+                        join_keys,
+                        None,
+                        JoinType::Inner,
+                        JoinConstraint::On,
+                        NullEquality::NullEqualsNothing,
+                        false,
+                    )?;
+                    Some(Arc::new(LogicalPlan::Join(join)))
+                }
+            };
         }
 
+        let current = current.expect("distinct_list non-empty implies at least one branch");
         let join_schema = current.schema();
 
         let mut proj_exprs: Vec<Expr> = vec![];
@@ -358,6 +371,34 @@ mod tests {
         assert!(
             s.matches("SubqueryAlias: mdc_d").count() >= 2,
             "expected distinct branches, got:\n{s}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rewrites_global_three_count_distinct() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    count_distinct(col("a")),
+                    count_distinct(col("b")),
+                    count_distinct(col("c")),
+                ],
+            )?
+            .build()?;
+
+        let optimized =
+            optimize_with_rule(plan, Arc::new(MultiDistinctCountRewrite::new()))?;
+        let s = optimized.display_indent_schema().to_string();
+        assert!(
+            s.contains("Cross Join") || s.contains("Inner Join"),
+            "expected join rewrite for global multi-distinct, got:\n{s}"
+        );
+        assert!(
+            !s.contains("mdc_base"),
+            "global-only rewrite should not use mdc_base, got:\n{s}"
         );
         Ok(())
     }
