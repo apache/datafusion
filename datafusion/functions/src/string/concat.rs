@@ -257,7 +257,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     builder.append_offset();
                 }
 
-                let string_array = builder.finish(None);
+                let string_array = builder.finish(None)?;
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             DataType::Utf8View => {
@@ -281,7 +281,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     builder.append_offset();
                 }
 
-                let string_array = builder.finish(None);
+                let string_array = builder.finish(None)?;
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             _ => unreachable!(),

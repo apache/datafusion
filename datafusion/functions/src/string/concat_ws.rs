@@ -355,7 +355,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     }
                     builder.append_offset();
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
             }
             _ => {
                 let mut builder = StringArrayBuilder::with_capacity(len, data_size);
@@ -376,7 +376,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     }
                     builder.append_offset();
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls())?)))
             }
         }
     }
