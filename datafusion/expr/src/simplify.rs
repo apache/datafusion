@@ -65,7 +65,7 @@ impl SimplifyContext {
     }
 
     #[deprecated(
-        since = "53.1.0",
+        since = "54.0.0",
         note = "Use SimplifyContextBuilder if you intend to use non-default values."
     )]
     /// Set the [`ConfigOptions`] for this context
@@ -75,7 +75,7 @@ impl SimplifyContext {
     }
 
     #[deprecated(
-        since = "53.1.0",
+        since = "54.0.0",
         note = "Use SimplifyContextBuilder if you intend to use non-default values."
     )]
     /// Set the schema for this context
@@ -85,7 +85,7 @@ impl SimplifyContext {
     }
 
     #[deprecated(
-        since = "53.1.0",
+        since = "54.0.0",
         note = "Use SimplifyContextBuilder if you intend to use non-default values."
     )]
     /// Set the query execution start time
@@ -98,7 +98,7 @@ impl SimplifyContext {
     }
 
     #[deprecated(
-        since = "53.1.0",
+        since = "54.0.0",
         note = "Use SimplifyContextBuilder if you intend to use non-default values."
     )]
     /// Set the query execution start to the current time
