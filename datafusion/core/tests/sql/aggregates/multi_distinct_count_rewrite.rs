@@ -56,3 +56,78 @@ async fn multi_count_distinct_matches_expected_with_nulls() -> Result<()> {
     );
     Ok(())
 }
+
+/// `COUNT(*)` + two `COUNT(DISTINCT …)` per group (BI-style); must match non-rewritten semantics.
+#[tokio::test]
+async fn multi_count_distinct_with_count_star_matches_expected() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("g", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+        Field::new("c", DataType::Int32, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1, 1])),
+            Arc::new(Int32Array::from(vec![1, 2, 1])),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+        ],
+    )?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let sql = "SELECT g, COUNT(*) AS n, COUNT(DISTINCT b) AS db, COUNT(DISTINCT c) AS dc \
+               FROM t GROUP BY g";
+    let batches = ctx.sql(sql).await?.collect().await?;
+    let out = batches_to_sort_string(&batches);
+
+    assert_eq!(
+        out,
+        "+---+---+----+----+\n\
+         | g | n | db | dc |\n\
+         +---+---+----+----+\n\
+         | 1 | 3 | 2  | 3  |\n\
+         +---+---+----+----+"
+    );
+    Ok(())
+}
+
+/// Multiple `GROUP BY` keys: join must align on all keys.
+#[tokio::test]
+async fn multi_count_distinct_two_group_keys_matches_expected() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("g1", DataType::Int32, false),
+        Field::new("g2", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+        Field::new("c", DataType::Int32, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1, 1])),
+            Arc::new(Int32Array::from(vec![1, 1, 2])),
+            Arc::new(Int32Array::from(vec![1, 1, 3])),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+        ],
+    )?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let sql = "SELECT g1, g2, COUNT(DISTINCT b) AS db, COUNT(DISTINCT c) AS dc \
+               FROM t GROUP BY g1, g2";
+    let batches = ctx.sql(sql).await?.collect().await?;
+    let out = batches_to_sort_string(&batches);
+
+    assert_eq!(
+        out,
+        "+----+----+----+----+\n\
+         | g1 | g2 | db | dc |\n\
+         +----+----+----+----+\n\
+         | 1  | 1  | 1  | 2  |\n\
+         | 1  | 2  | 1  | 1  |\n\
+         +----+----+----+----+"
+    );
+    Ok(())
+}

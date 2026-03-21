@@ -25,7 +25,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
-    Column, JoinConstraint, NullEquality, Result, tree_node::Transformed,
+    Column, JoinConstraint, NullEquality, Result, internal_err, tree_node::Transformed,
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, ScalarFunction};
@@ -205,10 +205,9 @@ impl OptimizerRule for MultiDistinctCountRewrite {
                     base_aggr_exprs,
                 )?);
                 let base_alias = config.alias_generator().next("mdc_base");
-                Some(Arc::new(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                    Arc::new(base_plan),
-                    &base_alias,
-                )?)))
+                Some(Arc::new(LogicalPlan::SubqueryAlias(
+                    SubqueryAlias::try_new(Arc::new(base_plan), &base_alias)?,
+                )))
             };
 
         let mut current = base_plan_opt;
@@ -285,8 +284,11 @@ impl OptimizerRule for MultiDistinctCountRewrite {
             };
         }
 
-        let current = current.expect("distinct_list non-empty implies at least one branch");
+        let current =
+            current.expect("distinct_list non-empty implies at least one branch");
         let join_schema = current.schema();
+
+        let base_field_count = group_size + other_list.len();
 
         let mut proj_exprs: Vec<Expr> = vec![];
         for i in 0..group_size {
@@ -296,23 +298,36 @@ impl OptimizerRule for MultiDistinctCountRewrite {
             let c = Expr::Column(Column::new(join_q.cloned(), join_f.name()));
             proj_exprs.push(c.alias_qualified(q.cloned(), orig_name));
         }
-        for (field_idx, (_, schema_aggr_idx)) in other_list.iter().enumerate() {
-            let (q, f) = schema.qualified_field(*schema_aggr_idx);
+        // Preserve original aggregate column order (distinct and non-distinct may be interleaved).
+        for aggr_i in 0..aggr_expr.len() {
+            let schema_idx = group_size + aggr_i;
+            let (q, f) = schema.qualified_field(schema_idx);
             let orig_name = f.name();
-            let join_idx = group_size + field_idx;
-            let (join_q, join_f) = join_schema.qualified_field(join_idx);
-            let c = Expr::Column(Column::new(join_q.cloned(), join_f.name()));
-            proj_exprs.push(c.alias_qualified(q.cloned(), orig_name));
-        }
-        let base_field_count = group_size + other_list.len();
-        for (idx, (_, schema_aggr_idx, _)) in distinct_list.iter().enumerate() {
-            let (q, f) = schema.qualified_field(*schema_aggr_idx);
-            let orig_name = f.name();
-            let branch_start_idx = base_field_count + idx * (group_size + 1);
-            let branch_aggr_idx = branch_start_idx + group_size;
-            let (join_q, join_f) = join_schema.qualified_field(branch_aggr_idx);
-            let c = Expr::Column(Column::new(join_q.cloned(), join_f.name()));
-            proj_exprs.push(c.alias_qualified(q.cloned(), orig_name));
+
+            if let Some((dist_idx, (_, _, _))) = distinct_list
+                .iter()
+                .enumerate()
+                .find(|(_, (_, idx, _))| *idx == schema_idx)
+            {
+                let branch_start_idx = base_field_count + dist_idx * (group_size + 1);
+                let branch_aggr_idx = branch_start_idx + group_size;
+                let (join_q, join_f) = join_schema.qualified_field(branch_aggr_idx);
+                let c = Expr::Column(Column::new(join_q.cloned(), join_f.name()));
+                proj_exprs.push(c.alias_qualified(q.cloned(), orig_name));
+            } else if let Some((other_idx, _)) = other_list
+                .iter()
+                .enumerate()
+                .find(|(_, (_, idx))| *idx == schema_idx)
+            {
+                let join_idx = group_size + other_idx;
+                let (join_q, join_f) = join_schema.qualified_field(join_idx);
+                let c = Expr::Column(Column::new(join_q.cloned(), join_f.name()));
+                proj_exprs.push(c.alias_qualified(q.cloned(), orig_name));
+            } else {
+                return internal_err!(
+                    "aggregate index {aggr_i} (schema index {schema_idx}) is neither distinct nor other"
+                );
+            }
         }
 
         let out = project((*current).clone(), proj_exprs)?;
@@ -327,8 +342,13 @@ mod tests {
     use crate::OptimizerContext;
     use crate::OptimizerRule;
     use crate::test::*;
+    use arrow::datatypes::DataType;
+    use datafusion_expr::GroupingSet;
     use datafusion_expr::LogicalPlan;
+    use datafusion_expr::expr_fn::cast;
+    use datafusion_expr::logical_plan::Aggregate;
     use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
+    use datafusion_expr::{Expr, col};
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct};
 
     fn optimize_with_rule(
@@ -403,12 +423,160 @@ mod tests {
         Ok(())
     }
 
+    /// Grouped query with multiple `COUNT(DISTINCT …)` **and** non-distinct aggregates (typical BI).
+    /// Non-distinct aggs live in `mdc_base`; each distinct column gets a branch + join on keys.
+    #[test]
+    fn rewrites_two_count_distinct_with_non_distinct_count() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_distinct(col("b")),
+                    count_distinct(col("c")),
+                    count(col("a")),
+                ],
+            )?
+            .build()?;
+
+        let optimized =
+            optimize_with_rule(plan, Arc::new(MultiDistinctCountRewrite::new()))?;
+        let s = optimized.display_indent_schema().to_string();
+        assert!(s.contains("Inner Join"), "expected join rewrite, got:\n{s}");
+        assert!(
+            s.contains("SubqueryAlias: mdc_base"),
+            "expected base aggregate for non-distinct aggs, got:\n{s}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_rewrite_two_count_distinct_same_column() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_distinct(col("b")).alias("cd1"),
+                    count_distinct(col("b")).alias("cd2"),
+                ],
+            )?
+            .build()?;
+        let before = plan.display_indent_schema().to_string();
+        let optimized =
+            optimize_with_rule(plan, Arc::new(MultiDistinctCountRewrite::new()))?;
+        let after = optimized.display_indent_schema().to_string();
+        assert_eq!(before, after);
+        Ok(())
+    }
+
     #[test]
     fn does_not_rewrite_single_count_distinct() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
             .build()?;
+        let before = plan.display_indent_schema().to_string();
+        let optimized =
+            optimize_with_rule(plan, Arc::new(MultiDistinctCountRewrite::new()))?;
+        let after = optimized.display_indent_schema().to_string();
+        assert_eq!(before, after);
+        Ok(())
+    }
+
+    #[test]
+    fn rewrites_three_count_distinct_grouped() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_distinct(col("b")),
+                    count_distinct(col("c")),
+                    count_distinct(col("a")),
+                ],
+            )?
+            .build()?;
+
+        let optimized =
+            optimize_with_rule(plan, Arc::new(MultiDistinctCountRewrite::new()))?;
+        let s = optimized.display_indent_schema().to_string();
+        assert!(
+            s.matches("Inner Join").count() >= 2,
+            "expected two joins for three branches, got:\n{s}"
+        );
+        assert!(
+            s.contains("SubqueryAlias: mdc_base"),
+            "expected base aggregate, got:\n{s}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rewrites_interleaved_non_distinct_between_distincts() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_distinct(col("b")),
+                    count(col("a")),
+                    count_distinct(col("c")),
+                ],
+            )?
+            .build()?;
+
+        let optimized =
+            optimize_with_rule(plan, Arc::new(MultiDistinctCountRewrite::new()))?;
+        let s = optimized.display_indent_schema().to_string();
+        assert!(s.contains("Inner Join"), "expected join rewrite, got:\n{s}");
+        assert!(
+            s.contains("SubqueryAlias: mdc_base"),
+            "expected base for middle count(a), got:\n{s}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rewrites_count_distinct_on_cast_exprs() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_distinct(cast(col("b"), DataType::Int64)),
+                    count_distinct(cast(col("c"), DataType::Int64)),
+                ],
+            )?
+            .build()?;
+
+        let optimized =
+            optimize_with_rule(plan, Arc::new(MultiDistinctCountRewrite::new()))?;
+        let s = optimized.display_indent_schema().to_string();
+        assert!(s.contains("Inner Join"), "expected join rewrite, got:\n{s}");
+        assert!(
+            s.contains("Filter: CAST(test.b AS Int64) IS NOT NULL"),
+            "expected null filter on cast(b), got:\n{s}"
+        );
+        assert!(
+            s.contains("Filter: CAST(test.c AS Int64) IS NOT NULL"),
+            "expected null filter on cast(c), got:\n{s}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_rewrite_grouping_sets_multi_distinct() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let group_expr = vec![Expr::GroupingSet(GroupingSet::GroupingSets(vec![vec![
+            col("a"),
+        ]]))];
+        let aggr_expr = vec![count_distinct(col("b")), count_distinct(col("c"))];
+        let plan = LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(table_scan),
+            group_expr,
+            aggr_expr,
+        )?);
         let before = plan.display_indent_schema().to_string();
         let optimized =
             optimize_with_rule(plan, Arc::new(MultiDistinctCountRewrite::new()))?;
