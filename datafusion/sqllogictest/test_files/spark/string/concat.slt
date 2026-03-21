@@ -94,3 +94,37 @@ query TT
 SELECT concat_ws('|', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')), arrow_typeof(concat_ws('|', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')));
 ----
 hello|world Utf8
+
+# Invalid UTF8 binaries for concatenation, scalar case
+# 636166c3a9 = café  , where c3a9 is a char é
+# 68656c6c6f = hello
+query error Execution error: invalid UTF-8 in binary literal
+SELECT concat(x'636166c3', x'68656c6c6f');
+
+statement ok
+create table t as values (x'636166c3', x'68656c6c6f');
+
+# Invalid UTF8 sequence for concatenation, array case
+query error Arrow error: Invalid argument error: Invalid UTF8 sequence at string
+SELECT concat(column1, column2) from t;
+
+statement ok
+drop table t
+
+statement ok
+create table t as values (x'636166c3', x'a968656c6c6f');
+
+# Invalid UTF8 binaries make a valid UTF8 sequence after concatenation, array case
+query T
+SELECT concat(column1, column2) from t;
+----
+caféhello
+
+statement ok
+drop table t
+
+# Invalid UTF8 binaries make a valid UTF8 sequence after concatenation, scalar case
+query T
+SELECT concat(x'636166c3', x'a968656c6c6f');
+----
+caféhello
