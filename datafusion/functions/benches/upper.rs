@@ -35,7 +35,7 @@ fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let upper = string::upper();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     for size in [1024, 4096, 8192] {
         let args = create_args(size, 32);

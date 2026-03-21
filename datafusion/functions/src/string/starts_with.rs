@@ -328,7 +328,7 @@ mod tests {
                 ],
                 number_rows: 4,
                 return_field: Field::new("f", Boolean, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             })
             .unwrap();
 
@@ -368,7 +368,7 @@ mod tests {
                 ],
                 number_rows: 4,
                 return_field: Field::new("f", Boolean, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             })
             .unwrap();
 
@@ -414,7 +414,7 @@ mod tests {
                 ],
                 number_rows: 4,
                 return_field: Field::new("f", Boolean, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             })
             .unwrap();
 

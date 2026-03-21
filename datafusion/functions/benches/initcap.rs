@@ -68,7 +68,7 @@ fn create_unicode_utf8view_args(size: usize) -> Vec<ColumnarValue> {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let initcap = unicode::initcap();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     // Array benchmarks: vary both row count and string length
     for size in [1024, 4096, 8192] {

@@ -67,7 +67,7 @@ fn invoke_repeat_with_args(
         .enumerate()
         .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     string::repeat().invoke_with_args(ScalarFunctionArgs {
         args,
@@ -80,7 +80,7 @@ fn invoke_repeat_with_args(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let repeat_fn = string::repeat();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     // Scalar benchmarks (outside loop)
     c.bench_function("repeat/scalar_utf8", |b| {

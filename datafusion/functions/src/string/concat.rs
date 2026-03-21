@@ -487,7 +487,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatFunc::new().invoke_with_args(args)?;

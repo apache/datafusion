@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let iszero = iszero();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     for size in [1024, 4096, 8192] {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));

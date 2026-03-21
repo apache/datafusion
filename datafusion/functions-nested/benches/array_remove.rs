@@ -80,7 +80,7 @@ fn bench_array_remove_int64(c: &mut Criterion) {
                                 false,
                             )
                             .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
+                            config_options: ConfigOptions::default_arc(),
                         })
                         .unwrap(),
                     )
@@ -121,7 +121,7 @@ fn bench_array_remove_f64(c: &mut Criterion) {
                                 false,
                             )
                             .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
+                            config_options: ConfigOptions::default_arc(),
                         })
                         .unwrap(),
                     )
@@ -162,7 +162,7 @@ fn bench_array_remove_strings(c: &mut Criterion) {
                                 false,
                             )
                             .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
+                            config_options: ConfigOptions::default_arc(),
                         })
                         .unwrap(),
                     )
@@ -203,7 +203,7 @@ fn bench_array_remove_binary(c: &mut Criterion) {
                                 false,
                             )
                             .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
+                            config_options: ConfigOptions::default_arc(),
                         })
                         .unwrap(),
                     )
@@ -244,7 +244,7 @@ fn bench_array_remove_boolean(c: &mut Criterion) {
                                 false,
                             )
                             .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
+                            config_options: ConfigOptions::default_arc(),
                         })
                         .unwrap(),
                     )
@@ -286,7 +286,7 @@ fn bench_array_remove_decimal64(c: &mut Criterion) {
                                 false,
                             )
                             .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
+                            config_options: ConfigOptions::default_arc(),
                         })
                         .unwrap(),
                     )
@@ -329,7 +329,7 @@ fn bench_array_remove_fixed_size_binary(c: &mut Criterion) {
                                 false,
                             )
                             .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
+                            config_options: ConfigOptions::default_arc(),
                         })
                         .unwrap(),
                     )

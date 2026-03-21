@@ -59,7 +59,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 fn bench_array_has(c: &mut Criterion, array_size: usize) {
     let mut group = c.benchmark_group("array_has_i64");
     let list_array = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
     let arg_fields: Vec<Arc<Field>> = vec![
         Field::new("arr", list_array.data_type().clone(), false).into(),
@@ -123,7 +123,7 @@ fn bench_array_has_all(c: &mut Criterion, array_size: usize) {
     let mut group = c.benchmark_group("array_has_all");
     let haystack = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
     let list_type = haystack.data_type().clone();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
     let arg_fields: Vec<Arc<Field>> = vec![
         Field::new("haystack", list_type.clone(), false).into(),
@@ -192,7 +192,7 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
     let mut group = c.benchmark_group("array_has_any");
     let first_arr = create_int64_list_array(NUM_ROWS, array_size, NULL_DENSITY);
     let list_type = first_arr.data_type().clone();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
     let arg_fields: Vec<Arc<Field>> = vec![
         Field::new("first", list_type.clone(), false).into(),
@@ -313,7 +313,7 @@ fn bench_array_has_any(c: &mut Criterion, array_size: usize) {
 
 fn bench_array_has_strings(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_has_strings");
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
 
     let sizes = vec![10, 100, 500];
@@ -371,7 +371,7 @@ fn bench_array_has_strings(c: &mut Criterion) {
 
 fn bench_array_has_all_strings(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_has_all_strings");
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
 
     let sizes = vec![10, 100, 500];
@@ -433,7 +433,7 @@ fn bench_array_has_all_strings(c: &mut Criterion) {
 
 fn bench_array_has_any_strings(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_has_any_strings");
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
 
     let sizes = vec![10, 100, 500];
@@ -550,7 +550,7 @@ fn bench_array_has_any_strings(c: &mut Criterion) {
 /// size while keeping the columnar array small (3 elements per row).
 fn bench_array_has_any_scalar(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_has_any_scalar");
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     let return_field: Arc<Field> = Field::new("result", DataType::Boolean, true).into();
 
     let array_size = 3;

@@ -334,7 +334,7 @@ mod tests {
                 ],
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
-                config_options: Arc::clone(&Arc::new(ConfigOptions::default())),
+                config_options: Arc::clone(&ConfigOptions::default_arc()),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -439,7 +439,7 @@ mod tests {
                 arg_fields,
                 number_rows: 1,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -533,7 +533,7 @@ mod tests {
                 arg_fields,
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -697,7 +697,7 @@ mod tests {
                 arg_fields,
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -725,7 +725,7 @@ mod tests {
                 arg_fields,
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -750,7 +750,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -771,7 +771,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(

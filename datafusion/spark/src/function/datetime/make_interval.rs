@@ -552,7 +552,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Field::new("f", Interval(MonthDayNano), true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
         SparkMakeInterval::new().invoke_with_args(args)
     }

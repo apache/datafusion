@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let decode = encoding::decode();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     for size in [1024, 4096, 8192] {
         let bin_array = Arc::new(create_binary_array::<i32>(size, 0.2));

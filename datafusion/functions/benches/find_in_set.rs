@@ -165,7 +165,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: Arc::clone(&return_field),
-                    config_options: Arc::new(ConfigOptions::default()),
+                    config_options: ConfigOptions::default_arc(),
                 }))
             })
         });
@@ -183,7 +183,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: Arc::clone(&return_field),
-                    config_options: Arc::new(ConfigOptions::default()),
+                    config_options: ConfigOptions::default_arc(),
                 }))
             })
         });
@@ -205,7 +205,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: Arc::clone(&return_field),
-                    config_options: Arc::new(ConfigOptions::default()),
+                    config_options: ConfigOptions::default_arc(),
                 }))
             })
         });
@@ -216,7 +216,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
         let return_field = Arc::new(Field::new("f", DataType::Int32, true));
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         group.bench_function(format!("string_view_len_{str_len}"), |b| {
             b.iter(|| {

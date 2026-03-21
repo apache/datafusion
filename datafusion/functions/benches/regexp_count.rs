@@ -62,7 +62,7 @@ fn invoke_regexp_count_with_args(
         .enumerate()
         .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     regex::regexp_count().invoke_with_args(ScalarFunctionArgs {
         args,

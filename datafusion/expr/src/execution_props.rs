@@ -72,7 +72,7 @@ impl ExecutionProps {
 
     #[deprecated(since = "50.0.0", note = "Use mark_start_execution instead")]
     pub fn start_execution(&mut self) -> &Self {
-        let default_config = Arc::new(ConfigOptions::default());
+        let default_config = ConfigOptions::default_arc();
         self.mark_start_execution(default_config)
     }
 

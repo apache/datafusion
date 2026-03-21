@@ -101,7 +101,6 @@ mod test {
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ScalarFunctionArgs;
     use datafusion_expr::ScalarUDF;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_version_udf() {
@@ -112,7 +111,7 @@ mod test {
                 arg_fields: vec![],
                 number_rows: 0,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             })
             .unwrap();
 

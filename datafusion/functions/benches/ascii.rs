@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let ascii = datafusion_functions::string::ascii();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     // Scalar benchmarks (outside loop)
     c.bench_function("ascii/scalar_utf8", |b| {
@@ -76,7 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let arg_fields =
             vec![Field::new("a", args_string_ascii[0].data_type(), true).into()];
         let return_field = Field::new("f", DataType::Utf8, true).into();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         c.bench_function(
             format!("ascii/string_ascii_only (null_density={null_density})").as_str(),

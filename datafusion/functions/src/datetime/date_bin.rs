@@ -857,7 +857,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Arc::clone(return_field),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
         DateBinFunc::new().invoke_with_args(args)
     }

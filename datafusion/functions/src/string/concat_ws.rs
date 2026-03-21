@@ -624,7 +624,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -661,7 +661,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -699,7 +699,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8View, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -736,7 +736,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", LargeUtf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -778,7 +778,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8View, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -819,7 +819,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", LargeUtf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -852,7 +852,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", Utf8View, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -875,7 +875,7 @@ mod tests {
             arg_fields,
             number_rows: 2,
             return_field: Field::new("f", Utf8View, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -904,7 +904,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", LargeUtf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -927,7 +927,7 @@ mod tests {
             arg_fields,
             number_rows: 2,
             return_field: Field::new("f", LargeUtf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;

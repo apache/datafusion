@@ -1751,7 +1751,7 @@ pub(crate) mod tests {
             test_fun,
             vec![Arc::clone(col_c)],
             &schema,
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )?) as PhysicalExprRef;
 
         let option_asc = SortOptions {

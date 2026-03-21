@@ -54,7 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Field::new("a", interval.data_type(), true).into(),
             Field::new("b", timestamps.data_type(), true).into(),
         ];
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         b.iter(|| {
             black_box(

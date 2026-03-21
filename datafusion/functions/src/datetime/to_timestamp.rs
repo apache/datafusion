@@ -1665,7 +1665,7 @@ mod tests {
                     arg_fields: vec![arg_field],
                     number_rows: 4,
                     return_field: Field::new("f", rt, true).into(),
-                    config_options: Arc::new(ConfigOptions::default()),
+                    config_options: ConfigOptions::default_arc(),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1715,7 +1715,7 @@ mod tests {
                     arg_fields: vec![arg_field],
                     number_rows: 5,
                     return_field: Field::new("f", rt, true).into(),
-                    config_options: Arc::new(ConfigOptions::default()),
+                    config_options: ConfigOptions::default_arc(),
                 };
                 let res = udf
                     .invoke_with_args(args)

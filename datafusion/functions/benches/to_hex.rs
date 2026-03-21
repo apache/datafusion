@@ -29,7 +29,7 @@ use std::time::Duration;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let hex = string::to_hex();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     c.bench_function("to_hex/scalar_i32", |b| {
         let args = vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(2147483647)))];

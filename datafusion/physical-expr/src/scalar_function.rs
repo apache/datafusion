@@ -424,7 +424,7 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
         let args = vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>];
-        let config_options = Arc::new(ConfigOptions::new());
+        let config_options = ConfigOptions::default_arc();
 
         // Test volatile function
         let volatile_expr = ScalarFunctionExpr::try_new(

@@ -182,7 +182,7 @@ mod test {
             arg_fields,
             number_rows: array.len(),
             return_field: Field::new("f", DataType::Float32, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
@@ -229,7 +229,7 @@ mod test {
             arg_fields,
             number_rows: array.len(),
             return_field: Field::new("f", DataType::Float64, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)

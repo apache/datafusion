@@ -691,7 +691,7 @@ mod tests {
             arg_fields: vec![Arc::clone(&field), Arc::clone(&field)],
             number_rows: 2,
             return_field: Arc::clone(&field),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })?;
 
         let output = result.into_array(2)?;
@@ -717,7 +717,7 @@ mod tests {
             arg_fields: vec![Arc::clone(&field), Arc::clone(&field)],
             number_rows: 2,
             return_field: Arc::clone(&field),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })?;
 
         let output = result.into_array(2)?;
@@ -748,7 +748,7 @@ mod tests {
             arg_fields: vec![Arc::clone(&field)],
             number_rows: 2,
             return_field: field,
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })?;
 
         let output = result.into_array(2)?;
@@ -787,7 +787,7 @@ mod tests {
                 arg_fields: vec![input_field.clone().into()],
                 number_rows: 1,
                 return_field: input_field.clone().into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             })?;
 
             assert_eq!(

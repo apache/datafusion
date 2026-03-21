@@ -54,7 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         .enumerate()
         .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     c.bench_function("char", |b| {
         b.iter(|| {

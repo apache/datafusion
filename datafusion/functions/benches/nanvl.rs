@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let nanvl_fn = nanvl();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     // Scalar benchmarks
     c.bench_function("nanvl/scalar_f64", |b| {

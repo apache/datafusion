@@ -1072,7 +1072,7 @@ mod tests {
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             Field::new("f", DataType::Utf8, true).into(),
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         ));
 
         // Assume existing ordering is [c ASC, a ASC, b ASC]
@@ -1163,7 +1163,7 @@ mod tests {
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             Field::new("f", DataType::Utf8, true).into(),
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )) as _;
 
         // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]

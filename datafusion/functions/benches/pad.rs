@@ -215,7 +215,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
             })
             .collect::<Vec<_>>();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         group.bench_function(
             format!("lpad utf8 [size={size}, str_len=5, target=20]"),
@@ -493,7 +493,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
             })
             .collect::<Vec<_>>();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         group.bench_function(
             format!("rpad utf8 [size={size}, str_len=5, target=20]"),

@@ -26,7 +26,7 @@ use std::sync::Arc;
 fn criterion_benchmark(c: &mut Criterion) {
     let random_func = RandomFunc::new();
     let return_field = Field::new("f", DataType::Float64, true).into();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     // Benchmark to evaluate 1M rows in batch size 8192
     let iterations = 1_000_000 / 8192; // Calculate how many iterations are needed to reach approximately 1M rows

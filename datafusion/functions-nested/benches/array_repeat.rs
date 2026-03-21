@@ -83,7 +83,7 @@ fn bench_array_repeat_int64(c: &mut Criterion) {
                                     false,
                                 )
                                 .into(),
-                                config_options: Arc::new(ConfigOptions::default()),
+                                config_options: ConfigOptions::default_arc(),
                             })
                             .unwrap(),
                         )
@@ -131,7 +131,7 @@ fn bench_array_repeat_string(c: &mut Criterion) {
                                     false,
                                 )
                                 .into(),
-                                config_options: Arc::new(ConfigOptions::default()),
+                                config_options: ConfigOptions::default_arc(),
                             })
                             .unwrap(),
                         )
@@ -184,7 +184,7 @@ fn bench_array_repeat_nested_int64_list(c: &mut Criterion) {
                                     false,
                                 )
                                 .into(),
-                                config_options: Arc::new(ConfigOptions::default()),
+                                config_options: ConfigOptions::default_arc(),
                             })
                             .unwrap(),
                         )
@@ -233,7 +233,7 @@ fn bench_array_repeat_float64(c: &mut Criterion) {
                                     false,
                                 )
                                 .into(),
-                                config_options: Arc::new(ConfigOptions::default()),
+                                config_options: ConfigOptions::default_arc(),
                             })
                             .unwrap(),
                         )
@@ -282,7 +282,7 @@ fn bench_array_repeat_boolean(c: &mut Criterion) {
                                     false,
                                 )
                                 .into(),
-                                config_options: Arc::new(ConfigOptions::default()),
+                                config_options: ConfigOptions::default_arc(),
                             })
                             .unwrap(),
                         )
@@ -335,7 +335,7 @@ fn bench_array_repeat_nested_string_list(c: &mut Criterion) {
                                     false,
                                 )
                                 .into(),
-                                config_options: Arc::new(ConfigOptions::default()),
+                                config_options: ConfigOptions::default_arc(),
                             })
                             .unwrap(),
                         )

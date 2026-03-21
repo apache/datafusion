@@ -143,7 +143,7 @@ fn generate_mixed_pattern_array(rng: &mut ThreadRng) -> StringArray {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     c.bench_function("to_char_array_date_only_patterns_1000", |b| {
         let mut rng = rand::rng();

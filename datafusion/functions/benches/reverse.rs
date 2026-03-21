@@ -28,7 +28,7 @@ use std::sync::Arc;
 fn criterion_benchmark(c: &mut Criterion) {
     // All benches are single batch run with 8192 rows
     let reverse = datafusion_functions::unicode::reverse();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     const N_ROWS: usize = 8192;
     const NULL_DENSITY: f32 = 0.1;

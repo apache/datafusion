@@ -514,7 +514,7 @@ mod tests {
                 arg_fields: vec![arg_field],
                 number_rows: 1,
                 return_field: Field::new("f", expected.data_type(), true).into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             })
             .unwrap();
         match res {
@@ -585,7 +585,7 @@ mod tests {
                     true,
                 )
                 .into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             };
             let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

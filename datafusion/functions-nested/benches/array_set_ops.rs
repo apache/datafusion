@@ -63,7 +63,7 @@ fn invoke_udf(udf: &impl ScalarUDFImpl, array1: &ArrayRef, array2: &ArrayRef) {
             ],
             number_rows: NUM_ROWS,
             return_field: Field::new("result", array1.data_type().clone(), false).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })
         .unwrap(),
     );
@@ -155,7 +155,7 @@ fn bench_array_distinct(c: &mut Criterion) {
                                     false,
                                 )
                                 .into(),
-                                config_options: Arc::new(ConfigOptions::default()),
+                                config_options: ConfigOptions::default_arc(),
                             })
                             .unwrap(),
                         )
@@ -374,7 +374,7 @@ fn bench_array_distinct_sliced(c: &mut Criterion) {
                                 false,
                             )
                             .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
+                            config_options: ConfigOptions::default_arc(),
                         })
                         .unwrap(),
                     )

@@ -203,7 +203,7 @@ mod test {
             arg_fields,
             number_rows: 2,
             return_field: Field::new("f", DataType::Boolean, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();

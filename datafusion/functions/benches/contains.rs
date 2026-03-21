@@ -91,7 +91,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         Field::new("b", DataType::Utf8, true).into(),
     ];
     let return_field = Field::new("f", DataType::Boolean, true).into();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     c.bench_function("contains_StringArray_scalar_search", |b| {
         b.iter(|| {

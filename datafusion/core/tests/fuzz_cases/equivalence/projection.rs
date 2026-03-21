@@ -50,7 +50,7 @@ fn project_orderings_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )?);
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(
@@ -124,7 +124,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )?) as PhysicalExprRef;
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(

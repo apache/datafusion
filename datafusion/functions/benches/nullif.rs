@@ -40,7 +40,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
             })
             .collect::<Vec<_>>();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         c.bench_function(&format!("nullif scalar array: {size}"), |b| {
             b.iter(|| {

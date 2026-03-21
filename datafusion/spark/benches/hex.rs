@@ -102,7 +102,7 @@ fn run_benchmark(c: &mut Criterion, name: &str, size: usize, array: Arc<dyn Arra
         .enumerate()
         .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     c.bench_function(&format!("{name}/size={size}"), |b| {
         b.iter(|| {

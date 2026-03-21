@@ -135,7 +135,7 @@ fn array_slice_benchmark(
                         number_rows: size,
                         return_field: Field::new_list_field(args[0].data_type(), true)
                             .into(),
-                        config_options: Arc::new(ConfigOptions::default()),
+                        config_options: ConfigOptions::default_arc(),
                     })
                     .unwrap(),
             )

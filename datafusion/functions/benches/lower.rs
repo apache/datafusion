@@ -122,7 +122,7 @@ fn create_args5(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let lower = string::lower();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     for size in [1024, 4096, 8192] {
         let args = create_args1(size, 32);

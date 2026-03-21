@@ -98,7 +98,7 @@ fn test_pushdown_volatile_functions_not_allowed() {
     // Test that we do not push down filters with volatile functions
     // Use random() as an example of a volatile function
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
-    let cfg = Arc::new(ConfigOptions::default());
+    let cfg = ConfigOptions::default_arc();
     let predicate = Arc::new(BinaryExpr::new(
         Arc::new(Column::new_with_schema("a", &schema()).unwrap()),
         Operator::Eq,
@@ -695,7 +695,7 @@ fn test_filter_with_fetch_partially_pushed_to_scan() {
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
     let pushed_predicate = col_lit_predicate("a", "foo", &schema());
     let volatile_predicate = {
-        let cfg = Arc::new(ConfigOptions::default());
+        let cfg = ConfigOptions::default_arc();
         Arc::new(BinaryExpr::new(
             Arc::new(Column::new_with_schema("a", &schema()).unwrap()),
             Operator::Eq,

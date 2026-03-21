@@ -42,7 +42,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_a = ColumnarValue::Array(generate_i64_array(n_rows));
     let array_b = ColumnarValue::Array(generate_i64_array(n_rows));
     let udf = gcd();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     c.bench_function("gcd both array", |b| {
         b.iter(|| {

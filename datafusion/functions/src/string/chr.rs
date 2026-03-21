@@ -160,7 +160,7 @@ mod tests {
             arg_fields: vec![Field::new("a", Int64, true).into()],
             number_rows,
             return_field: Field::new("f", Utf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })
     }
 

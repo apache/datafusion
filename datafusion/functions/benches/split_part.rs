@@ -80,7 +80,7 @@ fn gen_positions(n_rows: usize, position: i64) -> ColumnarValue {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let split_part_func = split_part();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     let mut group = c.benchmark_group("split_part");
 

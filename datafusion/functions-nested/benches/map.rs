@@ -104,7 +104,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Field::new("a", values.data_type(), true).into(),
         ];
         let return_field = Field::new("f", return_type, true).into();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         b.iter(|| {
             black_box(

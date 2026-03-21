@@ -283,7 +283,7 @@ mod tests {
             arg_fields: vec![Arc::clone(&list_field), Arc::clone(&list_field)],
             number_rows: 2,
             return_field,
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })?;
 
         let output = result.into_array(2)?;

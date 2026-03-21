@@ -348,7 +348,7 @@ pub fn create_physical_expr(
                 create_physical_exprs(args, input_dfschema, execution_props)?;
             let config_options = match execution_props.config_options.as_ref() {
                 Some(config_options) => Arc::clone(config_options),
-                None => Arc::new(ConfigOptions::default()),
+                None => ConfigOptions::default_arc(),
             };
 
             Ok(Arc::new(ScalarFunctionExpr::try_new(

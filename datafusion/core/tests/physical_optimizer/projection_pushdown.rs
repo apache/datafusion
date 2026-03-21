@@ -130,7 +130,7 @@ fn test_update_matching_exprs() -> Result<()> {
                 )),
             ],
             Field::new("f", DataType::Int32, true).into(),
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -196,7 +196,7 @@ fn test_update_matching_exprs() -> Result<()> {
                 )),
             ],
             Field::new("f", DataType::Int32, true).into(),
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 3))),
@@ -271,7 +271,7 @@ fn test_update_projected_exprs() -> Result<()> {
                 )),
             ],
             Field::new("f", DataType::Int32, true).into(),
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -337,7 +337,7 @@ fn test_update_projected_exprs() -> Result<()> {
                 )),
             ],
             Field::new("f", DataType::Int32, true).into(),
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d_new", 3))),

@@ -522,7 +522,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Arc::new(Field::new("f", DataType::Boolean, true)),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })
     }
 

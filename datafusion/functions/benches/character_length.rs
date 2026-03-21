@@ -30,7 +30,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let character_length = datafusion_functions::unicode::character_length();
 
     let return_field = Arc::new(Field::new("f", DataType::Utf8, true));
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     let n_rows = 8192;
     for str_len in [8, 32, 128, 4096] {

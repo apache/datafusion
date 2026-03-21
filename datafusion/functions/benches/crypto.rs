@@ -33,7 +33,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         crypto::sha384(),
         crypto::sha512(),
     ];
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     for func in crypto {
         let size = 1024;

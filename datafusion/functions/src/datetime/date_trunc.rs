@@ -1021,7 +1021,7 @@ mod tests {
                     true,
                 )
                 .into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
@@ -1209,7 +1209,7 @@ mod tests {
                     true,
                 )
                 .into(),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
@@ -1377,7 +1377,7 @@ mod tests {
                         true,
                     )
                     .into(),
-                    config_options: Arc::new(ConfigOptions::default()),
+                    config_options: ConfigOptions::default_arc(),
                 };
                 let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
                 if let ColumnarValue::Array(result) = result {

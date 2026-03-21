@@ -1130,7 +1130,7 @@ mod tests {
             arg_fields: vec![haystack_field, needle_field],
             number_rows: 1,
             return_field,
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })?;
 
         let output = result.into_array(1)?;
@@ -1171,7 +1171,7 @@ mod tests {
                     ],
                     number_rows: 2,
                     return_field: Arc::clone(&return_field),
-                    config_options: Arc::new(ConfigOptions::default()),
+                    config_options: ConfigOptions::default_arc(),
                 })?
                 .into_array(2)
         };
@@ -1204,7 +1204,7 @@ mod tests {
             arg_fields: vec![haystack_field, needle_field],
             number_rows: 1,
             return_field,
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })?;
 
         let output = result.into_array(1)?;
@@ -1239,7 +1239,7 @@ mod tests {
                 ],
                 number_rows: num_rows,
                 return_field: Arc::new(Field::new("return", DataType::Boolean, true)),
-                config_options: Arc::new(ConfigOptions::default()),
+                config_options: ConfigOptions::default_arc(),
             })
             .unwrap();
         let output = result.into_array(num_rows).unwrap();

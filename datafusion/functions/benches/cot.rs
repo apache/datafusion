@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let cot_fn = cot();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     // Array benchmarks - run for different sizes
     for size in [1024, 4096, 8192] {

@@ -68,7 +68,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Field::new("a", days.data_type(), true).into(),
         ];
         let return_field = Field::new("f", DataType::Date32, true).into();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         b.iter(|| {
             black_box(
@@ -98,7 +98,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Field::new("a", days.data_type(), true).into(),
         ];
         let return_field = Field::new("f", DataType::Date32, true).into();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         b.iter(|| {
             black_box(
@@ -128,7 +128,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Field::new("a", days.data_type(), true).into(),
         ];
         let return_field = Field::new("f", DataType::Date32, true).into();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         b.iter(|| {
             black_box(
@@ -155,7 +155,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Field::new("a", day.data_type(), true).into(),
         ];
         let return_field = Field::new("f", DataType::Date32, true).into();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         b.iter(|| {
             black_box(

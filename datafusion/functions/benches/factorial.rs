@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let factorial = factorial();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     let arr_args = vec![ColumnarValue::Array(Arc::new(Int64Array::from_iter(
         (0..1024).map(|i| Some(i % 21)),

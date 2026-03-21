@@ -180,7 +180,6 @@ mod tests {
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
-    use std::sync::Arc;
 
     use super::UnionExtractFun;
 
@@ -216,7 +215,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -239,7 +238,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -261,7 +260,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })?;
 
         assert_scalar(result, ScalarValue::new_utf8("42"));

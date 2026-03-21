@@ -123,7 +123,7 @@ fn run_benchmark(
             Field::new(format!("arg_{idx}"), arg.data_type().clone(), true).into()
         })
         .collect::<Vec<_>>();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     b.iter(|| {
         black_box(

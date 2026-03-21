@@ -29,7 +29,7 @@ use std::time::Duration;
 fn criterion_benchmark(c: &mut Criterion) {
     let floor_fn = floor();
     let ceil_fn = ceil();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     for size in [1024, 4096, 8192] {
         let mut group = c.benchmark_group(format!("floor_ceil size={size}"));

@@ -106,7 +106,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            options: Arc::new(ConfigOptions::new()),
+            options: ConfigOptions::default_arc(),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
                 0,

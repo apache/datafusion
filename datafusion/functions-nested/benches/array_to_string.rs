@@ -76,7 +76,7 @@ fn bench_array_to_string(
                             number_rows: NUM_ROWS,
                             return_field: Field::new("result", DataType::Utf8, true)
                                 .into(),
-                            config_options: Arc::new(ConfigOptions::default()),
+                            config_options: ConfigOptions::default_arc(),
                         })
                         .unwrap(),
                     )

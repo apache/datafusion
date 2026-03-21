@@ -168,7 +168,7 @@ fn bench_strpos(
 ) {
     let arg_fields = vec![Field::new("a", args[0].data_type(), true).into()];
     let return_field: Arc<Field> = Field::new("f", DataType::Int32, true).into();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     c.bench_function(name, |b| {
         b.iter(|| {

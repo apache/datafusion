@@ -391,19 +391,19 @@ mod tests {
             Arc::clone(&test_fun),
             vec![Arc::clone(col_a)],
             &test_schema,
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )?) as PhysicalExprRef;
         let floor_f = Arc::new(ScalarFunctionExpr::try_new(
             Arc::clone(&test_fun),
             vec![Arc::clone(col_f)],
             &test_schema,
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )?) as PhysicalExprRef;
         let exp_a = Arc::new(ScalarFunctionExpr::try_new(
             Arc::clone(&test_fun),
             vec![Arc::clone(col_a)],
             &test_schema,
-            Arc::new(ConfigOptions::default()),
+            ConfigOptions::default_arc(),
         )?) as PhysicalExprRef;
 
         let a_plus_b = Arc::new(BinaryExpr::new(

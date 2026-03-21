@@ -35,7 +35,7 @@ pub fn seedable_rng() -> StdRng {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let chr_fn = chr();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
 
     // Scalar benchmarks
     c.bench_function("chr/scalar", |b| {

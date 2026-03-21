@@ -109,7 +109,7 @@ mod tests {
             args: vec![ColumnarValue::Array(input)],
             arg_fields: vec![arg_field],
             return_field: Field::new("f", expected.data_type().clone(), true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         };
 
         let result = match func.invoke_with_args(args)? {

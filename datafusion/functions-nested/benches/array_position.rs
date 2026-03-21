@@ -66,7 +66,7 @@ fn bench_array_position(c: &mut Criterion, array_size: usize) {
         Field::new("needle", DataType::Int64, false).into(),
     ];
     let return_field: Arc<Field> = Field::new("result", DataType::UInt64, true).into();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     let needle = ScalarValue::Int64(Some(SENTINEL_NEEDLE));
 
     // Benchmark: one match per row.
@@ -175,7 +175,7 @@ fn bench_array_positions(c: &mut Criterion, array_size: usize) {
         true,
     )
     .into();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     let needle = ScalarValue::Int64(Some(SENTINEL_NEEDLE));
 
     let args_found_once = vec![

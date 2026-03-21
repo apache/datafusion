@@ -633,7 +633,7 @@ mod tests {
             arg_fields,
             number_rows: args.len(),
             return_field: Field::new("f", Int64, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: ConfigOptions::default_arc(),
         })
     }
 

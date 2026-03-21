@@ -116,7 +116,7 @@ fn create_membership_predicate(
                     struct_func(),
                     on_right.to_vec(),
                     return_field,
-                    Arc::new(ConfigOptions::default()),
+                    ConfigOptions::default_arc(),
                 )) as Arc<dyn PhysicalExpr>
             };
 

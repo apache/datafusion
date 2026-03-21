@@ -42,7 +42,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
             .collect::<Vec<_>>();
         let return_field = Field::new("f", DataType::Float32, true).into();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         c.bench_function(&format!("signum f32 array: {size}"), |b| {
             b.iter(|| {

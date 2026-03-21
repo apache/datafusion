@@ -110,7 +110,7 @@ fn subexp(rng: &mut ThreadRng) -> Int64Array {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let regexp_like_func = RegexpLikeFunc::new();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default_arc();
     c.bench_function("regexp_count_1000 string", |b| {
         let mut rng = rand::rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;

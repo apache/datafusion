@@ -62,7 +62,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 scalar_arguments: &scalar_arguments,
             })
             .unwrap();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         b.iter(|| {
             black_box(

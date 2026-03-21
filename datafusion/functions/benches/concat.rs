@@ -76,7 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
             })
             .collect::<Vec<_>>();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         let mut group = c.benchmark_group("concat function");
         group.bench_function(BenchmarkId::new("concat", size), |b| {
@@ -114,7 +114,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Field::new(format!("arg_{idx}"), dt, true).into()
             })
             .collect::<Vec<_>>();
-        let config_options = Arc::new(ConfigOptions::default());
+        let config_options = ConfigOptions::default_arc();
 
         let mut group = c.benchmark_group("concat function");
         group.bench_function(BenchmarkId::new("concat_view", size), |b| {
@@ -155,7 +155,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: scalar_arg_fields.clone(),
                         number_rows: 1,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
-                        config_options: Arc::new(ConfigOptions::default()),
+                        config_options: ConfigOptions::default_arc(),
                     })
                     .unwrap(),
             )
