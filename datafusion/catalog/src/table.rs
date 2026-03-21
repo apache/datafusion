@@ -87,7 +87,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// Create an [`ExecutionPlan`] for scanning the table with optionally
     /// specified `projection`, `filter` and `limit`, described below.
     ///
-    /// The `ExecutionPlan` is responsible scanning the datasource's
+    /// The returned `ExecutionPlan` is responsible scanning the datasource's
     /// partitions in a streaming, parallelized fashion.
     ///
     /// # Projection
@@ -163,6 +163,29 @@ pub trait TableProvider: Debug + Sync + Send {
     /// because inexact filters do not guarantee that every filtered row is
     /// removed, so applying the limit could lead to too few rows being available
     /// to return as a final result.
+    ///
+    /// ## Evaluation Order
+    ///
+    /// The logical evaluation is first `filters` then `limit` and then `projection`.
+    ///
+    /// Note that `limit` applies to the filtered result, not to the unfiltered
+    /// input, and `projection` affects only which columns are returned, not
+    /// which rows qualify.
+    ///
+    /// For example, if a scan receives:
+    ///
+    /// - `projection = [a]`
+    /// - `filters = [b > 5]`
+    /// - `limit = Some(3)`
+    ///
+    /// It logically must produce results like:
+    ///
+    /// ```text
+    /// PROJECTION a (LIMIT 3 (SCAN WHERE b > 5))
+    /// ```
+    ///
+    /// As mentioned above, columns referenced only by pushed-down filters may
+    /// be absent from `projection`.
     async fn scan(
         &self,
         state: &dyn Session,
