@@ -125,19 +125,16 @@ impl ScalarUDFImpl for ConcatFunc {
 
         // Scalar
         if array_len.is_none() {
-            let mut values: Vec<&str> = Vec::with_capacity(args.len());
+            let mut values: Vec<&[u8]> = Vec::with_capacity(args.len());
             for arg in &args {
                 let ColumnarValue::Scalar(scalar) = arg else {
                     return internal_err!("concat expected scalar value, got {arg:?}");
                 };
                 if let ScalarValue::Binary(Some(value)) = scalar {
-                    let s: &str = std::str::from_utf8(value).map_err(|_| {
-                        exec_datafusion_err!("invalid UTF-8 in binary literal: {value:?}")
-                    })?;
-                    values.push(s);
+                    values.push(value);
                 } else {
                     match scalar.try_as_str() {
-                        Some(Some(v)) => values.push(v),
+                        Some(Some(v)) => values.push(v.as_bytes()),
                         Some(None) => {} // null literal
                         None => plan_err!(
                             "Concat function does not support scalar type {}",
@@ -146,7 +143,10 @@ impl ScalarUDFImpl for ConcatFunc {
                     }
                 }
             }
-            let result = values.concat();
+            let concat_bytes = values.concat();
+            let result = std::str::from_utf8(&concat_bytes)
+                .map_err(|_| exec_datafusion_err!("invalid UTF-8 in binary literal"))?
+                .to_string();
 
             return match return_datatype {
                 DataType::Utf8View => {

@@ -17,6 +17,8 @@
 
 use std::mem::size_of;
 
+use datafusion_common::{Result, internal_err};
+
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, BinaryArray, ByteView, LargeStringArray,
     NullBufferBuilder, StringArray, StringViewArray, StringViewBuilder, make_view,
@@ -30,6 +32,8 @@ use arrow::datatypes::DataType;
 pub struct StringArrayBuilder {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
+    /// If true, a safety check is required during the `finish` call
+    tainted: bool,
 }
 
 impl StringArrayBuilder {
@@ -45,6 +49,7 @@ impl StringArrayBuilder {
         Self {
             offsets_buffer,
             value_buffer: MutableBuffer::with_capacity(data_capacity),
+            tainted: false,
         }
     }
 
@@ -79,6 +84,7 @@ impl StringArrayBuilder {
                 if !CHECK_VALID || array.is_valid(i) {
                     self.value_buffer.extend_from_slice(array.value(i));
                 }
+                self.tainted = true;
             }
             ColumnarValueRef::NonNullableArray(array) => {
                 self.value_buffer
@@ -94,6 +100,7 @@ impl StringArrayBuilder {
             }
             ColumnarValueRef::NonNullableBinaryArray(array) => {
                 self.value_buffer.extend_from_slice(array.value(i));
+                self.tainted = true;
             }
         }
     }
@@ -109,17 +116,17 @@ impl StringArrayBuilder {
 
     /// Finalize the builder into a concrete [`StringArray`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// This method can panic when:
+    /// Returns an error when:
     ///
     /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
-    pub fn finish(self, null_buffer: Option<NullBuffer>) -> StringArray {
+    pub fn finish(self, null_buffer: Option<NullBuffer>) -> Result<StringArray> {
         let row_count = self.offsets_buffer.len() / size_of::<i32>() - 1;
-        if let Some(ref null_buffer) = null_buffer {
-            assert_eq!(
-                null_buffer.len(),
-                row_count,
+        if let Some(ref null_buffer) = null_buffer
+            && null_buffer.len() != row_count
+        {
+            return internal_err!(
                 "Null buffer and offsets buffer must be the same length"
             );
         }
@@ -128,10 +135,17 @@ impl StringArrayBuilder {
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
-        // SAFETY: all data that was appended was valid UTF8 and the values
-        // and offsets were created correctly
-        let array_data = unsafe { array_builder.build_unchecked() };
-        StringArray::from(array_data)
+        if self.tainted {
+            // Raw binary arrays with possible invalid utf-8 were used,
+            // so let ArrayDataBuilder perform validation
+            let array_data = array_builder.build()?;
+            Ok(StringArray::from(array_data))
+        } else {
+            // SAFETY: all data that was appended was valid UTF8 and the values
+            // and offsets were created correctly
+            let array_data = unsafe { array_builder.build_unchecked() };
+            Ok(StringArray::from(array_data))
+        }
     }
 }
 
@@ -216,6 +230,8 @@ impl StringViewArrayBuilder {
 pub struct LargeStringArrayBuilder {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
+    /// If true, a safety check is required during the `finish` call
+    tainted: bool,
 }
 
 impl LargeStringArrayBuilder {
@@ -231,6 +247,7 @@ impl LargeStringArrayBuilder {
         Self {
             offsets_buffer,
             value_buffer: MutableBuffer::with_capacity(data_capacity),
+            tainted: false,
         }
     }
 
@@ -265,6 +282,7 @@ impl LargeStringArrayBuilder {
                 if !CHECK_VALID || array.is_valid(i) {
                     self.value_buffer.extend_from_slice(array.value(i));
                 }
+                self.tainted = true;
             }
             ColumnarValueRef::NonNullableArray(array) => {
                 self.value_buffer
@@ -280,6 +298,7 @@ impl LargeStringArrayBuilder {
             }
             ColumnarValueRef::NonNullableBinaryArray(array) => {
                 self.value_buffer.extend_from_slice(array.value(i));
+                self.tainted = true;
             }
         }
     }
@@ -295,17 +314,17 @@ impl LargeStringArrayBuilder {
 
     /// Finalize the builder into a concrete [`LargeStringArray`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// This method can panic when:
+    /// Returns an error when:
     ///
     /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
-    pub fn finish(self, null_buffer: Option<NullBuffer>) -> LargeStringArray {
+    pub fn finish(self, null_buffer: Option<NullBuffer>) -> Result<LargeStringArray> {
         let row_count = self.offsets_buffer.len() / size_of::<i64>() - 1;
-        if let Some(ref null_buffer) = null_buffer {
-            assert_eq!(
-                null_buffer.len(),
-                row_count,
+        if let Some(ref null_buffer) = null_buffer
+            && null_buffer.len() != row_count
+        {
+            return internal_err!(
                 "Null buffer and offsets buffer must be the same length"
             );
         }
@@ -314,10 +333,17 @@ impl LargeStringArrayBuilder {
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
-        // SAFETY: all data that was appended was valid Large UTF8 and the values
-        // and offsets were created correctly
-        let array_data = unsafe { array_builder.build_unchecked() };
-        LargeStringArray::from(array_data)
+        if self.tainted {
+            // Raw binary arrays with possible invalid utf-8 were used,
+            // so let ArrayDataBuilder perform validation
+            let array_data = array_builder.build()?;
+            Ok(LargeStringArray::from(array_data))
+        } else {
+            // SAFETY: all data that was appended was valid Large UTF8 and the values
+            // and offsets were created correctly
+            let array_data = unsafe { array_builder.build_unchecked() };
+            Ok(LargeStringArray::from(array_data))
+        }
     }
 }
 
