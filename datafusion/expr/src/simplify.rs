@@ -64,18 +64,30 @@ impl SimplifyContext {
         SimplifyContextBuilder::default()
     }
 
+    #[deprecated(
+        since = "53.1.0",
+        note = "Use SimplifyContextBuilder if you intend to use non-default values."
+    )]
     /// Set the [`ConfigOptions`] for this context
     pub fn with_config_options(mut self, config_options: Arc<ConfigOptions>) -> Self {
         self.config_options = config_options;
         self
     }
 
+    #[deprecated(
+        since = "53.1.0",
+        note = "Use SimplifyContextBuilder if you intend to use non-default values."
+    )]
     /// Set the schema for this context
     pub fn with_schema(mut self, schema: DFSchemaRef) -> Self {
         self.schema = schema;
         self
     }
 
+    #[deprecated(
+        since = "53.1.0",
+        note = "Use SimplifyContextBuilder if you intend to use non-default values."
+    )]
     /// Set the query execution start time
     pub fn with_query_execution_start_time(
         mut self,
@@ -85,6 +97,10 @@ impl SimplifyContext {
         self
     }
 
+    #[deprecated(
+        since = "53.1.0",
+        note = "Use SimplifyContextBuilder if you intend to use non-default values."
+    )]
     /// Set the query execution start to the current time
     pub fn with_current_time(mut self) -> Self {
         self.query_execution_start_time = Some(Utc::now());
