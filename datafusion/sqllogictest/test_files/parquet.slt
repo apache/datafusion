@@ -666,8 +666,8 @@ query TT
 explain select * from foo where starts_with(column1, 'f');
 ----
 logical_plan
-01)Filter: foo.column1 LIKE Utf8View("f%")
-02)--TableScan: foo projection=[column1], partial_filters=[foo.column1 LIKE Utf8View("f%")]
+01)Filter: foo.column1 LIKE Utf8View("f%") ESCAPE '\'
+02)--TableScan: foo projection=[column1], partial_filters=[foo.column1 LIKE Utf8View("f%") ESCAPE '\']
 physical_plan
 01)FilterExec: column1@0 LIKE f%
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
