@@ -45,6 +45,7 @@ use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
+use crate::multi_distinct_count_rewrite::MultiDistinctCountRewrite;
 use crate::optimize_projections::OptimizeProjections;
 use crate::optimize_unions::OptimizeUnions;
 use crate::plan_signature::LogicalPlanSignature;
@@ -298,6 +299,7 @@ impl Optimizer {
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
+            Arc::new(MultiDistinctCountRewrite::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
             Arc::new(EliminateGroupByConstant::new()),

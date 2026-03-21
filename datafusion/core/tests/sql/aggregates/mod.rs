@@ -1024,3 +1024,4 @@ pub fn split_fuzz_timestamp_data_into_batches(
 
 pub mod basic;
 pub mod dict_nulls;
+pub mod multi_distinct_count_rewrite;
