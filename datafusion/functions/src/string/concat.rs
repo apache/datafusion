@@ -77,6 +77,17 @@ impl ConcatFunc {
     }
 }
 
+fn deduce_return_type(arg_types: &[DataType]) -> DataType {
+    use DataType::*;
+    if arg_types.contains(&Utf8View) {
+        Utf8View
+    } else if arg_types.contains(&LargeUtf8) {
+        LargeUtf8
+    } else {
+        Utf8
+    }
+}
+
 impl ScalarUDFImpl for ConcatFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -94,14 +105,7 @@ impl ScalarUDFImpl for ConcatFunc {
     /// mixed inputs, prefer Utf8View; prefer LargeUtf8 over Utf8 to avoid
     /// potential overflow on LargeUtf8 input.
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        if arg_types.contains(&Utf8View) {
-            Ok(Utf8View)
-        } else if arg_types.contains(&LargeUtf8) {
-            Ok(LargeUtf8)
-        } else {
-            Ok(Utf8)
-        }
+        Ok(deduce_return_type(arg_types))
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
@@ -109,14 +113,8 @@ impl ScalarUDFImpl for ConcatFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
-        let return_datatype = if args.iter().any(|c| c.data_type() == DataType::Utf8View)
-        {
-            DataType::Utf8View
-        } else if args.iter().any(|c| c.data_type() == DataType::LargeUtf8) {
-            DataType::LargeUtf8
-        } else {
-            DataType::Utf8
-        };
+        let arg_types: Vec<DataType> = args.iter().map(|c| c.data_type()).collect();
+        let return_datatype = deduce_return_type(&arg_types);
 
         let array_len = args.iter().find_map(|x| match x {
             ColumnarValue::Array(array) => Some(array.len()),
