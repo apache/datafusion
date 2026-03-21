@@ -121,9 +121,7 @@ fn create_string_list_array(num_rows: usize, elements_per_row: usize) -> ArrayRe
 fn invoke_array_sort(udf: &ArraySort, array: &ArrayRef) -> ColumnarValue {
     udf.invoke_with_args(ScalarFunctionArgs {
         args: vec![ColumnarValue::Array(Arc::clone(array))],
-        arg_fields: vec![
-            Field::new("arr", array.data_type().clone(), true).into(),
-        ],
+        arg_fields: vec![Field::new("arr", array.data_type().clone(), true).into()],
         number_rows: array.len(),
         return_field: Field::new("result", array.data_type().clone(), true).into(),
         config_options: Arc::new(ConfigOptions::default()),
