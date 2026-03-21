@@ -1317,21 +1317,29 @@ mod tests {
     /// Helper for multi-stream morsel tests that share one
     /// [`SharedFileStreamState`].
     #[derive(Clone)]
-    struct SiblingMorselTest {
+    struct MultiStreamMorselTest {
         /// Shared mock morselizer used by all sibling streams in the test.
         morselizer: MockMorselizer,
         /// Per-partition file assignments used to build one sibling
         /// `FileStream` per partition.
         partitions: Vec<Vec<String>>,
+        /// The sequence of sibling streams to poll while exercising the
+        /// stealing scenario under test.
+        reads: Vec<TestStreamId>,
     }
 
-    impl SiblingMorselTest {
+    /// Identifies one sibling stream in a [`MultiStreamMorselTest`].
+    #[derive(Debug, Clone, Copy)]
+    struct TestStreamId(usize);
+
+    impl MultiStreamMorselTest {
         /// Create a sibling-stream test harness with `num_partitions`
         /// independent `FileStream`s.
         fn new(num_partitions: usize) -> Self {
             Self {
                 morselizer: MockMorselizer::new(),
                 partitions: vec![vec![]; num_partitions],
+                reads: vec![],
             }
         }
 
@@ -1348,6 +1356,13 @@ mod tests {
             let path = path.into();
             self.morselizer = self.morselizer.with_file(path.clone(), planner);
             self.partitions[partition].push(path);
+            self
+        }
+
+        /// Configure the order in which sibling streams are polled while the
+        /// test scenario is executing.
+        fn with_reads(mut self, reads: Vec<TestStreamId>) -> Self {
+            self.reads = reads;
             self
         }
 
@@ -1378,7 +1393,7 @@ mod tests {
         /// This is the core helper for stealing tests: separate streams have
         /// distinct local queues, but share the same outstanding-I/O budget
         /// and shared ready-work queues.
-        fn build_streams(self) -> Result<(MorselObserver, Vec<FileStream>)> {
+        fn build_streams(&self) -> Result<(MorselObserver, Vec<FileStream>)> {
             let observer = self.morselizer.observer().clone();
             observer.clear();
 
@@ -1401,6 +1416,44 @@ mod tests {
 
             Ok((observer, streams))
         }
+
+        /// Run the configured poll sequence and format the per-stream outputs
+        /// plus shared scheduler events into one snapshot string.
+        async fn run(self) -> Result<String> {
+            let reads = self.reads.clone();
+            let (observer, mut streams) = self.build_streams()?;
+            let mut outputs = vec![vec![]; streams.len()];
+
+            for stream_id in reads {
+                let batch_id = next_batch_id(&mut streams[stream_id.0]).await?;
+                assert!(
+                    batch_id.is_some(),
+                    "expected stream {:?} to produce a batch",
+                    stream_id
+                );
+                outputs[stream_id.0].push(batch_id.unwrap());
+            }
+
+            for stream in &mut streams {
+                assert_eq!(next_batch_id(stream).await?, None);
+            }
+
+            let mut parts = vec![];
+            for (idx, output) in outputs.iter().enumerate() {
+                parts.push(format!("----- Stream {idx} Output -----"));
+                parts.push(
+                    output
+                        .iter()
+                        .map(|batch_id| format!("Batch: {batch_id}"))
+                        .chain(std::iter::once("Done".to_string()))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+            }
+            parts.push("----- File Stream Events -----".to_string());
+            parts.push(observer.format_summary_events());
+            Ok(parts.join("\n"))
+        }
     }
 
     /// Read the next single-row batch from a test stream and return its batch
@@ -1415,33 +1468,6 @@ mod tests {
         }))
     }
 
-    /// Format the outputs of two sibling streams plus the shared scheduler
-    /// event trace into one snapshot string.
-    fn format_sibling_outputs(
-        stream_0: &[i32],
-        stream_1: &[i32],
-        observer: &MorselObserver,
-    ) -> String {
-        [
-            "----- Stream 0 Output -----".to_string(),
-            stream_0
-                .iter()
-                .map(|batch_id| format!("Batch: {batch_id}"))
-                .chain(std::iter::once("Done".to_string()))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            "----- Stream 1 Output -----".to_string(),
-            stream_1
-                .iter()
-                .map(|batch_id| format!("Batch: {batch_id}"))
-                .chain(std::iter::once("Done".to_string()))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            "----- File Stream Events -----".to_string(),
-            observer.format_summary_events(),
-        ]
-        .join("\n")
-    }
 
     /// Verifies the simplest morsel-driven flow: one planner produces one
     /// morsel immediately, and the morsel is then scanned to completion.
@@ -1841,31 +1867,27 @@ mod tests {
     /// it has no local files of its own.
     #[tokio::test]
     async fn morsel_framework_sibling_stream_steals_when_only_one_has_files() -> Result<()> {
-        let test = SiblingMorselTest::new(2).with_file_in_partition(
-            0,
-            "file1.parquet",
-            MockPlanner::builder()
-                .with_id(PlannerId(0))
-                .return_plan(
-                    ReturnPlanBuilder::new()
-                        .with_morsel(MockMorselSpec::single_batch(MorselId(10), 41))
-                        .with_morsel(MockMorselSpec::single_batch(MorselId(11), 42)),
-                )
-                .return_none()
-                .build(),
-        );
-
-        let (observer, mut streams) = test.build_streams()?;
-        let mut stream_0 = vec![];
-        let mut stream_1 = vec![];
-
-        stream_0.push(next_batch_id(&mut streams[0]).await?.unwrap());
-        stream_1.push(next_batch_id(&mut streams[1]).await?.unwrap());
-        assert_eq!(next_batch_id(&mut streams[0]).await?, None);
-        assert_eq!(next_batch_id(&mut streams[1]).await?, None);
+        let test = MultiStreamMorselTest::new(2)
+            .with_file_in_partition(
+                0,
+                "file1.parquet",
+                MockPlanner::builder()
+                    .with_id(PlannerId(0))
+                    .return_plan(
+                        ReturnPlanBuilder::new()
+                            .return_morsel(MorselId(10), 41)
+                            .return_morsel(MorselId(11), 42),
+                    )
+                    .return_none()
+                    .build(),
+            )
+            // Poll sibling 0 first so it discovers the file and publishes
+            // ready morsels. Poll sibling 1 next: because it has no local
+            // files, any batch it returns must have been stolen from sibling 0.
+            .with_reads(vec![TestStreamId(0), TestStreamId(1)]);
 
         insta::assert_snapshot!(
-            format_sibling_outputs(&stream_0, &stream_1, &observer),
+            test.run().await.unwrap(),
             @r"
         ----- Stream 0 Output -----
         Batch: 41
@@ -1891,7 +1913,7 @@ mod tests {
     #[tokio::test]
     async fn morsel_framework_sibling_stream_steals_while_own_file_waits_on_io(
     ) -> Result<()> {
-        let test = SiblingMorselTest::new(2)
+        let test = MultiStreamMorselTest::new(2)
             .with_file_in_partition(
                 0,
                 "fast.parquet",
@@ -1899,14 +1921,8 @@ mod tests {
                     .with_id(PlannerId(0))
                     .return_plan(
                         ReturnPlanBuilder::new()
-                            .with_morsel(MockMorselSpec::single_batch(
-                                MorselId(10),
-                                41,
-                            ))
-                            .with_morsel(MockMorselSpec::single_batch(
-                                MorselId(11),
-                                42,
-                            )),
+                            .return_morsel(MorselId(10), 41)
+                            .return_morsel(MorselId(11), 42),
                     )
                     .return_none()
                     .build(),
@@ -1920,20 +1936,16 @@ mod tests {
                     .return_morsel(MorselId(12), 51)
                     .return_none()
                     .build(),
-            );
-
-        let (observer, mut streams) = test.build_streams()?;
-        let mut stream_0 = vec![];
-        let mut stream_1 = vec![];
-
-        stream_0.push(next_batch_id(&mut streams[0]).await?.unwrap());
-        stream_1.push(next_batch_id(&mut streams[1]).await?.unwrap());
-        stream_0.push(next_batch_id(&mut streams[0]).await?.unwrap());
-        assert_eq!(next_batch_id(&mut streams[1]).await?, None);
-        assert_eq!(next_batch_id(&mut streams[0]).await?, None);
+            )
+            // Poll sibling 0 first so it publishes one ready morsel from the
+            // fast file. Poll sibling 1 next while its own file is still
+            // blocked on I/O: the batch it returns at that point must have
+            // been stolen from sibling 0. Poll sibling 0 again last so it can
+            // finish once sibling 1's local I/O has resolved.
+            .with_reads(vec![TestStreamId(0), TestStreamId(1), TestStreamId(0)]);
 
         insta::assert_snapshot!(
-            format_sibling_outputs(&stream_0, &stream_1, &observer),
+            test.run().await.unwrap(),
             @r"
         ----- Stream 0 Output -----
         Batch: 41

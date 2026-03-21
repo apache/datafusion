@@ -327,6 +327,12 @@ impl ReturnPlanBuilder {
         Self::default()
     }
 
+    /// Add a single-batch morsel that should be returned immediately by this
+    /// planner step.
+    pub fn return_morsel(self, morsel_id: MorselId, batch_id: i32) -> Self {
+        self.with_morsel(MockMorselSpec::single_batch(morsel_id, batch_id))
+    }
+
     /// Add a morsel that should be returned immediately by this planner step.
     pub fn with_morsel(mut self, morsel: MockMorselSpec) -> Self {
         self.morsels.push(morsel);
