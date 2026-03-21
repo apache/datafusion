@@ -271,7 +271,10 @@ impl MorselQueue {
     }
 
     /// Extend the local queue with ready morsels.
-    pub(super) fn extend_morsels(&mut self, morsels: impl IntoIterator<Item = Box<dyn Morsel>>) {
+    pub(super) fn extend_morsels(
+        &mut self,
+        morsels: impl IntoIterator<Item = Box<dyn Morsel>>,
+    ) {
         self.morsels.extend(morsels);
     }
 
@@ -386,7 +389,8 @@ impl FileStream {
         // streams. Sending work through shared state in the single-stream case
         // changes local scheduling behavior without enabling any useful
         // stealing.
-        !self.preserve_order && self.shared_file_stream_state.registered_stream_count() > 1
+        !self.preserve_order
+            && self.shared_file_stream_state.registered_stream_count() > 1
     }
 
     /// Enqueue ready planners either locally or into the shared queue.
@@ -483,7 +487,7 @@ impl FileStream {
             self.push_ready_morsels(plan.take_morsels());
             self.push_ready_planners(plan.take_planners());
             if let Some(io_future) = plan.take_io_future() {
-            self.queues.push_waiting_planner(WaitingPlanner::new(
+                self.queues.push_waiting_planner(WaitingPlanner::new(
                     planner,
                     io_future,
                     io_permit
@@ -794,7 +798,14 @@ impl FileStream {
                 };
                 self.shared_file_stream_state
                     .register_waker(stream_id, cx.waker());
-            } else if self.queues.has_morsels() || self.queues.has_ready_planners() {
+            // If the active reader just returned `Pending`, yield back to the
+            // executor instead of looping immediately. Otherwise a reader that
+            // needs more I/O can hot-loop inside `poll_inner` as long as there
+            // is buffered work behind it, repeatedly polling the same pending
+            // reader without giving the executor a chance to wake it.
+            } else if self.reader.is_none()
+                && (self.queues.has_morsels() || self.queues.has_ready_planners())
+            {
                 continue;
             }
 
@@ -1024,12 +1035,12 @@ impl FileStreamMetrics {
 
 #[cfg(test)]
 mod tests {
+    use crate::file_groups::FileGroup;
     use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
     use crate::morsel::test_utils::{
         IoFutureId, MockMorselSpec, MockMorselizer, MockPlanner, MorselId,
         MorselObserver, PlannerId, ReturnPlanBuilder,
     };
-    use crate::file_groups::FileGroup;
     use crate::tests::make_partition;
     use crate::{PartitionedFile, TableSchema};
     use arrow::datatypes::Int32Type;
@@ -1428,8 +1439,7 @@ mod tests {
                 let batch_id = next_batch_id(&mut streams[stream_id.0]).await?;
                 assert!(
                     batch_id.is_some(),
-                    "expected stream {:?} to produce a batch",
-                    stream_id
+                    "expected stream {stream_id:?} to produce a batch"
                 );
                 outputs[stream_id.0].push(batch_id.unwrap());
             }
@@ -1467,7 +1477,6 @@ mod tests {
             col.value(0)
         }))
     }
-
 
     /// Verifies the simplest morsel-driven flow: one planner produces one
     /// morsel immediately, and the morsel is then scanned to completion.
@@ -1866,7 +1875,8 @@ mod tests {
     /// Verifies that an idle sibling stream can steal ready morsels even when
     /// it has no local files of its own.
     #[tokio::test]
-    async fn morsel_framework_sibling_stream_steals_when_only_one_has_files() -> Result<()> {
+    async fn morsel_framework_sibling_stream_steals_when_only_one_has_files() -> Result<()>
+    {
         let test = MultiStreamMorselTest::new(2)
             .with_file_in_partition(
                 0,
@@ -1911,8 +1921,8 @@ mod tests {
     /// Verifies that a sibling stream waiting on its own file's I/O can steal
     /// ready work from a faster sibling and continue making progress.
     #[tokio::test]
-    async fn morsel_framework_sibling_stream_steals_while_own_file_waits_on_io(
-    ) -> Result<()> {
+    async fn morsel_framework_sibling_stream_steals_while_own_file_waits_on_io()
+    -> Result<()> {
         let test = MultiStreamMorselTest::new(2)
             .with_file_in_partition(
                 0,

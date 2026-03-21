@@ -384,7 +384,9 @@ impl IoState {
 
         match self.mode {
             SharedFileStreamMode::Unordered => self.can_issue_unordered(stream_id),
-            SharedFileStreamMode::PreserveOrder => self.can_issue_preserve_order(stream_id),
+            SharedFileStreamMode::PreserveOrder => {
+                self.can_issue_preserve_order(stream_id)
+            }
         }
     }
 
