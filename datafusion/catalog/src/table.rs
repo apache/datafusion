@@ -177,7 +177,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// - `filters = [b > 5]`
     /// - `limit = Some(3)`
     ///
-    /// It must logically produce results like:
+    /// It must logically produce results equivalent to:
     ///
     /// ```text
     /// PROJECTION a (LIMIT 3 (SCAN WHERE b > 5))
