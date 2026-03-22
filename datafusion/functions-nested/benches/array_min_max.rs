@@ -27,7 +27,7 @@ use datafusion_functions_nested::min_max::ArrayMax;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-const NUM_ROWS: usize = 1000;
+const NUM_ROWS: usize = 8192;
 const SEED: u64 = 42;
 const LIST_NULL_DENSITY: f64 = 0.1;
 const ELEMENT_NULL_DENSITY: f64 = 0.1;
