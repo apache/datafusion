@@ -1991,6 +1991,9 @@ SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(
 ----
 NULL
 
+query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal \(got null\)
+SELECT APPROX_PERCENTILE_CONT(NULL) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
+
 # percentile_cont_with_weight_with_nulls
 query R
 SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(w, 0.5) WITHIN GROUP (ORDER BY v)
