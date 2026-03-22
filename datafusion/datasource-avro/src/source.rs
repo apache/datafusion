@@ -20,6 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::{ArrayRef, RecordBatch, new_null_array};
+use arrow::compute::cast;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -55,16 +58,52 @@ impl AvroSource {
     }
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
-        let mut builder = ReaderBuilder::new()
-            .with_batch_size(self.batch_size.expect("Batch size must set before open"));
+        // Do not push projection ordinals into `arrow-avro` here. Those ordinals are
+        // based on DataFusion's logical file schema, while `arrow-avro` without a reader
+        // schema interprets them against the writer schema of each file.
+        // We apply projection by column name after decode in `coerce_batch_to_schema`.
+        ReaderBuilder::new()
+            .with_batch_size(self.batch_size.expect("Batch size must set before open"))
+            .build(reader)
+            .map_err(Into::into)
+    }
 
-        // Avoid pushing an empty projection into arrow-avro.
-        if !self.projection.file_indices.is_empty() {
-            builder = builder.with_projection(self.projection.file_indices.clone());
+    fn projected_file_schema(&self) -> SchemaRef {
+        let file_schema = self.table_schema.file_schema();
+        if self.projection.file_indices.is_empty() {
+            return Arc::clone(file_schema);
         }
 
-        builder.build(reader).map_err(Into::into)
+        Arc::new(Schema::new(
+            self.projection
+                .file_indices
+                .iter()
+                .map(|idx| file_schema.field(*idx).clone())
+                .collect::<Vec<_>>(),
+        ))
     }
+}
+
+fn coerce_batch_to_schema(
+    batch: RecordBatch,
+    target_schema: SchemaRef,
+) -> Result<RecordBatch> {
+    let mut columns = Vec::with_capacity(target_schema.fields().len());
+    for field in target_schema.fields() {
+        let array: ArrayRef = match batch.schema().column_with_name(field.name()) {
+            Some((idx, _)) => {
+                let source_array = batch.column(idx).clone();
+                if source_array.data_type() == field.data_type() {
+                    source_array
+                } else {
+                    cast(&source_array, field.data_type())?
+                }
+            }
+            None => new_null_array(field.data_type(), batch.num_rows()),
+        };
+        columns.push(array);
+    }
+    Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
 impl FileSource for AvroSource {
@@ -162,6 +201,7 @@ mod private {
         fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
             let object_store = Arc::clone(&self.object_store);
             let config = Arc::clone(&self.config);
+            let projected_file_schema = config.projected_file_schema();
 
             Ok(Box::pin(async move {
                 let r = object_store
@@ -171,14 +211,28 @@ mod private {
                     GetResultPayload::File(file, _) => {
                         let reader = config.open(BufReader::new(file))?;
                         Ok(futures::stream::iter(reader)
-                            .map(|r| r.map_err(Into::into))
+                            .map(move |r| {
+                                r.map_err(Into::into).and_then(|batch| {
+                                    coerce_batch_to_schema(
+                                        batch,
+                                        Arc::clone(&projected_file_schema),
+                                    )
+                                })
+                            })
                             .boxed())
                     }
                     GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
                         let reader = config.open(BufReader::new(bytes.reader()))?;
                         Ok(futures::stream::iter(reader)
-                            .map(|r| r.map_err(Into::into))
+                            .map(move |r| {
+                                r.map_err(Into::into).and_then(|batch| {
+                                    coerce_batch_to_schema(
+                                        batch,
+                                        Arc::clone(&projected_file_schema),
+                                    )
+                                })
+                            })
                             .boxed())
                     }
                 }
