@@ -22,10 +22,10 @@ use arrow::datatypes::{FieldRef, Float64Type};
 use arrow::{
     array::{Array, ArrayRef, BooleanArray, Float64Array, UInt64Array},
     buffer::NullBuffer,
-    compute::kernels::cast,
     datatypes::{DataType, Field},
 };
-use datafusion_common::{Result, ScalarValue, downcast_value, plan_err};
+use datafusion_common::cast::{as_float64_array, as_uint64_array};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
     Volatility,
@@ -62,19 +62,10 @@ make_udaf_expr_and_func!(
     syntax_example = "var(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct VarianceSample {
     signature: Signature,
     aliases: Vec<String>,
-}
-
-impl Debug for VarianceSample {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("VarianceSample")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for VarianceSample {
@@ -87,7 +78,7 @@ impl VarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_sample"), String::from("var_samp")],
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
         }
     }
 }
@@ -171,19 +162,10 @@ impl AggregateUDFImpl for VarianceSample {
     syntax_example = "var_pop(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct VariancePopulation {
     signature: Signature,
     aliases: Vec<String>,
-}
-
-impl Debug for VariancePopulation {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("VariancePopulation")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for VariancePopulation {
@@ -196,7 +178,7 @@ impl VariancePopulation {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_population")],
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
         }
     }
 }
@@ -214,11 +196,7 @@ impl AggregateUDFImpl for VariancePopulation {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Variance requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
@@ -278,6 +256,7 @@ impl AggregateUDFImpl for VariancePopulation {
             StatsType::Population,
         )))
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -365,10 +344,8 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &cast(&values[0], &DataType::Float64)?;
-        let arr = downcast_value!(values, Float64Array).iter().flatten();
-
-        for value in arr {
+        let arr = as_float64_array(&values[0])?;
+        for value in arr.iter().flatten() {
             (self.count, self.mean, self.m2) =
                 update(self.count, self.mean, self.m2, value)
         }
@@ -377,10 +354,8 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &cast(&values[0], &DataType::Float64)?;
-        let arr = downcast_value!(values, Float64Array).iter().flatten();
-
-        for value in arr {
+        let arr = as_float64_array(&values[0])?;
+        for value in arr.iter().flatten() {
             let new_count = self.count - 1;
             let delta1 = self.mean - value;
             let new_mean = delta1 / new_count as f64 + self.mean;
@@ -396,9 +371,9 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = downcast_value!(states[0], UInt64Array);
-        let means = downcast_value!(states[1], Float64Array);
-        let m2s = downcast_value!(states[2], Float64Array);
+        let counts = as_uint64_array(&states[0])?;
+        let means = as_float64_array(&states[1])?;
+        let m2s = as_float64_array(&states[2])?;
 
         for i in 0..counts.len() {
             let c = counts.value(i);
@@ -533,8 +508,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = &cast(&values[0], &DataType::Float64)?;
-        let values = downcast_value!(values, Float64Array);
+        let values = as_float64_array(&values[0])?;
 
         self.resize(total_num_groups);
         accumulate(group_indices, values, opt_filter, |group_index, value| {
@@ -561,9 +535,9 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
     ) -> Result<()> {
         assert_eq!(values.len(), 3, "two arguments to merge_batch");
         // first batch is counts, second is partial means, third is partial m2s
-        let partial_counts = downcast_value!(values[0], UInt64Array);
-        let partial_means = downcast_value!(values[1], Float64Array);
-        let partial_m2s = downcast_value!(values[2], Float64Array);
+        let partial_counts = as_uint64_array(&values[0])?;
+        let partial_means = as_float64_array(&values[1])?;
+        let partial_m2s = as_float64_array(&values[2])?;
 
         self.resize(total_num_groups);
         Self::merge(
@@ -633,9 +607,7 @@ impl DistinctVarianceAccumulator {
 
 impl Accumulator for DistinctVarianceAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let cast_values = cast(&values[0], &DataType::Float64)?;
-        self.distinct_values
-            .update_batch(vec![cast_values].as_ref())
+        self.distinct_values.update_batch(values)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {

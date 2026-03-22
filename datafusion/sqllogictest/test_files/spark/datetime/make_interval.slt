@@ -90,21 +90,15 @@ SELECT make_interval(0, 0, 0, 0, 2147483647, 1, 0.0);
 ----
 NULL
 
-# Intervals being rendered as empty string, see issue:
-# https://github.com/apache/datafusion/issues/17455
-# We expect something like 0.00 secs with query ?
 query T
 SELECT make_interval(0, 0, 0, 0, 0, 0, 0.0) || '';
 ----
-(empty)
+0 secs
 
-# Intervals being rendered as empty string, see issue:
-# https://github.com/apache/datafusion/issues/17455
-# We expect something like 0.00 secs with query ?
 query T
 SELECT make_interval() || '';
 ----
-(empty)
+0 secs
 
 query ?
 SELECT INTERVAL '1' SECOND AS iv;

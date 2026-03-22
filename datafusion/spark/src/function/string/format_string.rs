@@ -598,7 +598,7 @@ impl ConversionType {
     pub fn validate(&self, arg_type: &DataType) -> Result<()> {
         match self {
             ConversionType::BooleanLower | ConversionType::BooleanUpper => {
-                if !matches!(arg_type, DataType::Boolean) {
+                if *arg_type != DataType::Boolean {
                     return exec_err!(
                         "Invalid argument type for boolean conversion: {:?}",
                         arg_type
@@ -1431,7 +1431,7 @@ impl ConversionSpecifier {
                 let value = "null".to_string();
                 self.format_string(string, &value)
             }
-            _ => exec_err!("Invalid scalar value: {:?}", value),
+            _ => exec_err!("Invalid scalar value: {value}"),
         }
     }
 
@@ -2361,7 +2361,6 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
 mod tests {
     use super::*;
     use arrow::datatypes::DataType::Utf8;
-    use datafusion_common::Result;
 
     #[test]
     fn test_format_string_nullability() -> Result<()> {

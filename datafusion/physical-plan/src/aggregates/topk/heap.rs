@@ -216,7 +216,7 @@ fn extract_string_value<'a>(
         DataType::Utf8 => batch.as_string::<i32>().value(idx),
         DataType::LargeUtf8 => batch.as_string::<i64>().value(idx),
         DataType::Utf8View => batch.as_string_view().value(idx),
-        _ => unreachable!("Unsupported string type: {:?}", data_type),
+        _ => unreachable!("Unsupported string type: {data_type}"),
     }
 }
 
@@ -316,7 +316,7 @@ impl ArrowHeap for StringHeap {
             DataType::Utf8 => build_string_array!(StringBuilder),
             DataType::LargeUtf8 => build_string_array!(LargeStringBuilder),
             DataType::Utf8View => build_string_array!(StringViewBuilder),
-            _ => unreachable!("Unsupported string type: {:?}", self.data_type),
+            _ => unreachable!("Unsupported string type: {}", self.data_type),
         };
         (arr, map_idxs)
     }

@@ -24,22 +24,24 @@ use std::task::{Context, Poll};
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream,
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 use futures::{Stream, StreamExt, ready};
@@ -74,7 +76,7 @@ pub struct RecursiveQueryExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl RecursiveQueryExec {
@@ -97,7 +99,7 @@ impl RecursiveQueryExec {
             is_distinct,
             work_table,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -143,12 +145,19 @@ impl ExecutionPlan for RecursiveQueryExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.static_term, &self.recursive_term]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     // TODO: control these hints and see whether we can
@@ -207,10 +216,6 @@ impl ExecutionPlan for RecursiveQueryExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 
@@ -383,20 +388,6 @@ fn assign_work_table(
         } else {
             Ok(Transformed::no(plan))
         }
-    })
-    .data()
-}
-
-/// Some plans will change their internal states after execution, making them unable to be executed again.
-/// This function uses [`ExecutionPlan::reset_state`] to reset any internal state within the plan.
-///
-/// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
-/// However, if the data of the left table is derived from the work table, it will become outdated
-/// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
-fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    plan.transform_up(|plan| {
-        let new_plan = Arc::clone(&plan).reset_state()?;
-        Ok(Transformed::yes(new_plan))
     })
     .data()
 }

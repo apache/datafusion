@@ -490,7 +490,7 @@ fn resolve_classic_join(
             // If we find a match we append all indices and move to the next stream row index
             match operator {
                 Operator::Gt | Operator::Lt => {
-                    if matches!(compare, Ordering::Less) {
+                    if compare == Ordering::Less {
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
 
@@ -662,7 +662,6 @@ mod tests {
     use arrow_schema::{DataType, Field};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
-    use datafusion_expr::JoinType;
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use insta::assert_snapshot;
     use std::sync::Arc;

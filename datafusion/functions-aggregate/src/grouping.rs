@@ -18,7 +18,6 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::fmt;
 
 use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef};
@@ -60,18 +59,9 @@ make_udaf_expr_and_func!(
         description = "Expression to evaluate whether data is aggregated across the specified column. Can be a constant, column, or function."
     )
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Grouping {
     signature: Signature,
-}
-
-impl fmt::Debug for Grouping {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Grouping")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for Grouping {

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
@@ -37,6 +38,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
+    FieldRef,
 };
 use arrow::util::display::array_value_to_string;
 use datafusion_common::{
@@ -45,7 +47,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
-    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
+    expr::{Alias, Exists, InList, ScalarFunction, SetQuantifier, Sort, WindowFunction},
 };
 use sqlparser::ast::helpers::attached_token::AttachedToken;
 use sqlparser::tokenizer::Span;
@@ -188,9 +190,7 @@ impl Unparser<'_> {
                     end_token: AttachedToken::empty(),
                 })
             }
-            Expr::Cast(Cast { expr, data_type }) => {
-                Ok(self.cast_to_sql(expr, data_type)?)
-            }
+            Expr::Cast(Cast { expr, field }) => Ok(self.cast_to_sql(expr, field)?),
             Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(window_fun) => {
@@ -393,6 +393,33 @@ impl Unparser<'_> {
                     negated: insubq.negated,
                 })
             }
+            Expr::SetComparison(set_cmp) => {
+                let left = Box::new(self.expr_to_sql_inner(set_cmp.expr.as_ref())?);
+                let sub_statement =
+                    self.plan_to_sql(set_cmp.subquery.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                let compare_op = self.op_to_sql(&set_cmp.op)?;
+                match set_cmp.quantifier {
+                    SetQuantifier::Any => Ok(ast::Expr::AnyOp {
+                        left,
+                        compare_op,
+                        right: Box::new(ast::Expr::Subquery(sub_query)),
+                        is_some: false,
+                    }),
+                    SetQuantifier::All => Ok(ast::Expr::AllOp {
+                        left,
+                        compare_op,
+                        right: Box::new(ast::Expr::Subquery(sub_query)),
+                    }),
+                }
+            }
             Expr::Exists(Exists { subquery, negated }) => {
                 let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
                 let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
@@ -461,12 +488,13 @@ impl Unparser<'_> {
                     )
                 })
             }
-            Expr::TryCast(TryCast { expr, data_type }) => {
+            Expr::TryCast(TryCast { expr, field }) => {
                 let inner_expr = self.expr_to_sql_inner(expr)?;
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
-                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    data_type: self.arrow_dtype_to_ast_dtype(field)?,
+                    array: false,
                     format: None,
                 })
             }
@@ -1066,6 +1094,7 @@ impl Unparser<'_> {
             Operator::Question => Ok(BinaryOperator::Question),
             Operator::QuestionAnd => Ok(BinaryOperator::QuestionAnd),
             Operator::QuestionPipe => Ok(BinaryOperator::QuestionPipe),
+            Operator::Colon => Ok(BinaryOperator::Custom(":".to_owned())),
         }
     }
 
@@ -1118,6 +1147,7 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(ts))),
             data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
+            array: false,
             format: None,
         })
     }
@@ -1140,30 +1170,36 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(time))),
             data_type: ast::DataType::Time(None, TimezoneInfo::None),
+            array: false,
             format: None,
         })
     }
 
     // Explicit type cast on ast::Expr::Value is not needed by underlying engine for certain types
     // For example: CAST(Utf8("binary_value") AS Binary) and  CAST(Utf8("dictionary_value") AS Dictionary)
-    fn cast_to_sql(&self, expr: &Expr, data_type: &DataType) -> Result<ast::Expr> {
+    fn cast_to_sql(&self, expr: &Expr, field: &FieldRef) -> Result<ast::Expr> {
         let inner_expr = self.expr_to_sql_inner(expr)?;
+        let data_type = field.data_type();
         match inner_expr {
             ast::Expr::Value(_) => match data_type {
-                DataType::Dictionary(_, _) | DataType::Binary | DataType::BinaryView => {
+                DataType::Dictionary(_, _) | DataType::Binary | DataType::BinaryView
+                    if field.metadata().is_empty() =>
+                {
                     Ok(inner_expr)
                 }
                 _ => Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
-                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    data_type: self.arrow_dtype_to_ast_dtype(field)?,
+                    array: false,
                     format: None,
                 }),
             },
             _ => Ok(ast::Expr::Cast {
                 kind: ast::CastKind::Cast,
                 expr: Box::new(inner_expr),
-                data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                data_type: self.arrow_dtype_to_ast_dtype(field)?,
+                array: false,
                 format: None,
             }),
         }
@@ -1258,18 +1294,17 @@ impl Unparser<'_> {
                 Ok(ast::Expr::value(ast::Value::Number(ui.to_string(), false)))
             }
             ScalarValue::UInt64(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Utf8(Some(str)) => {
+            ScalarValue::Utf8(Some(str))
+            | ScalarValue::Utf8View(Some(str))
+            | ScalarValue::LargeUtf8(Some(str)) => {
+                if let Some(expr) = self.dialect.string_literal_to_sql(str) {
+                    return Ok(expr);
+                }
                 Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
             }
-            ScalarValue::Utf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Utf8View(Some(str)) => {
-                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
-            }
-            ScalarValue::Utf8View(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::LargeUtf8(Some(str)) => {
-                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
-            }
-            ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Utf8(None)
+            | ScalarValue::Utf8View(None)
+            | ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Binary(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::BinaryView(Some(_)) => {
@@ -1305,6 +1340,7 @@ impl Unparser<'_> {
                         date.to_string(),
                     ))),
                     data_type: ast::DataType::Date,
+                    array: false,
                     format: None,
                 })
             }
@@ -1328,6 +1364,7 @@ impl Unparser<'_> {
                         datetime.to_string(),
                     ))),
                     data_type: self.ast_type_for_date64_in_cast(),
+                    array: false,
                     format: None,
                 })
             }
@@ -1414,6 +1451,7 @@ impl Unparser<'_> {
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(v),
+            ScalarValue::RunEndEncoded(_, _, v) => self.scalar_to_sql(v),
         }
     }
 
@@ -1689,7 +1727,8 @@ impl Unparser<'_> {
         }))
     }
 
-    fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
+    fn arrow_dtype_to_ast_dtype(&self, field: &FieldRef) -> Result<ast::DataType> {
+        let data_type = field.data_type();
         match data_type {
             DataType::Null => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
@@ -1762,7 +1801,10 @@ impl Unparser<'_> {
             DataType::Union(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
-            DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
+            DataType::Dictionary(_, val) => {
+                self.arrow_dtype_to_ast_dtype(&val.clone().into_nullable_field_ref())
+            }
+            DataType::RunEndEncoded(_, val) => self.arrow_dtype_to_ast_dtype(val),
             DataType::Decimal32(precision, scale)
             | DataType::Decimal64(precision, scale)
             | DataType::Decimal128(precision, scale)
@@ -1782,9 +1824,6 @@ impl Unparser<'_> {
                 ))
             }
             DataType::Map(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
-            }
-            DataType::RunEndEncoded(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
         }
@@ -1904,34 +1943,25 @@ mod tests {
                 r#"CASE WHEN a IS NOT NULL THEN true ELSE false END"#,
             ),
             (
-                Expr::Cast(Cast {
-                    expr: Box::new(col("a")),
-                    data_type: DataType::Date64,
-                }),
+                Expr::Cast(Cast::new(Box::new(col("a")), DataType::Date64)),
                 r#"CAST(a AS DATETIME)"#,
             ),
             (
-                Expr::Cast(Cast {
-                    expr: Box::new(col("a")),
-                    data_type: DataType::Timestamp(
-                        TimeUnit::Nanosecond,
-                        Some("+08:00".into()),
-                    ),
-                }),
+                Expr::Cast(Cast::new(
+                    Box::new(col("a")),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+08:00".into())),
+                )),
                 r#"CAST(a AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
-                Expr::Cast(Cast {
-                    expr: Box::new(col("a")),
-                    data_type: DataType::Timestamp(TimeUnit::Millisecond, None),
-                }),
+                Expr::Cast(Cast::new(
+                    Box::new(col("a")),
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                )),
                 r#"CAST(a AS TIMESTAMP)"#,
             ),
             (
-                Expr::Cast(Cast {
-                    expr: Box::new(col("a")),
-                    data_type: DataType::UInt32,
-                }),
+                Expr::Cast(Cast::new(Box::new(col("a")), DataType::UInt32)),
                 r#"CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
@@ -2249,10 +2279,7 @@ mod tests {
                 r#"((a + b) > 100.123)"#,
             ),
             (
-                Expr::Cast(Cast {
-                    expr: Box::new(col("a")),
-                    data_type: DataType::Decimal128(10, -2),
-                }),
+                Expr::Cast(Cast::new(Box::new(col("a")), DataType::Decimal128(10, -2))),
                 r#"CAST(a AS DECIMAL(12,0))"#,
             ),
             (
@@ -2284,6 +2311,17 @@ mod tests {
                 Expr::Literal(
                     ScalarValue::Dictionary(
                         Box::new(DataType::Int32),
+                        Box::new(ScalarValue::Utf8(Some("foo".into()))),
+                    ),
+                    None,
+                ),
+                "'foo'",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::RunEndEncoded(
+                        Field::new("run_ends", DataType::Int32, false).into(),
+                        Field::new("values", DataType::Utf8, true).into(),
                         Box::new(ScalarValue::Utf8(Some("foo".into()))),
                     ),
                     None,
@@ -2359,7 +2397,6 @@ mod tests {
 
         let expected = r#"('a' > 4)"#;
         assert_eq!(actual, expected);
-
         Ok(())
     }
 
@@ -2389,10 +2426,7 @@ mod tests {
                 .build();
             let unparser = Unparser::new(&dialect);
 
-            let expr = Expr::Cast(Cast {
-                expr: Box::new(col("a")),
-                data_type: DataType::Date64,
-            });
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), DataType::Date64));
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
@@ -2414,10 +2448,7 @@ mod tests {
                 .build();
             let unparser = Unparser::new(&dialect);
 
-            let expr = Expr::Cast(Cast {
-                expr: Box::new(col("a")),
-                data_type: DataType::Float64,
-            });
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64));
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
@@ -2647,23 +2678,23 @@ mod tests {
     fn test_cast_value_to_binary_expr() {
         let tests = [
             (
-                Expr::Cast(Cast {
-                    expr: Box::new(Expr::Literal(
+                Expr::Cast(Cast::new(
+                    Box::new(Expr::Literal(
                         ScalarValue::Utf8(Some("blah".to_string())),
                         None,
                     )),
-                    data_type: DataType::Binary,
-                }),
+                    DataType::Binary,
+                )),
                 "'blah'",
             ),
             (
-                Expr::Cast(Cast {
-                    expr: Box::new(Expr::Literal(
+                Expr::Cast(Cast::new(
+                    Box::new(Expr::Literal(
                         ScalarValue::Utf8(Some("blah".to_string())),
                         None,
                     )),
-                    data_type: DataType::BinaryView,
-                }),
+                    DataType::BinaryView,
+                )),
                 "'blah'",
             ),
         ];
@@ -2694,10 +2725,7 @@ mod tests {
         ] {
             let unparser = Unparser::new(dialect);
 
-            let expr = Expr::Cast(Cast {
-                expr: Box::new(col("a")),
-                data_type,
-            });
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
@@ -2780,10 +2808,7 @@ mod tests {
             [(default_dialect, "BIGINT"), (mysql_dialect, "SIGNED")]
         {
             let unparser = Unparser::new(&dialect);
-            let expr = Expr::Cast(Cast {
-                expr: Box::new(col("a")),
-                data_type: DataType::Int64,
-            });
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int64));
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
@@ -2808,10 +2833,7 @@ mod tests {
             [(default_dialect, "INTEGER"), (mysql_dialect, "SIGNED")]
         {
             let unparser = Unparser::new(&dialect);
-            let expr = Expr::Cast(Cast {
-                expr: Box::new(col("a")),
-                data_type: DataType::Int32,
-            });
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int32));
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
@@ -2847,10 +2869,7 @@ mod tests {
             (&mysql_dialect, &timestamp_with_tz, "DATETIME"),
         ] {
             let unparser = Unparser::new(dialect);
-            let expr = Expr::Cast(Cast {
-                expr: Box::new(col("a")),
-                data_type: data_type.clone(),
-            });
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type.clone()));
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
@@ -2903,10 +2922,7 @@ mod tests {
         ] {
             let unparser = Unparser::new(dialect);
 
-            let expr = Expr::Cast(Cast {
-                expr: Box::new(col("a")),
-                data_type,
-            });
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
@@ -2944,15 +2960,79 @@ mod tests {
     }
 
     #[test]
+    fn test_mssql_dialect_national_literal() -> Result<()> {
+        struct MsSqlDialect;
+
+        impl Dialect for MsSqlDialect {
+            fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+                Some('[')
+            }
+
+            fn string_literal_to_sql(&self, s: &str) -> Option<ast::Expr> {
+                if !s.is_ascii() {
+                    Some(ast::Expr::value(ast::Value::NationalStringLiteral(
+                        s.to_string(),
+                    )))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let dialect = MsSqlDialect;
+        let unparser = Unparser::new(&dialect);
+
+        // Get nation string literal for the custom mssql dialect
+        for (s, expected) in [
+            ("national string", "'national string'"),
+            ("datafusion資料融合", "N'datafusion資料融合'"),
+        ] {
+            let expr = Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::Utf8View(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::LargeUtf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+        }
+
+        let dialect = DefaultDialect {};
+        let unparser = Unparser::new(&dialect);
+
+        // Get normal string literal for default dialect
+        for (s, expected) in [
+            ("national string", "'national string'"),
+            ("datafusion資料融合", "'datafusion資料融合'"),
+        ] {
+            let expr = Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::Utf8View(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+
+            let expr = Expr::Literal(ScalarValue::LargeUtf8(Some(s.to_string())), None);
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_cast_value_to_dict_expr() {
         let tests = [(
-            Expr::Cast(Cast {
-                expr: Box::new(Expr::Literal(
+            Expr::Cast(Cast::new(
+                Box::new(Expr::Literal(
                     ScalarValue::Utf8(Some("variation".to_string())),
                     None,
                 )),
-                data_type: DataType::Dictionary(Box::new(Int8), Box::new(DataType::Utf8)),
-            }),
+                DataType::Dictionary(Box::new(Int8), Box::new(DataType::Utf8)),
+            )),
             "'variation'",
         )];
         for (value, expected) in tests {
@@ -2984,10 +3064,7 @@ mod tests {
                     datafusion_functions::math::round::RoundFunc::new(),
                 )),
                 args: vec![
-                    Expr::Cast(Cast {
-                        expr: Box::new(col("a")),
-                        data_type: DataType::Float64,
-                    }),
+                    Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
                     Expr::Literal(ScalarValue::Int64(Some(2)), None),
                 ],
             });
@@ -3149,10 +3226,31 @@ mod tests {
 
         let unparser = Unparser::new(&dialect);
 
-        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::Utf8),
-        ))?;
+        let arrow_field = Arc::new(Field::new(
+            "",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ));
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&arrow_field)?;
+
+        assert_eq!(ast_dtype, ast::DataType::Varchar(None));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_end_encoded_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new().build();
+
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(
+            &DataType::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", DataType::Utf8, true).into(),
+            )
+            .into_nullable_field_ref(),
+        )?;
 
         assert_eq!(ast_dtype, ast::DataType::Varchar(None));
 
@@ -3166,7 +3264,8 @@ mod tests {
             .build();
         let unparser = Unparser::new(&dialect);
 
-        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Utf8View)?;
+        let arrow_field = Arc::new(Field::new("", DataType::Utf8View, true));
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&arrow_field)?;
 
         assert_eq!(ast_dtype, ast::DataType::Char(None));
 
@@ -3234,10 +3333,10 @@ mod tests {
         let dialect: Arc<dyn Dialect> = Arc::new(SqliteDialect {});
 
         let unparser = Unparser::new(dialect.as_ref());
-        let expr = Expr::Cast(Cast {
-            expr: Box::new(col("a")),
-            data_type: DataType::Timestamp(TimeUnit::Nanosecond, None),
-        });
+        let expr = Expr::Cast(Cast::new(
+            Box::new(col("a")),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ));
 
         let ast = unparser.expr_to_sql(&expr)?;
 

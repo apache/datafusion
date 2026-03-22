@@ -48,7 +48,10 @@ use std::sync::Arc;
 ```"#,
     standard_argument(name = "str", prefix = "String"),
     argument(name = "delimiter", description = "String or character to split on."),
-    argument(name = "pos", description = "Position of the part to return.")
+    argument(
+        name = "pos",
+        description = "Position of the part to return (counting from 1). Negative values count backward from the end of the string."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SplitPartFunc {
@@ -228,17 +231,32 @@ where
                                     "split_part index {n} exceeds maximum supported value"
                                 )
                             })?;
-                            string.split(delimiter).nth(idx)
+
+                            if delimiter.is_empty() {
+                                // Match PostgreSQL split_part behavior for empty delimiter:
+                                // treat the input as a single field ("ab" -> ["ab"]),
+                                // rather than Rust's split("") result (["", "a", "b", ""]).
+                                (n == 1).then_some(string)
+                            } else {
+                                string.split(delimiter).nth(idx)
+                            }
                         }
                         std::cmp::Ordering::Less => {
                             // Negative index: use rsplit().nth() to efficiently get from the end
                             // rsplit iterates in reverse, so -1 means first from rsplit (index 0)
-                            let idx: usize = (-n - 1).try_into().map_err(|_| {
+                            let idx: usize = (n.unsigned_abs() - 1).try_into().map_err(|_| {
                                 exec_datafusion_err!(
                                     "split_part index {n} exceeds minimum supported value"
                                 )
                             })?;
-                            string.rsplit(delimiter).nth(idx)
+                            if delimiter.is_empty() {
+                                // Match PostgreSQL split_part behavior for empty delimiter:
+                                // treat the input as a single field ("ab" -> ["ab"]),
+                                // rather than Rust's split("") result (["", "a", "b", ""]).
+                                (n == -1).then_some(string)
+                            } else {
+                                string.rsplit(delimiter).nth(idx)
+                            }
                         }
                         std::cmp::Ordering::Equal => {
                             return exec_err!("field position must not be zero");
@@ -320,6 +338,131 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
             ],
             exec_err!("field position must not be zero"),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
+                    "abc~@~def~@~ghi"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(i64::MIN))),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // Edge cases with delimiters
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(",")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ],
+            Ok(Some("a")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(",")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ],
+            Ok(Some("a,b")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(" ")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ],
+            Ok(Some("a,b")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(" ")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        // Edge cases with delimiters with negative n
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(-1))),
+            ],
+            Ok(Some("a,b")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(" ")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(-1))),
+            ],
+            Ok(Some("a,b")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(-2))),
+            ],
+            Ok(Some("")),
             &str,
             Utf8,
             StringArray

@@ -212,7 +212,7 @@ impl MemoryPool for FairSpillPool {
                     .checked_div(state.num_spill)
                     .unwrap_or(spill_available);
 
-                if reservation.size + additional > available {
+                if reservation.size() + additional > available {
                     return Err(insufficient_capacity_err(
                         reservation,
                         additional,
@@ -264,7 +264,7 @@ fn insufficient_capacity_err(
         "Failed to allocate additional {} for {} with {} already allocated for this reservation - {} remain available for the total pool",
         human_readable_size(additional),
         reservation.registration.consumer.name,
-        human_readable_size(reservation.size),
+        human_readable_size(reservation.size()),
         human_readable_size(available)
     )
 }
@@ -526,12 +526,12 @@ mod tests {
     fn test_fair() {
         let pool = Arc::new(FairSpillPool::new(100)) as _;
 
-        let mut r1 = MemoryConsumer::new("unspillable").register(&pool);
+        let r1 = MemoryConsumer::new("unspillable").register(&pool);
         // Can grow beyond capacity of pool
         r1.grow(2000);
         assert_eq!(pool.reserved(), 2000);
 
-        let mut r2 = MemoryConsumer::new("r2")
+        let r2 = MemoryConsumer::new("r2")
             .with_can_spill(true)
             .register(&pool);
         // Can grow beyond capacity of pool
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(r2.size(), 10);
         assert_eq!(pool.reserved(), 30);
 
-        let mut r3 = MemoryConsumer::new("r3")
+        let r3 = MemoryConsumer::new("r3")
             .with_can_spill(true)
             .register(&pool);
 
@@ -584,7 +584,7 @@ mod tests {
         r1.free();
         assert_eq!(pool.reserved(), 80);
 
-        let mut r4 = MemoryConsumer::new("s4").register(&pool);
+        let r4 = MemoryConsumer::new("s4").register(&pool);
         let err = r4.try_grow(30).unwrap_err().strip_backtrace();
         assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 30.0 B for s4 with 0.0 B already allocated for this reservation - 20.0 B remain available for the total pool");
     }
@@ -601,18 +601,18 @@ mod tests {
         // Test: use all the different interfaces to change reservation size
 
         // set r1=50, using grow and shrink
-        let mut r1 = MemoryConsumer::new("r1").register(&pool);
+        let r1 = MemoryConsumer::new("r1").register(&pool);
         r1.grow(50);
         r1.grow(20);
         r1.shrink(20);
 
         // set r2=15 using try_grow
-        let mut r2 = MemoryConsumer::new("r2").register(&pool);
+        let r2 = MemoryConsumer::new("r2").register(&pool);
         r2.try_grow(15)
             .expect("should succeed in memory allotment for r2");
 
         // set r3=20 using try_resize
-        let mut r3 = MemoryConsumer::new("r3").register(&pool);
+        let r3 = MemoryConsumer::new("r3").register(&pool);
         r3.try_resize(25)
             .expect("should succeed in memory allotment for r3");
         r3.try_resize(20)
@@ -620,12 +620,12 @@ mod tests {
 
         // set r4=10
         // this should not be reported in top 3
-        let mut r4 = MemoryConsumer::new("r4").register(&pool);
+        let r4 = MemoryConsumer::new("r4").register(&pool);
         r4.grow(10);
 
         // Test: reports if new reservation causes error
         // using the previously set sizes for other consumers
-        let mut r5 = MemoryConsumer::new("r5").register(&pool);
+        let r5 = MemoryConsumer::new("r5").register(&pool);
         let res = r5.try_grow(150);
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
@@ -650,7 +650,7 @@ mod tests {
         let same_name = "foo";
 
         // Test: see error message when no consumers recorded yet
-        let mut r0 = MemoryConsumer::new(same_name).register(&pool);
+        let r0 = MemoryConsumer::new(same_name).register(&pool);
         let res = r0.try_grow(150);
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
@@ -665,7 +665,7 @@ mod tests {
 
         r0.grow(10); // make r0=10, pool available=90
         let new_consumer_same_name = MemoryConsumer::new(same_name);
-        let mut r1 = new_consumer_same_name.register(&pool);
+        let r1 = new_consumer_same_name.register(&pool);
         // TODO: the insufficient_capacity_err() message is per reservation, not per consumer.
         // a followup PR will clarify this message "0 bytes already allocated for this reservation"
         let res = r1.try_grow(150);
@@ -695,7 +695,7 @@ mod tests {
         // will be recognized as different in the TrackConsumersPool
         let consumer_with_same_name_but_different_hash =
             MemoryConsumer::new(same_name).with_can_spill(true);
-        let mut r2 = consumer_with_same_name_but_different_hash.register(&pool);
+        let r2 = consumer_with_same_name_but_different_hash.register(&pool);
         let res = r2.try_grow(150);
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
@@ -714,10 +714,10 @@ mod tests {
             // Baseline: see the 2 memory consumers
             let setting = make_settings();
             let _bound = setting.bind_to_scope();
-            let mut r0 = MemoryConsumer::new("r0").register(&pool);
+            let r0 = MemoryConsumer::new("r0").register(&pool);
             r0.grow(10);
             let r1_consumer = MemoryConsumer::new("r1");
-            let mut r1 = r1_consumer.register(&pool);
+            let r1 = r1_consumer.register(&pool);
             r1.grow(20);
 
             let res = r0.try_grow(150);
@@ -791,13 +791,13 @@ mod tests {
             .downcast::<TrackConsumersPool<GreedyMemoryPool>>()
             .unwrap();
         // set r1=20
-        let mut r1 = MemoryConsumer::new("r1").register(&pool);
+        let r1 = MemoryConsumer::new("r1").register(&pool);
         r1.grow(20);
         // set r2=15
-        let mut r2 = MemoryConsumer::new("r2").register(&pool);
+        let r2 = MemoryConsumer::new("r2").register(&pool);
         r2.grow(15);
         // set r3=45
-        let mut r3 = MemoryConsumer::new("r3").register(&pool);
+        let r3 = MemoryConsumer::new("r3").register(&pool);
         r3.grow(45);
 
         let downcasted = upcasted

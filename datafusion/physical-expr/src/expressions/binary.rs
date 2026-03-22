@@ -715,7 +715,7 @@ impl BinaryExpr {
             StringConcat => concat_elements(&left, &right),
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
-            | IntegerDivide => {
+            | IntegerDivide | Colon => {
                 not_impl_err!(
                     "Binary operator '{:?}' is not supported in the physical expr",
                     self.op

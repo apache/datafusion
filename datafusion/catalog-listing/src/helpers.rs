@@ -83,6 +83,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         | Expr::Exists(_)
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
+        | Expr::SetComparison(_)
         | Expr::GroupingSet(_)
         | Expr::Case(_) => Ok(TreeNodeRecursion::Continue),
 
@@ -461,7 +462,7 @@ mod tests {
     use std::ops::Not;
 
     use super::*;
-    use datafusion_expr::{Expr, case, col, lit};
+    use datafusion_expr::{case, col};
 
     #[test]
     fn test_split_files() {

@@ -35,6 +35,7 @@ use datafusion_datasource::file_stream::FileOpener;
 use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -548,6 +549,7 @@ impl FileSource for ParquetSource {
                 .batch_size
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
+            preserve_order: base_config.preserve_order,
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
@@ -756,7 +758,7 @@ impl FileSource for ParquetSource {
     /// # Returns
     /// - `Inexact`: Created an optimized source (e.g., reversed scan) that approximates the order
     /// - `Unsupported`: Cannot optimize for this ordering
-    fn try_reverse_output(
+    fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],
         eq_properties: &EquivalenceProperties,
@@ -814,6 +816,26 @@ impl FileSource for ParquetSource {
         // - File reordering based on min/max statistics
         // - Detection of exact ordering (return Exact to remove Sort operator)
         // - Partial sort pushdown for prefix matches
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn PhysicalExpr,
+        ) -> datafusion_common::Result<TreeNodeRecursion>,
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
+        // Visit predicate (filter) expression if present
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(predicate) = &self.predicate {
+            tnr = tnr.visit_sibling(|| f(predicate.as_ref()))?;
+        }
+
+        // Visit projection expressions
+        for proj_expr in &self.projection {
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
+        }
+
+        Ok(tnr)
     }
 }
 
@@ -873,7 +895,6 @@ mod tests {
     #[test]
     fn test_reverse_scan_with_other_options() {
         use arrow::datatypes::Schema;
-        use datafusion_common::config::TableParquetOptions;
 
         let schema = Arc::new(Schema::empty());
         let options = TableParquetOptions::default();

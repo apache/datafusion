@@ -89,6 +89,9 @@ impl EmitTo {
 /// optional and is harder to implement than `Accumulator`, but can be much
 /// faster for queries with many group values.  See the [Aggregating Millions of
 /// Groups Fast blog] for more background.
+/// For more background, please also see the [Aggregating Millions of Groups Fast in Apache Arrow DataFusion 28.0.0 blog]
+///
+/// [Aggregating Millions of Groups Fast in Apache Arrow DataFusion 28.0.0 blog]: https://datafusion.apache.org/blog/2023/08/05/datafusion_fast_grouping
 ///
 /// [`NullState`] can help keep the state for groups that have not seen any
 /// values and produce the correct output for those groups.
@@ -105,7 +108,7 @@ impl EmitTo {
 ///
 /// [`Accumulator`]: crate::accumulator::Accumulator
 /// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
-pub trait GroupsAccumulator: Send {
+pub trait GroupsAccumulator: Send + std::any::Any {
     /// Updates the accumulator's state from its arguments, encoded as
     /// a vector of [`ArrayRef`]s.
     ///

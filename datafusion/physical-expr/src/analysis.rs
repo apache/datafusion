@@ -178,7 +178,7 @@ pub fn analyze(
             "ExprBoundaries has a non-zero distinct count although it represents an empty table"
         );
         assert_or_internal_err!(
-            context.selectivity == Some(0.0),
+            context.selectivity.unwrap_or(0.0) == 0.0,
             "AnalysisContext has a non-zero selectivity although it represents an empty table"
         );
         Ok(context)

@@ -60,7 +60,7 @@ SELECT
     isnan(NULL),
     iszero(NULL)
 ----
-NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL 1 NULL NULL NULL
 
 # test_array_cast_invalid_timezone_will_panic
 statement error Parser error: Invalid timezone "Foo": failed to parse timezone
@@ -432,6 +432,16 @@ SELECT chr(CAST(0 AS int))
 statement error DataFusion error: Execution error: invalid Unicode scalar value: 9223372036854775807
 SELECT chr(CAST(9223372036854775807 AS bigint))
 
+statement error DataFusion error: Execution error: invalid Unicode scalar value: 1114112
+SELECT chr(CAST(1114112 AS bigint))
+
+statement error DataFusion error: Execution error: invalid Unicode scalar value: -1
+SELECT chr(CAST(-1 AS bigint))
+
+# surrogate code point (invalid scalar value)
+statement error DataFusion error: Execution error: invalid Unicode scalar value: 55297
+SELECT chr(CAST(55297 AS bigint))
+
 query T
 SELECT concat('a','b','c')
 ----
@@ -493,6 +503,25 @@ abc
 
 statement ok
 drop table foo
+
+# concat_ws with a Utf8View column as separator
+statement ok
+create table test_concat_ws_sep (sep varchar, val1 varchar, val2 varchar) as values (',', 'foo', 'bar'), ('|', 'a', 'b');
+
+query T
+SELECT concat_ws(arrow_cast(sep, 'Utf8View'), val1, val2) FROM test_concat_ws_sep ORDER BY val1
+----
+a|b
+foo,bar
+
+query T
+SELECT concat_ws(arrow_cast(sep, 'LargeUtf8'), val1, val2) FROM test_concat_ws_sep ORDER BY val1
+----
+a|b
+foo,bar
+
+statement ok
+drop table test_concat_ws_sep
 
 query T
 SELECT initcap('')
@@ -589,7 +618,7 @@ select repeat('-1.2', arrow_cast(3, 'Int32'));
 ----
 -1.2-1.2-1.2
 
-query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int64\), Int64\)\) but received NativeType::Float64, DataType: Float64
+query error DataFusion error: Error during planning: Function 'repeat' requires Int64, but received Float64 \(DataType: Float64\)
 select repeat('-1.2', 3.2);
 
 query T
@@ -672,6 +701,26 @@ SELECT split_part('abc~@~def~@~ghi', '~@~', -100)
 ----
 (empty)
 
+query T
+SELECT split_part('a,b', '', 1)
+----
+a,b
+
+query T
+SELECT split_part('a,b', '', -1)
+----
+a,b
+
+query T
+SELECT split_part('a,b', '', 2)
+----
+(empty)
+
+query T
+SELECT split_part('a,b', '', -2)
+----
+(empty)
+
 statement error DataFusion error: Execution error: field position must not be zero
 SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
 
@@ -714,6 +763,27 @@ query T
 SELECT to_hex(CAST(NULL AS int))
 ----
 NULL
+
+query T
+SELECT to_hex(0)
+----
+0
+
+# negative values (two's complement encoding)
+query T
+SELECT to_hex(-1)
+----
+ffffffffffffffff
+
+query T
+SELECT to_hex(CAST(-1 AS INT))
+----
+ffffffffffffffff
+
+query T
+SELECT to_hex(CAST(255 AS TINYINT UNSIGNED))
+----
+ff
 
 query T
 SELECT trim(' tom ')

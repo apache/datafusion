@@ -17,19 +17,13 @@
 
 //! "crypto" DataFusion functions
 
-use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, BinaryArrayType, StringViewArray,
-};
+use arrow::array::{Array, ArrayRef, AsArray, BinaryArray, BinaryArrayType};
 use arrow::datatypes::DataType;
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
-use datafusion_common::cast::as_binary_array;
 
 use arrow::compute::StringArrayType;
-use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err,
-    utils::take_function_args,
-};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use md5::Md5;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
@@ -37,53 +31,8 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
-macro_rules! define_digest_function {
-    ($NAME: ident, $METHOD: ident, $DOC: expr) => {
-        #[doc = $DOC]
-        pub fn $NAME(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-            let [data] = take_function_args(&DigestAlgorithm::$METHOD.to_string(), args)?;
-            digest_process(data, DigestAlgorithm::$METHOD)
-        }
-    };
-}
-define_digest_function!(
-    sha224,
-    Sha224,
-    "computes sha224 hash digest of the given input"
-);
-define_digest_function!(
-    sha256,
-    Sha256,
-    "computes sha256 hash digest of the given input"
-);
-define_digest_function!(
-    sha384,
-    Sha384,
-    "computes sha384 hash digest of the given input"
-);
-define_digest_function!(
-    sha512,
-    Sha512,
-    "computes sha512 hash digest of the given input"
-);
-define_digest_function!(
-    blake2b,
-    Blake2b,
-    "computes blake2b hash digest of the given input"
-);
-define_digest_function!(
-    blake2s,
-    Blake2s,
-    "computes blake2s hash digest of the given input"
-);
-define_digest_function!(
-    blake3,
-    Blake3,
-    "computes blake3 hash digest of the given input"
-);
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum DigestAlgorithm {
+pub(crate) enum DigestAlgorithm {
     Md5,
     Sha224,
     Sha256,
@@ -133,44 +82,6 @@ impl fmt::Display for DigestAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", format!("{self:?}").to_lowercase())
     }
-}
-
-/// computes md5 hash digest of the given input
-pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let [data] = take_function_args("md5", args)?;
-    let value = digest_process(data, DigestAlgorithm::Md5)?;
-
-    // md5 requires special handling because of its unique utf8view return type
-    Ok(match value {
-        ColumnarValue::Array(array) => {
-            let binary_array = as_binary_array(&array)?;
-            let string_array: StringViewArray = binary_array
-                .iter()
-                .map(|opt| opt.map(hex_encode::<_>))
-                .collect();
-            ColumnarValue::Array(Arc::new(string_array))
-        }
-        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
-            ColumnarValue::Scalar(ScalarValue::Utf8View(opt.map(hex_encode::<_>)))
-        }
-        _ => return internal_err!("Impossibly got invalid results from digest"),
-    })
-}
-
-/// Hex encoding lookup table for fast byte-to-hex conversion
-const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
-
-/// Fast hex encoding using a lookup table instead of format strings.
-/// This is significantly faster than using `write!("{:02x}")` for each byte.
-#[inline]
-fn hex_encode<T: AsRef<[u8]>>(data: T) -> String {
-    let bytes = data.as_ref();
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        s.push(HEX_CHARS_LOWER[(b >> 4) as usize] as char);
-        s.push(HEX_CHARS_LOWER[(b & 0x0f) as usize] as char);
-    }
-    s
 }
 
 macro_rules! digest_to_array {
@@ -269,7 +180,7 @@ impl DigestAlgorithm {
     }
 }
 
-pub fn digest_process(
+pub(crate) fn digest_process(
     value: &ColumnarValue,
     digest_algorithm: DigestAlgorithm,
 ) -> Result<ColumnarValue> {

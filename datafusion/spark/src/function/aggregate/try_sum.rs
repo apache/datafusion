@@ -339,8 +339,8 @@ impl AggregateUDFImpl for SparkTrySum {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{BooleanArray, Decimal128Array, Float64Array, Int64Array};
-    use datafusion_common::{DataFusionError, ScalarValue};
+    use arrow::array::{Decimal128Array, Float64Array, Int64Array};
+    use datafusion_common::DataFusionError;
     use std::sync::Arc;
 
     use super::*;

@@ -669,6 +669,21 @@ config_namespace! {
         /// # Default
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
+
+        /// How many bytes to buffer in the probe side of hash joins while the build side is
+        /// concurrently being built.
+        ///
+        /// Without this, hash joins will wait until the full materialization of the build side
+        /// before polling the probe side. This is useful in scenarios where the query is not
+        /// completely CPU bounded, allowing to do some early work concurrently and reducing the
+        /// latency of the query.
+        ///
+        /// Note that when hash join buffering is enabled, the probe side will start eagerly
+        /// polling data, not giving time for the producer side of dynamic filters to produce any
+        /// meaningful predicate. Queries with dynamic filters might see performance degradation.
+        ///
+        /// Disabled by default, set to a number greater than 0 for enabling it.
+        pub hash_join_buffering_capacity: usize, default = 0
     }
 }
 
@@ -757,7 +772,7 @@ config_namespace! {
         /// (writing) Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// (writing) Sets write_batch_size in bytes
+        /// (writing) Sets write_batch_size in rows
         pub write_batch_size: usize, default = 1024
 
         /// (writing) Sets parquet writer version
@@ -772,7 +787,7 @@ config_namespace! {
 
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         ///
@@ -922,6 +937,11 @@ config_namespace! {
         /// past window functions, if possible
         pub enable_window_limits: bool, default = true
 
+        /// When set to true, the optimizer will push TopK (Sort with fetch)
+        /// below hash repartition when the partition key is a prefix of the
+        /// sort key, reducing data volume before the shuffle.
+        pub enable_topk_repartition: bool, default = true
+
         /// When set to true, the optimizer will attempt to push down TopK dynamic filters
         /// into the file scan phase.
         pub enable_topk_dynamic_filter_pushdown: bool, default = true
@@ -1068,6 +1088,12 @@ config_namespace! {
         /// process to reorder the join keys
         pub top_down_join_key_reordering: bool, default = true
 
+        /// When set to true, the physical plan optimizer may swap join inputs
+        /// based on statistics. When set to false, statistics-driven join
+        /// input reordering is disabled and the original join order in the
+        /// query is used.
+        pub join_reordering: bool, default = true
+
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         pub prefer_hash_join: bool, default = true
@@ -1142,6 +1168,12 @@ config_namespace! {
         ///
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
+
+        /// When set to true, the optimizer will extract leaf expressions
+        /// (such as `get_field`) from filter/sort/join nodes into projections
+        /// closer to the leaf table scans, and push those projections down
+        /// towards the leaf nodes.
+        pub enable_leaf_expression_pushdown: bool, default = true
     }
 }
 
@@ -1250,7 +1282,7 @@ impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions 
 }
 
 /// A key value pair, with a corresponding description
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
     /// A unique string to identify this config value
     pub key: String,
@@ -1346,6 +1378,10 @@ impl ConfigField for ConfigOptions {
     }
 }
 
+/// This namespace is reserved for interacting with Foreign Function Interface
+/// (FFI) based configuration extensions.
+pub const DATAFUSION_FFI_CONFIG_NAMESPACE: &str = "datafusion_ffi";
+
 impl ConfigOptions {
     /// Creates a new [`ConfigOptions`] with default values
     pub fn new() -> Self {
@@ -1360,12 +1396,12 @@ impl ConfigOptions {
 
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let Some((prefix, key)) = key.split_once('.') else {
+        let Some((mut prefix, mut inner_key)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
         if prefix == "datafusion" {
-            if key == "optimizer.enable_dynamic_filter_pushdown" {
+            if inner_key == "optimizer.enable_dynamic_filter_pushdown" {
                 let bool_value = value.parse::<bool>().map_err(|e| {
                     DataFusionError::Configuration(format!(
                         "Failed to parse '{value}' as bool: {e}",
@@ -1380,13 +1416,23 @@ impl ConfigOptions {
                 }
                 return Ok(());
             }
-            return ConfigField::set(self, key, value);
+            return ConfigField::set(self, inner_key, value);
+        }
+
+        if !self.extensions.0.contains_key(prefix)
+            && self
+                .extensions
+                .0
+                .contains_key(DATAFUSION_FFI_CONFIG_NAMESPACE)
+        {
+            inner_key = key;
+            prefix = DATAFUSION_FFI_CONFIG_NAMESPACE;
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
             return _config_err!("Could not find config namespace \"{prefix}\"");
         };
-        e.0.set(key, value)
+        e.0.set(inner_key, value)
     }
 
     /// Create new [`ConfigOptions`], taking values from environment variables
@@ -2151,7 +2197,7 @@ impl TableOptions {
     ///
     /// A result indicating success or failure in setting the configuration option.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let Some((prefix, _)) = key.split_once('.') else {
+        let Some((mut prefix, _)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
@@ -2161,6 +2207,15 @@ impl TableOptions {
 
         if prefix == "execution" {
             return Ok(());
+        }
+
+        if !self.extensions.0.contains_key(prefix)
+            && self
+                .extensions
+                .0
+                .contains_key(DATAFUSION_FFI_CONFIG_NAMESPACE)
+        {
+            prefix = DATAFUSION_FFI_CONFIG_NAMESPACE;
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
@@ -2248,7 +2303,7 @@ impl TableOptions {
 /// Options that control how Parquet files are read, including global options
 /// that apply to all columns and optional column-specific overrides
 ///
-/// Closely tied to [`ParquetWriterOptions`](crate::file_options::parquet_writer::ParquetWriterOptions).
+/// Closely tied to `ParquetWriterOptions` (see `crate::file_options::parquet_writer::ParquetWriterOptions` when the "parquet" feature is enabled).
 /// Properties not included in [`TableParquetOptions`] may not be configurable at the external API
 /// (e.g. sorting_columns).
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -2499,7 +2554,7 @@ config_namespace_with_hashmap! {
 
         /// Sets default parquet compression codec for the column path.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub compression: Option<String>, transform = str::to_lowercase, default = None
@@ -2682,10 +2737,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
                 },
             );
         }
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
         ConfigFileEncryptionProperties {
             encrypt_footer: f.encrypt_footer(),
             footer_key_as_hex: hex::encode(f.footer_key()),
@@ -2823,10 +2875,7 @@ impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
             column_decryption_properties.insert(column_name.clone(), props);
         }
 
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
         ConfigFileDecryptionProperties {
             footer_key_as_hex: hex::encode(
                 f.footer_key(None).unwrap_or_default().as_ref(),
@@ -3065,6 +3114,22 @@ config_namespace! {
         /// If not specified, the default level for the compression algorithm is used.
         pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
+       /// The JSON format to use when reading files.
+       ///
+       /// When `true` (default), expects newline-delimited JSON (NDJSON):
+       /// ```text
+       /// {"key1": 1, "key2": "val"}
+       /// {"key1": 2, "key2": "vals"}
+       /// ```
+       ///
+       /// When `false`, expects JSON array format:
+       /// ```text
+       /// [
+       ///   {"key1": 1, "key2": "val"},
+       ///   {"key1": 2, "key2": "vals"}
+       /// ]
+       /// ```
+       pub newline_delimited: bool, default = true
     }
 }
 

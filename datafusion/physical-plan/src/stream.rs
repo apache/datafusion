@@ -1005,7 +1005,7 @@ mod test {
             .build_arc()
             .unwrap();
 
-        let mut reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
+        let reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
@@ -1071,7 +1071,7 @@ mod test {
             .build_arc()
             .unwrap();
 
-        let mut reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
+        let reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 

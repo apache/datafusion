@@ -34,14 +34,16 @@ use arrow::array::types::{
 use arrow::array::{Array, ArrayRef, PrimitiveArray};
 use arrow::datatypes::DataType::{self, Time32, Time64, Timestamp};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
+use arrow::datatypes::{Field, FieldRef};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
 };
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -221,18 +223,25 @@ impl ScalarUDFImpl for DateTruncFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[1].is_null() {
-            Ok(Timestamp(Nanosecond, None))
-        } else {
-            Ok(arg_types[1].clone())
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be called instead")
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let field = &args.arg_fields[1];
+        let return_type = if field.data_type().is_null() {
+            Timestamp(Nanosecond, None)
+        } else {
+            field.data_type().clone()
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            return_type,
+            field.is_nullable(),
+        )))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         let (granularity, array) = (&args[0], &args[1]);
 
@@ -757,7 +766,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     #[test]
     fn date_trunc_test() {
@@ -999,7 +1008,7 @@ mod tests {
                 Field::new("a", DataType::Utf8, false).into(),
                 Field::new("b", input.data_type().clone(), false).into(),
             ];
-            let args = datafusion_expr::ScalarFunctionArgs {
+            let args = ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(ScalarValue::from("day")),
                     ColumnarValue::Array(Arc::new(input)),
@@ -1187,7 +1196,7 @@ mod tests {
                 Field::new("a", DataType::Utf8, false).into(),
                 Field::new("b", input.data_type().clone(), false).into(),
             ];
-            let args = datafusion_expr::ScalarFunctionArgs {
+            let args = ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(ScalarValue::from("hour")),
                     ColumnarValue::Array(Arc::new(input)),
@@ -1355,7 +1364,7 @@ mod tests {
                     Field::new("a", DataType::Utf8, false).into(),
                     Field::new("b", input.data_type().clone(), false).into(),
                 ];
-                let args = datafusion_expr::ScalarFunctionArgs {
+                let args = ScalarFunctionArgs {
                     args: vec![
                         ColumnarValue::Scalar(ScalarValue::from(*granularity)),
                         ColumnarValue::Array(Arc::new(input)),

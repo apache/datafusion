@@ -554,7 +554,7 @@ async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
                         InputOrderMode::PartiallySorted(_) | InputOrderMode::Sorted
                     ));
                 } else {
-                    assert!(matches!(exec.input_order_mode(), InputOrderMode::Linear));
+                    assert_eq!(*exec.input_order_mode(), InputOrderMode::Linear);
                 }
             }
             Ok(TreeNodeRecursion::Continue)

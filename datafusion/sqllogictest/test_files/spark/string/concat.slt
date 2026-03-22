@@ -20,6 +20,12 @@ SELECT concat('Spark', 'SQL');
 ----
 SparkSQL
 
+# Test two Utf8View inputs: value and return type
+query TT
+SELECT concat(arrow_cast('Spark', 'Utf8View'), arrow_cast('SQL', 'Utf8View')), arrow_typeof(concat(arrow_cast('Spark', 'Utf8View'), arrow_cast('SQL', 'Utf8View')));
+----
+SparkSQL Utf8View
+
 query T
 SELECT concat('Spark', 'SQL', NULL);
 ----
@@ -46,3 +52,21 @@ SELECT concat(a, b, c) from (select 'a' a, 'b' b, 'c' c union all select null a,
 ----
 abc
 NULL
+
+# Test mixed types: Utf8View + Utf8
+query TT
+SELECT concat(arrow_cast('hello', 'Utf8View'), ' world'), arrow_typeof(concat(arrow_cast('hello', 'Utf8View'), ' world'));
+----
+hello world Utf8View
+
+# Test Utf8 + LargeUtf8 => return type LargeUtf8
+query TT
+SELECT concat('a', arrow_cast('b', 'LargeUtf8')), arrow_typeof(concat('a', arrow_cast('b', 'LargeUtf8')));
+----
+ab LargeUtf8
+
+# Test all three types mixed together
+query TT
+SELECT concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')), arrow_typeof(concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')));
+----
+abc Utf8View

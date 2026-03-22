@@ -152,47 +152,46 @@ impl StringViewArrayBuilder {
             }
             ColumnarValueRef::NullableArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(
-                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
-                    );
+                    self.block.push_str(array.value(i));
                 }
             }
             ColumnarValueRef::NullableLargeStringArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(
-                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
-                    );
+                    self.block.push_str(array.value(i));
                 }
             }
             ColumnarValueRef::NullableStringViewArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(
-                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
-                    );
+                    self.block.push_str(array.value(i));
                 }
             }
             ColumnarValueRef::NonNullableArray(array) => {
-                self.block
-                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                self.block.push_str(array.value(i));
             }
             ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.block
-                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                self.block.push_str(array.value(i));
             }
             ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.block
-                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                self.block.push_str(array.value(i));
             }
         }
     }
 
     pub fn append_offset(&mut self) {
         self.builder.append_value(&self.block);
-        self.block = String::new();
+        self.block.clear();
     }
 
-    pub fn finish(mut self) -> StringViewArray {
-        self.builder.finish()
+    pub fn finish(mut self, null_buffer: Option<NullBuffer>) -> StringViewArray {
+        let array = self.builder.finish();
+        match null_buffer {
+            Some(nulls) => {
+                let array_data = array.into_data().into_builder().nulls(Some(nulls));
+                // SAFETY: the underlying data is valid; we are only adding a null buffer
+                StringViewArray::from(unsafe { array_data.build_unchecked() })
+            }
+            None => array,
+        }
     }
 }
 

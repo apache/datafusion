@@ -139,6 +139,10 @@ pub trait ContextProvider {
 }
 
 /// Customize planning of SQL AST expressions to [`Expr`]s
+///
+/// For more background, please also see the [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]
+///
+/// [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
 pub trait ExprPlanner: Debug + Send + Sync {
     /// Plan the binary operation between two expressions, returns original
     /// BinaryExpr if not possible
@@ -247,13 +251,6 @@ pub trait ExprPlanner: Debug + Send + Sync {
         not_impl_err!(
             "Default planner compound identifier hasn't been implemented for ExprPlanner"
         )
-    }
-
-    /// Plans `ANY` expression, such as `expr = ANY(array_expr)`
-    ///
-    /// Returns origin binary expression if not possible
-    fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
-        Ok(PlannerResult::Original(expr))
     }
 
     /// Plans aggregate functions, such as `COUNT(<expr>)`
@@ -369,13 +366,16 @@ impl PlannedRelation {
 #[derive(Debug)]
 pub enum RelationPlanning {
     /// The relation was successfully planned by an extension planner
-    Planned(PlannedRelation),
+    Planned(Box<PlannedRelation>),
     /// No extension planner handled the relation, return it for default processing
-    Original(TableFactor),
+    Original(Box<TableFactor>),
 }
 
 /// Customize planning SQL table factors to [`LogicalPlan`]s.
 #[cfg(feature = "sql")]
+/// For more background, please also see the [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]
+///
+/// [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
 pub trait RelationPlanner: Debug + Send + Sync {
     /// Plan a table factor into a [`LogicalPlan`].
     ///
@@ -427,14 +427,35 @@ pub trait RelationPlannerContext {
 
 /// Customize planning SQL types to DataFusion (Arrow) types.
 #[cfg(feature = "sql")]
+/// For more background, please also see the [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]
+///
+/// [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
 pub trait TypePlanner: Debug + Send + Sync {
     /// Plan SQL [`sqlparser::ast::DataType`] to DataFusion [`DataType`]
     ///
     /// Returns None if not possible
+    #[deprecated(since = "53.0.0", note = "Use plan_type_field()")]
     fn plan_type(
         &self,
         _sql_type: &sqlparser::ast::DataType,
     ) -> Result<Option<DataType>> {
         Ok(None)
+    }
+
+    /// Plan SQL [`sqlparser::ast::DataType`] to DataFusion [`FieldRef`]
+    ///
+    /// Returns None if not possible. Unlike [`Self::plan_type`], `plan_type_field()`
+    /// makes it possible to express extension types (e.g., `arrow.uuid`) or otherwise
+    /// insert metadata into the DataFusion type representation. The default implementation
+    /// falls back on [`Self::plan_type`] for backward compatibility and wraps the result
+    /// in a nullable field reference.
+    fn plan_type_field(
+        &self,
+        sql_type: &sqlparser::ast::DataType,
+    ) -> Result<Option<FieldRef>> {
+        #[expect(deprecated)]
+        Ok(self
+            .plan_type(sql_type)?
+            .map(|data_type| data_type.into_nullable_field_ref()))
     }
 }

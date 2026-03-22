@@ -95,8 +95,35 @@ impl ScalarUDFImpl for CeilFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(&args.args)?;
-        let value = &args[0];
+        let arg = &args.args[0];
+
+        // Scalar fast path for float types - avoid array conversion overhead entirely
+        if let ColumnarValue::Scalar(scalar) = arg {
+            match scalar {
+                ScalarValue::Float64(v) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(
+                        v.map(f64::ceil),
+                    )));
+                }
+                ScalarValue::Float32(v) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(
+                        v.map(f32::ceil),
+                    )));
+                }
+                ScalarValue::Null => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
+                }
+                // For decimals: convert to array of size 1, process, then extract scalar
+                // This ensures we don't expand the array while reusing overflow validation
+                _ => {}
+            }
+        }
+
+        // Track if input was a scalar to convert back at the end
+        let is_scalar = matches!(arg, ColumnarValue::Scalar(_));
+
+        // Array path (also handles decimal scalars converted to size-1 arrays)
+        let value = arg.to_array(args.number_rows)?;
 
         let result: ArrayRef = match value.data_type() {
             DataType::Float64 => Arc::new(
@@ -114,7 +141,7 @@ impl ScalarUDFImpl for CeilFunc {
             }
             DataType::Decimal32(precision, scale) => {
                 apply_decimal_op::<Decimal32Type, _>(
-                    value,
+                    &value,
                     *precision,
                     *scale,
                     self.name(),
@@ -123,7 +150,7 @@ impl ScalarUDFImpl for CeilFunc {
             }
             DataType::Decimal64(precision, scale) => {
                 apply_decimal_op::<Decimal64Type, _>(
-                    value,
+                    &value,
                     *precision,
                     *scale,
                     self.name(),
@@ -132,7 +159,7 @@ impl ScalarUDFImpl for CeilFunc {
             }
             DataType::Decimal128(precision, scale) => {
                 apply_decimal_op::<Decimal128Type, _>(
-                    value,
+                    &value,
                     *precision,
                     *scale,
                     self.name(),
@@ -141,7 +168,7 @@ impl ScalarUDFImpl for CeilFunc {
             }
             DataType::Decimal256(precision, scale) => {
                 apply_decimal_op::<Decimal256Type, _>(
-                    value,
+                    &value,
                     *precision,
                     *scale,
                     self.name(),
@@ -156,7 +183,12 @@ impl ScalarUDFImpl for CeilFunc {
             }
         };
 
-        Ok(ColumnarValue::Array(result))
+        // If input was a scalar, convert result back to scalar
+        if is_scalar {
+            ScalarValue::try_from_array(&result, 0).map(ColumnarValue::Scalar)
+        } else {
+            Ok(ColumnarValue::Array(result))
+        }
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {

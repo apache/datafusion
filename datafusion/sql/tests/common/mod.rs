@@ -23,6 +23,7 @@ use std::{sync::Arc, vec};
 
 use arrow::datatypes::*;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DFSchema, GetExt, Result, TableReference, plan_err};
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
@@ -161,11 +162,25 @@ impl ContextProvider for MockContextProvider {
             ])),
             "orders" => Ok(Schema::new(vec![
                 Field::new("order_id", DataType::UInt32, false),
+                Field::new("o_orderkey", DataType::UInt32, false),
+                Field::new("o_custkey", DataType::UInt32, false),
+                Field::new("o_orderstatus", DataType::Utf8, false),
                 Field::new("customer_id", DataType::UInt32, false),
+                Field::new("o_totalprice", DataType::Decimal128(15, 2), false),
                 Field::new("o_item_id", DataType::Utf8, false),
                 Field::new("qty", DataType::Int32, false),
                 Field::new("price", DataType::Float64, false),
                 Field::new("delivered", DataType::Boolean, false),
+            ])),
+            "customer" => Ok(Schema::new(vec![
+                Field::new("c_custkey", DataType::UInt32, false),
+                Field::new("c_name", DataType::Utf8, false),
+                Field::new("c_address", DataType::Utf8, false),
+                Field::new("c_nationkey", DataType::UInt32, false),
+                Field::new("c_phone", DataType::Utf8, false),
+                Field::new("c_acctbal", DataType::Float64, false),
+                Field::new("c_mktsegment", DataType::Utf8, false),
+                Field::new("c_comment", DataType::Utf8, false),
             ])),
             "array" => Ok(Schema::new(vec![
                 Field::new(
@@ -186,8 +201,10 @@ impl ContextProvider for MockContextProvider {
                 ),
             ])),
             "lineitem" => Ok(Schema::new(vec![
+                Field::new("l_orderkey", DataType::UInt32, false),
                 Field::new("l_item_id", DataType::UInt32, false),
                 Field::new("l_description", DataType::Utf8, false),
+                Field::new("l_extendedprice", DataType::Decimal128(15, 2), false),
                 Field::new("price", DataType::Float64, false),
             ])),
             "aggregate_test_100" => Ok(Schema::new(vec![
@@ -227,6 +244,11 @@ impl ContextProvider for MockContextProvider {
                     false,
                 ),
             ])),
+            "@quoted_identifier_names_table" => Ok(Schema::new(vec![Field::new(
+                "@column",
+                DataType::UInt32,
+                false,
+            )])),
             _ => plan_err!("No table named: {} found", name.table()),
         };
 
@@ -244,8 +266,11 @@ impl ContextProvider for MockContextProvider {
         self.state.aggregate_functions.get(name).cloned()
     }
 
-    fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
-        unimplemented!()
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
+        match variable_names {
+            [var] if var == "@variable" => Some(DataType::Date32),
+            _ => unimplemented!(),
+        }
     }
 
     fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
@@ -317,8 +342,17 @@ impl TableSource for EmptyTable {
 pub struct CustomTypePlanner {}
 
 impl TypePlanner for CustomTypePlanner {
-    fn plan_type(&self, sql_type: &sqlparser::ast::DataType) -> Result<Option<DataType>> {
+    fn plan_type_field(
+        &self,
+        sql_type: &sqlparser::ast::DataType,
+    ) -> Result<Option<FieldRef>> {
         match sql_type {
+            sqlparser::ast::DataType::Uuid => Ok(Some(Arc::new(
+                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
+                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
+                        .into(),
+                ),
+            ))),
             sqlparser::ast::DataType::Datetime(precision) => {
                 let precision = match precision {
                     Some(0) => TimeUnit::Second,
@@ -327,7 +361,9 @@ impl TypePlanner for CustomTypePlanner {
                     None | Some(9) => TimeUnit::Nanosecond,
                     _ => unreachable!(),
                 };
-                Ok(Some(DataType::Timestamp(precision, None)))
+                Ok(Some(
+                    DataType::Timestamp(precision, None).into_nullable_field_ref(),
+                ))
             }
             _ => Ok(None),
         }

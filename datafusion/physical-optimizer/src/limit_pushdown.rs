@@ -17,6 +17,47 @@
 
 //! [`LimitPushdown`] pushes `LIMIT` down through `ExecutionPlan`s to reduce
 //! data transfer as much as possible.
+//!
+//! # Plan Limit Absorption
+//! In addition to pushing down [`LimitExec`] in the plan, some operators can
+//! "absorb" a limit and stop early during execution.
+//!
+//! ## Background: vectorized volcano execution model
+//! DataFusion uses a batched volcano model. For most operators, output is
+//! produced in batches of `datafusion.execution.batch_size` (default 8192), so
+//! the batch sizes typically look like:
+//! ```text
+//! 8192, 8192, ..., 8192, 100 (the final batch may be partial)
+//! ```
+//!
+//! ## Example
+//! For a join with an expensive, selective predicate:
+//! ```text
+//! LimitExec(fetch=10)
+//! -- NestedLoopJoinExec(on=expr_expensive_and_selective)
+//! --- DataSourceExec()
+//! --- DataSourceExec()
+//! ```
+//!
+//! Under this model, `NestedLoopJoinExec` would keep working until it can emit
+//! a full batch (8192 rows), even though the query only needs 10. If the limit
+//! cannot be pushed below the join, we can still embed it inside the join so it
+//! stops once the limit is satisfied. The transformed plan looks like:
+//!
+//! ```text
+//! NestedLoopJoinExec(on=expr_expensive_and_selective, fetch=10)
+//! --- DataSourceExec()
+//! --- DataSourceExec()
+//! ```
+//!
+//! ## Implementation
+//! The current optimizer rule optionally pushes `fetch` requirements into
+//! operators via [`ExecutionPlan::with_fetch`].
+//!
+//! To support early termination in operators, [`LimitedBatchCoalescer`](https://docs.rs/datafusion/latest/datafusion/physical_plan/coalesce/struct.LimitedBatchCoalescer.html)
+//! can help manage the output buffer.
+//!
+//! Reference implementation in Hash Join: <https://github.com/apache/datafusion/pull/20228>
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -50,6 +91,7 @@ pub struct GlobalRequirements {
     fetch: Option<usize>,
     skip: usize,
     satisfied: bool,
+    preserve_order: bool,
 }
 
 impl LimitPushdown {
@@ -69,6 +111,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
             fetch: None,
             skip: 0,
             satisfied: false,
+            preserve_order: false,
         };
         pushdown_limits(plan, global_state)
     }
@@ -111,6 +154,13 @@ impl LimitExec {
             Self::Local(_) => 0,
         }
     }
+
+    fn preserve_order(&self) -> bool {
+        match self {
+            Self::Global(global) => global.required_ordering().is_some(),
+            Self::Local(local) => local.required_ordering().is_some(),
+        }
+    }
 }
 
 impl From<LimitExec> for Arc<dyn ExecutionPlan> {
@@ -145,6 +195,8 @@ pub fn pushdown_limit_helper(
         );
         global_state.skip = skip;
         global_state.fetch = fetch;
+        global_state.preserve_order = limit_exec.preserve_order();
+        global_state.satisfied = false;
 
         // Now the global state has the most recent information, we can remove
         // the `LimitExec` plan. We will decide later if we should add it again
@@ -162,7 +214,7 @@ pub fn pushdown_limit_helper(
     // If we have a non-limit operator with fetch capability, update global
     // state as necessary:
     if pushdown_plan.fetch().is_some() {
-        if global_state.fetch.is_none() {
+        if global_state.skip == 0 {
             global_state.satisfied = true;
         }
         (global_state.skip, global_state.fetch) = combine_limit(
@@ -241,17 +293,28 @@ pub fn pushdown_limit_helper(
         let maybe_fetchable = pushdown_plan.with_fetch(skip_and_fetch);
         if global_state.satisfied {
             if let Some(plan_with_fetch) = maybe_fetchable {
-                Ok((Transformed::yes(plan_with_fetch), global_state))
+                let plan_with_preserve_order = plan_with_fetch
+                    .with_preserve_order(global_state.preserve_order)
+                    .unwrap_or(plan_with_fetch);
+                Ok((Transformed::yes(plan_with_preserve_order), global_state))
             } else {
                 Ok((Transformed::no(pushdown_plan), global_state))
             }
         } else {
             global_state.satisfied = true;
             pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
+                let plan_with_preserve_order = plan_with_fetch
+                    .with_preserve_order(global_state.preserve_order)
+                    .unwrap_or(plan_with_fetch);
+
                 if global_skip > 0 {
-                    add_global_limit(plan_with_fetch, global_skip, Some(global_fetch))
+                    add_global_limit(
+                        plan_with_preserve_order,
+                        global_skip,
+                        Some(global_fetch),
+                    )
                 } else {
-                    plan_with_fetch
+                    plan_with_preserve_order
                 }
             } else {
                 add_limit(pushdown_plan, global_skip, global_fetch)

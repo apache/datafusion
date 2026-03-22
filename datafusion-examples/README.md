@@ -71,15 +71,16 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand            | File Path                                                                                             | Description                                   |
-| --------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| csv_sql_streaming     | [`custom_data_source/csv_sql_streaming.rs`](examples/custom_data_source/csv_sql_streaming.rs)         | Run a streaming SQL query against CSV data    |
-| csv_json_opener       | [`custom_data_source/csv_json_opener.rs`](examples/custom_data_source/csv_json_opener.rs)             | Use low-level FileOpener APIs for CSV/JSON    |
-| custom_datasource     | [`custom_data_source/custom_datasource.rs`](examples/custom_data_source/custom_datasource.rs)         | Query a custom TableProvider                  |
-| custom_file_casts     | [`custom_data_source/custom_file_casts.rs`](examples/custom_data_source/custom_file_casts.rs)         | Implement custom casting rules                |
-| custom_file_format    | [`custom_data_source/custom_file_format.rs`](examples/custom_data_source/custom_file_format.rs)       | Write to a custom file format                 |
-| default_column_values | [`custom_data_source/default_column_values.rs`](examples/custom_data_source/default_column_values.rs) | Custom default values using metadata          |
-| file_stream_provider  | [`custom_data_source/file_stream_provider.rs`](examples/custom_data_source/file_stream_provider.rs)   | Read/write via FileStreamProvider for streams |
+| Subcommand            | File Path                                                                                             | Description                                                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| adapter_serialization | [`custom_data_source/adapter_serialization.rs`](examples/custom_data_source/adapter_serialization.rs) | Preserve custom PhysicalExprAdapter information during plan serialization using PhysicalExtensionCodec interception |
+| csv_json_opener       | [`custom_data_source/csv_json_opener.rs`](examples/custom_data_source/csv_json_opener.rs)             | Use low-level FileOpener APIs for CSV/JSON                                                                          |
+| csv_sql_streaming     | [`custom_data_source/csv_sql_streaming.rs`](examples/custom_data_source/csv_sql_streaming.rs)         | Run a streaming SQL query against CSV data                                                                          |
+| custom_datasource     | [`custom_data_source/custom_datasource.rs`](examples/custom_data_source/custom_datasource.rs)         | Query a custom TableProvider                                                                                        |
+| custom_file_casts     | [`custom_data_source/custom_file_casts.rs`](examples/custom_data_source/custom_file_casts.rs)         | Implement custom casting rules                                                                                      |
+| custom_file_format    | [`custom_data_source/custom_file_format.rs`](examples/custom_data_source/custom_file_format.rs)       | Write to a custom file format                                                                                       |
+| default_column_values | [`custom_data_source/default_column_values.rs`](examples/custom_data_source/default_column_values.rs) | Custom default values using metadata                                                                                |
+| file_stream_provider  | [`custom_data_source/file_stream_provider.rs`](examples/custom_data_source/file_stream_provider.rs)   | Read/write via FileStreamProvider for streams                                                                       |
 
 ## Data IO Examples
 
@@ -143,8 +144,8 @@ cargo run --example dataframe -- dataframe
 
 | Subcommand | File Path                                               | Description                                            |
 | ---------- | ------------------------------------------------------- | ------------------------------------------------------ |
-| server     | [`flight/server.rs`](examples/flight/server.rs)         | Run DataFusion server accepting FlightSQL/JDBC queries |
 | client     | [`flight/client.rs`](examples/flight/client.rs)         | Execute SQL queries via Arrow Flight protocol          |
+| server     | [`flight/server.rs`](examples/flight/server.rs)         | Run DataFusion server accepting FlightSQL/JDBC queries |
 | sql_server | [`flight/sql_server.rs`](examples/flight/sql_server.rs) | Standalone SQL server for JDBC clients                 |
 
 ## Proto Examples
@@ -153,9 +154,10 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand               | File Path                                                                         | Description                                                     |
-| ------------------------ | --------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| composed_extension_codec | [`proto/composed_extension_codec.rs`](examples/proto/composed_extension_codec.rs) | Use multiple extension codecs for serialization/deserialization |
+| Subcommand               | File Path                                                                         | Description                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| composed_extension_codec | [`proto/composed_extension_codec.rs`](examples/proto/composed_extension_codec.rs) | Use multiple extension codecs for serialization/deserialization               |
+| expression_deduplication | [`proto/expression_deduplication.rs`](examples/proto/expression_deduplication.rs) | Example of expression caching/deduplication using the codec decorator pattern |
 
 ## Query Planning Examples
 

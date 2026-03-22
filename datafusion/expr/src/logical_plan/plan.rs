@@ -661,6 +661,7 @@ impl LogicalPlan {
                 on,
                 schema: _,
                 null_equality,
+                null_aware,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -682,6 +683,7 @@ impl LogicalPlan {
                     filter,
                     schema: DFSchemaRef::new(schema),
                     null_equality,
+                    null_aware,
                 }))
             }
             LogicalPlan::Subquery(_) => Ok(self),
@@ -901,6 +903,7 @@ impl LogicalPlan {
                 join_constraint,
                 on,
                 null_equality,
+                null_aware,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -942,6 +945,7 @@ impl LogicalPlan {
                     filter: filter_expr,
                     schema: DFSchemaRef::new(schema),
                     null_equality: *null_equality,
+                    null_aware: *null_aware,
                 }))
             }
             LogicalPlan::Subquery(Subquery {
@@ -1961,7 +1965,7 @@ impl LogicalPlan {
                             .unwrap_or_else(|| "".to_string());
                         let join_type = if filter.is_none()
                             && keys.is_empty()
-                            && matches!(join_type, JoinType::Inner)
+                            && *join_type == JoinType::Inner
                         {
                             "Cross".to_string()
                         } else {
@@ -1969,13 +1973,16 @@ impl LogicalPlan {
                         };
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(
-                                    f,
-                                    "{} Join: {}{}",
-                                    join_type,
-                                    join_expr.join(", "),
-                                    filter_expr
-                                )
+                                write!(f, "{join_type} Join:",)?;
+                                if !join_expr.is_empty() || !filter_expr.is_empty() {
+                                    write!(
+                                        f,
+                                        " {}{}",
+                                        join_expr.join(", "),
+                                        filter_expr
+                                    )?;
+                                }
+                                Ok(())
                             }
                             JoinConstraint::Using => {
                                 write!(
@@ -3483,7 +3490,9 @@ pub struct Aggregate {
     pub input: Arc<LogicalPlan>,
     /// Grouping expressions
     pub group_expr: Vec<Expr>,
-    /// Aggregate expressions
+    /// Aggregate expressions.
+    ///
+    /// Note these *must* be either [`Expr::AggregateFunction`] or [`Expr::Alias`]
     pub aggr_expr: Vec<Expr>,
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
@@ -3781,6 +3790,14 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
+    /// Whether this is a null-aware anti join (for NOT IN semantics).
+    ///
+    /// Only applies to LeftAnti joins. When true, implements SQL NOT IN semantics where:
+    /// - If the right side (subquery) contains any NULL in join keys, no rows are output
+    /// - Left side rows with NULL in join keys are not output
+    ///
+    /// This is required for correct NOT IN subquery behavior with three-valued logic.
+    pub null_aware: bool,
 }
 
 impl Join {
@@ -3798,10 +3815,12 @@ impl Join {
     /// * `join_type` - Type of join (Inner, Left, Right, etc.)
     /// * `join_constraint` - Join constraint (On, Using)
     /// * `null_equality` - How to handle nulls in join comparisons
+    /// * `null_aware` - Whether this is a null-aware anti join (for NOT IN semantics)
     ///
     /// # Returns
     ///
     /// A new Join operator with the computed schema
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
@@ -3810,6 +3829,7 @@ impl Join {
         join_type: JoinType,
         join_constraint: JoinConstraint,
         null_equality: NullEquality,
+        null_aware: bool,
     ) -> Result<Self> {
         let join_schema = build_join_schema(left.schema(), right.schema(), &join_type)?;
 
@@ -3822,6 +3842,7 @@ impl Join {
             join_constraint,
             schema: Arc::new(join_schema),
             null_equality,
+            null_aware,
         })
     }
 
@@ -3877,6 +3898,7 @@ impl Join {
                 join_constraint: original_join.join_constraint,
                 schema: Arc::new(join_schema),
                 null_equality: original_join.null_equality,
+                null_aware: original_join.null_aware,
             },
             requalified,
         ))
@@ -4174,7 +4196,9 @@ impl Unnest {
                                 }
                                 DataType::List(_)
                                 | DataType::FixedSizeList(_, _)
-                                | DataType::LargeList(_) => {
+                                | DataType::LargeList(_)
+                                | DataType::ListView(_)
+                                | DataType::LargeListView(_) => {
                                     list_columns.push((
                                         index,
                                         ColumnUnnestList {
@@ -4249,7 +4273,11 @@ fn get_unnested_columns(
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+        DataType::List(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => {
             let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
             let new_field = Arc::new(Field::new(
                 col_name, data_type,
@@ -4286,7 +4314,9 @@ fn get_unnested_list_datatype_recursive(
     match data_type {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
             if depth == 1 {
                 return Ok(field.data_type().clone());
             }
@@ -4313,7 +4343,7 @@ mod tests {
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
-    use datafusion_common::{Constraint, ScalarValue, not_impl_err};
+    use datafusion_common::{Constraint, not_impl_err};
     use insta::{assert_debug_snapshot, assert_snapshot};
     use std::hash::DefaultHasher;
 
@@ -4436,49 +4466,49 @@ mod tests {
         [
           {
             "Plan": {
+              "Node Type": "Projection",
               "Expressions": [
                 "employee_csv.id"
               ],
-              "Node Type": "Projection",
-              "Output": [
-                "id"
-              ],
               "Plans": [
                 {
-                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Node Type": "Filter",
-                  "Output": [
-                    "id",
-                    "state"
-                  ],
+                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Plans": [
                     {
                       "Node Type": "Subquery",
-                      "Output": [
-                        "state"
-                      ],
                       "Plans": [
                         {
                           "Node Type": "TableScan",
+                          "Relation Name": "employee_csv",
+                          "Plans": [],
                           "Output": [
                             "state"
-                          ],
-                          "Plans": [],
-                          "Relation Name": "employee_csv"
+                          ]
                         }
+                      ],
+                      "Output": [
+                        "state"
                       ]
                     },
                     {
                       "Node Type": "TableScan",
+                      "Relation Name": "employee_csv",
+                      "Plans": [],
                       "Output": [
                         "id",
                         "state"
-                      ],
-                      "Plans": [],
-                      "Relation Name": "employee_csv"
+                      ]
                     }
+                  ],
+                  "Output": [
+                    "id",
+                    "state"
                   ]
                 }
+              ],
+              "Output": [
+                "id"
               ]
             }
           }
@@ -5329,6 +5359,7 @@ mod tests {
                 join_constraint: JoinConstraint::On,
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
+                null_aware: false,
             }))
         }
 
@@ -5440,6 +5471,7 @@ mod tests {
                 join_type,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             match join_type {
@@ -5585,6 +5617,7 @@ mod tests {
                 JoinType::Inner,
                 JoinConstraint::Using,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let fields = join.schema.fields();
@@ -5636,6 +5669,7 @@ mod tests {
                 JoinType::Inner,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let fields = join.schema.fields();
@@ -5685,6 +5719,7 @@ mod tests {
                 JoinType::Inner,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNull,
+                false,
             )?;
 
             assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
@@ -5727,6 +5762,7 @@ mod tests {
                 join_type,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let fields = join.schema.fields();
@@ -5766,6 +5802,7 @@ mod tests {
             JoinType::Inner,
             JoinConstraint::Using,
             NullEquality::NullEqualsNothing,
+            false,
         )?;
 
         assert_eq!(

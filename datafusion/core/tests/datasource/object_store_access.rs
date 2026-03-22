@@ -36,8 +36,9 @@ use insta::assert_snapshot;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult,
 };
 use parking_lot::Mutex;
 use std::fmt;
@@ -54,8 +55,8 @@ async fn create_single_csv_file() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=csv_table.csv
-    - GET  path=csv_table.csv
+    - GET  (opts) path=csv_table.csv head=true
+    - GET  (opts) path=csv_table.csv
     "
     );
 }
@@ -76,7 +77,7 @@ async fn query_single_csv_file() {
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=csv_table.csv
+    - GET  (opts) path=csv_table.csv head=true
     - GET  (opts) path=csv_table.csv
     "
     );
@@ -91,9 +92,9 @@ async fn create_multi_file_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 4
     - LIST prefix=data
-    - GET  path=data/file_0.csv
-    - GET  path=data/file_1.csv
-    - GET  path=data/file_2.csv
+    - GET  (opts) path=data/file_0.csv
+    - GET  (opts) path=data/file_1.csv
+    - GET  (opts) path=data/file_2.csv
     "
     );
 }
@@ -351,8 +352,8 @@ async fn create_single_parquet_file_default() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=0-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=0-2994
     "
     );
 }
@@ -370,8 +371,8 @@ async fn create_single_parquet_file_prefetch() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=1994-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=1994-2994
     "
     );
 }
@@ -399,10 +400,10 @@ async fn create_single_parquet_file_too_small_prefetch() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 4
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=2494-2994 path=parquet_table.parquet
-    - GET  (range) range=2264-2986 path=parquet_table.parquet
-    - GET  (range) range=2124-2264 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=2494-2994
+    - GET  (opts) path=parquet_table.parquet range=2264-2986
+    - GET  (opts) path=parquet_table.parquet range=2124-2264
     "
     );
 }
@@ -431,9 +432,9 @@ async fn create_single_parquet_file_small_prefetch() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 3
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=2254-2994 path=parquet_table.parquet
-    - GET  (range) range=2124-2264 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=2254-2994
+    - GET  (opts) path=parquet_table.parquet range=2124-2264
     "
     );
 }
@@ -455,8 +456,8 @@ async fn create_single_parquet_file_no_prefetch() {
         @r"
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=parquet_table.parquet
-    - GET  (range) range=0-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (opts) path=parquet_table.parquet range=0-2994
     "
     );
 }
@@ -476,7 +477,7 @@ async fn query_single_parquet_file() {
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
     Total Requests: 3
-    - HEAD path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
     - GET  (ranges) path=parquet_table.parquet ranges=4-534,534-1064
     - GET  (ranges) path=parquet_table.parquet ranges=1064-1594,1594-2124
     "
@@ -500,7 +501,7 @@ async fn query_single_parquet_file_with_single_predicate() {
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
     Total Requests: 2
-    - HEAD path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
     - GET  (ranges) path=parquet_table.parquet ranges=1064-1481,1481-1594,1594-2011,2011-2124
     "
     );
@@ -524,7 +525,7 @@ async fn query_single_parquet_file_multi_row_groups_multiple_predicates() {
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
     Total Requests: 3
-    - HEAD path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet head=true
     - GET  (ranges) path=parquet_table.parquet ranges=4-421,421-534,534-951,951-1064
     - GET  (ranges) path=parquet_table.parquet ranges=1064-1481,1481-1594,1594-2011,2011-2124
     "
@@ -701,7 +702,7 @@ impl Test {
 
         let mut buffer = vec![];
         let props = parquet::file::properties::WriterProperties::builder()
-            .set_max_row_group_size(100)
+            .set_max_row_group_row_count(Some(100))
             .build();
         let mut writer = parquet::arrow::ArrowWriter::try_new(
             &mut buffer,
@@ -752,11 +753,8 @@ impl Test {
 /// Details of individual requests made through the [`RequestCountingObjectStore`]
 #[derive(Clone, Debug)]
 enum RequestDetails {
-    Get { path: Path },
     GetOpts { path: Path, get_options: GetOptions },
     GetRanges { path: Path, ranges: Vec<Range<u64>> },
-    GetRange { path: Path, range: Range<u64> },
-    Head { path: Path },
     List { prefix: Option<Path> },
     ListWithDelimiter { prefix: Option<Path> },
     ListWithOffset { prefix: Option<Path>, offset: Path },
@@ -774,9 +772,6 @@ fn display_range(range: &Range<u64>) -> impl Display + '_ {
 impl Display for RequestDetails {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            RequestDetails::Get { path } => {
-                write!(f, "GET  path={path}")
-            }
             RequestDetails::GetOpts { path, get_options } => {
                 write!(f, "GET  (opts) path={path}")?;
                 if let Some(range) = &get_options.range {
@@ -813,13 +808,6 @@ impl Display for RequestDetails {
                     }
                 }
                 Ok(())
-            }
-            RequestDetails::GetRange { path, range } => {
-                let range = display_range(range);
-                write!(f, "GET  (range) range={range} path={path}")
-            }
-            RequestDetails::Head { path } => {
-                write!(f, "HEAD path={path}")
             }
             RequestDetails::List { prefix } => {
                 write!(f, "LIST")?;
@@ -893,7 +881,7 @@ impl ObjectStore for RequestCountingObjectStore {
         _payload: PutPayload,
         _opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        Err(object_store::Error::NotImplemented)
+        unimplemented!()
     }
 
     async fn put_multipart_opts(
@@ -901,15 +889,7 @@ impl ObjectStore for RequestCountingObjectStore {
         _location: &Path,
         _opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        Err(object_store::Error::NotImplemented)
-    }
-
-    async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-        let result = self.inner.get(location).await?;
-        self.requests.lock().push(RequestDetails::Get {
-            path: location.to_owned(),
-        });
-        Ok(result)
+        unimplemented!()
     }
 
     async fn get_opts(
@@ -925,19 +905,6 @@ impl ObjectStore for RequestCountingObjectStore {
         Ok(result)
     }
 
-    async fn get_range(
-        &self,
-        location: &Path,
-        range: Range<u64>,
-    ) -> object_store::Result<Bytes> {
-        let result = self.inner.get_range(location, range.clone()).await?;
-        self.requests.lock().push(RequestDetails::GetRange {
-            path: location.to_owned(),
-            range: range.clone(),
-        });
-        Ok(result)
-    }
-
     async fn get_ranges(
         &self,
         location: &Path,
@@ -949,18 +916,6 @@ impl ObjectStore for RequestCountingObjectStore {
             ranges: ranges.to_vec(),
         });
         Ok(result)
-    }
-
-    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        let result = self.inner.head(location).await?;
-        self.requests.lock().push(RequestDetails::Head {
-            path: location.to_owned(),
-        });
-        Ok(result)
-    }
-
-    async fn delete(&self, _location: &Path) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented)
     }
 
     fn list(
@@ -998,15 +953,19 @@ impl ObjectStore for RequestCountingObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented)
+    fn delete_stream(
+        &self,
+        _locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        unimplemented!()
     }
 
-    async fn copy_if_not_exists(
+    async fn copy_opts(
         &self,
         _from: &Path,
         _to: &Path,
+        _options: CopyOptions,
     ) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented)
+        unimplemented!()
     }
 }

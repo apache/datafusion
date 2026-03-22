@@ -19,20 +19,27 @@ use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
+use arrow::array::timezone::Tz;
+use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use arrow::datatypes::{
+    ArrowTimestampType, DataType, Date32Type, Date64Type, Field, FieldRef,
+    IntervalUnit as ArrowIntervalUnit, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
+use chrono::{Datelike, NaiveDate};
 use datafusion_common::types::{NativeType, logical_date};
 
 use datafusion_common::{
     Result, ScalarValue,
     cast::{
-        as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
+        as_date32_array, as_date64_array, as_int32_array, as_interval_dt_array,
+        as_interval_mdn_array, as_interval_ym_array, as_time32_millisecond_array,
         as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
         as_timestamp_microsecond_array, as_timestamp_millisecond_array,
         as_timestamp_nanosecond_array, as_timestamp_second_array,
@@ -41,9 +48,11 @@ use datafusion_common::{
     types::logical_string,
     utils::take_function_args,
 };
+use datafusion_expr::preimage::PreimageResult;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility, interval_arithmetic,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -56,8 +65,9 @@ use datafusion_macros::user_doc;
     argument(
         name = "part",
         description = r#"Part of the date to return. The following date parts are supported:
-        
+
     - year
+    - isoyear (ISO 8601 week-numbering year)
     - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
     - month
     - week (week of the year)
@@ -70,7 +80,7 @@ use datafusion_macros::user_doc;
     - nanosecond
     - dow (day of the week where Sunday is 0)
     - doy (day of the year)
-    - epoch (seconds since Unix epoch)
+    - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
     - isodow (day of the week where Monday is 0)
 "#
     ),
@@ -148,6 +158,7 @@ impl ScalarUDFImpl for DatePartFunc {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
+        let nullable = args.arg_fields[1].is_nullable();
 
         field
             .and_then(|sv| {
@@ -156,9 +167,12 @@ impl ScalarUDFImpl for DatePartFunc {
                     .filter(|s| !s.is_empty())
                     .map(|part| {
                         if is_epoch(part) {
-                            Field::new(self.name(), DataType::Float64, true)
+                            Field::new(self.name(), DataType::Float64, nullable)
+                        } else if is_nanosecond(part) {
+                            // See notes on [seconds_ns] for rationale
+                            Field::new(self.name(), DataType::Int64, nullable)
                         } else {
-                            Field::new(self.name(), DataType::Int32, true)
+                            Field::new(self.name(), DataType::Int32, nullable)
                         }
                     })
             })
@@ -169,10 +183,7 @@ impl ScalarUDFImpl for DatePartFunc {
             )
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         let [part, array] = take_function_args(self.name(), args)?;
 
@@ -208,13 +219,14 @@ impl ScalarUDFImpl for DatePartFunc {
                 IntervalUnit::Second => seconds_as_i32(array.as_ref(), Second)?,
                 IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
                 IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
-                IntervalUnit::Nanosecond => seconds_as_i32(array.as_ref(), Nanosecond)?,
+                IntervalUnit::Nanosecond => seconds_ns(array.as_ref())?,
                 // century and decade are not supported by `DatePart`, although they are supported in postgres
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
         } else {
             // special cases that can be extracted (in postgres) but are not interval units
             match part_trim.to_lowercase().as_str() {
+                "isoyear" => date_part(array.as_ref(), DatePart::YearISO)?,
                 "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
                 "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
@@ -231,6 +243,71 @@ impl ScalarUDFImpl for DatePartFunc {
         })
     }
 
+    // Only casting the year is supported since pruning other IntervalUnit is not possible
+    // date_part(col, YEAR) = 2024 => col >= '2024-01-01' and col < '2025-01-01'
+    // But for anything less than YEAR simplifying is not possible without specifying the bigger interval
+    // date_part(col, MONTH) = 1 => col = '2023-01-01' or col = '2024-01-01' or ... or col = '3000-01-01'
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        let [part, col_expr] = take_function_args(self.name(), args)?;
+
+        // Get the interval unit from the part argument
+        let interval_unit = part
+            .as_literal()
+            .and_then(|sv| sv.try_as_str().flatten())
+            .map(part_normalization)
+            .and_then(|s| IntervalUnit::from_str(s).ok());
+
+        // only support extracting year
+        match interval_unit {
+            Some(IntervalUnit::Year) => (),
+            _ => return Ok(PreimageResult::None),
+        }
+
+        // Check if the argument is a literal (e.g. date_part(YEAR, col) = 2024)
+        let Some(argument_literal) = lit_expr.as_literal() else {
+            return Ok(PreimageResult::None);
+        };
+
+        // Extract i32 year from Scalar value
+        let year = match argument_literal {
+            ScalarValue::Int32(Some(y)) => *y,
+            _ => return Ok(PreimageResult::None),
+        };
+
+        // Can only extract year from Date32/64 and Timestamp column
+        let target_type = match info.get_data_type(col_expr)? {
+            Date32 | Date64 | Timestamp(_, _) => &info.get_data_type(col_expr)?,
+            _ => return Ok(PreimageResult::None),
+        };
+
+        // Compute the Interval bounds
+        let Some(start_time) = NaiveDate::from_ymd_opt(year, 1, 1) else {
+            return Ok(PreimageResult::None);
+        };
+        let Some(end_time) = start_time.with_year(year + 1) else {
+            return Ok(PreimageResult::None);
+        };
+
+        // Convert to ScalarValues
+        let (Some(lower), Some(upper)) = (
+            date_to_scalar(start_time, target_type),
+            date_to_scalar(end_time, target_type),
+        ) else {
+            return Ok(PreimageResult::None);
+        };
+        let interval = Box::new(interval_arithmetic::Interval::try_new(lower, upper)?);
+
+        Ok(PreimageResult::Range {
+            expr: col_expr.clone(),
+            interval,
+        })
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -243,6 +320,53 @@ impl ScalarUDFImpl for DatePartFunc {
 fn is_epoch(part: &str) -> bool {
     let part = part_normalization(part);
     matches!(part.to_lowercase().as_str(), "epoch")
+}
+
+fn is_nanosecond(part: &str) -> bool {
+    IntervalUnit::from_str(part_normalization(part))
+        .map(|p| matches!(p, IntervalUnit::Nanosecond))
+        .unwrap_or(false)
+}
+
+fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
+    Some(match target_type {
+        Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
+        Date64 => ScalarValue::Date64(Some(Date64Type::from_naive_date(date))),
+
+        Timestamp(unit, tz_opt) => {
+            let naive_midnight = date.and_hms_opt(0, 0, 0)?;
+            let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
+
+            match unit {
+                Second => ScalarValue::TimestampSecond(
+                    TimestampSecondType::from_naive_datetime(naive_midnight, tz.as_ref()),
+                    tz_opt.clone(),
+                ),
+                Millisecond => ScalarValue::TimestampMillisecond(
+                    TimestampMillisecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
+                    tz_opt.clone(),
+                ),
+                Microsecond => ScalarValue::TimestampMicrosecond(
+                    TimestampMicrosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
+                    tz_opt.clone(),
+                ),
+                Nanosecond => ScalarValue::TimestampNanosecond(
+                    TimestampNanosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
+                    tz_opt.clone(),
+                ),
+            }
+        }
+        _ => return None,
+    })
 }
 
 // Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
@@ -349,6 +473,11 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
 
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     const SECONDS_IN_A_DAY: f64 = 86400_f64;
+    // Note: Month-to-second conversion uses 30 days as an approximation.
+    // This matches PostgreSQL's behavior for interval epoch extraction,
+    // but does not represent exact calendar months (which vary 28-31 days).
+    // See: https://doxygen.postgresql.org/datatype_2timestamp_8h.html
+    const DAYS_PER_MONTH: f64 = 30_f64;
 
     let f: Float64Array = match array.data_type() {
         Timestamp(Second, _) => as_timestamp_second_array(array)?.unary(|x| x as f64),
@@ -373,8 +502,56 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         Time64(Nanosecond) => {
             as_time64_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
         }
-        Interval(_) | Duration(_) => return seconds(array, Second),
+        Interval(ArrowIntervalUnit::YearMonth) => as_interval_ym_array(array)?
+            .unary(|x| x as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY),
+        Interval(ArrowIntervalUnit::DayTime) => as_interval_dt_array(array)?.unary(|x| {
+            x.days as f64 * SECONDS_IN_A_DAY + x.milliseconds as f64 / 1_000_f64
+        }),
+        Interval(ArrowIntervalUnit::MonthDayNano) => {
+            as_interval_mdn_array(array)?.unary(|x| {
+                x.months as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY
+                    + x.days as f64 * SECONDS_IN_A_DAY
+                    + x.nanoseconds as f64 / 1_000_000_000_f64
+            })
+        }
+        Duration(_) => return seconds(array, Second),
         d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
+}
+
+/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
+/// result to a total number of nanoseconds as an Int64 array.
+///
+/// This returns an Int64 rather than Int32 because  there 1 billion
+/// `nanosecond`s in each second, so representing up to 60 seconds as
+/// nanoseconds can be values up to 60 billion, which does not fit in Int32.
+fn seconds_ns(array: &dyn Array) -> Result<ArrayRef> {
+    let secs = date_part(array, DatePart::Second)?;
+    // This assumes array is primitive and not a dictionary
+    let secs = as_int32_array(secs.as_ref())?;
+    let subsecs = date_part(array, DatePart::Nanosecond)?;
+    let subsecs = as_int32_array(subsecs.as_ref())?;
+
+    // Special case where there are no nulls.
+    if subsecs.null_count() == 0 {
+        let r: Int64Array = binary(secs, subsecs, |secs, subsecs| {
+            (secs as i64) * 1_000_000_000 + (subsecs as i64)
+        })?;
+        Ok(Arc::new(r))
+    } else {
+        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
+        // where the number of nanoseconds overflows.
+        let r: Int64Array = secs
+            .iter()
+            .zip(subsecs)
+            .map(|(secs, subsecs)| {
+                secs.map(|secs| {
+                    let subsecs = subsecs.unwrap_or(0);
+                    (secs as i64) * 1_000_000_000 + (subsecs as i64)
+                })
+            })
+            .collect();
+        Ok(Arc::new(r))
+    }
 }

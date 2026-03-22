@@ -33,6 +33,7 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
 use datafusion_catalog::TableProvider;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, exec_err};
 use datafusion_execution::RecordBatchStream;
 use datafusion_expr::Expr;
@@ -162,7 +163,7 @@ impl Drop for AsyncTableProvider {
 
 #[derive(Debug)]
 struct AsyncTestExecutionPlan {
-    properties: datafusion_physical_plan::PlanProperties,
+    properties: Arc<datafusion_physical_plan::PlanProperties>,
     batch_request: mpsc::Sender<bool>,
     batch_receiver: broadcast::Receiver<Option<RecordBatch>>,
 }
@@ -173,12 +174,12 @@ impl AsyncTestExecutionPlan {
         batch_receiver: broadcast::Receiver<Option<RecordBatch>>,
     ) -> Self {
         Self {
-            properties: datafusion_physical_plan::PlanProperties::new(
+            properties: Arc::new(datafusion_physical_plan::PlanProperties::new(
                 EquivalenceProperties::new(super::create_test_schema()),
                 Partitioning::UnknownPartitioning(3),
                 datafusion_physical_plan::execution_plan::EmissionType::Incremental,
                 datafusion_physical_plan::execution_plan::Boundedness::Bounded,
-            ),
+            )),
             batch_request,
             batch_receiver,
         }
@@ -194,7 +195,7 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         self
     }
 
-    fn properties(&self) -> &datafusion_physical_plan::PlanProperties {
+    fn properties(&self) -> &Arc<datafusion_physical_plan::PlanProperties> {
         &self.properties
     }
 
@@ -218,6 +219,22 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
             batch_request: self.batch_request.clone(),
             batch_receiver: self.batch_receiver.resubscribe(),
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.properties.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 

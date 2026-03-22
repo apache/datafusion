@@ -29,7 +29,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -119,7 +120,7 @@ fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
             ScalarValue::List(array) => Ok(array.value(0)),
             ScalarValue::LargeList(array) => Ok(array.value(0)),
             ScalarValue::FixedSizeList(array) => Ok(array.value(0)),
-            _ => exec_err!("Expected array, got {:?}", value),
+            _ => exec_err!("Expected array, got {}", value),
         },
         ColumnarValue::Array(array) => Ok(array.to_owned()),
     }
@@ -288,10 +289,7 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_map_batch(&args.args)
     }
 

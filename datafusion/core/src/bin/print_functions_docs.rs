@@ -84,30 +84,6 @@ fn print_window_docs() -> Result<String> {
     print_docs(providers, window_doc_sections::doc_sections())
 }
 
-// Temporary method useful to semi automate
-// the migration of UDF documentation generation from code based
-// to attribute based
-// To be removed
-#[allow(dead_code)]
-fn save_doc_code_text(documentation: &Documentation, name: &str) {
-    let attr_text = documentation.to_doc_attribute();
-
-    let file_path = format!("{name}.txt");
-    if std::path::Path::new(&file_path).exists() {
-        std::fs::remove_file(&file_path).unwrap();
-    }
-
-    // Open the file in append mode, create it if it doesn't exist
-    let mut file = std::fs::OpenOptions::new()
-        .append(true) // Open in append mode
-        .create(true) // Create the file if it doesn't exist
-        .open(file_path)
-        .unwrap();
-
-    use std::io::Write;
-    file.write_all(attr_text.as_bytes()).unwrap();
-}
-
 #[expect(clippy::needless_pass_by_value)]
 fn print_docs(
     providers: Vec<Box<dyn DocProvider>>,
@@ -306,8 +282,7 @@ impl DocProvider for WindowUDF {
     }
 }
 
-#[allow(clippy::borrowed_box)]
-#[allow(clippy::ptr_arg)]
+#[expect(clippy::borrowed_box)]
 fn get_names_and_aliases(functions: &Vec<&Box<dyn DocProvider>>) -> Vec<String> {
     functions
         .iter()

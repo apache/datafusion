@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int64Array};

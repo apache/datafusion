@@ -353,6 +353,14 @@ pub trait TableProvider: Debug + Sync + Send {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("UPDATE not supported for {} table", self.table_type())
     }
+
+    /// Remove all rows from the table.
+    ///
+    /// Should return an [ExecutionPlan] producing a single row with count (UInt64),
+    /// representing the number of rows removed.
+    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("TRUNCATE not supported for {} table", self.table_type())
+    }
 }
 
 /// Arguments for scanning a table with [`TableProvider::scan_with_args`].
@@ -478,7 +486,7 @@ pub trait TableProviderFactory: Debug + Sync + Send {
 }
 
 /// A trait for table function implementations
-pub trait TableFunctionImpl: Debug + Sync + Send {
+pub trait TableFunctionImpl: Debug + Sync + Send + Any {
     /// Create a table provider
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
 }

@@ -23,7 +23,8 @@ use arrow::array::{
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -88,10 +89,7 @@ impl ScalarUDFImpl for CharacterLengthFunc {
         utf8_to_int_type(&arg_types[0], "character_length")
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(character_length, vec![])(&args.args)
     }
 

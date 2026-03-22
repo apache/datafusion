@@ -1,0 +1,171 @@
+{
+  "version": {
+    "minorNumber": 54,
+    "producer": "datafusion-test"
+  },
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "set": {
+            "common": {
+              "direct": {}
+            },
+            "inputs": [
+              {
+                "project": {
+                  "common": {
+                    "emit": {
+                      "outputMapping": [2, 3]
+                    }
+                  },
+                  "input": {
+                    "read": {
+                      "common": {
+                        "direct": {}
+                      },
+                      "baseSchema": {
+                        "names": ["foo", "bar"],
+                        "struct": {
+                          "types": [
+                            {
+                              "i64": {
+                                "nullability": "NULLABILITY_REQUIRED"
+                              }
+                            },
+                            {
+                              "i64": {
+                                "nullability": "NULLABILITY_REQUIRED"
+                              }
+                            }
+                          ],
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      "virtualTable": {
+                        "expressions": [
+                          {
+                            "fields": [
+                              {
+                                "literal": {
+                                  "i64": "100"
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "i64": "200"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 0
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    },
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "project": {
+                  "common": {
+                    "emit": {
+                      "outputMapping": [2, 3]
+                    }
+                  },
+                  "input": {
+                    "read": {
+                      "common": {
+                        "direct": {}
+                      },
+                      "baseSchema": {
+                        "names": ["x", "foo"],
+                        "struct": {
+                          "types": [
+                            {
+                              "i32": {
+                                "nullability": "NULLABILITY_REQUIRED"
+                              }
+                            },
+                            {
+                              "i64": {
+                                "nullability": "NULLABILITY_REQUIRED"
+                              }
+                            }
+                          ],
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      "virtualTable": {
+                        "expressions": [
+                          {
+                            "fields": [
+                              {
+                                "literal": {
+                                  "i32": 300
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "i64": "400"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 0
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    },
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "op": "SET_OP_UNION_ALL"
+          }
+        },
+        "names": ["col1", "col2"]
+      }
+    }
+  ]
+}

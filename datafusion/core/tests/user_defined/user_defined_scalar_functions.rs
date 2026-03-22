@@ -715,10 +715,7 @@ impl ScalarUDFImpl for CastToI64UDF {
             arg
         } else {
             // need to use an actual cast to get the correct type
-            Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Int64,
-            })
+            Expr::Cast(datafusion_expr::Cast::new(Box::new(arg), DataType::Int64))
         };
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))
@@ -1306,19 +1303,14 @@ async fn create_scalar_function_from_sql_statement_default_arguments() -> Result
         "Error during planning: Non-default arguments cannot follow default arguments.";
     assert!(expected.starts_with(&err.strip_backtrace()));
 
-    // FIXME: The `DEFAULT` syntax does not work with positional params
-    let bad_expression_sql = r#"
+    let expression_sql = r#"
     CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE DEFAULT 2.0)
         RETURNS DOUBLE
         RETURN $1 + $2
     "#;
-    let err = ctx
-        .sql(bad_expression_sql)
-        .await
-        .expect_err("sqlparser error");
-    let expected =
-        "SQL error: ParserError(\"Expected: ), found: 2.0 at Line: 2, Column: 63\")";
-    assert!(expected.starts_with(&err.strip_backtrace()));
+    let result = ctx.sql(expression_sql).await;
+
+    assert!(result.is_ok());
     Ok(())
 }
 

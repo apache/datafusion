@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, AsArray, Int32Array, StringArrayType};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignatureClass};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::Coercion;
@@ -91,7 +91,31 @@ impl ScalarUDFImpl for AsciiFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(ascii, vec![])(&args.args)
+        let [arg] = take_function_args(self.name(), args.args)?;
+
+        match arg {
+            ColumnarValue::Scalar(scalar) => {
+                if scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Int32(None)));
+                }
+
+                match scalar {
+                    ScalarValue::Utf8(Some(s))
+                    | ScalarValue::LargeUtf8(Some(s))
+                    | ScalarValue::Utf8View(Some(s)) => {
+                        let result = s.chars().next().map_or(0, |c| c as i32);
+                        Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(result))))
+                    }
+                    _ => {
+                        internal_err!(
+                            "Unexpected data type {:?} for function ascii",
+                            scalar.data_type()
+                        )
+                    }
+                }
+            }
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(ascii(&[array])?)),
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {

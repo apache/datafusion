@@ -29,11 +29,11 @@ use crate::physical_optimizer::test_utils::{
     spr_repartition_exec, stream_exec_ordered, union_exec,
 };
 
-use arrow::compute::SortOptions;
+use arrow::compute::{SortOptions};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion_common::{Result,  TableReference};
+use datafusion_common::{create_array, Result, TableReference};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr_common::operator::Operator;
@@ -58,7 +58,7 @@ use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
-use arrow::array::{Int32Array, RecordBatch};
+use arrow::array::{record_batch, ArrayRef, Int32Array, RecordBatch};
 use arrow::datatypes::{Field};
 use arrow_schema::Schema;
 use datafusion_execution::TaskContext;
@@ -2802,6 +2802,50 @@ async fn test_partial_sort_with_homogeneous_batches() -> Result<()> {
         0,
         "Memory should be released after execution"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sort_with_streaming_table() -> Result<()> {
+    let batch = record_batch!(("a", Int32, [1, 2, 3]), ("b", Int32, [1, 2, 3]))?;
+
+    let ctx = SessionContext::new();
+
+    let sort_order = vec![
+        SortExpr::new(
+            Expr::Column(datafusion_common::Column::new(
+                Option::<TableReference>::None,
+                "a",
+            )),
+            true,
+            false,
+        ),
+        SortExpr::new(
+            Expr::Column(datafusion_common::Column::new(
+                Option::<TableReference>::None,
+                "b",
+            )),
+            true,
+            false,
+        ),
+    ];
+    let schema = batch.schema();
+    let batches = Arc::new(DummyStreamPartition {
+        schema: schema.clone(),
+        batches: vec![batch],
+    }) as _;
+    let provider = StreamingTable::try_new(schema.clone(), vec![batches])?
+        .with_sort_order(sort_order);
+    ctx.register_table("test_table", Arc::new(provider))?;
+
+    let sql = "SELECT a FROM test_table GROUP BY a ORDER BY a";
+    let results = ctx.sql(sql).await?.collect().await?;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].num_columns(), 1);
+    let expected = create_array!(Int32, vec![1, 2, 3]) as ArrayRef;
+    assert_eq!(results[0].column(0), &expected);
 
     Ok(())
 }

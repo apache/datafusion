@@ -94,7 +94,6 @@ impl ScalarUDFImpl for SparkAscii {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn test_return_field_nullable_input() {

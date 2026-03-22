@@ -143,7 +143,7 @@ impl ScalarUDFImpl for UnionTagFunc {
                     args.return_field.data_type(),
                 )?)),
             },
-            v => exec_err!("union_tag only support unions, got {:?}", v.data_type()),
+            v => exec_err!("union_tag only support unions, got {}", v.data_type()),
         }
     }
 

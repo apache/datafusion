@@ -20,8 +20,8 @@
 use crate::utils;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, cast::AsArray,
-    new_empty_array,
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullBufferBuilder,
+    OffsetSizeTrait, cast::AsArray, make_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
@@ -30,7 +30,7 @@ use datafusion_common::utils::ListCoercion;
 use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -40,13 +40,13 @@ make_udf_expr_and_func!(
     ArrayRemove,
     array_remove,
     array element,
-    "removes the first element from the array equal to the given value.",
+    "removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     array_remove_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes the first element from the array equal to the given value.",
+    description = "Removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     syntax_example = "array_remove(array, element)",
     sql_example = r#"```sql
 > select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
@@ -55,6 +55,13 @@ make_udf_expr_and_func!(
 +----------------------------------------------+
 | [1, 2, 3, 2, 1, 4]                           |
 +----------------------------------------------+
+
+> select array_remove([1, 2, NULL, 2, 4], 2);
++---------------------------------------------------+
+| array_remove(List([1,2,NULL,2,4]),Int64(2)) |
++---------------------------------------------------+
+| [1, NULL, 2, 4]                              |
++---------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -110,10 +117,7 @@ impl ScalarUDFImpl for ArrayRemove {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_inner)(&args.args)
     }
 
@@ -130,14 +134,14 @@ make_udf_expr_and_func!(
     ArrayRemoveN,
     array_remove_n,
     array element max,
-    "removes the first `max` elements from the array equal to the given value.",
+    "removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     array_remove_n_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes the first `max` elements from the array equal to the given value.",
-    syntax_example = "array_remove_n(array, element, max))",
+    description = "Removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
+    syntax_example = "array_remove_n(array, element, max)",
     sql_example = r#"```sql
 > select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
 +---------------------------------------------------------+
@@ -145,6 +149,13 @@ make_udf_expr_and_func!(
 +---------------------------------------------------------+
 | [1, 3, 2, 1, 4]                                         |
 +---------------------------------------------------------+
+
+> select array_remove_n([1, 2, NULL, 2, 4], 2, 2);
++----------------------------------------------------------+
+| array_remove_n(List([1,2,NULL,2,4]),Int64(2),Int64(2)) |
++----------------------------------------------------------+
+| [1, NULL, 4]                                            |
++----------------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -205,10 +216,7 @@ impl ScalarUDFImpl for ArrayRemoveN {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_n_inner)(&args.args)
     }
 
@@ -225,13 +233,13 @@ make_udf_expr_and_func!(
     ArrayRemoveAll,
     array_remove_all,
     array element,
-    "removes all elements from the array equal to the given value.",
+    "removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     array_remove_all_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes all elements from the array equal to the given value.",
+    description = "Removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     syntax_example = "array_remove_all(array, element)",
     sql_example = r#"```sql
 > select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
@@ -240,6 +248,13 @@ make_udf_expr_and_func!(
 +--------------------------------------------------+
 | [1, 3, 1, 4]                                     |
 +--------------------------------------------------+
+
+> select array_remove_all([1, 2, NULL, 2, 4], 2);
++-----------------------------------------------------+
+| array_remove_all(List([1,2,NULL,2,4]),Int64(2)) |
++-----------------------------------------------------+
+| [1, NULL, 4]                                     |
++-----------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -289,10 +304,7 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_all_inner)(&args.args)
     }
 
@@ -377,73 +389,84 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
             );
         }
     };
-    let data_type = list_field.data_type();
-    let mut new_values = vec![];
+    let original_data = list_array.values().to_data();
     // Build up the offsets for the final output array
     let mut offsets = Vec::<OffsetSize>::with_capacity(arr_n.len() + 1);
     offsets.push(OffsetSize::zero());
 
-    // n is the number of elements to remove in this row
-    for (row_index, (list_array_row, n)) in
-        list_array.iter().zip(arr_n.iter()).enumerate()
-    {
-        match list_array_row {
-            Some(list_array_row) => {
-                let eq_array = utils::compare_element_to_list(
-                    &list_array_row,
-                    element_array,
-                    row_index,
-                    false,
-                )?;
+    let mut mutable = MutableArrayData::with_capacities(
+        vec![&original_data],
+        false,
+        Capacities::Array(original_data.len()),
+    );
+    let mut valid = NullBufferBuilder::new(list_array.len());
 
-                // We need to keep at most first n elements as `false`, which represent the elements to remove.
-                let eq_array = if eq_array.false_count() < *n as usize {
-                    eq_array
-                } else {
-                    let mut count = 0;
-                    eq_array
-                        .iter()
-                        .map(|e| {
-                            // Keep first n `false` elements, and reverse other elements to `true`.
-                            if let Some(false) = e {
-                                if count < *n {
-                                    count += 1;
-                                    e
-                                } else {
-                                    Some(true)
-                                }
-                            } else {
-                                e
-                            }
-                        })
-                        .collect::<BooleanArray>()
-                };
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        if list_array.is_null(row_index) || element_array.is_null(row_index) {
+            offsets.push(offsets[row_index]);
+            valid.append_null();
+            continue;
+        }
 
-                let filtered_array = arrow::compute::filter(&list_array_row, &eq_array)?;
-                offsets.push(
-                    offsets[row_index] + OffsetSize::usize_as(filtered_array.len()),
-                );
-                new_values.push(filtered_array);
-            }
-            None => {
-                // Null element results in a null row (no new offsets)
-                offsets.push(offsets[row_index]);
+        let start = offset_window[0].to_usize().unwrap();
+        let end = offset_window[1].to_usize().unwrap();
+        // n is the number of elements to remove in this row
+        let n = arr_n[row_index];
+
+        // compare each element in the list, `false` means the element matches and should be removed
+        let eq_array = utils::compare_element_to_list(
+            &list_array.value(row_index),
+            element_array,
+            row_index,
+            false,
+        )?;
+
+        let num_to_remove = eq_array.false_count();
+
+        // Fast path: no elements to remove, copy entire row
+        if num_to_remove == 0 {
+            mutable.extend(0, start, end);
+            offsets.push(offsets[row_index] + OffsetSize::usize_as(end - start));
+            valid.append_non_null();
+            continue;
+        }
+
+        // Remove at most `n` matching elements
+        let max_removals = n.min(num_to_remove as i64);
+        let mut removed = 0i64;
+        let mut copied = 0usize;
+        // marks the beginning of a range of elements pending to be copied.
+        let mut pending_batch_to_retain: Option<usize> = None;
+        for (i, keep) in eq_array.iter().enumerate() {
+            if keep == Some(false) && removed < max_removals {
+                // Flush pending batch before skipping this element
+                if let Some(bs) = pending_batch_to_retain {
+                    mutable.extend(0, start + bs, start + i);
+                    copied += i - bs;
+                    pending_batch_to_retain = None;
+                }
+                removed += 1;
+            } else if pending_batch_to_retain.is_none() {
+                pending_batch_to_retain = Some(i);
             }
         }
+
+        // Flush remaining batch
+        if let Some(bs) = pending_batch_to_retain {
+            mutable.extend(0, start + bs, start + eq_array.len());
+            copied += eq_array.len() - bs;
+        }
+
+        offsets.push(offsets[row_index] + OffsetSize::usize_as(copied));
+        valid.append_non_null();
     }
 
-    let values = if new_values.is_empty() {
-        new_empty_array(data_type)
-    } else {
-        let new_values = new_values.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-        arrow::compute::concat(&new_values)?
-    };
-
+    let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
         Arc::clone(list_field),
         OffsetBuffer::new(offsets.into()),
-        values,
-        list_array.nulls().cloned(),
+        new_values,
+        valid.finish(),
     )?))
 }
 

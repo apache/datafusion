@@ -35,8 +35,8 @@ use datafusion_common::{
     utils::take_function_args,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -143,10 +143,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [time_value] = take_function_args(self.name(), &args.args)?;
         to_local_time(time_value)
     }
@@ -324,7 +321,7 @@ fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
 /// ```
 ///
 /// See `test_adjust_to_local_time()` for example
-fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
+pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
     fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
     where
         F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,

@@ -43,10 +43,10 @@ use datafusion::common::Result;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::Column;
 use datafusion_expr::Expr;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_sql::unparser::Unparser;
 use datafusion_sql::unparser::dialect::DefaultDialect;
 use itertools::Itertools;
+use recursive::{set_minimum_stack_size, set_stack_allocation_size};
 
 /// Paths to benchmark query files (supports running from repo root or different working directories).
 const BENCHMARK_PATHS: &[&str] = &["../../benchmarks/", "./benchmarks/"];
@@ -322,16 +322,6 @@ async fn collect_results(ctx: &SessionContext, original: &str) -> TestCaseResult
         }
     };
 
-    let is_sorted = match ctx.state().create_physical_plan(df.logical_plan()).await {
-        Ok(plan) => plan.equivalence_properties().output_ordering().is_some(),
-        Err(e) => {
-            return TestCaseResult::ExecutionError {
-                original: original.to_string(),
-                error: e.to_string(),
-            };
-        }
-    };
-
     // Collect results from original query
     let mut expected = match df.collect().await {
         Ok(batches) => batches,
@@ -367,8 +357,9 @@ async fn collect_results(ctx: &SessionContext, original: &str) -> TestCaseResult
         }
     };
 
-    // Sort if needed for comparison
-    if !is_sorted {
+    // Always sort for deterministic comparison — even "sorted" results can have
+    // tied rows in different order between original and unparsed SQL.
+    {
         expected = match sort_batches(ctx, expected).await {
             Ok(batches) => batches,
             Err(e) => {
@@ -458,5 +449,8 @@ async fn test_clickbench_unparser_roundtrip() {
 
 #[tokio::test]
 async fn test_tpch_unparser_roundtrip() {
+    // Grow stacker segments earlier to avoid deep unparser recursion overflow in q20.
+    set_minimum_stack_size(512 * 1024);
+    set_stack_allocation_size(8 * 1024 * 1024);
     run_roundtrip_tests("TPC-H", tpch_queries(), tpch_test_context).await;
 }

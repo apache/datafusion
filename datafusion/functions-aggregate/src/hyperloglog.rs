@@ -34,7 +34,7 @@
 //!
 //! This module also borrows some code structure from [pdatastructs.rs](https://github.com/crepererum/pdatastructs.rs/blob/3997ed50f6b6871c9e53c4c5e0f48f431405fc63/src/hyperloglog.rs).
 
-use ahash::RandomState;
+use std::hash::BuildHasher;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
@@ -58,15 +58,11 @@ where
 /// Fixed seed for the hashing so that values are consistent across runs
 ///
 /// Note that when we later move on to have serialized HLL register binaries
-/// shared across cluster, this SEED will have to be consistent across all
+/// shared across cluster, this HLL_HASH_STATE will have to be consistent across all
 /// parties otherwise we might have corruption. So ideally for later this seed
 /// shall be part of the serialized form (or stay unchanged across versions).
-const SEED: RandomState = RandomState::with_seeds(
-    0x885f6cab121d01a3_u64,
-    0x71e4379f2976ad8f_u64,
-    0xbf30173dd28a8816_u64,
-    0x0eaea5d736d733a4_u64,
-);
+pub(crate) const HLL_HASH_STATE: foldhash::quality::FixedState =
+    foldhash::quality::FixedState::with_seed(0);
 
 impl<T> Default for HyperLogLog<T>
 where
@@ -97,17 +93,26 @@ where
         }
     }
 
-    /// choice of hash function: ahash is already an dependency
+    /// choice of hash function: foldhash is already an dependency
     /// and it fits the requirements of being a 64bit hash with
     /// reasonable performance.
     #[inline]
     fn hash_value(&self, obj: &T) -> u64 {
-        SEED.hash_one(obj)
+        HLL_HASH_STATE.hash_one(obj)
     }
 
     /// Adds an element to the HyperLogLog.
     pub fn add(&mut self, obj: &T) {
         let hash = self.hash_value(obj);
+        self.add_hashed(hash);
+    }
+
+    /// Adds a pre-computed hash value directly to the HyperLogLog.
+    ///
+    /// The hash should be computed using [`HLL_HASH_STATE`], the same hasher used
+    /// by [`Self::add`].
+    #[inline]
+    pub(crate) fn add_hashed(&mut self, hash: u64) {
         let index = (hash & HLL_P_MASK) as usize;
         let p = ((hash >> HLL_P) | (1_u64 << HLL_Q)).trailing_zeros() + 1;
         self.registers[index] = self.registers[index].max(p as u8);

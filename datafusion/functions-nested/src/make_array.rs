@@ -31,12 +31,12 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType::Null, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, plan_err};
-use datafusion_expr::TypeSignature;
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools as _;
@@ -80,10 +80,7 @@ impl Default for MakeArray {
 impl MakeArray {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![TypeSignature::Nullary, TypeSignature::UserDefined],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("make_list")],
         }
     }
@@ -113,10 +110,7 @@ impl ScalarUDFImpl for MakeArray {
         Ok(DataType::new_list(element_type, true))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(make_array_inner)(&args.args)
     }
 
@@ -125,7 +119,11 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        coerce_types_inner(arg_types, self.name())
+        if arg_types.is_empty() {
+            Ok(vec![])
+        } else {
+            coerce_types_inner(arg_types, self.name())
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {

@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
@@ -24,10 +23,12 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::hash_table::HashTable;
+use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -128,7 +129,9 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |&(g, _)| unsafe { self.values.get_unchecked(g).is_eq(key) },
+                        |&(g, h)| unsafe {
+                            hash == h && self.values.get_unchecked(g).is_eq(key)
+                        },
                         |&(_, h)| h,
                     );
 

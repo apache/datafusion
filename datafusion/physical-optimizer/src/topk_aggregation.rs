@@ -25,6 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::aggregates::LimitOptions;
 use datafusion_physical_plan::aggregates::{AggregateExec, topk_types_supported};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -47,28 +48,47 @@ impl TopKAggregation {
         order_desc: bool,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
-        // ensure the sort direction matches aggregate function
-        let (field, desc) = aggr.get_minmax_desc()?;
-        if desc != order_desc {
-            return None;
-        }
-        let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
-        let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
-        let vt = field.data_type();
-        if !topk_types_supported(&kt, vt) {
+        // Current only support single group key
+        let (group_key, group_key_alias) =
+            aggr.group_expr().expr().iter().exactly_one().ok()?;
+        let kt = group_key.data_type(&aggr.input().schema()).ok()?;
+        let vt = if let Some((field, _)) = aggr.get_minmax_desc() {
+            field.data_type().clone()
+        } else {
+            kt.clone()
+        };
+        if !topk_types_supported(&kt, &vt) {
             return None;
         }
         if aggr.filter_expr().iter().any(|e| e.is_some()) {
             return None;
         }
 
-        // ensure the sort is on the same field as the aggregate output
-        if order_by != field.name() {
+        // Check if this is ordering by an aggregate function (MIN/MAX)
+        if let Some((field, desc)) = aggr.get_minmax_desc() {
+            // ensure the sort direction matches aggregate function
+            if desc != order_desc {
+                return None;
+            }
+            // ensure the sort is on the same field as the aggregate output
+            if order_by != field.name() {
+                return None;
+            }
+        } else if aggr.aggr_expr().is_empty() {
+            // This is a GROUP BY without aggregates, check if ordering is on the group key itself
+            if order_by != group_key_alias {
+                return None;
+            }
+        } else {
+            // Has aggregates but not MIN/MAX, or doesn't DISTINCT
             return None;
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = aggr.with_new_limit(Some(limit));
+        let new_aggr = AggregateExec::with_new_limit_options(
+            aggr,
+            Some(LimitOptions::new_with_order(limit, order_desc)),
+        );
         Some(Arc::new(new_aggr))
     }
 

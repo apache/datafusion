@@ -36,7 +36,7 @@ use crate::windows::{
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr,
+    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
 };
 
 use arrow::compute::take_record_batch;
@@ -48,6 +48,7 @@ use arrow::{
 };
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
@@ -65,7 +66,8 @@ use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
 
-use ahash::RandomState;
+use crate::execution_plan::CardinalityEffect;
+use datafusion_common::hash_utils::RandomState;
 use futures::stream::Stream;
 use futures::{StreamExt, ready};
 use hashbrown::hash_table::HashTable;
@@ -93,7 +95,7 @@ pub struct BoundedWindowAggExec {
     // See `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// If `can_rerepartition` is false, partition_keys is always empty.
     can_repartition: bool,
 }
@@ -134,7 +136,7 @@ impl BoundedWindowAggExec {
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode,
             ordered_partition_by_indices,
-            cache,
+            cache: Arc::new(cache),
             can_repartition,
         })
     }
@@ -248,6 +250,17 @@ impl BoundedWindowAggExec {
             total_byte_size: Precision::Absent,
         })
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -304,12 +317,25 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for window_expr in &self.window_expr {
+            for expr in window_expr.expressions() {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -339,6 +365,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
@@ -368,13 +395,14 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let input_stat =
+            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        Ok(Arc::new(self.statistics_helper(input_stat)?))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stat = self.input.partition_statistics(partition)?;
-        self.statistics_helper(input_stat)
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
     }
 }
 
@@ -1244,6 +1272,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::common::collect;
+    use crate::execution_plan::CardinalityEffect;
     use crate::expressions::PhysicalSortExpr;
     use crate::projection::{ProjectionExec, ProjectionExpr};
     use crate::streaming::{PartitionStream, StreamingTableExec};
@@ -1826,6 +1855,24 @@ mod tests {
         +----+------+-------+
         ");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_bounded_window_agg_cardinality_effect() -> Result<()> {
+        let schema = test_schema();
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let plan = bounded_window_exec_pb_latent_range(input, 1, "hash", "sn")?;
+        let plan = plan
+            .as_any()
+            .downcast_ref::<BoundedWindowAggExec>()
+            .expect("expected BoundedWindowAggExec");
+
+        assert!(matches!(
+            plan.cardinality_effect(),
+            CardinalityEffect::Equal
+        ));
         Ok(())
     }
 }

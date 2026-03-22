@@ -31,10 +31,11 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 
 /// A vector of record batches with a memory reservation.
 #[derive(Debug)]
@@ -109,7 +110,7 @@ pub struct WorkTableExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl WorkTableExec {
@@ -129,7 +130,7 @@ impl WorkTableExec {
             projection,
             work_table: Arc::new(WorkTable::new(name)),
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -181,12 +182,19 @@ impl ExecutionPlan for WorkTableExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -231,12 +239,8 @@ impl ExecutionPlan for WorkTableExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
-    }
-
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics::new_unknown(&self.schema())))
     }
 
     /// Injects run-time state into this `WorkTableExec`.
@@ -263,7 +267,7 @@ impl ExecutionPlan for WorkTableExec {
             projection: self.projection.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
         }))
     }
 }
@@ -283,7 +287,7 @@ mod tests {
         assert!(work_table.take().is_err());
 
         let pool = Arc::new(UnboundedMemoryPool::default()) as _;
-        let mut reservation = MemoryConsumer::new("test_work_table").register(&pool);
+        let reservation = MemoryConsumer::new("test_work_table").register(&pool);
 
         // Update batch to work_table
         let array: ArrayRef = Arc::new((0..5).collect::<Int32Array>());
