@@ -115,14 +115,14 @@ impl AvroSource {
 }
 
 fn coerce_batch_to_schema(
-    batch: RecordBatch,
+    batch: &RecordBatch,
     target_schema: SchemaRef,
 ) -> Result<RecordBatch> {
     let mut columns = Vec::with_capacity(target_schema.fields().len());
     for field in target_schema.fields() {
         let array: ArrayRef = match batch.schema().column_with_name(field.name()) {
             Some((idx, _)) => {
-                let source_array = batch.column(idx).clone();
+                let source_array = Arc::clone(batch.column(idx));
                 if source_array.data_type() == field.data_type() {
                     source_array
                 } else {
@@ -255,7 +255,7 @@ mod private {
                             .map(move |r| {
                                 r.map_err(Into::into).and_then(|batch| {
                                     coerce_batch_to_schema(
-                                        batch,
+                                        &batch,
                                         Arc::clone(&projected_file_schema),
                                     )
                                 })
@@ -278,7 +278,7 @@ mod private {
                             .map(move |r| {
                                 r.map_err(Into::into).and_then(|batch| {
                                     coerce_batch_to_schema(
-                                        batch,
+                                        &batch,
                                         Arc::clone(&projected_file_schema),
                                     )
                                 })
