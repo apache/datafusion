@@ -57,15 +57,17 @@ impl AvroSource {
         }
     }
 
-    fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
-        // Do not push projection ordinals into `arrow-avro` here. Those ordinals are
-        // based on DataFusion's logical file schema, while `arrow-avro` without a reader
-        // schema interprets them against the writer schema of each file.
-        // We apply projection by column name after decode in `coerce_batch_to_schema`.
-        ReaderBuilder::new()
-            .with_batch_size(self.batch_size.expect("Batch size must set before open"))
-            .build(reader)
-            .map_err(Into::into)
+    fn open<R: std::io::BufRead>(
+        &self,
+        reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Reader<R>> {
+        let mut builder = ReaderBuilder::new()
+            .with_batch_size(self.batch_size.expect("Batch size must set before open"));
+        if let Some(projection) = projection {
+            builder = builder.with_projection(projection);
+        }
+        builder.build(reader).map_err(Into::into)
     }
 
     fn projected_file_schema(&self) -> SchemaRef {
@@ -81,6 +83,34 @@ impl AvroSource {
                 .map(|idx| file_schema.field(*idx).clone())
                 .collect::<Vec<_>>(),
         ))
+    }
+
+    fn writer_projection_for_schema(
+        &self,
+        writer_schema: &Schema,
+        target_schema: &Schema,
+    ) -> Option<Vec<usize>> {
+        // `arrow-avro` accepts projection ordinals against the file's writer schema,
+        // while DataFusion plans projection against the logical table schema. Remap
+        // projected column names to writer ordinals so reader-level pushdown still
+        // preserves DataFusion's existing name-based projection semantics.
+        let projection = target_schema
+            .fields()
+            .iter()
+            .filter_map(|field| {
+                writer_schema
+                    .column_with_name(field.name())
+                    .map(|(idx, _)| idx)
+            })
+            .collect::<Vec<_>>();
+
+        let identity_projection = projection.len() == writer_schema.fields().len()
+            && projection
+                .iter()
+                .enumerate()
+                .all(|(idx, value)| idx == *value);
+
+        (!identity_projection).then_some(projection)
     }
 }
 
@@ -186,6 +216,7 @@ impl FileSource for AvroSource {
 mod private {
     use super::*;
     use std::io::BufReader;
+    use std::io::Seek;
 
     use bytes::Buf;
     use datafusion_datasource::{PartitionedFile, file_stream::FileOpenFuture};
@@ -208,8 +239,18 @@ mod private {
                     .get(&partitioned_file.object_meta.location)
                     .await?;
                 match r.payload {
-                    GetResultPayload::File(file, _) => {
-                        let reader = config.open(BufReader::new(file))?;
+                    GetResultPayload::File(mut file, _) => {
+                        // Probe the writer schema first so logical projected columns can be
+                        // translated to the writer-schema ordinals expected by `arrow-avro`.
+                        let probe_reader =
+                            config.open(BufReader::new(file.try_clone()?), None)?;
+                        let writer_projection = config.writer_projection_for_schema(
+                            probe_reader.schema().as_ref(),
+                            projected_file_schema.as_ref(),
+                        );
+                        file.rewind()?;
+                        let reader =
+                            config.open(BufReader::new(file), writer_projection)?;
                         Ok(futures::stream::iter(reader)
                             .map(move |r| {
                                 r.map_err(Into::into).and_then(|batch| {
@@ -223,7 +264,16 @@ mod private {
                     }
                     GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
-                        let reader = config.open(BufReader::new(bytes.reader()))?;
+                        // As above, inspect the writer schema before constructing the real
+                        // reader so `with_projection` can use writer-schema ordinals.
+                        let probe_reader =
+                            config.open(BufReader::new(bytes.clone().reader()), None)?;
+                        let writer_projection = config.writer_projection_for_schema(
+                            probe_reader.schema().as_ref(),
+                            projected_file_schema.as_ref(),
+                        );
+                        let reader = config
+                            .open(BufReader::new(bytes.reader()), writer_projection)?;
                         Ok(futures::stream::iter(reader)
                             .map(move |r| {
                                 r.map_err(Into::into).and_then(|batch| {
