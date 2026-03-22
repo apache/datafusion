@@ -124,7 +124,7 @@ LOCATION '../../testing/data/avro/alltypes_plain.avro';
 
 statement ok
 CREATE EXTERNAL TABLE single_nan (
-  mycol DOUBLE
+  mycol FLOAT
 )
 STORED AS AVRO
 LOCATION '../../testing/data/avro/single_nan.avro';
