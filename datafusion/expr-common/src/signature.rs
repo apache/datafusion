@@ -594,6 +594,20 @@ impl Display for ArrayFunctionArgument {
     }
 }
 
+static NUMERICS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+    DataType::Float16,
+    DataType::Float32,
+    DataType::Float64,
+];
+
 impl TypeSignature {
     pub fn to_string_repr(&self) -> Vec<String> {
         match self {
@@ -912,13 +926,11 @@ impl TypeSignature {
                 .cloned()
                 .map(|data_type| vec![data_type])
                 .collect(),
-            TypeSignature::Numeric(arg_count) => {
-                [DataType::Int8, DataType::UInt64, DataType::Float32]
-                    .iter()
-                    .cloned()
-                    .map(|numeric_type| vec![numeric_type; *arg_count])
-                    .collect()
-            }
+            TypeSignature::Numeric(arg_count) => NUMERICS
+                .iter()
+                .cloned()
+                .map(|numeric_type| vec![numeric_type; *arg_count])
+                .collect(),
             TypeSignature::String(arg_count) => get_data_types(&NativeType::String)
                 .into_iter()
                 .map(|dt| vec![dt; *arg_count])
