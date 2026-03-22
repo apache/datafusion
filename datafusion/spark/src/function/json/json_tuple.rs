@@ -196,7 +196,6 @@ fn json_tuple_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn test_return_field_shape() {

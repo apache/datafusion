@@ -33,7 +33,8 @@ use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array
 use datafusion_common::types::{NativeType, logical_int64};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -133,10 +134,7 @@ impl ScalarUDFImpl for ArrayRepeat {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_repeat_inner)(&args.args)
     }
 

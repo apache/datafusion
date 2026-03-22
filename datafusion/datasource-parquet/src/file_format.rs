@@ -1808,11 +1808,9 @@ async fn output_single_parquet_file_parallelized(
 #[cfg(test)]
 mod tests {
     use parquet::arrow::parquet_to_arrow_schema;
-    use std::sync::Arc;
 
     use super::*;
 
-    use arrow::datatypes::DataType;
     use parquet::schema::parser::parse_message_type;
 
     #[test]

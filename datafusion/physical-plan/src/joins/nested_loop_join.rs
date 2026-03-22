@@ -2335,8 +2335,8 @@ pub(crate) mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::assert_contains;
     use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_common::{ScalarValue, assert_contains};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};

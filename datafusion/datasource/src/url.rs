@@ -527,7 +527,6 @@ mod tests {
     use std::any::Any;
     use std::collections::HashMap;
     use std::ops::Range;
-    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[test]

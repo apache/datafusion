@@ -446,7 +446,7 @@ mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::datatype::DataTypeExt;
-    use datafusion_expr::{Operator, col, lit};
+    use datafusion_expr::col;
 
     use super::*;
 
