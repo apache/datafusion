@@ -168,7 +168,6 @@ impl PartitionEvaluator for NumRowsEvaluator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use datafusion_common::arrow::array::{Array, BooleanArray};
     use datafusion_common::cast::as_uint64_array;

@@ -123,10 +123,7 @@ pub fn spark_bitwise_not(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field};
     use std::sync::Arc;
-
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn test_bitwise_not_nullability() {

@@ -339,6 +339,10 @@ impl FFI_SessionRef {
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
+        if let Some(session) = session.as_any().downcast_ref::<ForeignSession>() {
+            return session.session.clone();
+        }
+
         let private_data = Box::new(SessionPrivateData { session, runtime });
 
         Self {
@@ -626,11 +630,9 @@ impl Session for ForeignSession {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::execution::SessionStateBuilder;
-    use datafusion_common::DataFusionError;
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;

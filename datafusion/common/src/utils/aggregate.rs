@@ -17,133 +17,116 @@
 
 //! Scalar-level aggregation utilities for statistics merging.
 //!
-//! Provides a cheap pairwise [`ScalarValue`] addition that directly
-//! extracts inner primitive values, avoiding the expensive
-//! `ScalarValue::add` path (which round-trips through Arrow arrays).
-use arrow::datatypes::i256;
+//! Provides in-place accumulation helpers that reuse the existing
+//! [`ScalarValue`] accumulator when possible.
 
 use crate::stats::Precision;
 use crate::{Result, ScalarValue};
 
-/// Saturating addition for [`i256`] (which lacks a built-in
-/// `saturating_add`).  Returns `i256::MAX` on positive overflow and
-/// `i256::MIN` on negative overflow.
-#[inline]
-fn i256_saturating_add(a: i256, b: i256) -> i256 {
-    match a.checked_add(b) {
-        Some(sum) => sum,
-        None => {
-            // If b is non-negative the overflow is positive, otherwise
-            // negative.
-            if b >= i256::ZERO {
-                i256::MAX
-            } else {
-                i256::MIN
-            }
-        }
+/// Adds `rhs` into `lhs`, mutating the accumulator in place when
+/// possible and otherwise falling back to `ScalarValue::add_checked`.
+pub(crate) fn scalar_add(lhs: &mut ScalarValue, rhs: &ScalarValue) -> Result<()> {
+    if lhs.try_add_checked_in_place(rhs)? {
+        return Ok(());
     }
+
+    *lhs = lhs.add_checked(rhs)?;
+    Ok(())
 }
 
-/// Add two [`ScalarValue`]s by directly extracting and adding their
-/// inner primitive values.
+/// [`Precision`]-aware sum that mutates `lhs` in place when possible.
 ///
-/// This avoids `ScalarValue::add` which converts both operands to
-/// single-element Arrow arrays, runs the `add_wrapping` kernel, and
-/// converts the result back — 3 heap allocations per call.
-///
-/// For non-primitive types, falls back to `ScalarValue::add`.
-pub(crate) fn scalar_add(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    macro_rules! add_int {
-        ($lhs:expr, $rhs:expr, $VARIANT:ident) => {
-            match ($lhs, $rhs) {
-                (ScalarValue::$VARIANT(Some(a)), ScalarValue::$VARIANT(Some(b))) => {
-                    Ok(ScalarValue::$VARIANT(Some(a.saturating_add(*b))))
-                }
-                (ScalarValue::$VARIANT(None), other)
-                | (other, ScalarValue::$VARIANT(None)) => Ok(other.clone()),
-                _ => unreachable!(),
-            }
-        };
-    }
-
-    macro_rules! add_decimal {
-        ($lhs:expr, $rhs:expr, $VARIANT:ident) => {
-            match ($lhs, $rhs) {
-                (
-                    ScalarValue::$VARIANT(Some(a), p, s),
-                    ScalarValue::$VARIANT(Some(b), _, _),
-                ) => Ok(ScalarValue::$VARIANT(Some(a.saturating_add(*b)), *p, *s)),
-                (ScalarValue::$VARIANT(None, _, _), other)
-                | (other, ScalarValue::$VARIANT(None, _, _)) => Ok(other.clone()),
-                _ => unreachable!(),
-            }
-        };
-    }
-
-    macro_rules! add_float {
-        ($lhs:expr, $rhs:expr, $VARIANT:ident) => {
-            match ($lhs, $rhs) {
-                (ScalarValue::$VARIANT(Some(a)), ScalarValue::$VARIANT(Some(b))) => {
-                    Ok(ScalarValue::$VARIANT(Some(*a + *b)))
-                }
-                (ScalarValue::$VARIANT(None), other)
-                | (other, ScalarValue::$VARIANT(None)) => Ok(other.clone()),
-                _ => unreachable!(),
-            }
-        };
-    }
-
-    match lhs {
-        ScalarValue::Int8(_) => add_int!(lhs, rhs, Int8),
-        ScalarValue::Int16(_) => add_int!(lhs, rhs, Int16),
-        ScalarValue::Int32(_) => add_int!(lhs, rhs, Int32),
-        ScalarValue::Int64(_) => add_int!(lhs, rhs, Int64),
-        ScalarValue::UInt8(_) => add_int!(lhs, rhs, UInt8),
-        ScalarValue::UInt16(_) => add_int!(lhs, rhs, UInt16),
-        ScalarValue::UInt32(_) => add_int!(lhs, rhs, UInt32),
-        ScalarValue::UInt64(_) => add_int!(lhs, rhs, UInt64),
-        ScalarValue::Float16(_) => add_float!(lhs, rhs, Float16),
-        ScalarValue::Float32(_) => add_float!(lhs, rhs, Float32),
-        ScalarValue::Float64(_) => add_float!(lhs, rhs, Float64),
-        ScalarValue::Decimal32(_, _, _) => add_decimal!(lhs, rhs, Decimal32),
-        ScalarValue::Decimal64(_, _, _) => add_decimal!(lhs, rhs, Decimal64),
-        ScalarValue::Decimal128(_, _, _) => add_decimal!(lhs, rhs, Decimal128),
-        ScalarValue::Decimal256(_, _, _) => match (lhs, rhs) {
-            (
-                ScalarValue::Decimal256(Some(a), p, s),
-                ScalarValue::Decimal256(Some(b), _, _),
-            ) => Ok(ScalarValue::Decimal256(
-                Some(i256_saturating_add(*a, *b)),
-                *p,
-                *s,
-            )),
-            (ScalarValue::Decimal256(None, _, _), other)
-            | (other, ScalarValue::Decimal256(None, _, _)) => Ok(other.clone()),
-            _ => unreachable!(),
-        },
-        // Fallback: use the existing ScalarValue::add
-        _ => lhs.add(rhs),
-    }
-}
-
-/// [`Precision`]-aware sum of two [`ScalarValue`] precisions using
-/// cheap direct addition via [`scalar_add`].
-///
-/// Mirrors the semantics of `Precision<ScalarValue>::add` but avoids
-/// the expensive `ScalarValue::add` round-trip through Arrow arrays.
+/// Mirrors the semantics of `Precision<ScalarValue>::add`, including
+/// checked overflow handling, but avoids allocating a fresh
+/// [`ScalarValue`] for the common numeric fast path.
 pub(crate) fn precision_add(
-    lhs: &Precision<ScalarValue>,
+    lhs: &mut Precision<ScalarValue>,
     rhs: &Precision<ScalarValue>,
-) -> Precision<ScalarValue> {
-    match (lhs, rhs) {
-        (Precision::Exact(a), Precision::Exact(b)) => scalar_add(a, b)
-            .map(Precision::Exact)
-            .unwrap_or(Precision::Absent),
-        (Precision::Inexact(a), Precision::Exact(b))
-        | (Precision::Exact(a), Precision::Inexact(b))
-        | (Precision::Inexact(a), Precision::Inexact(b)) => scalar_add(a, b)
-            .map(Precision::Inexact)
-            .unwrap_or(Precision::Absent),
-        (_, _) => Precision::Absent,
+) {
+    let (mut lhs_value, lhs_is_exact) = match std::mem::take(lhs) {
+        Precision::Exact(value) => (value, true),
+        Precision::Inexact(value) => (value, false),
+        Precision::Absent => return,
+    };
+
+    let (rhs_value, rhs_is_exact) = match rhs {
+        Precision::Exact(value) => (value, true),
+        Precision::Inexact(value) => (value, false),
+        Precision::Absent => return,
+    };
+
+    if scalar_add(&mut lhs_value, rhs_value).is_err() {
+        return;
+    }
+
+    *lhs = if lhs_is_exact && rhs_is_exact {
+        Precision::Exact(lhs_value)
+    } else {
+        Precision::Inexact(lhs_value)
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scalar_add_null_propagates() -> Result<()> {
+        let mut lhs = ScalarValue::Int32(Some(42));
+
+        scalar_add(&mut lhs, &ScalarValue::Int32(None))?;
+
+        assert_eq!(lhs, ScalarValue::Int32(None));
+        Ok(())
+    }
+
+    #[test]
+    fn test_scalar_add_overflow_returns_error() {
+        let mut lhs = ScalarValue::Int32(Some(i32::MAX));
+
+        let err = scalar_add(&mut lhs, &ScalarValue::Int32(Some(1)))
+            .unwrap_err()
+            .strip_backtrace();
+
+        assert_eq!(
+            err,
+            "Arrow error: Arithmetic overflow: Overflow happened on: 2147483647 + 1"
+        );
+    }
+
+    #[test]
+    fn test_precision_add_null_propagates() {
+        let mut lhs = Precision::Exact(ScalarValue::Int32(Some(42)));
+
+        precision_add(&mut lhs, &Precision::Exact(ScalarValue::Int32(None)));
+
+        assert_eq!(lhs, Precision::Exact(ScalarValue::Int32(None)));
+    }
+
+    #[test]
+    fn test_precision_add_overflow_becomes_absent() {
+        let mut lhs = Precision::Exact(ScalarValue::Int32(Some(i32::MAX)));
+
+        precision_add(&mut lhs, &Precision::Exact(ScalarValue::Int32(Some(1))));
+
+        assert_eq!(lhs, Precision::Absent);
+    }
+
+    #[test]
+    fn test_precision_add_rhs_absent_absorbs() {
+        let mut lhs = Precision::Exact(ScalarValue::Int32(Some(42)));
+
+        precision_add(&mut lhs, &Precision::Absent);
+
+        assert_eq!(lhs, Precision::Absent);
+    }
+
+    #[test]
+    fn test_precision_add_mixed_exactness() {
+        let mut lhs = Precision::Exact(ScalarValue::Int32(Some(10)));
+
+        precision_add(&mut lhs, &Precision::Inexact(ScalarValue::Int32(Some(5))));
+
+        assert_eq!(lhs, Precision::Inexact(ScalarValue::Int32(Some(15))));
     }
 }

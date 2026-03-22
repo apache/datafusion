@@ -1171,7 +1171,6 @@ fn new_columns_for_join_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     use crate::common::collect;
 

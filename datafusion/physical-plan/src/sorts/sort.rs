@@ -1430,7 +1430,6 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::collect;
-    use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::test;
     use crate::test::TestMemoryExec;
@@ -1440,9 +1439,9 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -2751,7 +2750,6 @@ mod tests {
         use datafusion_execution::memory_pool::{
             GreedyMemoryPool, MemoryConsumer, MemoryPool,
         };
-        use futures::TryStreamExt;
 
         let sort_spill_reservation_bytes: usize = 10 * 1024; // 10 KB
 

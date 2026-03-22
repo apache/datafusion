@@ -202,11 +202,9 @@ where
 mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
-    use arrow::array::{Array, Int32Array};
+    use arrow::array::Int32Array;
     use arrow::datatypes::DataType::Int32;
-    use arrow::datatypes::{Field, FieldRef};
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarUDFImpl};
 
     macro_rules! test_spark_length_string {
         ($INPUT:expr, $EXPECTED:expr) => {
