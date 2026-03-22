@@ -17,8 +17,8 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use crate::hyperloglog::HyperLogLog;
-use arrow::array::{BinaryArray, StringViewArray};
+use crate::hyperloglog::{HLL_HASH_STATE, HyperLogLog};
+use arrow::array::{Array, BinaryArray, StringViewArray};
 use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
@@ -44,7 +44,7 @@ use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 
 make_udaf_expr_and_func!(
@@ -55,14 +55,14 @@ make_udaf_expr_and_func!(
     approx_distinct_udaf
 );
 
-impl<T: Hash> From<&HyperLogLog<T>> for ScalarValue {
+impl<T: Hash + ?Sized> From<&HyperLogLog<T>> for ScalarValue {
     fn from(v: &HyperLogLog<T>) -> ScalarValue {
         let values = v.as_ref().to_vec();
         ScalarValue::Binary(Some(values))
     }
 }
 
-impl<T: Hash> TryFrom<&[u8]> for HyperLogLog<T> {
+impl<T: Hash + ?Sized> TryFrom<&[u8]> for HyperLogLog<T> {
     type Error = DataFusionError;
     fn try_from(v: &[u8]) -> Result<HyperLogLog<T>> {
         let arr: [u8; 16384] = v.try_into().map_err(|_| {
@@ -72,7 +72,7 @@ impl<T: Hash> TryFrom<&[u8]> for HyperLogLog<T> {
     }
 }
 
-impl<T: Hash> TryFrom<&ScalarValue> for HyperLogLog<T> {
+impl<T: Hash + ?Sized> TryFrom<&ScalarValue> for HyperLogLog<T> {
     type Error = DataFusionError;
     fn try_from(v: &ScalarValue) -> Result<HyperLogLog<T>> {
         if let ScalarValue::Binary(Some(slice)) = v {
@@ -99,7 +99,6 @@ where
     T: ArrowPrimitiveType,
     T::Native: Hash,
 {
-    /// new approx_distinct accumulator
     pub fn new() -> Self {
         Self {
             hll: HyperLogLog::new(),
@@ -112,7 +111,7 @@ struct StringHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
 {
-    hll: HyperLogLog<String>,
+    hll: HyperLogLog<str>,
     phantom_data: PhantomData<T>,
 }
 
@@ -120,7 +119,6 @@ impl<T> StringHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
 {
-    /// new approx_distinct accumulator
     pub fn new() -> Self {
         Self {
             hll: HyperLogLog::new(),
@@ -130,22 +128,14 @@ where
 }
 
 #[derive(Debug)]
-struct StringViewHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
-    hll: HyperLogLog<String>,
-    phantom_data: PhantomData<T>,
+struct StringViewHLLAccumulator {
+    hll: HyperLogLog<str>,
 }
 
-impl<T> StringViewHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
+impl StringViewHLLAccumulator {
     pub fn new() -> Self {
         Self {
             hll: HyperLogLog::new(),
-            phantom_data: PhantomData,
         }
     }
 }
@@ -155,7 +145,7 @@ struct BinaryHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
 {
-    hll: HyperLogLog<Vec<u8>>,
+    hll: HyperLogLog<[u8]>,
     phantom_data: PhantomData<T>,
 }
 
@@ -163,7 +153,6 @@ impl<T> BinaryHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
 {
-    /// new approx_distinct accumulator
     pub fn new() -> Self {
         Self {
             hll: HyperLogLog::new(),
@@ -213,23 +202,29 @@ where
         let array: &GenericBinaryArray<T> =
             downcast_value!(values[0], GenericBinaryArray, T);
         // flatten because we would skip nulls
-        self.hll
-            .extend(array.into_iter().flatten().map(|v| v.to_vec()));
+        self.hll.extend(array.into_iter().flatten());
         Ok(())
     }
 
     default_accumulator_impl!();
 }
 
-impl<T> Accumulator for StringViewHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
+impl Accumulator for StringViewHLLAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array: &StringViewArray = downcast_value!(values[0], StringViewArray);
-        // flatten because we would skip nulls
-        self.hll
-            .extend(array.iter().flatten().map(|s| s.to_string()));
+
+        // When all strings are stored inline in the StringView (≤ 12 bytes),
+        // hash the raw u128 view directly instead of materializing a &str.
+        if array.data_buffers().is_empty() {
+            for (i, &view) in array.views().iter().enumerate() {
+                if !array.is_null(i) {
+                    self.hll.add_hashed(HLL_HASH_STATE.hash_one(view));
+                }
+            }
+        } else {
+            self.hll.extend(array.iter().flatten());
+        }
+
         Ok(())
     }
 
@@ -244,8 +239,7 @@ where
         let array: &GenericStringArray<T> =
             downcast_value!(values[0], GenericStringArray, T);
         // flatten because we would skip nulls
-        self.hll
-            .extend(array.into_iter().flatten().map(|i| i.to_string()));
+        self.hll.extend(array.into_iter().flatten());
         Ok(())
     }
 
@@ -391,7 +385,7 @@ impl AggregateUDFImpl for ApproxDistinct {
             }
             DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
             DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
-            DataType::Utf8View => Box::new(StringViewHLLAccumulator::<i32>::new()),
+            DataType::Utf8View => Box::new(StringViewHLLAccumulator::new()),
             DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
             DataType::Null => {

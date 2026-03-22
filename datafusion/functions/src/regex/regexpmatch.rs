@@ -24,7 +24,7 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::exec_err;
 use datafusion_common::{arrow_datafusion_err, plan_err};
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
+use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -119,10 +119,7 @@ impl ScalarUDFImpl for RegexpMatchFunc {
         })
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         let len = args
             .iter()

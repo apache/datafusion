@@ -1041,9 +1041,6 @@ message PhysicalExtensionExprNode {
 message PhysicalHashExprNode {
   repeated PhysicalExprNode on_columns = 1;
   uint64 seed0 = 2;
-  uint64 seed1 = 3;
-  uint64 seed2 = 4;
-  uint64 seed3 = 5;
   string description = 6;
 }
 
@@ -1353,6 +1350,7 @@ message RepartitionExecNode{
   //   uint64 unknown = 4;
   // }
   Partitioning partitioning = 5;
+  bool preserve_order = 6;
 }
 
 message Partitioning {

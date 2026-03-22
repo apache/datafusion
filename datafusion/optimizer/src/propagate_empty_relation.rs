@@ -232,11 +232,10 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
 
-    use datafusion_common::{Column, DFSchema, JoinType};
+    use datafusion_common::{Column, DFSchema};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         Operator, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder,

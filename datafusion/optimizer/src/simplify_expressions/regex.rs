@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
@@ -39,7 +39,7 @@ const ANY_CHAR_REGEX_PATTERN: &str = ".*";
 /// - partial anchored regex patterns (e.g. `^foo`) to `LIKE 'foo%'`
 /// - combinations (alternatives) of the above, will be concatenated with `OR` or `AND`
 /// - `EQ .*` to NotNull
-/// - `NE .*` means IS EMPTY
+/// - `NE .*` to col IS NULL AND Boolean(NULL) (false for any string, or NULL if col is NULL)
 ///
 /// Dev note: unit tests of this function are in `expr_simplifier.rs`, case `test_simplify_regex`.
 pub fn simplify_regex_expr(
@@ -68,12 +68,11 @@ pub fn simplify_regex_expr(
     // Handle the special case for ".*" pattern
     if pattern == ANY_CHAR_REGEX_PATTERN {
         let new_expr = if mode.not {
-            // not empty
-            let empty_lit = Box::new(string_scalar.to_expr(""));
+            let null_bool = lit(ScalarValue::Boolean(None));
             Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right: empty_lit,
+                left: Box::new(left.is_null()),
+                op: Operator::And,
+                right: Box::new(null_bool),
             })
         } else {
             // not null

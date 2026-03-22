@@ -355,13 +355,9 @@ mod tests {
     use crate::test::build_table_i32;
     use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::compute::cast;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::StreamExt as _;
-
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_batch_spill_and_read() -> Result<()> {

@@ -928,6 +928,13 @@ fn coerced_from<'a>(
         (Timestamp(_, Some(_)), Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8) => {
             Some(type_into.clone())
         }
+        // Null can be coerced to any target type, provided the cast is valid.
+        // This mirrors null_coercion() in binary comparison coercion
+        // (expr-common/src/type_coercion/binary.rs) and is the symmetric
+        // counterpart of the (Null, _) arm above. Without this, untyped
+        // placeholders ($1, $foo) inside function calls fail signature matching
+        // because their Null type doesn't match any Exact(...) variant.
+        (_, Null) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
         _ => None,
     }
 }
@@ -937,7 +944,7 @@ mod tests {
     use crate::Volatility;
 
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::IntervalUnit;
     use datafusion_common::{
         assert_contains,
         types::{logical_binary, logical_int64},
@@ -954,6 +961,36 @@ mod tests {
         for case in cases {
             assert_eq!(coerced_from(&case.0, &case.1), Some(case.0));
         }
+    }
+
+    #[test]
+    fn test_coerced_from_null() {
+        // Null should coerce to Interval (the motivating case)
+        assert_eq!(
+            coerced_from(
+                &DataType::Interval(IntervalUnit::MonthDayNano),
+                &DataType::Null
+            ),
+            Some(DataType::Interval(IntervalUnit::MonthDayNano))
+        );
+
+        // Null should coerce to Date32
+        assert_eq!(
+            coerced_from(&DataType::Date32, &DataType::Null),
+            Some(DataType::Date32)
+        );
+
+        // Null should coerce to Timestamp with timezone
+        assert_eq!(
+            coerced_from(
+                &DataType::Timestamp(TimeUnit::Microsecond, Some("+00".into())),
+                &DataType::Null
+            ),
+            Some(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some("+00".into())
+            ))
+        );
     }
 
     #[test]

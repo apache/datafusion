@@ -1741,6 +1741,42 @@ fn test_sort_with_push_down_fetch() -> Result<()> {
 }
 
 #[test]
+fn test_sort_with_scalar_fn_and_push_down_fetch() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("search_phrase", DataType::Utf8, false),
+        Field::new("event_time", DataType::Utf8, false),
+    ]);
+
+    let substr_udf = unicode::substr();
+
+    // Build a plan that mimics the DF52 optimizer output:
+    // Projection(search_phrase) → Sort(substr(event_time), fetch=10)
+    //   → Projection(search_phrase, event_time) → Filter → TableScan
+    // This triggers a subquery because the outer projection differs from the inner one.
+    // The ORDER BY scalar function must not reference the inner table qualifier.
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .filter(col("search_phrase").not_eq(lit("")))?
+        .project(vec![col("search_phrase"), col("event_time")])?
+        .sort_with_limit(
+            vec![
+                substr_udf
+                    .call(vec![col("event_time"), lit(1), lit(5)])
+                    .sort(true, true),
+            ],
+            Some(10),
+        )?
+        .project(vec![col("search_phrase")])?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT t1.search_phrase FROM (SELECT t1.search_phrase, t1.event_time FROM t1 WHERE (t1.search_phrase <> '') ORDER BY substr(t1.event_time, 1, 5) ASC NULLS FIRST LIMIT 10)"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_join_with_table_scan_filters() -> Result<()> {
     let schema_left = Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -1984,7 +2020,7 @@ fn test_complex_order_by_with_grouping() -> Result<()> {
     }, {
         assert_snapshot!(
             sql,
-            @r#"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string)) ORDER BY lochierarchy DESC NULLS FIRST, CASE WHEN (("grouping(j1.j1_id)" + "grouping(j1.j1_string)") = 0) THEN j1.j1_id END ASC NULLS LAST LIMIT 100"#
+            @"SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY lochierarchy DESC NULLS FIRST, CASE WHEN (lochierarchy = 0) THEN j1.j1_id END ASC NULLS LAST LIMIT 100"
         );
     });
 

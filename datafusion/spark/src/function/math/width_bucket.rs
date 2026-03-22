@@ -442,7 +442,6 @@ pub(crate) fn width_bucket_interval_mdn_exact(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     use arrow::array::{
         ArrayRef, DurationMicrosecondArray, Float64Array, Int32Array, Int64Array,

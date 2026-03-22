@@ -1037,25 +1037,16 @@ impl GroupedHashAggregateStream {
                     self.group_values.len()
                 };
 
-                // Clamp to the sort boundary when using partial group ordering,
-                // otherwise remove_groups panics (#20445).
-                let n = match &self.group_ordering {
-                    GroupOrdering::None => n,
-                    _ => match self.group_ordering.emit_to() {
-                        Some(EmitTo::First(max)) => n.min(max),
-                        _ => 0,
-                    },
-                };
-
-                if n > 0
-                    && let Some(batch) = self.emit(EmitTo::First(n), false)?
+                if let Some(emit_to) = self.group_ordering.oom_emit_to(n)
+                    && let Some(batch) = self.emit(emit_to, false)?
                 {
-                    Ok(Some(ExecutionState::ProducingOutput(batch)))
-                } else {
-                    Err(oom)
+                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
                 }
+                Err(oom)
             }
-            _ => Err(oom),
+            OutOfMemoryMode::EmitEarly
+            | OutOfMemoryMode::Spill
+            | OutOfMemoryMode::ReportError => Err(oom),
         }
     }
 
@@ -1267,6 +1258,18 @@ impl GroupedHashAggregateStream {
             // on the grouping columns.
             self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
 
+            // Recreate `group_values` for streaming merge so group ids are assigned
+            // in first-seen order, as required by `GroupOrderingFull`.
+            // The pre-spill multi-column collector may use `vectorized_intern`, which
+            // can assign new group ids out of input order under hash collisions.
+            let group_schema = self
+                .spill_state
+                .merging_group_by
+                .group_schema(&self.spill_state.spill_schema)?;
+            if group_schema.fields().len() > 1 {
+                self.group_values = new_group_values(group_schema, &self.group_ordering)?;
+            }
+
             // Use `OutOfMemoryMode::ReportError` from this point on
             // to ensure we don't spill the spilled data to disk again.
             self.oom_mode = OutOfMemoryMode::ReportError;
@@ -1356,12 +1359,10 @@ mod tests {
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {

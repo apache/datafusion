@@ -754,7 +754,7 @@ impl Accumulator for DurationAvgAccumulator {
 struct AvgGroupsAccumulator<T, F>
 where
     T: ArrowNumericType + Send,
-    F: Fn(T::Native, u64) -> Result<T::Native> + Send,
+    F: Fn(T::Native, u64) -> Result<T::Native> + Send + 'static,
 {
     /// The type of the internal sum
     sum_data_type: DataType,
@@ -778,7 +778,7 @@ where
 impl<T, F> AvgGroupsAccumulator<T, F>
 where
     T: ArrowNumericType + Send,
-    F: Fn(T::Native, u64) -> Result<T::Native> + Send,
+    F: Fn(T::Native, u64) -> Result<T::Native> + Send + 'static,
 {
     pub fn new(sum_data_type: &DataType, return_data_type: &DataType, avg_fn: F) -> Self {
         debug!(
@@ -800,7 +800,7 @@ where
 impl<T, F> GroupsAccumulator for AvgGroupsAccumulator<T, F>
 where
     T: ArrowNumericType + Send,
-    F: Fn(T::Native, u64) -> Result<T::Native> + Send,
+    F: Fn(T::Native, u64) -> Result<T::Native> + Send + 'static,
 {
     fn update_batch(
         &mut self,

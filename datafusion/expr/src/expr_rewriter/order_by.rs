@@ -21,9 +21,7 @@ use crate::expr::Alias;
 use crate::expr_rewriter::normalize_col;
 use crate::{Cast, Expr, LogicalPlan, TryCast, expr::Sort};
 
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
@@ -77,8 +75,10 @@ fn rewrite_in_terms_of_projection(
     // assumption is that each item in exprs, such as "b + c" is
     // available as an output column named "b + c"
     expr.transform(|expr| {
-        // search for unnormalized names first such as "c1" (such as aliases)
-        if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
+        // search for unnormalized names first such as "c1" (such as aliases).
+        // Also look inside aliases so e.g. `count(Int64(1))` matches
+        // `count(Int64(1)) AS count(*)`.
+        if let Some(found) = proj_exprs.iter().find(|a| expr_match(&expr, a)) {
             let (qualifier, field_name) = found.qualified_name();
             let col = Expr::Column(Column::new(qualifier, field_name));
             return Ok(Transformed::yes(col));
@@ -102,29 +102,27 @@ fn rewrite_in_terms_of_projection(
 
         let search_col = Expr::Column(Column::new_unqualified(name));
 
-        // look for the column named the same as this expr
-        let mut found = None;
-        for proj_expr in proj_exprs {
-            proj_expr.apply(|e| {
-                if expr_match(&search_col, e) {
-                    found = Some(e.clone());
-                    return Ok(TreeNodeRecursion::Stop);
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })?;
-        }
+        // Search only top-level projection expressions for a match.
+        // We intentionally avoid a recursive search (e.g. `apply`) to
+        // prevent matching sub-expressions of composites like
+        // `min(c2) + max(c3)` when the ORDER BY is just `min(c2)`.
+        let found = proj_exprs
+            .iter()
+            .find(|proj_expr| expr_match(&search_col, proj_expr));
 
         if let Some(found) = found {
+            let (qualifier, field_name) = found.qualified_name();
+            let col = Expr::Column(Column::new(qualifier, field_name));
             return Ok(Transformed::yes(match normalized_expr {
                 Expr::Cast(Cast { expr: _, field }) => Expr::Cast(Cast {
-                    expr: Box::new(found),
+                    expr: Box::new(col),
                     field,
                 }),
                 Expr::TryCast(TryCast { expr: _, field }) => Expr::TryCast(TryCast {
-                    expr: Box::new(found),
+                    expr: Box::new(col),
                     field,
                 }),
-                _ => found,
+                _ => col,
             }));
         }
 
@@ -158,7 +156,10 @@ mod test {
 
     use super::*;
     use crate::test::function_stub::avg;
+    use crate::test::function_stub::count;
+    use crate::test::function_stub::max;
     use crate::test::function_stub::min;
+    use crate::test::function_stub::sum;
 
     #[test]
     fn rewrite_sort_cols_by_agg() {
@@ -235,23 +236,220 @@ mod test {
             TestCase {
                 desc: r#"min(c2) --> "min(c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(min(col("c2"))),
-                expected: sort(col("min(t.c2)")),
+                expected: sort(Expr::Column(Column::new_unqualified("min(t.c2)"))),
             },
             TestCase {
                 desc: r#"c1 + min(c2) --> "c1 + min(c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(col("c1") + min(col("c2"))),
-                // should be "c1" not t.c1
-                expected: sort(col("c1") + col("min(t.c2)")),
+                expected: sort(
+                    col("c1") + Expr::Column(Column::new_unqualified("min(t.c2)")),
+                ),
             },
             TestCase {
-                desc: r#"avg(c3) --> "avg(t.c3)" as average (column *named* "avg(t.c3)", aliased)"#,
+                desc: r#"avg(c3) --> "average" (column *named* "average", from alias)"#,
                 input: sort(avg(col("c3"))),
-                expected: sort(col("avg(t.c3)").alias("average")),
+                expected: sort(col("average")),
             },
         ];
 
         for case in cases {
             case.run(&agg)
+        }
+    }
+
+    /// When an aggregate is aliased in the projection,
+    /// ORDER BY on the original aggregate expression should resolve to
+    /// a Column reference using the alias name — not leak the inner
+    /// Alias expression node or resolve to a descendant subtree.
+    #[test]
+    fn rewrite_sort_resolves_alias_to_column_ref() {
+        let plan = make_input()
+            .aggregate(vec![col("c1")], vec![min(col("c2")), max(col("c3"))])
+            .unwrap()
+            .project(vec![
+                col("c1"),
+                min(col("c2")).alias("min_val"),
+                max(col("c3")).alias("max_val"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![
+            TestCase {
+                desc: "min(c2) with alias 'min_val' should resolve to col(min_val)",
+                input: sort(min(col("c2"))),
+                expected: sort(col("min_val")),
+            },
+            TestCase {
+                desc: "max(c3) with alias 'max_val' should resolve to col(max_val)",
+                input: sort(max(col("c3"))),
+                expected: sort(col("max_val")),
+            },
+        ];
+
+        for case in cases {
+            case.run(&plan)
+        }
+    }
+
+    #[test]
+    fn composite_proj_expr_containing_sort_col_as_subexpr() {
+        let plan = make_input()
+            .aggregate(vec![col("c1")], vec![min(col("c2")), max(col("c3"))])
+            .unwrap()
+            .project(vec![
+                col("c1"),
+                (min(col("c2")) + max(col("c3"))).alias("range"),
+                min(col("c2")).alias("min_val"),
+                max(col("c3")).alias("max_val"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![
+            TestCase {
+                desc: "sort by min(c2) should resolve to col(min_val), not col(range)",
+                input: sort(min(col("c2"))),
+                expected: sort(col("min_val")),
+            },
+            TestCase {
+                desc: "sort by max(c3) should resolve to col(max_val), not col(range)",
+                input: sort(max(col("c3"))),
+                expected: sort(col("max_val")),
+            },
+        ];
+
+        for case in cases {
+            case.run(&plan)
+        }
+    }
+
+    #[test]
+    fn composite_before_standalone_should_not_shadow() {
+        let plan = make_input()
+            .aggregate(vec![col("c1")], vec![min(col("c2")), max(col("c2"))])
+            .unwrap()
+            .project(vec![
+                col("c1"),
+                (min(col("c2")) + max(col("c2"))).alias("combined"),
+                min(col("c2")),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![TestCase {
+            desc: "sort by min(c2) should resolve to col(min(t.c2)), not col(combined)",
+            input: sort(min(col("c2"))),
+            expected: sort(Expr::Column(Column::new_unqualified("min(t.c2)"))),
+        }];
+
+        for case in cases {
+            case.run(&plan)
+        }
+    }
+
+    #[test]
+    fn duplicate_aggregate_in_multiple_proj_exprs() {
+        let plan = make_input()
+            .aggregate(vec![col("c1")], vec![min(col("c2"))])
+            .unwrap()
+            .project(vec![
+                col("c1"),
+                min(col("c2")).alias("first_alias"),
+                min(col("c2")).alias("second_alias"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![TestCase {
+            desc: "sort by min(c2) with two aliases picks first_alias",
+            input: sort(min(col("c2"))),
+            expected: sort(col("first_alias")),
+        }];
+
+        for case in cases {
+            case.run(&plan)
+        }
+    }
+
+    #[test]
+    fn sort_agg_not_in_select_with_aliased_aggs() {
+        let plan = make_input()
+            .aggregate(
+                vec![col("c1")],
+                vec![min(col("c2")), max(col("c3")), sum(col("c3"))],
+            )
+            .unwrap()
+            .project(vec![
+                col("c1"),
+                min(col("c2")).alias("min_val"),
+                max(col("c3")).alias("max_val"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![TestCase {
+            desc: "sort by sum(c3) not in projection should not be rewritten",
+            input: sort(sum(col("c3"))),
+            expected: sort(sum(col("c3"))),
+        }];
+
+        for case in cases {
+            case.run(&plan)
+        }
+    }
+
+    #[test]
+    fn cast_on_aliased_aggregate() {
+        let plan = make_input()
+            .aggregate(vec![col("c1")], vec![min(col("c2"))])
+            .unwrap()
+            .project(vec![col("c1"), min(col("c2")).alias("min_val")])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![
+            TestCase {
+                desc: "CAST on aliased aggregate should preserve cast and resolve alias",
+                input: sort(cast(min(col("c2")), DataType::Int64)),
+                expected: sort(cast(col("min_val"), DataType::Int64)),
+            },
+            TestCase {
+                desc: "TryCast on aliased aggregate should preserve try_cast and resolve alias",
+                input: sort(try_cast(min(col("c2")), DataType::Int64)),
+                expected: sort(try_cast(col("min_val"), DataType::Int64)),
+            },
+        ];
+
+        for case in cases {
+            case.run(&plan)
+        }
+    }
+
+    #[test]
+    fn count_star_with_alias() {
+        let plan = make_input()
+            .aggregate(vec![col("c1")], vec![count(lit(1))])
+            .unwrap()
+            .project(vec![col("c1"), count(lit(1)).alias("cnt")])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![TestCase {
+            desc: "sort by count(1) should resolve to cnt alias",
+            input: sort(count(lit(1))),
+            expected: sort(col("cnt")),
+        }];
+
+        for case in cases {
+            case.run(&plan)
         }
     }
 
@@ -269,12 +467,12 @@ mod test {
             TestCase {
                 desc: "Cast is preserved by rewrite_sort_cols_by_aggs",
                 input: sort(cast(col("c2"), DataType::Int64)),
-                expected: sort(cast(col("c2").alias("c2"), DataType::Int64)),
+                expected: sort(cast(col("c2"), DataType::Int64)),
             },
             TestCase {
                 desc: "TryCast is preserved by rewrite_sort_cols_by_aggs",
                 input: sort(try_cast(col("c2"), DataType::Int64)),
-                expected: sort(try_cast(col("c2").alias("c2"), DataType::Int64)),
+                expected: sort(try_cast(col("c2"), DataType::Int64)),
             },
         ];
 

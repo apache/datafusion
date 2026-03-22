@@ -44,6 +44,7 @@ use std::sync::{Arc, LazyLock};
 define_udwf_and_expr!(
     Rank,
     rank,
+    rank_udwf,
     "Returns rank of the current row with gaps. Same as `row_number` of its first peer",
     Rank::basic
 );
@@ -51,6 +52,7 @@ define_udwf_and_expr!(
 define_udwf_and_expr!(
     DenseRank,
     dense_rank,
+    dense_rank_udwf,
     "Returns rank of the current row without gaps. This function counts peer groups",
     Rank::dense_rank
 );
@@ -58,6 +60,7 @@ define_udwf_and_expr!(
 define_udwf_and_expr!(
     PercentRank,
     percent_rank,
+    percent_rank_udwf,
     "Returns the relative rank of the current row: (rank - 1) / (total rows - 1)",
     Rank::percent_rank
 );

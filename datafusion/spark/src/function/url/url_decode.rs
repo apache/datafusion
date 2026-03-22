@@ -208,8 +208,6 @@ pub fn spark_handled_url_decode(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StringArray;
-    use datafusion_common::Result;
 
     use super::*;
 

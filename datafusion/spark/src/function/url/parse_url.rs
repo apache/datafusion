@@ -84,7 +84,35 @@ impl ParseUrl {
         let url: std::result::Result<Url, ParseError> = Url::parse(value);
         if let Err(ParseError::RelativeUrlWithoutBase) = url {
             return if !value.contains("://") {
-                Ok(None)
+                // Schemeless URLs are treated as relative URIs (like java.net.URI).
+                // Manually parse path, query, and fragment components.
+                let (without_fragment, fragment) = match value.split_once('#') {
+                    Some((before, frag)) => (before, Some(frag)),
+                    None => (value, None),
+                };
+                let (path, query) = match without_fragment.split_once('?') {
+                    Some((p, q)) => (p, Some(q)),
+                    None => (without_fragment, None),
+                };
+                Ok(match part {
+                    "PATH" => Some(path.to_string()),
+                    "QUERY" => match key {
+                        None => query.map(String::from),
+                        Some(key) => query.and_then(|q| {
+                            q.split('&')
+                                .filter_map(|pair| pair.split_once('='))
+                                .find(|(k, _)| *k == key)
+                                .map(|(_, v)| v.to_string())
+                        }),
+                    },
+                    "REF" => fragment.map(String::from),
+                    "FILE" => {
+                        // FILE = path + query (without fragment)
+                        Some(without_fragment.to_string())
+                    }
+                    // HOST, PROTOCOL, AUTHORITY, USERINFO → NULL
+                    _ => None,
+                })
             } else {
                 Err(exec_datafusion_err!(
                     "The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"
@@ -199,6 +227,7 @@ pub fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
@@ -207,6 +236,7 @@ pub fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -215,6 +245,7 @@ pub fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             _ => exec_err!(
@@ -240,6 +271,7 @@ pub fn spark_handled_parse_url(
                     as_string_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             (DataType::Utf8View, DataType::Utf8View) => {
@@ -248,6 +280,7 @@ pub fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -256,6 +289,7 @@ pub fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             _ => exec_err!(
@@ -272,6 +306,7 @@ fn process_parse_url<'a, A, B, C, T>(
     part_array: &'a B,
     key_array: &'a C,
     handle: impl Fn(Result<Option<String>>) -> Result<Option<String>>,
+    has_key_arg: bool,
 ) -> Result<ArrayRef>
 where
     &'a A: StringArrayType<'a>,
@@ -284,7 +319,11 @@ where
         .zip(part_array.iter())
         .zip(key_array.iter())
         .map(|((url, part), key)| {
-            if let (Some(url), Some(part), key) = (url, part, key) {
+            // Spark returns NULL when the third argument is explicitly NULL
+            if has_key_arg && key.is_none() {
+                return Ok(None);
+            }
+            if let (Some(url), Some(part)) = (url, part) {
                 handle(ParseUrl::parse(url, part, key))
             } else {
                 Ok(None)
@@ -297,10 +336,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, StringArray};
-    use datafusion_common::Result;
+    use arrow::array::Int32Array;
     use std::array::from_ref;
-    use std::sync::Arc;
 
     fn sa(vals: &[Option<&str>]) -> ArrayRef {
         Arc::new(StringArray::from(vals.to_vec())) as ArrayRef
@@ -357,9 +394,86 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_malformed_url_returns_error() -> Result<()> {
-        let got = ParseUrl::parse("notaurl", "HOST", None)?;
-        assert_eq!(got, None);
+    fn test_parse_schemeless_url() -> Result<()> {
+        // Spark's java.net.URI treats schemeless strings as relative URIs.
+        // Simple schemeless string: no query, no fragment.
+        assert_eq!(
+            ParseUrl::parse("notaurl", "PATH", None)?,
+            Some("notaurl".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl", "FILE", None)?,
+            Some("notaurl".to_string())
+        );
+        assert_eq!(ParseUrl::parse("notaurl", "HOST", None)?, None);
+        assert_eq!(ParseUrl::parse("notaurl", "PROTOCOL", None)?, None);
+        assert_eq!(ParseUrl::parse("notaurl", "QUERY", None)?, None);
+        assert_eq!(ParseUrl::parse("notaurl", "REF", None)?, None);
+        assert_eq!(ParseUrl::parse("notaurl", "AUTHORITY", None)?, None);
+        assert_eq!(ParseUrl::parse("notaurl", "USERINFO", None)?, None);
+
+        // Schemeless URL with query string
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "PATH", None)?,
+            Some("notaurl".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "FILE", None)?,
+            Some("notaurl?key=value".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "QUERY", None)?,
+            Some("key=value".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "QUERY", Some("key"))?,
+            Some("value".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "QUERY", Some("missing"))?,
+            None
+        );
+        assert_eq!(ParseUrl::parse("notaurl?key=value", "HOST", None)?, None);
+        assert_eq!(
+            ParseUrl::parse("notaurl?key=value", "PROTOCOL", None)?,
+            None
+        );
+
+        // Schemeless URL with fragment
+        assert_eq!(
+            ParseUrl::parse("notaurl#reference", "REF", None)?,
+            Some("reference".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl#reference", "PATH", None)?,
+            Some("notaurl".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl#reference", "FILE", None)?,
+            Some("notaurl".to_string())
+        );
+
+        // Schemeless URL with both query and fragment
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "PATH", None)?,
+            Some("notaurl".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "QUERY", None)?,
+            Some("a=1&b=2".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "QUERY", Some("b"))?,
+            Some("2".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "REF", None)?,
+            Some("frag".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse("notaurl?a=1&b=2#frag", "FILE", None)?,
+            Some("notaurl?a=1&b=2".to_string())
+        );
         Ok(())
     }
 

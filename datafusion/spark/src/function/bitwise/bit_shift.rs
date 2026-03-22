@@ -297,8 +297,6 @@ impl ScalarUDFImpl for SparkBitShift {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn test_bit_shift_nullability() -> Result<()> {
