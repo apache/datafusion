@@ -420,8 +420,38 @@
 <section id="development-environment">
 <h1>Development Environment<a class="headerlink" href="#development-environment" title="Link to this heading">#</a></h1>
 <p>This section describes how you can get started at developing DataFusion.</p>
+<section id="quick-start">
+<h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h2>
+<p>For the fastest path to a working local environment, follow these steps
+from the repository root:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="c1"># 1. Install Rust (https://rust-lang.org/tools/install/) and verify the active toolchain with</span>
+rustup<span class="w"> </span>show
+
+<span class="c1"># 2. Install protoc 3.15+ (see details below)</span>
+protoc<span class="w"> </span>--version
+
+<span class="c1"># 3. Download test data used by examples and many tests</span>
+git<span class="w"> </span>submodule<span class="w"> </span>update<span class="w"> </span>--init<span class="w"> </span>--recursive
+
+<span class="c1"># 4. Build the workspace</span>
+cargo<span class="w"> </span>build
+
+<span class="c1"># 5. Verify that Rust integration tests can be run</span>
+cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_integration
+
+<span class="c1"># 6. Verify that sqllogictests can run</span>
+cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--profile<span class="o">=</span>ci<span class="w"> </span>--test<span class="w"> </span>sqllogictests
+</pre></div>
+</div>
+<p>Notes:</p>
+<ul class="simple">
+<li><p>The pinned Rust version is defined in <code class="docutils literal notranslate"><span class="pre">rust-toolchain.toml</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">protoc</span></code> is required to compile DataFusion from source.</p></li>
+<li><p>Some tests and examples rely on git submodule data being present locally.</p></li>
+</ul>
+</section>
 <section id="windows-setup">
-<h2>Windows setup<a class="headerlink" href="#windows-setup" title="Link to this heading">#</a></h2>
+<h2>Windows Setup<a class="headerlink" href="#windows-setup" title="Link to this heading">#</a></h2>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>wget<span class="w"> </span>https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
 choco<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>git<span class="w"> </span>rustup.install<span class="w"> </span>visualcpp-build-tools
 git-bash.exe
@@ -433,7 +463,7 @@ cargo<span class="w"> </span>build
 <h2>Dev Container setup<a class="headerlink" href="#dev-container-setup" title="Link to this heading">#</a></h2>
 <p>DataFusion has support for <a class="reference external" href="https://containers.dev/">dev containers</a> which may be used for
 developing DataFusion in an isolated environment either locally or remote if desired. Using dev containers for developing
-DataFusion is not a requirement by any means but is available for those where doing local development could be tricky
+DataFusion is not a requirement but is available where doing local development could be tricky
 such as with Windows and WSL2, those with older hardware, etc.</p>
 <p>For specific details on IDE support for dev containers see the documentation for <a class="reference external" href="https://code.visualstudio.com/docs/devcontainers/containers">Visual Studio Code</a>,
 <a class="reference external" href="https://www.jetbrains.com/help/idea/connect-to-devcontainer.html">IntelliJ IDEA</a>,
@@ -441,9 +471,9 @@ such as with Windows and WSL2, those with older hardware, etc.</p>
 <a class="reference external" href="https://docs.github.com/en/codespaces/setting-up-your-project-for-codespaces/adding-a-dev-container-configuration/introduction-to-dev-containers">GitHub Codespaces</a>.</p>
 </section>
 <section id="protoc-installation">
-<h2>Protoc Installation<a class="headerlink" href="#protoc-installation" title="Link to this heading">#</a></h2>
+<h2><code class="docutils literal notranslate"><span class="pre">protoc</span></code> Installation<a class="headerlink" href="#protoc-installation" title="Link to this heading">#</a></h2>
 <p>Compiling DataFusion from sources requires an installed version of the protobuf compiler, <code class="docutils literal notranslate"><span class="pre">protoc</span></code>.</p>
-<p>On most platforms this can be installed from your system’s package manager</p>
+<p>On most platforms this can be installed from your system’s package manager. For example:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span># Ubuntu
 $ sudo apt install -y protobuf-compiler
 
@@ -465,7 +495,7 @@ libprotoc<span class="w"> </span><span class="m">3</span>.15.0
 <p>Alternatively a binary release can be downloaded from the <a class="reference external" href="https://github.com/protocolbuffers/protobuf/releases">Release Page</a> or <a class="reference external" href="https://github.com/protocolbuffers/protobuf/blob/main/src/README.md">built from source</a>.</p>
 </section>
 <section id="bootstrap-environment">
-<h2>Bootstrap environment<a class="headerlink" href="#bootstrap-environment" title="Link to this heading">#</a></h2>
+<h2>Bootstrap Environment<a class="headerlink" href="#bootstrap-environment" title="Link to this heading">#</a></h2>
 <p>DataFusion is written in Rust and it uses a standard rust toolkit:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">rustup</span> <span class="pre">update</span> <span class="pre">stable</span></code> DataFusion generally uses the latest stable release of Rust, though it may lag when new Rust toolchains release</p>
@@ -545,10 +575,11 @@ libprotoc<span class="w"> </span><span class="m">3</span>.15.0
   </div>
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#windows-setup">Windows setup</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#windows-setup">Windows Setup</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dev-container-setup">Dev Container setup</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#protoc-installation">Protoc Installation</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#bootstrap-environment">Bootstrap environment</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#protoc-installation"><code class="docutils literal notranslate"><span class="pre">protoc</span></code> Installation</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#bootstrap-environment">Bootstrap Environment</a></li>
 </ul>
   </nav></div>
 
