@@ -4458,7 +4458,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 </section>
 <section id="array-remove">
 <h3><code class="docutils literal notranslate"><span class="pre">array_remove</span></code><a class="headerlink" href="#array-remove" title="Link to this heading">#</a></h3>
-<p>Removes the first element from the array equal to the given value.</p>
+<p>Removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If <code class="docutils literal notranslate"><span class="pre">element</span></code> evaluates to NULL, the result is NULL rather than removing NULL entries.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -4477,6 +4477,13 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <span class="o">+</span><span class="c1">----------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                           </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------------------------------------------+</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_remove</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="k">NULL</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4489,7 +4496,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 </section>
 <section id="array-remove-all">
 <h3><code class="docutils literal notranslate"><span class="pre">array_remove_all</span></code><a class="headerlink" href="#array-remove-all" title="Link to this heading">#</a></h3>
-<p>Removes all elements from the array equal to the given value.</p>
+<p>Removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If <code class="docutils literal notranslate"><span class="pre">element</span></code> evaluates to NULL, the result is NULL rather than removing NULL entries.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove_all</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -4508,6 +4515,13 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <span class="o">+</span><span class="c1">--------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                     </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove_all</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_remove_all</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="k">NULL</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4520,8 +4534,8 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 </section>
 <section id="array-remove-n">
 <h3><code class="docutils literal notranslate"><span class="pre">array_remove_n</span></code><a class="headerlink" href="#array-remove-n" title="Link to this heading">#</a></h3>
-<p>Removes the first <code class="docutils literal notranslate"><span class="pre">max</span></code> elements from the array equal to the given value.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove_n</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">,</span><span class="w"> </span><span class="k">max</span><span class="p">))</span>
+<p>Removes the first <code class="docutils literal notranslate"><span class="pre">max</span></code> elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If <code class="docutils literal notranslate"><span class="pre">element</span></code> evaluates to NULL, the result is NULL rather than removing NULL entries.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove_n</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">,</span><span class="w"> </span><span class="k">max</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id274">
@@ -4540,6 +4554,13 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <span class="o">+</span><span class="c1">---------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                         </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">---------------------------------------------------------+</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove_n</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_remove_n</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="k">NULL</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
