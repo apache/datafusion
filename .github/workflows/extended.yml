@@ -103,8 +103,6 @@ jobs:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
           fetch-depth: 1
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -118,6 +116,11 @@ jobs:
       - name: Show available disk space
         run: |
           df -h
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          # save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "extended"
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
@@ -162,7 +165,7 @@ jobs:
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=48,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion,spot=false', github.run_id) || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion,spot=false', github.run_id) || 'ubuntu-latest' }}
     # spot=false because the tests are long, https://runs-on.com/configuration/spot-instances/#disable-spot-pricing
     container:
       image: amd64/rust
@@ -177,6 +180,12 @@ jobs:
       - name: Install protobuf compiler
         run: |
           apt-get update && apt-get install -y protobuf-compiler
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          # save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "extended-sqllogictest"
+
       - name: Run sqllogictest
         run: |
-          cargo test --features backtrace,parquet_encryption --profile ci-optimized --test sqllogictests -- --include-sqlite
+          cargo test --features backtrace,parquet_encryption --profile ci --test sqllogictests -- --include-sqlite
