@@ -2349,7 +2349,6 @@ fn simplify_right_is_one_case(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
     use arrow::{
         array::{Int32Array, StructArray},

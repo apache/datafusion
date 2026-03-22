@@ -170,13 +170,7 @@ impl ScalarUDFImpl for TranslateFunc {
     }
 }
 
-/// If `cv` is a non-null scalar string, return its value.
-fn try_as_scalar_str(cv: &ColumnarValue) -> Option<&str> {
-    match cv {
-        ColumnarValue::Scalar(s) => s.try_as_str().flatten(),
-        _ => None,
-    }
-}
+use super::common::try_as_scalar_str;
 
 fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = args[0].len();

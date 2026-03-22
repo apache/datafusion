@@ -418,7 +418,6 @@ mod tests {
     use arrow::datatypes::{DECIMAL256_MAX_PRECISION, Field};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::simplify::SimplifyContext;
 
     #[test]
     fn test_log_decimal_native() {

@@ -870,7 +870,6 @@ mod tests {
     use datafusion_physical_plan::expressions::lit;
 
     use datafusion_physical_plan::ExecutionPlan;
-    use futures::StreamExt;
 
     #[tokio::test]
     async fn exec_with_limit() -> Result<()> {

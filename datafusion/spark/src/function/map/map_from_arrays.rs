@@ -117,8 +117,6 @@ fn map_from_arrays_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn test_map_from_arrays_nullability_and_type() {

@@ -488,7 +488,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{BinaryViewArray, GenericByteViewArray, StringViewArray};
+    use arrow::array::{GenericByteViewArray, StringViewArray};
     use datafusion_common::HashMap;
 
     use super::*;

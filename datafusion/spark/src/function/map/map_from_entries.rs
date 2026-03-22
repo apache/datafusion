@@ -160,7 +160,6 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::datatypes::Fields;
-    use datafusion_expr::ReturnFieldArgs;
 
     fn make_entries_field(array_nullable: bool, element_nullable: bool) -> FieldRef {
         let struct_type = DataType::Struct(Fields::from(vec![

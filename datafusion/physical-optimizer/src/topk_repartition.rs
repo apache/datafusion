@@ -185,7 +185,6 @@ mod tests {
     use datafusion_physical_plan::displayable;
     use datafusion_physical_plan::test::scan_partitioned;
     use insta::assert_snapshot;
-    use std::sync::Arc;
 
     fn schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
