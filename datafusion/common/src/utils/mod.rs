@@ -39,7 +39,7 @@ use std::cmp::{Ordering, min};
 use std::collections::HashSet;
 use std::num::NonZero;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::thread::available_parallelism;
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
@@ -922,10 +922,15 @@ pub fn combine_limit(
 ///
 /// This is a wrapper around `std::thread::available_parallelism`, providing a default value
 /// of `1` if the system's parallelism cannot be determined.
+///
+/// The result is cached after the first call.
 pub fn get_available_parallelism() -> usize {
-    available_parallelism()
-        .unwrap_or(NonZero::new(1).expect("literal value `1` shouldn't be zero"))
-        .get()
+    static PARALLELISM: LazyLock<usize> = LazyLock::new(|| {
+        available_parallelism()
+            .unwrap_or(NonZero::new(1).expect("literal value `1` shouldn't be zero"))
+            .get()
+    });
+    *PARALLELISM
 }
 
 /// Converts a collection of function arguments into a fixed-size array of length N
