@@ -136,7 +136,6 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
 
     #[test]
     fn test_date_add_non_nullable_inputs() {

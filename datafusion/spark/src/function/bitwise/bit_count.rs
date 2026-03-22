@@ -176,7 +176,7 @@ mod tests {
         Array, BooleanArray, Int8Array, Int16Array, Int32Array, Int64Array, UInt8Array,
         UInt16Array, UInt32Array, UInt64Array,
     };
-    use arrow::datatypes::{Field, Int32Type};
+    use arrow::datatypes::Field;
 
     #[test]
     fn test_bit_count_basic() {

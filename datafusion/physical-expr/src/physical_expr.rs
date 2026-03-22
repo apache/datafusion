@@ -233,15 +233,15 @@ pub fn add_offset_to_physical_sort_exprs(
 mod tests {
     use super::*;
 
-    use crate::expressions::{BinaryExpr, Column, Literal};
+    use crate::expressions::{BinaryExpr, Literal};
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
     use datafusion_physical_expr_common::physical_expr::is_volatile;
 
-    use arrow::datatypes::{DataType, Schema};
+    use arrow::datatypes::DataType;
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::ColumnarValue;
     use datafusion_expr::Operator;
     use std::any::Any;

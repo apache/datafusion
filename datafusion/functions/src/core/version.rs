@@ -99,6 +99,7 @@ mod test {
     use super::*;
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::ScalarFunctionArgs;
     use datafusion_expr::ScalarUDF;
     use std::sync::Arc;
 

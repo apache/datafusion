@@ -2259,7 +2259,7 @@ mod tests {
     use super::*;
     use crate::lit_with_metadata;
     use crate::logical_plan::StringifiedPlan;
-    use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
+    use crate::{col, expr, expr_fn::exists, in_subquery, scalar_subquery};
 
     use crate::test::function_stub::sum;
     use datafusion_common::{

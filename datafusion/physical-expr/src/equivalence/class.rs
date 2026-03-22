@@ -910,10 +910,9 @@ impl From<Vec<EquivalenceClass>> for EquivalenceGroup {
 mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{BinaryExpr, Column, Literal, binary, col, lit};
+    use crate::expressions::{BinaryExpr, Column, binary, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
 
-    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Operator;
 
     #[test]

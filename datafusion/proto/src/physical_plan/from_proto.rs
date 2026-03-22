@@ -844,10 +844,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
-    use datafusion_datasource::PartitionedFile;
-    use object_store::ObjectMeta;
-    use object_store::path::Path;
 
     use super::*;
 

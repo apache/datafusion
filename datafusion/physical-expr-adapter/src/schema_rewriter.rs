@@ -666,13 +666,10 @@ mod tests {
         BooleanArray, Int32Array, Int64Array, RecordBatch, RecordBatchOptions,
         StringArray, StringViewArray, StructArray,
     };
-    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-    use datafusion_common::{Result, ScalarValue, assert_contains, record_batch};
+    use arrow::datatypes::{Fields, Schema};
+    use datafusion_common::{assert_contains, record_batch};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, Literal, col, lit};
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use itertools::Itertools;
-    use std::sync::Arc;
 
     fn create_test_schema() -> (Schema, Schema) {
         let physical_schema = Schema::new(vec![
@@ -707,8 +704,6 @@ mod tests {
 
     #[test]
     fn test_rewrite_column_with_metadata_or_nullability_mismatch() -> Result<()> {
-        use std::collections::HashMap;
-
         let physical_schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
         let logical_schema =
             Schema::new(vec![Field::new("a", DataType::Int64, false).with_metadata(
@@ -916,8 +911,6 @@ mod tests {
 
     #[test]
     fn test_rewrite_missing_column_propagates_metadata() -> Result<()> {
-        use std::collections::HashMap;
-
         let physical_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let logical_schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),

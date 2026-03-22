@@ -2535,6 +2535,14 @@ select array_sort([]);
 ----
 []
 
+# empty-but-non-null string arrays should remain non-null, not become null
+query ?B
+select array_sort(column1), array_sort(column1) is null
+from (values (arrow_cast(make_array('b', 'a'), 'List(Utf8)')), (arrow_cast([], 'List(Utf8)'))) as t(column1);
+----
+[a, b] false
+[] false
+
 # test with null arguments
 query ?
 select array_sort(NULL);
@@ -2602,6 +2610,14 @@ from values (array_sort(arrow_cast([1, 3, 5, -5], 'FixedSizeList(4 x non-null In
 ----
 [-5, 1, 3, 5] List(non-null Int32)
 
+# arrays of strings
+query ???
+select array_sort(make_array('banana', 'apple', null, 'cherry')),
+       array_sort(make_array('banana', 'apple', null, 'cherry'), 'DESC', 'NULLS LAST'),
+       array_sort(make_array('banana', 'apple', null, 'cherry'), 'ASC', 'NULLS LAST');
+----
+[NULL, apple, banana, cherry] [cherry, banana, apple, NULL] [apple, banana, cherry, NULL]
+
 query ?
 select array_sort([struct('foo', 3), struct('foo', 1), struct('bar', 1)])
 ----
@@ -2624,6 +2640,76 @@ select array_sort([sum(a)]) from t1 where a > 100 group by b;
 
 statement ok
 drop table t1;
+
+# float arrays with NaN and Infinity (NaN sorts after Infinity per IEEE totalOrder)
+query ???
+select array_sort(make_array(1.0, 'NaN'::double, -1.0, 'Infinity'::double, '-Infinity'::double, null)),
+       array_sort(make_array(1.0, 'NaN'::double, -1.0, 'Infinity'::double, '-Infinity'::double, null), 'DESC', 'NULLS LAST'),
+       array_sort(make_array('NaN'::double, 'NaN'::double, 1.0));
+----
+[NULL, -inf, -1.0, 1.0, inf, NaN] [NaN, inf, 1.0, -1.0, -inf, NULL] [1.0, NaN, NaN]
+
+# float32 arrays
+query ??
+select array_sort(arrow_cast(make_array(3.0, 1.0, 'NaN'::double, null, 2.0), 'List(Float32)')),
+       array_sort(arrow_cast(make_array(3.0, 1.0, 'NaN'::double, null, 2.0), 'List(Float32)'), 'DESC', 'NULLS LAST');
+----
+[NULL, 1.0, 2.0, 3.0, NaN] [NaN, 3.0, 2.0, 1.0, NULL]
+
+# element-level nulls with all sort option combinations
+query ????
+select array_sort(make_array(3, null, 1, null, 2), 'ASC', 'NULLS FIRST'),
+       array_sort(make_array(3, null, 1, null, 2), 'ASC', 'NULLS LAST'),
+       array_sort(make_array(3, null, 1, null, 2), 'DESC', 'NULLS FIRST'),
+       array_sort(make_array(3, null, 1, null, 2), 'DESC', 'NULLS LAST');
+----
+[NULL, NULL, 1, 2, 3] [1, 2, 3, NULL, NULL] [NULL, NULL, 3, 2, 1] [3, 2, 1, NULL, NULL]
+
+# timestamp arrays
+query ??
+select array_sort(make_array(arrow_cast('2024-01-15T10:00:00', 'Timestamp(Nanosecond, None)'),
+                             arrow_cast('2024-01-01T00:00:00', 'Timestamp(Nanosecond, None)'),
+                             null,
+                             arrow_cast('2024-06-15T12:00:00', 'Timestamp(Nanosecond, None)'))),
+       array_sort(make_array(arrow_cast('2024-01-15T10:00:00', 'Timestamp(Nanosecond, None)'),
+                             arrow_cast('2024-01-01T00:00:00', 'Timestamp(Nanosecond, None)'),
+                             null,
+                             arrow_cast('2024-06-15T12:00:00', 'Timestamp(Nanosecond, None)')), 'DESC', 'NULLS LAST');
+----
+[NULL, 2024-01-01T00:00:00, 2024-01-15T10:00:00, 2024-06-15T12:00:00] [2024-06-15T12:00:00, 2024-01-15T10:00:00, 2024-01-01T00:00:00, NULL]
+
+# date arrays
+query ??
+select array_sort(make_array('2024-03-01'::date, '2024-01-01'::date, null, '2024-02-01'::date)),
+       array_sort(make_array('2024-03-01'::date, '2024-01-01'::date, null, '2024-02-01'::date), 'DESC', 'NULLS LAST');
+----
+[NULL, 2024-01-01, 2024-02-01, 2024-03-01] [2024-03-01, 2024-02-01, 2024-01-01, NULL]
+
+# struct arrays with nulls and DESC
+query ??
+select array_sort([struct('b', 2), struct('a', 1), null, struct('a', 3)]),
+       array_sort([struct('b', 2), struct('a', 1), null, struct('a', 3)], 'DESC', 'NULLS LAST');
+----
+[NULL, {c0: a, c1: 1}, {c0: a, c1: 3}, {c0: b, c1: 2}] [{c0: b, c1: 2}, {c0: a, c1: 3}, {c0: a, c1: 1}, NULL]
+
+# boolean arrays
+query ??
+select array_sort(make_array(true, false, null, true, false)),
+       array_sort(make_array(true, false, null, true, false), 'DESC', 'NULLS LAST');
+----
+[NULL, false, false, true, true] [true, true, false, false, NULL]
+
+# all-null array
+query ?
+select array_sort(make_array(null, null, null));
+----
+[NULL, NULL, NULL]
+
+# single-element arrays
+query ??
+select array_sort(make_array(42)), array_sort(make_array(null::int));
+----
+[42] [NULL]
 
 ## list_sort (aliases: `array_sort`)
 query ???
@@ -4002,6 +4088,12 @@ select array_position(arrow_cast(['a', 'b', 'c', 'b'], 'FixedSizeList(4, Utf8)')
 4
 
 ## array_positions (aliases: `list_positions`)
+
+# array_positions with empty array
+query ?
+select array_positions(arrow_cast(make_array(), 'List(Int64)'), 1);
+----
+[]
 
 query ?
 select array_positions([1, 2, 3, 4, 5], null);
@@ -5528,21 +5620,47 @@ select
  array_remove(make_array(1, null, 2), null),
  array_remove(make_array(1, null, 2, null), null);
 ----
-[1, 2] [1, 2, NULL]
+NULL NULL
 
 query ??
 select
  array_remove(arrow_cast(make_array(1, null, 2), 'LargeList(Int64)'), null),
  array_remove(arrow_cast(make_array(1, null, 2, null), 'LargeList(Int64)'), null);
 ----
-[1, 2] [1, 2, NULL]
+NULL NULL
 
 query ??
 select
  array_remove(arrow_cast(make_array(1, null, 2), 'FixedSizeList(3, Int64)'), null),
  array_remove(arrow_cast(make_array(1, null, 2, null), 'FixedSizeList(4, Int64)'), null);
 ----
-[1, 2] [1, 2, NULL]
+NULL NULL
+
+# array_remove with null element from column
+query ?
+select array_remove(column1, column2) from (values
+  (make_array(1, 2, 3), 2),
+  (make_array(4, 5, 6), null),
+  (make_array(7, 8, 9), 8),
+  (null, 1)
+) as t(column1, column2);
+----
+[1, 3]
+NULL
+[7, 9]
+NULL
+
+# array_remove with null element from column (LargeList)
+query ?
+select array_remove(column1, column2) from (values
+  (arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 2),
+  (arrow_cast(make_array(4, 5, 6), 'LargeList(Int64)'), null),
+  (arrow_cast(make_array(7, 8, 9), 'LargeList(Int64)'), 8)
+) as t(column1, column2);
+----
+[1, 3]
+NULL
+[7, 9]
 
 # array_remove scalar function #2 (element is list)
 query ??
@@ -5685,6 +5803,46 @@ select array_remove(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [1
 
 ## array_remove_n (aliases: `list_remove_n`)
 
+# array_remove_n with null element scalar
+query ??
+select array_remove_n(make_array(1, 2, 2, 1, 1), NULL, 2),
+       array_remove_n(make_array(1, 2, 2, 1, 1), 2, 2);
+----
+NULL [1, 1, 1]
+
+# array_remove_n with null element scalar (LargeList)
+query ??
+select array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), NULL, 2),
+       array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2, 2);
+----
+NULL [1, 1, 1]
+
+# array_remove_n with null element from column
+query ?
+select array_remove_n(column1, column2, column3) from (values
+  (make_array(1, 2, 2, 1, 1), 2, 2),
+  (make_array(3, 4, 4, 3, 3), null, 2),
+  (make_array(5, 6, 6, 5, 5), 6, 1),
+  (null, 1, 1)
+) as t(column1, column2, column3);
+----
+[1, 1, 1]
+NULL
+[5, 6, 5, 5]
+NULL
+
+# array_remove_n with null element from column (LargeList)
+query ?
+select array_remove_n(column1, column2, column3) from (values
+  (arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2, 2),
+  (arrow_cast(make_array(3, 4, 4, 3, 3), 'LargeList(Int64)'), null, 2),
+  (arrow_cast(make_array(5, 6, 6, 5, 5), 'LargeList(Int64)'), 6, 1)
+) as t(column1, column2, column3);
+----
+[1, 1, 1]
+NULL
+[5, 6, 5, 5]
+
 # array_remove_n scalar function #1
 query ???
 select array_remove_n(make_array(1, 2, 2, 1, 1), 2, 2), array_remove_n(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0, 2), array_remove_n(make_array('h', 'e', 'l', 'l', 'o'), 'l', 3);
@@ -5777,7 +5935,33 @@ select array_remove_n(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], 
 query ?
 select array_remove_all(make_array(1, 2, 2, 1, 1), NULL);
 ----
-[1, 2, 2, 1, 1]
+NULL
+
+# array_remove_all with null element from column
+query ?
+select array_remove_all(column1, column2) from (values
+  (make_array(1, 2, 2, 1, 1), 2),
+  (make_array(3, 4, 4, 3, 3), null),
+  (make_array(5, 6, 6, 5, 5), 6),
+  (null, 1)
+) as t(column1, column2);
+----
+[1, 1, 1]
+NULL
+[5, 5, 5]
+NULL
+
+# array_remove_all with null element from column (LargeList)
+query ?
+select array_remove_all(column1, column2) from (values
+  (arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2),
+  (arrow_cast(make_array(3, 4, 4, 3, 3), 'LargeList(Int64)'), null),
+  (arrow_cast(make_array(5, 6, 6, 5, 5), 'LargeList(Int64)'), 6)
+) as t(column1, column2);
+----
+[1, 1, 1]
+NULL
+[5, 5, 5]
 
 # array_remove_all scalar function #1
 query ???
@@ -7003,8 +7187,244 @@ select count(*) from arrays where 'X'=any(column3);
 ----
 0
 
-query error DataFusion error: Error during planning: Unsupported AnyOp: '>', only '=' is supported
-select count(*) from arrays where 'X'>any(column3);
+# any operator with comparison operators
+# Use inline arrays so the test data is visible and the needle (5)
+# falls within the range of some arrays but not others.
+statement ok
+CREATE TABLE any_op_test AS VALUES
+  (1, make_array(1, 2, 3)),
+  (2, make_array(4, 5, 6)),
+  (3, make_array(7, 8, 9)),
+  (4, make_array(3, 5, 7));
+
+# 5 > ANY(arr): true when array_min < 5
+# row1: min=1 < 5 ✓, row2: min=4 < 5 ✓, row3: min=7 < 5 ✗, row4: min=3 < 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 > any(column2) order by column1;
+----
+1 [1, 2, 3]
+2 [4, 5, 6]
+4 [3, 5, 7]
+
+# 5 >= ANY(arr): true when array_min <= 5
+# row1: min=1 <= 5 ✓, row2: min=4 <= 5 ✓, row3: min=7 <= 5 ✗, row4: min=3 <= 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 >= any(column2) order by column1;
+----
+1 [1, 2, 3]
+2 [4, 5, 6]
+4 [3, 5, 7]
+
+# 5 < ANY(arr): true when array_max > 5
+# row1: max=3 > 5 ✗, row2: max=6 > 5 ✓, row3: max=9 > 5 ✓, row4: max=7 > 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 < any(column2) order by column1;
+----
+2 [4, 5, 6]
+3 [7, 8, 9]
+4 [3, 5, 7]
+
+# 5 <= ANY(arr): true when array_max >= 5
+# row1: max=3 >= 5 ✗, row2: max=6 >= 5 ✓, row3: max=9 >= 5 ✓, row4: max=7 >= 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 <= any(column2) order by column1;
+----
+2 [4, 5, 6]
+3 [7, 8, 9]
+4 [3, 5, 7]
+
+# 5 <> ANY(arr): true when array_min != 5 OR array_max != 5
+# row1: [1,2,3] min=1!=5 ✓, row2: [4,5,6] min=4!=5 ✓, row3: [7,8,9] min=7!=5 ✓, row4: [3,5,7] min=3!=5 ✓
+query I?
+select column1, column2 from any_op_test where 5 <> any(column2) order by column1;
+----
+1 [1, 2, 3]
+2 [4, 5, 6]
+3 [7, 8, 9]
+4 [3, 5, 7]
+
+# For a single-element array where the element equals the needle, <> should return false
+query B
+select 5 <> any(make_array(5));
+----
+false
+
+# For a uniform array [5,5,5], <> should also return false
+query B
+select 5 <> any(make_array(5, 5, 5));
+----
+false
+
+# Empty array: all operators should return false (no elements satisfy the condition)
+query B
+select 5 = any(make_array());
+----
+false
+
+query B
+select 5 <> any(make_array());
+----
+false
+
+query B
+select 5 > any(make_array());
+----
+false
+
+query B
+select 5 < any(make_array());
+----
+false
+
+query B
+select 5 >= any(make_array());
+----
+false
+
+query B
+select 5 <= any(make_array());
+----
+false
+
+# Mixed NULL + non-NULL array where no non-NULL element satisfies the condition
+# These return false (NULLs are skipped by array_min/array_max)
+query B
+select 5 > any(make_array(6, NULL));
+----
+false
+
+query B
+select 5 < any(make_array(3, NULL));
+----
+false
+
+query B
+select 5 >= any(make_array(6, NULL));
+----
+false
+
+query B
+select 5 <= any(make_array(3, NULL));
+----
+false
+
+# Mixed NULL + non-NULL array where a non-NULL element satisfies the condition
+query B
+select 5 > any(make_array(3, NULL));
+----
+true
+
+query B
+select 5 < any(make_array(6, NULL));
+----
+true
+
+query B
+select 5 >= any(make_array(5, NULL));
+----
+true
+
+query B
+select 5 <= any(make_array(5, NULL));
+----
+true
+
+query B
+select 5 <> any(make_array(3, NULL));
+----
+true
+
+query B
+select 5 <> any(make_array(5, NULL));
+----
+false
+
+# All-NULL array: all operators should return false
+query B
+select 5 > any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 < any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 >= any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 <= any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 <> any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+# NULL left operand: should return NULL for non-empty arrays
+query B
+select NULL > any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL < any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL >= any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL <= any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL <> any(make_array(1, 2, 3));
+----
+NULL
+
+# NULL left operand with empty array: should return false
+query B
+select NULL > any(make_array());
+----
+false
+
+# NULL array: should return NULL
+query B
+select 5 > any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 < any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 >= any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 <= any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 <> any(NULL::INT[]);
+----
+NULL
+
+statement ok
+DROP TABLE any_op_test;
 
 ## array_distinct
 
@@ -7226,6 +7646,58 @@ select arrays_zip(a, b) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 
 [{1: NULL, 2: 30}, {1: NULL, 2: 40}]
 [{1: 5, 2: NULL}, {1: 6, 2: NULL}]
 
+# column-level test with single argument
+query ?
+select arrays_zip(a) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6], null)) as t(a, b);
+----
+[{1: 1}, {1: 2}]
+NULL
+[{1: 5}, {1: 6}]
+
+query ?
+select arrays_zip(b) from (values ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6], null)) as t(a, b);
+----
+[{1: 10}, {1: 20}]
+[{1: 30}, {1: 40}]
+NULL
+
+# No input
+query error Error during planning: 'arrays_zip' does not support zero arguments
+select arrays_zip();
+
+# Non-array input
+query error DataFusion error: Execution error: arrays_zip expects array arguments, got Int64
+select arrays_zip(1, 2);
+
+# null input
+query ?
+select arrays_zip(null)
+----
+NULL
+
+# single empty array
+query ?
+select arrays_zip([])
+----
+[]
+
+
+# single array of null
+query ?
+select arrays_zip([null])
+----
+[{1: NULL}]
+
+query ?
+select arrays_zip([NULL::int])
+----
+[{1: NULL}]
+
+query ?
+select arrays_zip([NULL::int[]])
+----
+[{1: NULL}]
+
 # alias: list_zip
 query ?
 select list_zip([1, 2], [3, 4]);
@@ -7248,9 +7720,11 @@ select arrays_zip([42], ['hello']);
 ----
 [{1: 42, 2: hello}]
 
-# error: too few arguments
-statement error
+# single argument
+query ?
 select arrays_zip([1, 2, 3]);
+----
+[{1: 1}, {1: 2}, {1: 3}]
 
 # arrays_zip with LargeList inputs
 query ?
@@ -7270,6 +7744,12 @@ select arrays_zip(
 ----
 [{1: 1, 2: 10}, {1: 2, 2: 20}, {1: NULL, 2: 30}]
 
+# single argument from LargeList
+query ?
+select arrays_zip(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'));
+----
+[{1: 1}, {1: 2}, {1: 3}]
+
 # arrays_zip with FixedSizeList inputs
 query ?
 select arrays_zip(
@@ -7278,6 +7758,12 @@ select arrays_zip(
 );
 ----
 [{1: 1, 2: 10}, {1: 2, 2: 20}, {1: 3, 2: 30}]
+
+# single argument from FixedSizeList
+query ?
+select arrays_zip(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'));
+----
+[{1: 1}, {1: 2}, {1: 3}]
 
 # arrays_zip mixing List and LargeList
 query ?

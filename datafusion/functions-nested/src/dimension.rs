@@ -33,7 +33,8 @@ use datafusion_common::{Result, exec_err, utils::take_function_args};
 use crate::utils::{compute_array_dims, make_scalar_function};
 use datafusion_common::utils::list_ndims;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -101,10 +102,7 @@ impl ScalarUDFImpl for ArrayDims {
         Ok(DataType::new_list(UInt64, true))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_dims_inner)(&args.args)
     }
 
@@ -173,10 +171,7 @@ impl ScalarUDFImpl for ArrayNdims {
         Ok(UInt64)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_ndims_inner)(&args.args)
     }
 
