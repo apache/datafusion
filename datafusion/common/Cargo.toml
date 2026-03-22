@@ -65,7 +65,6 @@ harness = false
 name = "stats_merge"
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
 chrono = { workspace = true }

@@ -1899,7 +1899,6 @@ dependencies = [
 name = "datafusion-common"
 version = "52.3.0"
 dependencies = [
- "ahash",
  "arrow",
  "arrow-ipc",
  "chrono",
