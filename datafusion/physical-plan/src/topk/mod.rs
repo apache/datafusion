@@ -18,7 +18,7 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    array::{Array, AsArray, BinaryArray, ListArray, MapArray, StringArray},
+    array::{Array, AsArray, BinaryArray, ListArray, MapArray, StringArray, StructArray},
     compute::{FilterBuilder, interleave_record_batch, prep_null_mask_filter},
     row::{RowConverter, Rows, SortField},
 };
@@ -940,6 +940,27 @@ fn split_indices_by_i32_offsets(
         ));
     }
 
+    // Fast path: if the combined data across *all* batches is well under the
+    // limit, no single interleave chunk can overflow regardless of which rows
+    // are selected, so we can skip the per-row accounting loop entirely.
+    let total_across_batches: i64 = record_batches
+        .iter()
+        .flat_map(|batch| {
+            var_width_columns.iter().map(|col| {
+                col.get_array(batch)
+                    .map(|a| col.total_data_size(a))
+                    .unwrap_or(0)
+            })
+        })
+        .fold(0_i64, |acc, v| acc.saturating_add(v));
+
+    if total_across_batches <= max_offset / 2 {
+        return Ok(split_indices_by_row_count(
+            all_indices.len(),
+            max_rows_per_batch,
+        ));
+    }
+
     let mut ranges = Vec::new();
     let mut start = 0;
     let mut totals = vec![0_i64; var_width_columns.len()];
@@ -957,8 +978,8 @@ fn split_indices_by_i32_offsets(
 
         let mut row_sizes = Vec::with_capacity(var_width_columns.len());
         for column in &var_width_columns {
-            let array = batch.column(column.column_index);
-            let size = column.row_size(array.as_ref(), *row_index)?;
+            let array = column.get_array(batch)?;
+            let size = column.row_size(array, *row_index)?;
             if size > max_offset {
                 return internal_err!(
                     "TopK row requires {size} offsets which exceeds i32::MAX"
@@ -1004,33 +1025,100 @@ fn split_indices_by_row_count(
     ranges
 }
 
+/// Recursively collect all variable-width leaf columns from `batch`, walking
+/// into `Struct` fields. Each returned `VarWidthColumn` stores the full index
+/// path needed to reach its array (top-level index, then zero or more struct
+/// child indices).
 fn collect_var_width_columns(batch: &RecordBatch) -> Vec<VarWidthColumn> {
-    batch
-        .columns()
-        .iter()
-        .enumerate()
-        .filter_map(|(index, array)| VarWidthColumn::new(index, array.data_type()))
-        .collect()
+    let mut columns = Vec::new();
+    collect_var_width_from_arrays(batch.columns(), &[], &mut columns);
+    columns
+}
+
+fn collect_var_width_from_arrays(
+    arrays: &[ArrayRef],
+    path_prefix: &[usize],
+    out: &mut Vec<VarWidthColumn>,
+) {
+    for (idx, array) in arrays.iter().enumerate() {
+        let mut path = path_prefix.to_vec();
+        path.push(idx);
+        match array.data_type() {
+            DataType::Utf8 => out.push(VarWidthColumn {
+                column_path: path,
+                kind: VarWidthKind::Utf8,
+            }),
+            DataType::Binary => out.push(VarWidthColumn {
+                column_path: path,
+                kind: VarWidthKind::Binary,
+            }),
+            DataType::Utf8View => out.push(VarWidthColumn {
+                column_path: path,
+                kind: VarWidthKind::Utf8View,
+            }),
+            DataType::BinaryView => out.push(VarWidthColumn {
+                column_path: path,
+                kind: VarWidthKind::BinaryView,
+            }),
+            DataType::List(_) => out.push(VarWidthColumn {
+                column_path: path,
+                kind: VarWidthKind::List,
+            }),
+            DataType::Map(_, _) => out.push(VarWidthColumn {
+                column_path: path,
+                kind: VarWidthKind::Map,
+            }),
+            DataType::Struct(_) => {
+                // Recurse: any Utf8/Binary (etc.) field inside a Struct gets the
+                // same i32 overflow treatment when interleave recurses into it.
+                if let Some(struct_array) = array.as_any().downcast_ref::<StructArray>() {
+                    collect_var_width_from_arrays(struct_array.columns(), &path, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 struct VarWidthColumn {
-    column_index: usize,
+    /// Path of column indices to the target array.
+    /// `column_path[0]` is the top-level index in the `RecordBatch`;
+    /// any further elements are child indices inside `StructArray`s.
+    column_path: Vec<usize>,
     kind: VarWidthKind,
 }
 
 impl VarWidthColumn {
-    fn new(column_index: usize, data_type: &DataType) -> Option<Self> {
-        let kind = match data_type {
-            DataType::Utf8 => VarWidthKind::Utf8,
-            DataType::Binary => VarWidthKind::Binary,
-            DataType::List(_) => VarWidthKind::List,
-            DataType::Map(_, _) => VarWidthKind::Map,
-            _ => return None,
-        };
-
-        Some(Self { column_index, kind })
+    /// Walk `batch` along `column_path` to reach the target array.
+    fn get_array<'a>(&self, batch: &'a RecordBatch) -> Result<&'a dyn Array> {
+        let first = self.column_path.first().ok_or_else(|| {
+            internal_datafusion_err!("Empty column path in VarWidthColumn")
+        })?;
+        let mut array: &dyn Array = batch.column(*first).as_ref();
+        for &child_idx in &self.column_path[1..] {
+            array = array
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected StructArray while following nested column path in TopK"
+                    )
+                })?
+                .column(child_idx)
+                .as_ref();
+        }
+        Ok(array)
     }
 
+    /// Return the offset increment contributed by row `row`.
+    ///
+    /// For `Utf8`/`Binary`/`Utf8View`/`BinaryView` this is the byte length of
+    /// the value, which is what Arrow accumulates in its i32 offset buffer.
+    ///
+    /// For `List`/`Map` this is the *element count* in that row's list/map,
+    /// which is what Arrow accumulates in its i32 offset buffer for those types.
+    /// The comparison threshold is still `i32::MAX` in both cases — just
+    /// different units.
     fn row_size(&self, array: &dyn Array, row: usize) -> Result<i64> {
         let size = match self.kind {
             VarWidthKind::Utf8 => array
@@ -1047,29 +1135,78 @@ impl VarWidthColumn {
                     internal_datafusion_err!("Expected Binary array for TopK interleave")
                 })?
                 .value_length(row) as i64,
+            VarWidthKind::Utf8View => array.as_string_view().value(row).len() as i64,
+            VarWidthKind::BinaryView => array.as_binary_view().value(row).len() as i64,
+            VarWidthKind::List => {
+                // value_length returns child element count — the correct unit for i32 offset overflow
+                array
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Expected List array for TopK interleave"
+                        )
+                    })?
+                    .value_length(row) as i64
+            }
+            VarWidthKind::Map => {
+                // value_length returns entry count — the correct unit for i32 offset overflow
+                array
+                    .as_any()
+                    .downcast_ref::<MapArray>()
+                    .ok_or_else(|| {
+                        internal_datafusion_err!("Expected Map array for TopK interleave")
+                    })?
+                    .value_length(row) as i64
+            }
+        };
+        Ok(size)
+    }
+
+    /// Return the total accumulated offset across the entire `array`.
+    /// Used for the fast-path check in `split_indices_by_i32_offsets`.
+    ///
+    /// For `Utf8`/`Binary` this is the total byte count (last value offset).
+    /// For `List`/`Map` this is the total child-element count (last offset).
+    /// For view arrays the format differs; we return `i64::MAX` to always
+    /// fall through to per-row accounting.
+    fn total_data_size(&self, array: &dyn Array) -> i64 {
+        match self.kind {
+            VarWidthKind::Utf8 => array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .and_then(|a| a.value_offsets().last().copied())
+                .map(|v| v as i64)
+                .unwrap_or(0),
+            VarWidthKind::Binary => array
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .and_then(|a| a.value_offsets().last().copied())
+                .map(|v| v as i64)
+                .unwrap_or(0),
+            // View arrays don't use i32 offset buffers; conservatively skip fast path.
+            VarWidthKind::Utf8View | VarWidthKind::BinaryView => i64::MAX,
             VarWidthKind::List => array
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| {
-                    internal_datafusion_err!("Expected List array for TopK interleave")
-                })?
-                .value_length(row) as i64,
+                .and_then(|a| a.offsets().last().copied())
+                .map(|v| v as i64)
+                .unwrap_or(0),
             VarWidthKind::Map => array
                 .as_any()
                 .downcast_ref::<MapArray>()
-                .ok_or_else(|| {
-                    internal_datafusion_err!("Expected Map array for TopK interleave")
-                })?
-                .value_length(row) as i64,
-        };
-
-        Ok(size)
+                .and_then(|a| a.offsets().last().copied())
+                .map(|v| v as i64)
+                .unwrap_or(0),
+        }
     }
 }
 
 enum VarWidthKind {
     Utf8,
     Binary,
+    Utf8View,
+    BinaryView,
     List,
     Map,
 }
