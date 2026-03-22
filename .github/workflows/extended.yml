@@ -173,6 +173,7 @@ jobs:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
           fetch-depth: 1
+      # Don't use setup-builder to avoid configuring RUST_BACKTRACE which is expensive
       - name: Install protobuf compiler
         run: |
           apt-get update && apt-get install -y protobuf-compiler
