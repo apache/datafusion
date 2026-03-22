@@ -248,7 +248,7 @@ fn try_primitive_array_min_max<O: OffsetSizeTrait>(
 /// Threshold to switch from direct iteration to using `min` / `max` kernel from
 /// `arrow::compute`. The latter has enough per-invocation overhead that direct
 /// iteration is faster for small lists.
-const ARROW_COMPUTE_THRESHOLD: usize = 64;
+const ARROW_COMPUTE_THRESHOLD: usize = 32;
 
 /// Computes min or max for each row of a primitive ListArray.
 fn primitive_array_min_max<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
