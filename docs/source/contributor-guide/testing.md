@@ -23,6 +23,37 @@ Tests are critical to ensure that DataFusion is working properly and
 is not accidentally broken during refactorings. All new features
 should have test coverage and the entire test suite is run as part of CI.
 
+## Testing Quick Start
+
+While developing a feature or bug fix, best practice is to run the smallest set
+of tests that gives confidence for your change, then expand as needed.
+
+Initially, run the tests in the crates you changed. For example, if you made changes
+to files in `datafusion-optimizer/src`, run the corresponding crate tests:
+
+```shell
+cargo test -p datafusion-optimizer
+```
+
+Then, run the `sqllogictest` suite, which provides a strong speed–coverage tradeoff for development: it runs quickly while offering broad regression coverage across most SQL behavior in DataFusion.
+
+```shell
+cargo test --profile=ci --test sqllogictests
+```
+
+Finally, before submitting a PR, run the tests for the core `datafusion` and
+`datafusion-cli` crates:
+
+```shell
+cargo test -p datafusion
+cargo test -p datafusion-cli
+```
+
+Some integration tests require optional external services such as Docker-backed
+containers and may skip when unavailable.
+
+## Testing Overview
+
 DataFusion has several levels of tests in its [Test Pyramid] and tries to follow
 the Rust standard [Testing Organization] described in [The Book].
 

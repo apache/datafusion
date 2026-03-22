@@ -419,7 +419,6 @@ mod tests {
     use arrow::array::LargeStringArray;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{Fields, Schema};
-    use datafusion_common::internal_err;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use std::sync::Arc;

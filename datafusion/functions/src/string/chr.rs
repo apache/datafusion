@@ -149,11 +149,10 @@ impl ScalarUDFImpl for ChrFunc {
 mod tests {
     use super::*;
 
-    use arrow::array::{Array, Int64Array, StringArray};
+    use arrow::array::{Array, StringArray};
     use arrow::datatypes::Field;
     use datafusion_common::assert_contains;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     fn invoke_chr(arg: ColumnarValue, number_rows: usize) -> Result<ColumnarValue> {
         ChrFunc::new().invoke_with_args(ScalarFunctionArgs {

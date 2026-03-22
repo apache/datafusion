@@ -1359,12 +1359,10 @@ mod tests {
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {

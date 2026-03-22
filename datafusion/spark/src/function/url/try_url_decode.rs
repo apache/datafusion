@@ -84,7 +84,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::StringArray;
-    use datafusion_common::{Result, cast::as_string_array};
+    use datafusion_common::cast::as_string_array;
 
     use super::*;
 

@@ -721,8 +721,7 @@ mod tests {
     use super::*;
     use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
 
-    use arrow::datatypes::FieldRef;
-    use datafusion_common::{DFSchema, ScalarValue, assert_or_internal_err};
+    use datafusion_common::{DFSchema, assert_or_internal_err};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{

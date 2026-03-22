@@ -32,8 +32,10 @@ community as well as get more familiar with Rust and the relevant codebases.
 
 ## Development Environment
 
-Setup your development environment [here](development_environment.md), and learn
-how to test the code [here](testing.md).
+Start with the [Development Environment Quick Start](development_environment.md#quick-start).
+
+For more detail, see the full [development environment guide](development_environment.md)
+and the [testing guide](testing.md).
 
 ## Finding and Creating Issues to Work On
 
@@ -103,6 +105,19 @@ Note all commits in a PR are squashed when merged to the `main` branch so there 
 
 Contributor-facing guidance for release branches, patch releases, and backports
 is documented in the [Release Management](release_management.md) guide.
+
+## Before Submitting a PR
+
+Before submitting a PR, run the standard non-functional checks. PRs must pass
+before merge.
+
+```bash
+./dev/rust_lint.sh
+# use `--write` to automatically fix some formatting and lint errors
+# ./dev/rust_lint.sh --write --allow-dirty
+```
+
+You should also run any relevant commands from the [testing quick start](testing.md#testing-quick-start).
 
 ## Conventional Commits & Labeling PRs
 

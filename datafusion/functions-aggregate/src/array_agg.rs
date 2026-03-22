@@ -1146,13 +1146,11 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 mod tests {
     use super::*;
     use arrow::array::{ListBuilder, StringBuilder};
-    use arrow::datatypes::{FieldRef, Schema};
+    use arrow::datatypes::Schema;
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
     use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-    use std::sync::Arc;
 
     #[test]
     fn no_duplicates_no_distinct() -> Result<()> {

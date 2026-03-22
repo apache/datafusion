@@ -920,7 +920,6 @@ mod tests {
     use arrow::compute::SortOptions;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-    use std::sync::Arc;
 
     /// Helper to create a PhysicalSortExpr
     fn sort_expr(

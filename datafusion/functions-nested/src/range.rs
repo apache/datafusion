@@ -47,8 +47,8 @@ use datafusion_common::{
     },
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -252,10 +252,7 @@ impl ScalarUDFImpl for Range {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
 
         if args.iter().any(|arg| arg.data_type().is_null()) {
