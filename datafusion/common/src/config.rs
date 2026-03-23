@@ -1088,6 +1088,12 @@ config_namespace! {
         /// process to reorder the join keys
         pub top_down_join_key_reordering: bool, default = true
 
+        /// When set to true, the physical plan optimizer may swap join inputs
+        /// based on statistics. When set to false, statistics-driven join
+        /// input reordering is disabled and the original join order in the
+        /// query is used.
+        pub join_reordering: bool, default = true
+
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         pub prefer_hash_join: bool, default = true

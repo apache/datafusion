@@ -244,12 +244,8 @@ where
 
         let adjusted_start = spark_start_to_datafusion_start(start, string_len);
 
-        let (byte_start, byte_end) = get_true_start_end(
-            string,
-            adjusted_start,
-            len_opt.map(|l| l as u64),
-            is_ascii,
-        );
+        let (byte_start, byte_end) =
+            get_true_start_end(string, adjusted_start, len_opt, is_ascii)?;
         let substr = &string[byte_start..byte_end];
         builder.append_value(substr);
     }

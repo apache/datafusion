@@ -129,7 +129,6 @@ pub fn evaluate_expressions_to_arrays_with_metrics<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use arrow::array::Int32Array;
 

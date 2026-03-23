@@ -107,7 +107,6 @@ impl DataFrame {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use super::super::Result;
     use super::*;

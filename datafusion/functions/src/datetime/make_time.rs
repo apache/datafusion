@@ -29,7 +29,8 @@ use chrono::prelude::*;
 use datafusion_common::types::{NativeType, logical_int32, logical_string};
 use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -112,10 +113,7 @@ impl ScalarUDFImpl for MakeTimeFunc {
         Ok(Time32(TimeUnit::Second))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [hours, minutes, seconds] = take_function_args(self.name(), args.args)?;
 
         match (hours, minutes, seconds) {
@@ -213,7 +211,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::DataFusionError;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     fn invoke_make_time_with_args(
@@ -224,7 +222,7 @@ mod tests {
             .iter()
             .map(|arg| Field::new("a", arg.data_type(), true).into())
             .collect::<Vec<_>>();
-        let args = datafusion_expr::ScalarFunctionArgs {
+        let args = ScalarFunctionArgs {
             args,
             arg_fields,
             number_rows,

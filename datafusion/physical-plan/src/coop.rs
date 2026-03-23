@@ -401,11 +401,10 @@ pub fn make_cooperative(stream: SendableRecordBatchStream) -> SendableRecordBatc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stream::RecordBatchStreamAdapter;
 
     use arrow_schema::SchemaRef;
 
-    use futures::{StreamExt, stream};
+    use futures::stream;
 
     // This is the hardcoded value Tokio uses
     const TASK_BUDGET: usize = 128;

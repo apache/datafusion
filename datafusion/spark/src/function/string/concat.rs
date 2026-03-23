@@ -167,10 +167,6 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, StringArray};
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::Result;
-    use datafusion_expr::ReturnFieldArgs;
-    use std::sync::Arc;
 
     #[test]
     fn test_concat_basic() -> Result<()> {

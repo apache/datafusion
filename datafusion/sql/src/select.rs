@@ -31,7 +31,7 @@ use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, Result, not_impl_err, plan_err};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
-use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
+use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
@@ -193,15 +193,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect::<Result<Vec<Expr>>>()?
         } else {
             // 'group by all' groups wrt. all select expressions except 'AggregateFunction's.
-            // Filter and collect non-aggregate select expressions
+            // Filter and collect non-aggregate select expressions.
             select_exprs
                 .iter()
-                .filter(|select_expr| match select_expr {
-                    Expr::AggregateFunction(_) => false,
-                    Expr::Alias(Alias { expr, name: _, .. }) => {
-                        !matches!(**expr, Expr::AggregateFunction(_))
-                    }
-                    _ => true,
+                .filter(|select_expr| {
+                    find_aggregate_exprs(std::iter::once(*select_expr)).is_empty()
                 })
                 .cloned()
                 .collect()

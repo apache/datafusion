@@ -29,7 +29,7 @@ use datafusion_common::utils::ListCoercion;
 use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -129,10 +129,7 @@ impl ScalarUDFImpl for ArrayReplace {
         Ok(args[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_inner)(&args.args)
     }
 
@@ -211,10 +208,7 @@ impl ScalarUDFImpl for ArrayReplaceN {
         Ok(args[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_n_inner)(&args.args)
     }
 
@@ -291,10 +285,7 @@ impl ScalarUDFImpl for ArrayReplaceAll {
         Ok(args[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_all_inner)(&args.args)
     }
 

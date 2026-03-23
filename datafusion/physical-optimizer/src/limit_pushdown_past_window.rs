@@ -265,21 +265,17 @@ fn bound_to_usize(bound: &WindowFrameBound) -> Option<usize> {
 mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+    use datafusion_expr::WindowFrame;
     use datafusion_functions_window::row_number::row_number_udwf;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion_physical_plan::InputOrderMode;
     use datafusion_physical_plan::displayable;
-    use datafusion_physical_plan::limit::LocalLimitExec;
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
     use datafusion_physical_plan::windows::{
         BoundedWindowAggExec, create_udwf_window_expr,
     };
     use insta::assert_snapshot;
-    use std::sync::Arc;
 
     fn plan_str(plan: &dyn ExecutionPlan) -> String {
         displayable(plan).indent(true).to_string()
