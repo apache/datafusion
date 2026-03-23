@@ -179,8 +179,8 @@ fn build_message_columns(
 fn nested_messages_batch(
     kind: NestedListKind,
     row_id: i32,
-    messages: Vec<MessageValue<'_>>,
-    fields: Fields,
+    messages: &[MessageValue<'_>],
+    fields: &Fields,
 ) -> RecordBatch {
     let item_field = Arc::new(Field::new("item", DataType::Struct(fields.clone()), true));
 
@@ -393,7 +393,7 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         .expect("row_id should be Int32");
     assert_eq!(row_ids.values(), &[1, 2]);
 
-    let (messages0, messages1) = extract_nested_list_values(kind, &all_rows.column(1));
+    let (messages0, messages1) = extract_nested_list_values(kind, all_rows.column(1));
 
     let messages0 = messages0
         .as_any()
