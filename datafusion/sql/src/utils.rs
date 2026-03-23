@@ -33,8 +33,8 @@ use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
     Alias, GroupingSet, Unnest, WindowFunction, WindowFunctionParams,
 };
-use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::select_expr::SelectExpr;
+use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     ColumnUnnestList, Expr, ExprSchemable, LogicalPlan, col, expr_vec_fmt,
 };
@@ -643,9 +643,7 @@ fn push_projection_dedupl(projection: &mut Vec<Expr>, expr: Expr) {
 ///
 /// Duplicates are detected by the schema name of each expression, which
 /// identifies logically identical expressions before column normalization.
-pub(crate) fn deduplicate_select_expr_names(
-    exprs: Vec<SelectExpr>,
-) -> Vec<SelectExpr> {
+pub(crate) fn deduplicate_select_expr_names(exprs: Vec<SelectExpr>) -> Vec<SelectExpr> {
     let mut seen: HashMap<String, usize> = HashMap::new();
     exprs
         .into_iter()
@@ -655,9 +653,7 @@ pub(crate) fn deduplicate_select_expr_names(
                 let count = seen.entry(name.clone()).or_insert(0);
                 let result = if *count > 0 {
                     let (_qualifier, field_name) = expr.qualified_name();
-                    SelectExpr::Expression(
-                        expr.alias(format!("{field_name}:{count}")),
-                    )
+                    SelectExpr::Expression(expr.alias(format!("{field_name}:{count}")))
                 } else {
                     SelectExpr::Expression(expr)
                 };
