@@ -291,12 +291,7 @@ async fn setup_nested_list_test(
     let prefix = format!("{}_{}", kind.name(), prefix_base);
 
     for (filename, batch) in batches {
-        write_parquet(
-            batch,
-            Arc::clone(&store),
-            &format!("{prefix}/{filename}"),
-        )
-        .await;
+        write_parquet(batch, Arc::clone(&store), &format!("{prefix}/{filename}")).await;
     }
 
     let ctx = test_context();
@@ -909,52 +904,22 @@ async fn assert_nested_list_struct_schema_evolution_errors(
     );
 }
 
-type ChainTypeProvider = fn() -> DataType;
-
-fn utf8_chain_type() -> DataType {
-    DataType::Utf8
-}
-
-async fn assert_nested_list_struct_schema_evolution_error_case(
-    kind: NestedListKind,
-    chain_type: Option<DataType>,
-    chain_nullable: bool,
-    expected_error: &str,
-    default_chain_type_provider: Option<ChainTypeProvider>,
-) {
-    let chain_type = chain_type.unwrap_or_else(|| {
-        default_chain_type_provider
-            .map(|provider| provider())
-            .unwrap_or(DataType::Utf8)
-    });
-
+async fn assert_non_nullable_missing_chain_field_fails(kind: NestedListKind) {
     assert_nested_list_struct_schema_evolution_errors(
         kind,
-        chain_type,
-        chain_nullable,
-        expected_error,
-    )
-    .await;
-}
-
-async fn assert_non_nullable_missing_chain_field_fails(kind: NestedListKind) {
-    assert_nested_list_struct_schema_evolution_error_case(
-        kind,
-        None,
+        DataType::Utf8,
         false,
         "non-nullable",
-        Some(utf8_chain_type),
     )
     .await;
 }
 
 async fn assert_incompatible_chain_field_fails(kind: NestedListKind) {
-    assert_nested_list_struct_schema_evolution_error_case(
+    assert_nested_list_struct_schema_evolution_errors(
         kind,
-        Some(incompatible_chain_type()),
+        incompatible_chain_type(),
         true,
         "Cannot cast struct field 'chain'",
-        None,
     )
     .await;
 }
