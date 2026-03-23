@@ -151,33 +151,26 @@ fn nested_messages_batch(
         },
     );
 
-    let id_array: ArrayRef = Arc::new(Int32Array::from(ids_vec));
-    let name_array: ArrayRef = Arc::new(StringArray::from(names_vec));
-    let ignored_array: ArrayRef = Arc::new(Int32Array::from(ignored_vec));
-
-    let chain_array: Option<ArrayRef> = fields
-        .iter()
-        .find(|field| field.name() == "chain")
-        .map(|field| match field.data_type() {
-            DataType::Utf8 => Arc::new(StringArray::from(chain_vec)) as ArrayRef,
-            DataType::Struct(chain_fields) => {
-                let chain_struct = StructArray::new(
-                    chain_fields.clone(),
-                    vec![Arc::new(StringArray::from(chain_vec)) as ArrayRef],
-                    None,
-                );
-                Arc::new(chain_struct) as ArrayRef
-            }
-            other => panic!("unexpected chain field type: {other:?}"),
-        });
-
     let columns: Vec<ArrayRef> = fields
         .iter()
         .map(|field| match field.name().as_str() {
-            "id" => id_array.clone(),
-            "name" => name_array.clone(),
-            "chain" => chain_array.as_ref().expect("chain field expected").clone(),
-            "ignored" => ignored_array.clone(),
+            "id" => Arc::new(Int32Array::from(ids_vec.clone())) as ArrayRef,
+            "name" => Arc::new(StringArray::from(names_vec.clone())) as ArrayRef,
+            "chain" => match field.data_type() {
+                DataType::Utf8 => {
+                    Arc::new(StringArray::from(chain_vec.clone())) as ArrayRef
+                }
+                DataType::Struct(chain_fields) => {
+                    let chain_struct = StructArray::new(
+                        chain_fields.clone(),
+                        vec![Arc::new(StringArray::from(chain_vec.clone())) as ArrayRef],
+                        None,
+                    );
+                    Arc::new(chain_struct) as ArrayRef
+                }
+                other => panic!("unexpected chain field type: {other:?}"),
+            },
+            "ignored" => Arc::new(Int32Array::from(ignored_vec.clone())) as ArrayRef,
             other => panic!("unexpected nested field: {other}"),
         })
         .collect();
