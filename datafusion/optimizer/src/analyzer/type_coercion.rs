@@ -758,25 +758,18 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_fields =
                     value_fields_with_lambda_udf(&current_fields, func.as_ref())?;
 
-                let transformed = current_fields != new_fields;
+                let new_args = std::iter::zip(args, new_fields)
+                    .map(|(arg, new_field)| match (&arg, new_field) {
+                        (Expr::Lambda(_lambda), ValueOrLambda::Lambda(_)) => Ok(arg),
+                        (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => plan_err!("value_fields_with_lambda_udf return a value for a lambda argument"),
+                        (_, ValueOrLambda::Value(new_field)) => arg.cast_to(new_field.data_type(), self.schema),
+                        (_, ValueOrLambda::Lambda(_)) => plan_err!("value_fields_with_lambda_udf return a lambda for a value argument"),
+                    })
+                    .collect::<Result<_>>()?;
 
-                let new_args = if transformed {
-                    std::iter::zip(args, new_fields)
-                            .map(|(arg, new_field)| match (&arg, new_field) {
-                                (Expr::Lambda(_lambda), ValueOrLambda::Lambda(_)) => Ok(arg),
-                                (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => plan_err!("value_fields_with_lambda_udf return a value for a lambda argument"),
-                                (_, ValueOrLambda::Value(new_field)) => arg.cast_to(new_field.data_type(), self.schema),
-                                (_, ValueOrLambda::Lambda(_)) => plan_err!("value_fields_with_lambda_udf return a lambda for a value argument"),
-                            })
-                            .collect::<Result<_>>()?
-                } else {
-                    args
-                };
-
-                Ok(Transformed::new_transformed(
-                    Expr::LambdaFunction(LambdaFunction::new(func, new_args)),
-                    transformed,
-                ))
+                Ok(Transformed::yes(Expr::LambdaFunction(
+                    LambdaFunction::new(func, new_args)
+                )))
             }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
