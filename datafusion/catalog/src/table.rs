@@ -84,10 +84,10 @@ pub trait TableProvider: Debug + Sync + Send {
         None
     }
 
-    /// Create an [`ExecutionPlan`] for scanning the table with optionally
-    /// specified `projection`, `filter` and `limit`, described below.
+    /// Create an [`ExecutionPlan`] for scanning the table with optional
+    /// `projection`, `filter`, and `limit`, described below.
     ///
-    /// The `ExecutionPlan` is responsible scanning the datasource's
+    /// The returned `ExecutionPlan` is responsible for scanning the datasource's
     /// partitions in a streaming, parallelized fashion.
     ///
     /// # Projection
@@ -96,33 +96,30 @@ pub trait TableProvider: Debug + Sync + Send {
     /// specified. The projection is a set of indexes of the fields in
     /// [`Self::schema`].
     ///
-    /// DataFusion provides the projection to scan only the columns actually
-    /// used in the query to improve performance, an optimization  called
-    /// "Projection Pushdown". Some datasources, such as Parquet, can use this
-    /// information to go significantly faster when only a subset of columns is
-    /// required.
+    /// DataFusion provides the projection so the scan reads only the columns
+    /// actually used in the query, an optimization called "Projection
+    /// Pushdown". Some datasources, such as Parquet, can use this information
+    /// to go significantly faster when only a subset of columns is required.
     ///
     /// # Filters
     ///
     /// A list of boolean filter [`Expr`]s to evaluate *during* the scan, in the
     /// manner specified by [`Self::supports_filters_pushdown`]. Only rows for
-    /// which *all* of the `Expr`s evaluate to `true` must be returned (aka the
-    /// expressions are `AND`ed together).
+    /// which *all* of the `Expr`s evaluate to `true` must be returned (that is,
+    /// the expressions are `AND`ed together).
     ///
-    /// To enable filter pushdown you must override
-    /// [`Self::supports_filters_pushdown`] as the default implementation does
-    /// not and `filters` will be empty.
+    /// To enable filter pushdown, override
+    /// [`Self::supports_filters_pushdown`]. The default implementation does not
+    /// push down filters, and `filters` will be empty.
     ///
-    /// DataFusion pushes filtering into the scans whenever possible
-    /// ("Filter Pushdown"), and depending on the format and the
-    /// implementation of the format, evaluating the predicate during the scan
-    /// can increase performance significantly.
+    /// DataFusion pushes filters into scans whenever possible ("Filter
+    /// Pushdown"). Depending on the data format and implementation, evaluating
+    /// predicates during the scan can significantly improve performance.
     ///
     /// ## Note: Some columns may appear *only* in Filters
     ///
-    /// In certain cases, a query may only use a certain column in a Filter that
-    /// has been completely pushed down to the scan. In this case, the
-    /// projection will not contain all the columns found in the filter
+    /// In some cases, a query may use a column only in a filter and the
+    /// projection will not contain all columns referenced by the filter
     /// expressions.
     ///
     /// For example, given the query `SELECT t.a FROM t WHERE t.b > 5`,
@@ -154,15 +151,40 @@ pub trait TableProvider: Debug + Sync + Send {
     ///
     /// # Limit
     ///
-    /// If `limit` is specified,  must only produce *at least* this many rows,
-    /// (though it may return more).  Like Projection Pushdown and Filter
-    /// Pushdown, DataFusion pushes `LIMIT`s  as far down in the plan as
-    /// possible, called "Limit Pushdown" as some sources can use this
-    /// information to improve their performance. Note that if there are any
-    /// Inexact filters pushed down, the LIMIT cannot be pushed down. This is
-    /// because inexact filters do not guarantee that every filtered row is
-    /// removed, so applying the limit could lead to too few rows being available
-    /// to return as a final result.
+    /// If `limit` is specified, the scan must produce *at least* this many
+    /// rows, though it may return more. Like Projection Pushdown and Filter
+    /// Pushdown, DataFusion pushes `LIMIT`s as far down in the plan as
+    /// possible. This is called "Limit Pushdown", and some sources can use the
+    /// information to improve performance.
+    ///
+    /// Note: If any pushed-down filters are `Inexact`, the `LIMIT` cannot be
+    /// pushed down. Inexact filters do not guarantee that every filtered row is
+    /// removed, so applying the limit could leave too few rows to return in the
+    /// final result.
+    ///
+    /// # Evaluation Order
+    ///
+    /// The logical evaluation order is `filters`, then `limit`, then
+    /// `projection`.
+    ///
+    /// Note that `limit` applies to the filtered result, not to the unfiltered
+    /// input, and `projection` affects only which columns are returned, not
+    /// which rows qualify.
+    ///
+    /// For example, if a scan receives:
+    ///
+    /// - `projection = [a]`
+    /// - `filters = [b > 5]`
+    /// - `limit = Some(3)`
+    ///
+    /// It must logically produce results equivalent to:
+    ///
+    /// ```text
+    /// PROJECTION a (LIMIT 3 (SCAN WHERE b > 5))
+    /// ```
+    ///
+    /// As noted above, columns referenced only by pushed-down filters may be
+    /// absent from `projection`.
     async fn scan(
         &self,
         state: &dyn Session,

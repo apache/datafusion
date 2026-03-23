@@ -87,7 +87,7 @@ use regex::Regex;
 ///     .unwrap();
 ///
 /// // Create the simplifier
-/// let context = SimplifyContext::default().with_schema(schema);
+/// let context = SimplifyContext::builder().with_schema(schema).build();
 /// let simplifier = ExprSimplifier::new(context);
 ///
 /// // Use the simplifier
@@ -157,7 +157,7 @@ impl ExprSimplifier {
     ///     .to_dfschema_ref()
     ///     .unwrap();
     /// // Create the simplifier
-    /// let context = SimplifyContext::default().with_schema(schema);
+    /// let context = SimplifyContext::builder().with_schema(schema).build();
     /// let simplifier = ExprSimplifier::new(context);
     ///
     /// // b < 2
@@ -285,7 +285,7 @@ impl ExprSimplifier {
     /// .unwrap();
     ///
     /// // Create the simplifier
-    /// let context = SimplifyContext::default().with_schema(schema);
+    /// let context = SimplifyContext::builder().with_schema(schema).build();
     ///
     /// // Expression: (x >= 3) AND (y + 2 < 10) AND (z > 5)
     /// let expr_x = col("x").gt_eq(lit(3_i64));
@@ -345,7 +345,7 @@ impl ExprSimplifier {
     /// .unwrap();
     ///
     /// // Create the simplifier
-    /// let context = SimplifyContext::default().with_schema(schema);
+    /// let context = SimplifyContext::builder().with_schema(schema).build();
     /// let simplifier = ExprSimplifier::new(context);
     ///
     /// // Expression: a = c AND 1 = b
@@ -399,7 +399,7 @@ impl ExprSimplifier {
     ///   .to_dfschema_ref().unwrap();
     ///
     /// // Create the simplifier
-    /// let context = SimplifyContext::default().with_schema(schema);
+    /// let context = SimplifyContext::builder().with_schema(schema).build();
     /// let simplifier = ExprSimplifier::new(context);
     ///
     /// // Expression: a IS NOT NULL
@@ -2380,8 +2380,11 @@ mod tests {
     // ------------------------------
     #[test]
     fn api_basic() {
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(test_schema())
+                .build(),
+        );
 
         let expr = lit(1) + lit(2);
         let expected = lit(3);
@@ -2392,7 +2395,9 @@ mod tests {
     fn basic_coercion() {
         let schema = test_schema();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::default().with_schema(Arc::clone(&schema)),
+            SimplifyContext::builder()
+                .with_schema(Arc::clone(&schema))
+                .build(),
         );
 
         // Note expr type is int32 (not int64)
@@ -2420,8 +2425,11 @@ mod tests {
 
     #[test]
     fn simplify_and_constant_prop() {
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(test_schema())
+                .build(),
+        );
 
         // should be able to simplify to false
         // (i * (1 - 2)) > 0
@@ -2432,8 +2440,11 @@ mod tests {
 
     #[test]
     fn simplify_and_constant_prop_with_case() {
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(test_schema())
+                .build(),
+        );
 
         //   CASE
         //     WHEN i>5 AND false THEN i > 5
@@ -3569,14 +3580,16 @@ mod tests {
     fn try_simplify(expr: Expr) -> Result<Expr> {
         let schema = expr_test_schema();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(schema));
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build());
         simplifier.simplify(expr)
     }
 
     fn coerce(expr: Expr) -> Expr {
         let schema = expr_test_schema();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::default().with_schema(Arc::clone(&schema)),
+            SimplifyContext::builder()
+                .with_schema(Arc::clone(&schema))
+                .build(),
         );
         simplifier.coerce(expr, schema.as_ref()).unwrap()
     }
@@ -3588,7 +3601,7 @@ mod tests {
     fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {
         let schema = expr_test_schema();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(schema));
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build());
         let (expr, count) = simplifier.simplify_with_cycle_count_transformed(expr)?;
         Ok((expr.data, count))
     }
@@ -3603,7 +3616,7 @@ mod tests {
     ) -> Expr {
         let schema = expr_test_schema();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(schema))
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build())
                 .with_guarantees(guarantees);
         simplifier.simplify(expr).unwrap()
     }
@@ -4506,7 +4519,7 @@ mod tests {
     fn just_simplifier_simplify_null_in_empty_inlist() {
         let simplify = |expr: Expr| -> Expr {
             let schema = expr_test_schema();
-            let info = SimplifyContext::default().with_schema(schema);
+            let info = SimplifyContext::builder().with_schema(schema).build();
             let simplifier = &mut Simplifier::new(&info);
             expr.rewrite(simplifier)
                 .expect("Failed to simplify expression")
@@ -4874,7 +4887,7 @@ mod tests {
     fn simplify_common_factor_conjunction_in_disjunction() {
         let schema = boolean_test_schema();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(schema));
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build());
 
         let a = || col("A");
         let b = || col("B");
@@ -5205,7 +5218,7 @@ mod tests {
         // The simplification should now fail with an error at plan time
         let schema = test_schema();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(schema));
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build());
         let result = simplifier.simplify(expr);
         assert!(result.is_err(), "Expected error for invalid cast");
         let err_msg = result.unwrap_err().to_string();
@@ -5260,8 +5273,11 @@ mod tests {
 
         let expr = make_struct_cast_expr(source_fields, target_fields);
 
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(test_schema())
+                .build(),
+        );
 
         // The cast should remain unchanged since field counts differ
         let result = simplifier.simplify(expr.clone()).unwrap();
@@ -5288,8 +5304,11 @@ mod tests {
 
         let expr = make_struct_cast_expr(source_fields, target_fields);
 
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(test_schema())
+                .build(),
+        );
 
         // The cast should be simplified
         let result = simplifier.simplify(expr.clone()).unwrap();
@@ -5319,8 +5338,11 @@ mod tests {
 
         let expr = make_struct_cast_expr(source_fields, target_fields);
 
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(test_schema())
+                .build(),
+        );
 
         // The cast should remain unchanged because there is no name overlap
         let result = simplifier.simplify(expr.clone()).unwrap();
@@ -5361,8 +5383,11 @@ mod tests {
             DataType::Struct(target_fields),
         ));
 
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(test_schema())
+                .build(),
+        );
 
         // The cast should remain unchanged since the struct array is empty (0-row)
         let result = simplifier.simplify(expr.clone()).unwrap();
