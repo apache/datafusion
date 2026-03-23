@@ -330,8 +330,8 @@ fn extract_or_clauses_for_join<'a>(
             right,
         }) = expr
         {
-            let left_expr = extract_or_clause(left.as_ref(), &schema_cols);
-            let right_expr = extract_or_clause(right.as_ref(), &schema_cols);
+            let left_expr = extract_or_clause(left.as_ref(), schema_cols);
+            let right_expr = extract_or_clause(right.as_ref(), schema_cols);
 
             // If nothing can be extracted from any sub clauses, do nothing for this OR clause.
             if let (Some(left_expr), Some(right_expr)) = (left_expr, right_expr) {

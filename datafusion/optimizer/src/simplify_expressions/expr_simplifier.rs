@@ -583,8 +583,7 @@ static DUMMY_DF_SCHEMA: LazyLock<DFSchema> =
 static DUMMY_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
     // Need a single "input" row to produce a single output row
     let col = new_null_array(&DataType::Null, 1);
-    let input_batch = RecordBatch::try_new(DUMMY_SCHEMA.clone(), vec![col]).unwrap();
-    input_batch
+    RecordBatch::try_new(DUMMY_SCHEMA.clone(), vec![col]).unwrap()
 });
 
 impl ConstEvaluator {
@@ -717,7 +716,7 @@ impl ConstEvaluator {
                     false => Some(FieldMetadata::from(m)),
                 }
             });
-        let col_val = match phys_expr.evaluate(&&DUMMY_BATCH) {
+        let col_val = match phys_expr.evaluate(&DUMMY_BATCH) {
             Ok(v) => v,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
         };
