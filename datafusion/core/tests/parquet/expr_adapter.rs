@@ -127,6 +127,41 @@ fn message_fields(
     fields.into()
 }
 
+// Helper to build message columns in canonical order (id, name, chain, ignored)
+// based on which optional fields are present in the schema.
+fn build_message_columns(
+    id_array: &ArrayRef,
+    name_array: &ArrayRef,
+    chain_vec: &[Option<&str>],
+    ignored_array: &ArrayRef,
+    fields: &Fields,
+) -> Vec<ArrayRef> {
+    let mut columns = vec![Arc::clone(id_array), Arc::clone(name_array)];
+
+    for field in fields.iter().skip(2) {
+        match field.name().as_str() {
+            "chain" => {
+                let chain_array = match field.data_type() {
+                    DataType::Utf8 => Arc::new(StringArray::from(chain_vec)) as ArrayRef,
+                    DataType::Struct(chain_fields) => {
+                        let chain_struct = StructArray::new(
+                            chain_fields.clone(),
+                            vec![Arc::new(StringArray::from(chain_vec)) as ArrayRef],
+                            None,
+                        );
+                        Arc::new(chain_struct) as ArrayRef
+                    }
+                    other => panic!("unexpected chain field type: {other:?}"),
+                };
+                columns.push(chain_array);
+            }
+            "ignored" => columns.push(Arc::clone(ignored_array)),
+            _ => {}
+        }
+    }
+    columns
+}
+
 fn nested_messages_batch(
     kind: NestedListKind,
     row_id: i32,
@@ -156,29 +191,8 @@ fn nested_messages_batch(
     let name_array = Arc::new(StringArray::from(names_vec)) as ArrayRef;
     let ignored_array = Arc::new(Int32Array::from(ignored_vec)) as ArrayRef;
 
-    let columns: Vec<ArrayRef> = fields
-        .iter()
-        .map(|field| match field.name().as_str() {
-            "id" => Arc::clone(&id_array),
-            "name" => Arc::clone(&name_array),
-            "chain" => match field.data_type() {
-                DataType::Utf8 => {
-                    Arc::new(StringArray::from(chain_vec.clone())) as ArrayRef
-                }
-                DataType::Struct(chain_fields) => {
-                    let chain_struct = StructArray::new(
-                        chain_fields.clone(),
-                        vec![Arc::new(StringArray::from(chain_vec.clone())) as ArrayRef],
-                        None,
-                    );
-                    Arc::new(chain_struct) as ArrayRef
-                }
-                other => panic!("unexpected chain field type: {other:?}"),
-            },
-            "ignored" => Arc::clone(&ignored_array),
-            other => panic!("unexpected nested field: {other}"),
-        })
-        .collect();
+    // Build columns in canonical order (id, name, chain, ignored) based on field schema
+    let columns = build_message_columns(&id_array, &name_array, &chain_vec, &ignored_array, &fields);
 
     let struct_array = StructArray::new(fields.clone(), columns, None);
     let messages_array = kind.array(
