@@ -18,9 +18,11 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray,
-    StructArray, record_batch,
+    Array, ArrayRef, BooleanArray, Int32Array, Int64Array, LargeListArray, ListArray,
+    RecordBatch, StringArray, StructArray, record_batch,
 };
+use arrow::buffer::OffsetBuffer;
+use arrow::compute::concat_batches;
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
@@ -52,6 +54,345 @@ async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &s
     }
     let data = out.into_inner().freeze();
     store.put(&Path::from(path), data.into()).await.unwrap();
+}
+
+#[derive(Debug, Clone, Copy)]
+enum NestedListKind {
+    List,
+    LargeList,
+}
+
+impl NestedListKind {
+    fn field_data_type(self, item_field: Arc<Field>) -> DataType {
+        match self {
+            Self::List => DataType::List(item_field),
+            Self::LargeList => DataType::LargeList(item_field),
+        }
+    }
+
+    fn array(
+        self,
+        item_field: Arc<Field>,
+        lengths: Vec<usize>,
+        values: ArrayRef,
+    ) -> ArrayRef {
+        match self {
+            Self::List => Arc::new(ListArray::new(
+                item_field,
+                OffsetBuffer::<i32>::from_lengths(lengths),
+                values,
+                None,
+            )),
+            Self::LargeList => Arc::new(LargeListArray::new(
+                item_field,
+                OffsetBuffer::<i64>::from_lengths(lengths),
+                values,
+                None,
+            )),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::LargeList => "large_list",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MessageValue<'a> {
+    id: i32,
+    name: &'a str,
+    chain: Option<&'a str>,
+    ignored: Option<i32>,
+}
+
+fn message_fields(
+    chain_type: DataType,
+    chain_nullable: bool,
+    include_chain: bool,
+    include_ignored: bool,
+) -> Fields {
+    let mut fields = vec![
+        Arc::new(Field::new("id", DataType::Int32, false)),
+        Arc::new(Field::new("name", DataType::Utf8, true)),
+    ];
+    if include_chain {
+        fields.push(Arc::new(Field::new("chain", chain_type, chain_nullable)));
+    }
+    if include_ignored {
+        fields.push(Arc::new(Field::new("ignored", DataType::Int32, true)));
+    }
+    fields.into()
+}
+
+fn nested_messages_batch(
+    kind: NestedListKind,
+    row_id: i32,
+    messages: Vec<MessageValue<'_>>,
+    fields: Fields,
+) -> RecordBatch {
+    let item_field = Arc::new(Field::new("item", DataType::Struct(fields.clone()), true));
+
+    let ids = Arc::new(Int32Array::from(
+        messages.iter().map(|msg| msg.id).collect::<Vec<_>>(),
+    )) as ArrayRef;
+    let names = Arc::new(StringArray::from(
+        messages
+            .iter()
+            .map(|msg| Some(msg.name))
+            .collect::<Vec<_>>(),
+    )) as ArrayRef;
+
+    let mut columns = vec![ids, names];
+    if fields.iter().any(|field| field.name() == "chain") {
+        match fields
+            .iter()
+            .find(|field| field.name() == "chain")
+            .map(|field| field.data_type())
+        {
+            Some(DataType::Utf8) => columns.push(Arc::new(StringArray::from(
+                messages.iter().map(|msg| msg.chain).collect::<Vec<_>>(),
+            )) as ArrayRef),
+            Some(DataType::Struct(chain_fields)) => {
+                let chain_struct = StructArray::new(
+                    chain_fields.clone(),
+                    vec![Arc::new(StringArray::from(
+                        messages.iter().map(|msg| msg.chain).collect::<Vec<_>>(),
+                    )) as ArrayRef],
+                    None,
+                );
+                columns.push(Arc::new(chain_struct) as ArrayRef);
+            }
+            other => panic!("unexpected chain field type: {other:?}"),
+        }
+    }
+    if fields.iter().any(|field| field.name() == "ignored") {
+        columns.push(Arc::new(Int32Array::from(
+            messages.iter().map(|msg| msg.ignored).collect::<Vec<_>>(),
+        )) as ArrayRef);
+    }
+
+    let struct_array = StructArray::new(fields.clone(), columns, None);
+    let messages_array = kind.array(
+        item_field.clone(),
+        vec![messages.len()],
+        Arc::new(struct_array),
+    );
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("row_id", DataType::Int32, false),
+        Field::new("messages", kind.field_data_type(item_field), true),
+    ]));
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(vec![row_id])) as ArrayRef,
+            messages_array,
+        ],
+    )
+    .unwrap()
+}
+
+async fn register_memory_listing_table(
+    ctx: &SessionContext,
+    store: Arc<dyn ObjectStore>,
+    base_path: &str,
+    table_schema: SchemaRef,
+) {
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+
+    let listing_table_config =
+        ListingTableConfig::new(ListingTableUrl::parse(base_path).unwrap())
+            .infer_options(&ctx.state())
+            .await
+            .unwrap()
+            .with_schema(table_schema)
+            .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
+
+    let table = ListingTable::try_new(listing_table_config).unwrap();
+    ctx.register_table("t", Arc::new(table)).unwrap();
+}
+
+fn test_context() -> SessionContext {
+    let mut cfg = SessionConfig::new()
+        .with_collect_statistics(false)
+        .with_parquet_pruning(false)
+        .with_parquet_page_index_pruning(false);
+    cfg.options_mut().execution.parquet.pushdown_filters = true;
+    SessionContext::new_with_config(cfg)
+}
+
+async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Result<()> {
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let prefix = format!("{}_struct_evolution", kind.name());
+
+    let old_batch = nested_messages_batch(
+        kind,
+        1,
+        vec![
+            MessageValue {
+                id: 10,
+                name: "alpha",
+                chain: None,
+                ignored: None,
+            },
+            MessageValue {
+                id: 20,
+                name: "beta",
+                chain: None,
+                ignored: None,
+            },
+        ],
+        message_fields(DataType::Utf8, true, false, false),
+    );
+    let new_batch = nested_messages_batch(
+        kind,
+        2,
+        vec![MessageValue {
+            id: 30,
+            name: "gamma",
+            chain: Some("eth"),
+            ignored: Some(99),
+        }],
+        message_fields(DataType::Utf8, true, true, true),
+    );
+
+    write_parquet(
+        old_batch,
+        Arc::clone(&store),
+        &format!("{prefix}/old.parquet"),
+    )
+    .await;
+    write_parquet(
+        new_batch,
+        Arc::clone(&store),
+        &format!("{prefix}/new.parquet"),
+    )
+    .await;
+
+    let target_message_fields: Fields = vec![
+        Arc::new(Field::new("id", DataType::Int64, false)),
+        Arc::new(Field::new("name", DataType::Utf8, true)),
+        Arc::new(Field::new("chain", DataType::Utf8, true)),
+    ]
+    .into();
+    let target_item = Arc::new(Field::new(
+        "item",
+        DataType::Struct(target_message_fields.clone()),
+        true,
+    ));
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("row_id", DataType::Int32, false),
+        Field::new("messages", kind.field_data_type(target_item), true),
+    ]));
+
+    let ctx = test_context();
+    register_memory_listing_table(
+        &ctx,
+        Arc::clone(&store),
+        &format!("memory:///{prefix}/"),
+        table_schema,
+    )
+    .await;
+
+    let select_all = ctx
+        .sql("SELECT * FROM t ORDER BY row_id")
+        .await?
+        .collect()
+        .await?;
+    let all_rows = concat_batches(&select_all[0].schema(), &select_all)?;
+
+    let row_ids = all_rows
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("row_id should be Int32");
+    assert_eq!(row_ids.values(), &[1, 2]);
+
+    match all_rows.column(1).data_type() {
+        DataType::List(_) | DataType::LargeList(_) => {}
+        other => panic!("expected list-like messages column, got {other:?}"),
+    }
+
+    let (messages0, messages1) = match kind {
+        NestedListKind::List => {
+            let list = all_rows
+                .column(1)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("messages should be a ListArray");
+            (list.value(0), list.value(1))
+        }
+        NestedListKind::LargeList => {
+            let list = all_rows
+                .column(1)
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .expect("messages should be a LargeListArray");
+            (list.value(0), list.value(1))
+        }
+    };
+
+    let messages0 = messages0
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("messages[0] should be a StructArray");
+    let old_ids = messages0
+        .column_by_name("id")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(old_ids.values(), &[10, 20]);
+    let old_chain = messages0
+        .column_by_name("chain")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(old_chain.iter().collect::<Vec<_>>(), vec![None, None]);
+
+    let messages1 = messages1
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("messages[1] should be a StructArray");
+    assert!(
+        messages1.column_by_name("ignored").is_none(),
+        "extra source fields should not appear in the logical schema"
+    );
+    let new_chain = messages1
+        .column_by_name("chain")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(new_chain.iter().collect::<Vec<_>>(), vec![Some("eth")]);
+
+    let projected = ctx
+        .sql(
+            "SELECT row_id, get_field(messages[1], 'id') AS msg_id, \
+             get_field(messages[1], 'chain') AS chain \
+             FROM t ORDER BY row_id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    #[rustfmt::skip]
+    let expected = [
+        "+--------+--------+-------+",
+        "| row_id | msg_id | chain |",
+        "+--------+--------+-------+",
+        "| 1      | 10     |       |",
+        "| 2      | 30     | eth   |",
+        "+--------+--------+-------+",
+    ];
+    assert_batches_eq!(expected, &projected);
+
+    Ok(())
 }
 
 // Implement a custom PhysicalExprAdapterFactory that fills in missing columns with
@@ -460,6 +801,101 @@ async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
     assert_eq!(extra.null_count(), 3);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn test_list_struct_schema_evolution_end_to_end() -> Result<()> {
+    assert_nested_list_struct_schema_evolution(NestedListKind::List).await
+}
+
+#[tokio::test]
+async fn test_large_list_struct_schema_evolution_end_to_end() -> Result<()> {
+    assert_nested_list_struct_schema_evolution(NestedListKind::LargeList).await
+}
+
+async fn assert_nested_list_struct_schema_evolution_errors(
+    kind: NestedListKind,
+    chain_type: DataType,
+    chain_nullable: bool,
+    expected_error: &str,
+) {
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let prefix = format!("{}_struct_evolution_error", kind.name());
+
+    let batch = nested_messages_batch(
+        kind,
+        1,
+        vec![MessageValue {
+            id: 10,
+            name: "alpha",
+            chain: Some("eth"),
+            ignored: None,
+        }],
+        message_fields(DataType::Utf8, true, true, false),
+    );
+    write_parquet(batch, Arc::clone(&store), &format!("{prefix}/data.parquet")).await;
+
+    let target_message_fields: Fields = vec![
+        Arc::new(Field::new("id", DataType::Int64, false)),
+        Arc::new(Field::new("name", DataType::Utf8, true)),
+        Arc::new(Field::new("chain", chain_type, chain_nullable)),
+    ]
+    .into();
+    let target_item = Arc::new(Field::new(
+        "item",
+        DataType::Struct(target_message_fields),
+        true,
+    ));
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("row_id", DataType::Int32, false),
+        Field::new("messages", kind.field_data_type(target_item), true),
+    ]));
+
+    let ctx = test_context();
+    register_memory_listing_table(
+        &ctx,
+        Arc::clone(&store),
+        &format!("memory:///{prefix}/"),
+        table_schema,
+    )
+    .await;
+
+    let err = ctx
+        .sql("SELECT * FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains(expected_error),
+        "expected error to contain '{expected_error}', got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_list_struct_schema_evolution_non_nullable_missing_field_fails() {
+    assert_nested_list_struct_schema_evolution_errors(
+        NestedListKind::List,
+        DataType::Utf8,
+        false,
+        "non-nullable",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_large_list_struct_schema_evolution_incompatible_field_fails() {
+    let target_chain_type = DataType::Struct(
+        vec![Arc::new(Field::new("value", DataType::Utf8, true))].into(),
+    );
+    assert_nested_list_struct_schema_evolution_errors(
+        NestedListKind::LargeList,
+        target_chain_type,
+        true,
+        "Cannot cast struct field 'chain'",
+    )
+    .await;
 }
 
 /// Test demonstrating that a single PhysicalExprAdapterFactory instance can be
