@@ -159,6 +159,10 @@ impl BatchBuilder {
 
         // Only clean up fully-consumed batches when all indices are drained,
         // because remaining indices may still reference earlier batches.
+        // In the overflow/partial-emit case this may retain some extra memory
+        // across a few drain polls, but avoids costly index scanning on the
+        // hot path. The retention is bounded and short-lived since leftover
+        // rows are drained over subsequent polls.
         if self.indices.is_empty() {
             // New cursors are only created once the previous cursor for the stream
             // is finished. This means all remaining rows from all but the last batch
@@ -251,6 +255,9 @@ where
     // `.expect("overflow")` / `.expect("offset overflow")`.
     // Catch only those specific panics so the caller can retry
     // with fewer rows while unrelated defects still unwind.
+    //
+    // TODO: remove once arrow-rs#9549 lands — interleave will return
+    // OffsetOverflowError directly instead of panicking.
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(result) => Ok(result?),
         Err(panic_payload) => {
