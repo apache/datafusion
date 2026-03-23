@@ -31,7 +31,7 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use crate::sorts::builder::try_grow_reservation_to_at_least;
-use crate::sorts::sort::get_reserved_byte_for_record_batch_size;
+use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::stream::RecordBatchStreamAdapter;
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
@@ -380,9 +380,11 @@ impl MultiLevelMergeBuilder {
         let mut total_needed: usize = 0;
 
         for spill in &self.sorted_spill_files {
-            let per_spill =
-                get_reserved_byte_for_record_batch_size(spill.max_record_batch_memory)
-                    * buffer_len;
+            let per_spill = get_reserved_bytes_for_record_batch_size(
+                spill.max_record_batch_memory,
+                // Size will be the same as the sliced size, bc it is a spilled batch.
+                spill.max_record_batch_memory,
+            ) * buffer_len;
             total_needed += per_spill;
 
             // For memory pools that are not shared this is good, for other
