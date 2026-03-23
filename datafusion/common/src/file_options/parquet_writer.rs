@@ -95,7 +95,7 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             global,
             column_specific_options,
             key_value_metadata,
-            crypto: _,
+            ..
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
@@ -191,6 +191,10 @@ impl ParquetOptions {
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
+            enable_content_defined_chunking,
+            cdc_min_chunk_size,
+            cdc_max_chunk_size,
+            cdc_norm_level,
 
             // not in WriterProperties
             enable_page_index: _,
@@ -246,6 +250,15 @@ impl ParquetOptions {
         }
         if let Some(encoding) = encoding {
             builder = builder.set_encoding(parse_encoding_string(encoding)?);
+        }
+        if *enable_content_defined_chunking {
+            builder = builder.set_content_defined_chunking(Some(
+                parquet::file::properties::CdcOptions {
+                    min_chunk_size: *cdc_min_chunk_size,
+                    max_chunk_size: *cdc_max_chunk_size,
+                    norm_level: *cdc_norm_level as i32,
+                },
+            ));
         }
 
         Ok(builder)
@@ -460,6 +473,10 @@ mod tests {
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
+            enable_content_defined_chunking: defaults.enable_content_defined_chunking,
+            cdc_min_chunk_size: defaults.cdc_min_chunk_size,
+            cdc_max_chunk_size: defaults.cdc_max_chunk_size,
+            cdc_norm_level: defaults.cdc_norm_level,
         }
     }
 
@@ -576,6 +593,21 @@ mod tests {
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
+                enable_content_defined_chunking: props
+                    .content_defined_chunking()
+                    .is_some(),
+                cdc_min_chunk_size: props
+                    .content_defined_chunking()
+                    .map(|c| c.min_chunk_size)
+                    .unwrap_or(global_options_defaults.cdc_min_chunk_size),
+                cdc_max_chunk_size: props
+                    .content_defined_chunking()
+                    .map(|c| c.max_chunk_size)
+                    .unwrap_or(global_options_defaults.cdc_max_chunk_size),
+                cdc_norm_level: props
+                    .content_defined_chunking()
+                    .map(|c| c.norm_level as i64)
+                    .unwrap_or(global_options_defaults.cdc_norm_level),
             },
             column_specific_options,
             key_value_metadata,
@@ -784,6 +816,49 @@ mod tests {
             }),
             "should have only the fpp set, and the ndv at default",
         );
+    }
+
+    #[test]
+    fn test_cdc_enabled_with_custom_options() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.enable_content_defined_chunking = true;
+        opts.global.cdc_min_chunk_size = 128 * 1024;
+        opts.global.cdc_max_chunk_size = 512 * 1024;
+        opts.global.cdc_norm_level = 2;
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+
+        let props = WriterPropertiesBuilder::try_from(&opts).unwrap().build();
+        let cdc = props.content_defined_chunking().expect("CDC should be set");
+        assert_eq!(cdc.min_chunk_size, 128 * 1024);
+        assert_eq!(cdc.max_chunk_size, 512 * 1024);
+        assert_eq!(cdc.norm_level, 2);
+    }
+
+    #[test]
+    fn test_cdc_disabled_by_default() {
+        let mut opts = TableParquetOptions::default();
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+
+        let props = WriterPropertiesBuilder::try_from(&opts).unwrap().build();
+        assert!(props.content_defined_chunking().is_none());
+    }
+
+    #[test]
+    fn test_cdc_round_trip_through_writer_props() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.enable_content_defined_chunking = true;
+        opts.global.cdc_min_chunk_size = 64 * 1024;
+        opts.global.cdc_max_chunk_size = 2 * 1024 * 1024;
+        opts.global.cdc_norm_level = -1;
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+
+        let props = WriterPropertiesBuilder::try_from(&opts).unwrap().build();
+        let recovered = session_config_from_writer_props(&props);
+
+        assert_eq!(recovered.global.enable_content_defined_chunking, true);
+        assert_eq!(recovered.global.cdc_min_chunk_size, 64 * 1024);
+        assert_eq!(recovered.global.cdc_max_chunk_size, 2 * 1024 * 1024);
+        assert_eq!(recovered.global.cdc_norm_level, -1);
     }
 
     #[test]

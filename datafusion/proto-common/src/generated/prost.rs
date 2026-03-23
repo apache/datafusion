@@ -872,6 +872,21 @@ pub struct ParquetOptions {
     pub max_predicate_cache_size_opt: ::core::option::Option<
         parquet_options::MaxPredicateCacheSizeOpt,
     >,
+    /// default = false
+    #[prost(bool, tag = "35")]
+    pub content_defined_chunking: bool,
+    #[prost(oneof = "parquet_options::CdcMinChunkSizeOpt", tags = "36")]
+    pub cdc_min_chunk_size_opt: ::core::option::Option<
+        parquet_options::CdcMinChunkSizeOpt,
+    >,
+    #[prost(oneof = "parquet_options::CdcMaxChunkSizeOpt", tags = "37")]
+    pub cdc_max_chunk_size_opt: ::core::option::Option<
+        parquet_options::CdcMaxChunkSizeOpt,
+    >,
+    #[prost(oneof = "parquet_options::CdcNormLevelOpt", tags = "38")]
+    pub cdc_norm_level_opt: ::core::option::Option<
+        parquet_options::CdcNormLevelOpt,
+    >,
 }
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
@@ -929,6 +944,21 @@ pub mod parquet_options {
     pub enum MaxPredicateCacheSizeOpt {
         #[prost(uint64, tag = "33")]
         MaxPredicateCacheSize(u64),
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum CdcMinChunkSizeOpt {
+        #[prost(uint64, tag = "36")]
+        CdcMinChunkSize(u64),
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum CdcMaxChunkSizeOpt {
+        #[prost(uint64, tag = "37")]
+        CdcMaxChunkSize(u64),
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum CdcNormLevelOpt {
+        #[prost(int32, tag = "38")]
+        CdcNormLevel(i32),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

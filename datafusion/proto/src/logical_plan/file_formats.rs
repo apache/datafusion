@@ -525,6 +525,10 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
+            enable_content_defined_chunking: Default::default(),
+            cdc_min_chunk_size: Default::default(),
+            cdc_max_chunk_size: Default::default(),
+            cdc_norm_level: Default::default(),
         }
         }
     }
@@ -585,7 +589,7 @@ mod parquet {
                     .iter()
                     .map(|(k, v)| (k.clone(), Some(v.clone())))
                     .collect(),
-                crypto: Default::default(),
+                ..Default::default()
             }
         }
     }

@@ -5728,6 +5728,18 @@ impl serde::Serialize for ParquetOptions {
         if self.max_predicate_cache_size_opt.is_some() {
             len += 1;
         }
+        if self.content_defined_chunking {
+            len += 1;
+        }
+        if self.cdc_min_chunk_size_opt.is_some() {
+            len += 1;
+        }
+        if self.cdc_max_chunk_size_opt.is_some() {
+            len += 1;
+        }
+        if self.cdc_norm_level_opt.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetOptions", len)?;
         if self.enable_page_index {
             struct_ser.serialize_field("enablePageIndex", &self.enable_page_index)?;
@@ -5893,6 +5905,34 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if self.content_defined_chunking {
+            struct_ser.serialize_field("contentDefinedChunking", &self.content_defined_chunking)?;
+        }
+        if let Some(v) = self.cdc_min_chunk_size_opt.as_ref() {
+            match v {
+                parquet_options::CdcMinChunkSizeOpt::CdcMinChunkSize(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("cdcMinChunkSize", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        if let Some(v) = self.cdc_max_chunk_size_opt.as_ref() {
+            match v {
+                parquet_options::CdcMaxChunkSizeOpt::CdcMaxChunkSize(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("cdcMaxChunkSize", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        if let Some(v) = self.cdc_norm_level_opt.as_ref() {
+            match v {
+                parquet_options::CdcNormLevelOpt::CdcNormLevel(v) => {
+                    struct_ser.serialize_field("cdcNormLevel", v)?;
+                }
+            }
+        }
         struct_ser.end()
     }
 }
@@ -5964,6 +6004,14 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "coerceInt96",
             "max_predicate_cache_size",
             "maxPredicateCacheSize",
+            "content_defined_chunking",
+            "contentDefinedChunking",
+            "cdc_min_chunk_size",
+            "cdcMinChunkSize",
+            "cdc_max_chunk_size",
+            "cdcMaxChunkSize",
+            "cdc_norm_level",
+            "cdcNormLevel",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6000,6 +6048,10 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             BloomFilterNdv,
             CoerceInt96,
             MaxPredicateCacheSize,
+            ContentDefinedChunking,
+            CdcMinChunkSize,
+            CdcMaxChunkSize,
+            CdcNormLevel,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6053,6 +6105,10 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
                             "coerceInt96" | "coerce_int96" => Ok(GeneratedField::CoerceInt96),
                             "maxPredicateCacheSize" | "max_predicate_cache_size" => Ok(GeneratedField::MaxPredicateCacheSize),
+                            "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
+                            "cdcMinChunkSize" | "cdc_min_chunk_size" => Ok(GeneratedField::CdcMinChunkSize),
+                            "cdcMaxChunkSize" | "cdc_max_chunk_size" => Ok(GeneratedField::CdcMaxChunkSize),
+                            "cdcNormLevel" | "cdc_norm_level" => Ok(GeneratedField::CdcNormLevel),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6104,6 +6160,10 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut bloom_filter_ndv_opt__ = None;
                 let mut coerce_int96_opt__ = None;
                 let mut max_predicate_cache_size_opt__ = None;
+                let mut content_defined_chunking__ = None;
+                let mut cdc_min_chunk_size_opt__ = None;
+                let mut cdc_max_chunk_size_opt__ = None;
+                let mut cdc_norm_level_opt__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EnablePageIndex => {
@@ -6312,6 +6372,30 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             max_predicate_cache_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(x.0));
                         }
+                        GeneratedField::ContentDefinedChunking => {
+                            if content_defined_chunking__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("contentDefinedChunking"));
+                            }
+                            content_defined_chunking__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CdcMinChunkSize => {
+                            if cdc_min_chunk_size_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cdcMinChunkSize"));
+                            }
+                            cdc_min_chunk_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::CdcMinChunkSizeOpt::CdcMinChunkSize(x.0));
+                        }
+                        GeneratedField::CdcMaxChunkSize => {
+                            if cdc_max_chunk_size_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cdcMaxChunkSize"));
+                            }
+                            cdc_max_chunk_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::CdcMaxChunkSizeOpt::CdcMaxChunkSize(x.0));
+                        }
+                        GeneratedField::CdcNormLevel => {
+                            if cdc_norm_level_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cdcNormLevel"));
+                            }
+                            cdc_norm_level_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::CdcNormLevelOpt::CdcNormLevel(x.0));
+                        }
                     }
                 }
                 Ok(ParquetOptions {
@@ -6347,6 +6431,10 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
                     coerce_int96_opt: coerce_int96_opt__,
                     max_predicate_cache_size_opt: max_predicate_cache_size_opt__,
+                    content_defined_chunking: content_defined_chunking__.unwrap_or_default(),
+                    cdc_min_chunk_size_opt: cdc_min_chunk_size_opt__,
+                    cdc_max_chunk_size_opt: cdc_max_chunk_size_opt__,
+                    cdc_norm_level_opt: cdc_norm_level_opt__,
                 })
             }
         }

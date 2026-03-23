@@ -603,6 +603,20 @@ message ParquetOptions {
   oneof max_predicate_cache_size_opt {
     uint64 max_predicate_cache_size = 33;
   }
+
+  bool content_defined_chunking = 35; // default = false
+
+  oneof cdc_min_chunk_size_opt {
+    uint64 cdc_min_chunk_size = 36;
+  }
+
+  oneof cdc_max_chunk_size_opt {
+    uint64 cdc_max_chunk_size = 37;
+  }
+
+  oneof cdc_norm_level_opt {
+    int32 cdc_norm_level = 38;
+  }
 }
 
 enum JoinSide {

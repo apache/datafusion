@@ -845,6 +845,7 @@ config_namespace! {
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
 
+
         /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel
@@ -872,6 +873,27 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
+
+        /// (writing) EXPERIMENTAL: Enable content-defined chunking (CDC) when writing
+        /// parquet files. When true, the other `cdc_*` options control the chunking
+        /// behavior. When CDC is enabled, parallel writing is automatically disabled
+        /// since the chunker state must persist across row groups.
+        pub enable_content_defined_chunking: bool, default = false
+
+        /// (writing) Minimum chunk size in bytes for content-defined chunking.
+        /// The rolling hash will not be updated until this size is reached for each chunk.
+        /// Default is 256 KiB. Only used when `enable_content_defined_chunking` is true.
+        pub cdc_min_chunk_size: usize, default = 256 * 1024
+
+        /// (writing) Maximum chunk size in bytes for content-defined chunking.
+        /// The chunker will create a new chunk whenever the chunk size exceeds this value.
+        /// Default is 1 MiB. Only used when `enable_content_defined_chunking` is true.
+        pub cdc_max_chunk_size: usize, default = 1024 * 1024
+
+        /// (writing) Normalization level for content-defined chunking.
+        /// Increasing this improves deduplication ratio but increases fragmentation.
+        /// Recommended range is [-3, 3], default is 0. Only used when `enable_content_defined_chunking` is true.
+        pub cdc_norm_level: i64, default = 0
     }
 }
 
@@ -1826,6 +1848,7 @@ config_field!(usize);
 config_field!(f64);
 config_field!(u64);
 config_field!(u32);
+config_field!(i64);
 
 impl ConfigField for u8 {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
