@@ -303,11 +303,6 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         .expect("row_id should be Int32");
     assert_eq!(row_ids.values(), &[1, 2]);
 
-    match all_rows.column(1).data_type() {
-        DataType::List(_) | DataType::LargeList(_) => {}
-        other => panic!("expected list-like messages column, got {other:?}"),
-    }
-
     let (messages0, messages1) = match kind {
         NestedListKind::List => {
             let list = all_rows
