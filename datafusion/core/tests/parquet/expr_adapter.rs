@@ -153,11 +153,14 @@ fn build_message_columns(
         match field.name().as_str() {
             "chain" => {
                 let chain_array = match field.data_type() {
-                    DataType::Utf8 => Arc::new(StringArray::from(chain_vec)) as ArrayRef,
+                    DataType::Utf8 => {
+                        Arc::new(StringArray::from(chain_vec.to_vec())) as ArrayRef
+                    }
                     DataType::Struct(chain_fields) => {
                         let chain_struct = StructArray::new(
                             chain_fields.clone(),
-                            vec![Arc::new(StringArray::from(chain_vec)) as ArrayRef],
+                            vec![Arc::new(StringArray::from(chain_vec.to_vec()))
+                                as ArrayRef],
                             None,
                         );
                         Arc::new(chain_struct) as ArrayRef
