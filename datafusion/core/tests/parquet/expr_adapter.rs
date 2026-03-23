@@ -277,6 +277,30 @@ fn nested_list_table_schema(
     ]))
 }
 
+// Helper to extract message values from a nested list column.
+// Returns the values at indices 0 and 1 from either a ListArray or LargeListArray.
+fn extract_nested_list_values(
+    kind: NestedListKind,
+    column: &ArrayRef,
+) -> (ArrayRef, ArrayRef) {
+    match kind {
+        NestedListKind::List => {
+            let list = column
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("messages should be a ListArray");
+            (list.value(0), list.value(1))
+        }
+        NestedListKind::LargeList => {
+            let list = column
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .expect("messages should be a LargeListArray");
+            (list.value(0), list.value(1))
+        }
+    }
+}
+
 // Helper to set up a nested list test fixture.
 // Creates an in-memory store, writes the provided batches to parquet files,
 // creates a SessionContext, and registers the resulting table.
@@ -366,24 +390,7 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         .expect("row_id should be Int32");
     assert_eq!(row_ids.values(), &[1, 2]);
 
-    let (messages0, messages1) = match kind {
-        NestedListKind::List => {
-            let list = all_rows
-                .column(1)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .expect("messages should be a ListArray");
-            (list.value(0), list.value(1))
-        }
-        NestedListKind::LargeList => {
-            let list = all_rows
-                .column(1)
-                .as_any()
-                .downcast_ref::<LargeListArray>()
-                .expect("messages should be a LargeListArray");
-            (list.value(0), list.value(1))
-        }
-    };
+    let (messages0, messages1) = extract_nested_list_values(kind, &all_rows.column(1));
 
     let messages0 = messages0
         .as_any()
