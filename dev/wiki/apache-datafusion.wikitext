@@ -1,0 +1,117 @@
+<!--
+Draft Wikipedia article.
+-->
+
+{{Short description|Open-source query engine}}
+{{Draft topics|technology|software}}
+{{Infobox software
+| name = Apache DataFusion
+| developer = [[Apache Software Foundation]]
+| programming language = [[Rust (programming language)|Rust]]
+| genre = Query engine
+| license = [[Apache License]]
+| website = {{URL|https://datafusion.apache.org/}}
+}}
+
+'''Apache DataFusion''' is an [[open-source software|open-source]], embeddable analytical query engine written in [[Rust (programming language)|Rust]], built on [[Apache Arrow]]'s columnar memory format.<ref name="sigmod-paper">{{cite journal |last1=Lamb |first1=Andrew |last2=Shen |first2=Yijie |last3=Heres |first3=Daniel |last4=Chakraborty |first4=Jayjeet |last5=Kabak |first5=Mehmet Ozan |last6=Hsieh |first6=Liang-Chi |last7=Sun |first7=Chao |title=Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine |journal=Proceedings of the 2024 International Conference on Management of Data |year=2024 |doi=10.1145/3626246.3653368}}</ref><ref name="intro-docs">{{cite web |title=Introduction |url=https://datafusion.apache.org/user-guide/introduction.html |website=Apache DataFusion |publisher=Apache Software Foundation |access-date=2026-03-22}}</ref> It provides [[SQL]] and DataFrame interfaces for analytical query execution and is designed to be used as a library by developers building databases, query engines, and analytical tools, rather than as a standalone database server.<ref name="sigmod-paper" /><ref name="intro-docs" /> The project originated in 2017, was donated to the [[Apache Arrow]] project in 2019, and became a top-level project of the [[Apache Software Foundation]] in 2024.<ref name="donation-post">{{cite web |title=DataFusion: A Rust-native Query Engine for Apache Arrow |url=https://datafusion.apache.org/blog/2019/02/04/datafusion-donation/ |website=Apache DataFusion Blog |publisher=Apache Software Foundation |date=2019-02-04 |access-date=2026-03-22}}</ref><ref name="asf-tlp">{{cite web |title=Apache Software Foundation Announces New Top-Level Project Apache DataFusion |url=https://news.apache.org/foundation/entry/apache-software-foundation-announces-new-top-level-project-apache-datafusion |website=The ASF Blog |publisher=Apache Software Foundation |date=2024-06-11 |access-date=2026-03-22}}</ref>
+
+== History ==
+
+DataFusion was first announced as a Rust-native query engine for Apache Arrow in February 2019. That announcement said the project had started about two years earlier and had recently been reimplemented to be Arrow-native before its donation to Apache Arrow.<ref name="donation-post" />
+
+After its donation, DataFusion was developed within the Apache Arrow project. Its development during the early 2020s coincided with wider adoption of Rust and Arrow-based analytical systems.<ref name="sigmod-paper" />
+
+In 2024, a paper describing DataFusion was accepted to the industry track of the [[ACM SIGMOD]] conference.<ref name="sigmod-accepted">{{cite web |title=SIGMOD 2024 Industrial Track: Accepted Papers |url=https://2024.sigmod.org/industrial-list.shtml |website=SIGMOD 2024 |access-date=2026-03-22}}</ref><ref name="sigmod-paper" /> On April 16, 2024, the project graduated from Apache Arrow and became a top-level Apache project; the Apache Software Foundation publicly announced the change on June 11, 2024.<ref name="asf-tlp" />
+
+== Features ==
+
+DataFusion is a fast, extensible query engine for building data systems. It provides a SQL interface and a DataFrame API for constructing queries programmatically, a [[query plan|query planner]] and rule-based [[query optimization|optimizer]], and a multithreaded vectorized execution engine that processes data in columnar batches rather than row by row.<ref name="sigmod-paper" /><ref name="intro-docs" />
+
+The engine reads common analytical file formats natively, including [[Apache Parquet]], [[comma-separated values|CSV]], [[JSON]], [[Apache Avro|Avro]], and Arrow IPC, and uses [[Apache Arrow]]'s columnar memory format throughout execution, avoiding [[serialization]] overhead between stages.<ref name="sigmod-paper" />
+
+DataFusion is designed for in-process embedding: it runs within the host application's process rather than as a separate server, using threads for parallel query execution. Its extension points allow downstream systems to add [[user-defined function|user-defined functions]], custom data sources, custom query languages, and new optimizer rules, enabling developers to build specialized database systems on top of DataFusion's planning and execution components without reimplementing them.<ref name="sigmod-paper" /><ref name="intro-docs" />
+
+== Comparison with related systems ==
+
+DataFusion is frequently compared with other columnar analytical systems including [[DuckDB]], [[Polars (software)|Polars]], and Velox, but these systems differ significantly in scope and intended use.<ref name="composable-dbms">{{cite journal |last1=Pedreira |first1=Pedro |last2=Erling |first2=Orri |last3=Mühleisen |first3=Hannes |last4=Muñoz |first4=Ruben |last5=Khaled |first5=Wael |last6=Dürsch |first6=Peter |title=The Composable Data Management System Manifesto |journal=Proceedings of the VLDB Endowment |volume=16 |issue=10 |year=2023 |doi=10.14778/3603581.3603604}}</ref>
+
+=== [[DuckDB]] ===
+
+[[DuckDB]] is an in-process [[online analytical processing|OLAP]] database for direct use by end users, with its own storage format and catalog.<ref name="duckdb-official">{{cite web |title=DuckDB |url=https://duckdb.org/ |website=DuckDB |access-date=2026-03-22}}</ref> DataFusion is a library for building such systems, providing query planning and execution components that other software can embed without a bundled persistent storage format.<ref name="bauplan">{{cite web |title=Duck Hunt: Moving Bauplan from DuckDB to DataFusion |url=https://www.bauplanlabs.com/post/duck-hunt-moving-bauplan-from-duckdb-to-datafusion |website=Bauplan |date=2025-11-05 |access-date=2026-03-22}}</ref>
+
+=== [[Polars (software)|Polars]] ===
+
+[[Polars (software)|Polars]] is also written in [[Rust (programming language)|Rust]] and uses the [[Apache Arrow]] memory model, but is designed as a self-contained DataFrame library for data manipulation rather than an embeddable query engine for building other systems.<ref name="polars-official">{{cite web |title=Polars |url=https://pola.rs/ |website=Polars |access-date=2026-03-22}}</ref><ref name="faq">{{cite web |title=Frequently Asked Questions |url=https://datafusion.apache.org/user-guide/faq.html |website=Apache DataFusion |publisher=Apache Software Foundation |access-date=2026-03-22}}</ref>
+
+=== [[Apache Spark]] ===
+
+[[Apache Spark]] is a distributed analytics framework for processing data at cluster scale.<ref name="spark-sql">{{cite web |title=Spark SQL & DataFrames |url=https://spark.apache.org/sql/ |website=Apache Spark |access-date=2026-03-22}}</ref> DataFusion executes queries within a single process and is aimed at building embedded analytics systems rather than distributed workloads.<ref name="sigmod-paper" /> Apache DataFusion Comet, originally developed at [[Apple Inc.|Apple]] and donated to the Apache Software Foundation, is a native execution plugin that uses DataFusion to accelerate Spark's [[Java virtual machine|JVM]]-based SQL execution engine.<ref name="comet-donation" />
+
+=== Velox ===
+
+[https://velox-lib.io/ Velox] is an execution engine library developed at [[Meta Platforms|Meta]].<ref name="velox-vldb">{{cite journal |last1=Pedreira |first1=Pedro |last2=Tan |first2=Wei |last3=Narayanan |first3=Deepak |last4=Chattopadhyay |first4=Bikramjit |last5=Erling |first5=Orri |last6=Melnik |first6=Sergey |last7=Bhagwan |first7=Ranjita |last8=Dumoulin |first8=Franck |title=Velox: Meta's Unified Execution Engine |journal=Proceedings of the VLDB Endowment |volume=15 |issue=12 |year=2022 |doi=10.14778/3554821.3554829}}</ref> Unlike DataFusion, Velox does not include a SQL frontend or query planning framework; it takes an already-optimized query plan as input and handles only execution.<ref name="velox-docs">{{cite web |title=Velox in 10 Minutes |url=https://facebookincubator.github.io/velox/velox-in-10-min.html |website=Velox |access-date=2026-03-22}}</ref>
+
+== Adoption and reception ==
+
+DataFusion has been adopted across a range of analytics and database products. [[Palantir Technologies|Palantir]] Foundry's release notes state that its Lightweight Pipelines are powered by DataFusion for rapid, low-latency data processing.<ref name="palantir-2025">{{cite web |title=Announcements: July 2025 |url=https://www.palantir.com/docs/foundry/announcements/2025-07 |website=Palantir Foundry Documentation |publisher=Palantir Technologies |date=2025-07-29 |access-date=2026-03-22}}</ref><ref name="palantir-2024">{{cite web |title=Announcements: February 2024 |url=https://www.palantir.com/docs/foundry/announcements/2024-02 |website=Palantir Foundry Documentation |publisher=Palantir Technologies |date=February 2024 |access-date=2026-03-22}}</ref> [[Cloudflare]] used DataFusion to execute SQL queries over log data stored in Cloudflare R2 in its Log Explorer product.<ref name="cloudflare">{{cite web |title=Cloudflare Log Explorer is now GA, providing native observability and forensics |url=https://blog.cloudflare.com/logexplorer-ga/ |website=The Cloudflare Blog |publisher=Cloudflare |date=2025-06-18 |access-date=2026-03-22}}</ref> [[InfluxDB]] 3.0 was rebuilt on what InfluxData called the FDAP stack: Apache Flight, DataFusion, Arrow, and Parquet.<ref name="influx-fdap">{{cite web |title=Flight, DataFusion, Arrow, and Parquet: Using the FDAP Architecture to build InfluxDB 3.0 |url=https://www.influxdata.com/blog/flight-datafusion-arrow-parquet-fdap-architecture-influxdb/ |website=InfluxData |date=2023-10-25 |access-date=2026-03-22}}</ref> Other adopters described in public references include EDB Postgres AI,<ref name="siliconangle-edb">{{cite web |title=Enterprise DB begins rolling AI features into PostgreSQL |url=https://siliconangle.com/2024/05/23/enterprise-db-begins-rolling-ai-features-postgresql/ |website=SiliconANGLE |date=2024-05-23 |access-date=2026-03-22}}</ref> Cube,<ref name="cube-pushdown">{{cite web |title=Query pushdown in Cube's semantic layer |url=https://cube.dev/blog/query-push-down-in-cubes-semantic-layer |website=Cube |date=2024-06-03 |access-date=2026-03-22}}</ref> Spice AI,<ref name="spice">{{cite web |title=How we use Apache DataFusion at Spice AI |url=https://spice.ai/blog/how-we-use-apache-datafusion-at-spice-ai |website=Spice AI |date=2026-01-17 |access-date=2026-03-22}}</ref> Pydantic Logfire,<ref name="logfire">{{cite web |title=We're changing database |url=https://github.com/pydantic/logfire/issues/408 |website=GitHub |date=2024-08-29 |access-date=2026-03-22}}</ref> and Kamu.<ref name="kamu">{{cite web |title=100X faster ingestion, and FlightSQL support for connecting BI tools |url=https://www.kamu.dev/blog/2023-09-datafusion-flightsql/ |website=Kamu Data |date=2023-09-26 |access-date=2026-03-22}}</ref>
+
+In 2024, ''CRN'' included Apache DataFusion in its list of "The 10 Coolest Open-Source Software Tools Of 2024".<ref name="crn">{{cite web |title=The 10 Coolest Open-Source Software Tools Of 2024 |url=https://www.crn.com/news/software/2024/the-10-coolest-open-source-software-tools-of-2024?page=3 |website=CRN |date=2024-11-21 |access-date=2026-03-22}}</ref>
+
+== Language support ==
+
+DataFusion itself is written in Rust. The project also has official Python bindings and community-maintained bindings and tooling for other languages and runtimes.<ref name="readme-related">{{cite web |title=Apache DataFusion |url=https://github.com/apache/datafusion |website=GitHub |publisher=Apache Software Foundation |access-date=2026-03-22}}</ref><ref name="df-contrib-org">{{cite web |title=datafusion-contrib |url=https://github.com/datafusion-contrib |website=GitHub |access-date=2026-03-22}}</ref>
+
+{| class="wikitable"
+|+ Language support
+! Language / runtime
+! Project
+! Notes
+|-
+| [[Rust (programming language)|Rust]]
+| Apache DataFusion
+| Core implementation
+|-
+| [[Python (programming language)|Python]]
+| [https://github.com/apache/datafusion-python datafusion-python]
+| Official Python bindings
+|-
+| [[Java (programming language)|Java]]
+| [https://github.com/datafusion-contrib/datafusion-java datafusion-java]
+| Community-maintained Java bindings
+|-
+| [[C (programming language)|C]]
+| [https://github.com/datafusion-contrib/datafusion-c datafusion-c]
+| Community-maintained C bindings
+|-
+| [[Ruby (programming language)|Ruby]]
+| [https://github.com/datafusion-contrib/datafusion-ruby datafusion-ruby]
+| Community-maintained Ruby bindings
+|-
+| [[WebAssembly]]
+| [https://github.com/datafusion-contrib/datafusion-wasm-bindings datafusion-wasm-bindings]
+| Community-maintained WebAssembly bindings
+|-
+| Browser tooling
+| [https://github.com/datafusion-contrib/datafusion-wasm-playground datafusion-wasm-playground], [https://github.com/datafusion-contrib/datafusion-fiddle datafusion-fiddle]
+| Interactive playgrounds
+|}
+
+== Ecosystem projects ==
+
+Several projects in the broader Apache ecosystem and the community-maintained [https://github.com/datafusion-contrib datafusion-contrib] organization extend DataFusion's capabilities.<ref name="df-contrib-org" />
+
+* [https://github.com/apache/datafusion-comet Apache DataFusion Comet], donated to the Apache Software Foundation by [[Apple Inc.|Apple]] in 2024, is a plugin that uses DataFusion to accelerate [[Apache Spark]] workloads as a drop-in replacement for Spark's JVM-based SQL execution engine<ref name="comet-donation">{{cite web |title=Announcing Apache Arrow DataFusion Comet |url=https://arrow.apache.org/blog/2024/03/06/comet-donation/ |website=Apache Arrow Blog |publisher=Apache Software Foundation |date=2024-03-06 |access-date=2026-03-22}}</ref>
+* [https://github.com/datafusion-contrib/datafusion-federation datafusion-federation], which allows DataFusion to resolve queries across remote query engines while pushing down as much compute as possible to the remote source
+* [https://github.com/datafusion-contrib/datafusion-distributed datafusion-distributed], a library for bringing distributed execution capabilities to DataFusion
+* [https://github.com/datafusion-contrib/datafusion-materialized-views datafusion-materialized-views], which provides incremental view maintenance and query rewriting for [[materialized view|materialized views]] in DataFusion
+* [https://github.com/datafusion-contrib/datafusion-table-providers datafusion-table-providers], which provides <code>TableProvider</code> implementations for reading data from external systems such as databases and file formats not natively supported by DataFusion
+
+== References ==
+
+{{Reflist}}
+
+== External links ==
+
+* {{Official website|https://datafusion.apache.org/}}
+* {{GitHub|apache/datafusion}}
+* {{URL|https://arrow.apache.org/}} Apache Arrow
