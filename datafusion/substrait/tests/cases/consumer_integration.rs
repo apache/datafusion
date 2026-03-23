@@ -762,4 +762,39 @@ mod tests {
 
         Ok(())
     }
+
+    /// Regression test: a Substrait join expression containing both `equal` and
+    /// `is_not_distinct_from` (as Spark can produce) must preserve the
+    /// null-safe semantics of `IS NOT DISTINCT FROM` by demoting it to the
+    /// join filter when mixed with regular equality keys.
+    ///
+    /// The plan is loaded from a JSON-encoded Substrait protobuf to exercise
+    /// the full consumer path (`from_substrait_plan` → `from_join_rel`).
+    #[tokio::test]
+    async fn test_mixed_join_equal_and_indistinct_from_substrait_plan() -> Result<()> {
+        let path = "tests/testdata/test_plans/mixed_join_equal_and_indistinct.json";
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+
+        let ctx = SessionContext::new();
+        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+
+        // Execute and count rows.
+        // Both tables have 6 identical rows; rows 3 and 4 have val=NULL.
+        // With correct handling, IS NOT DISTINCT FROM is demoted to the join
+        // filter, so NULL=NULL matches and all 6 rows appear in the output.
+        let df = ctx.execute_logical_plan(plan).await?;
+        let results = df.collect().await?;
+        let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
+
+        assert_eq!(
+            total_rows, 6,
+            "Expected 6 rows (including NULL=NULL matches via IS NOT DISTINCT FROM), \
+             got {total_rows}. Mixed equal/is_not_distinct_from lost null-safe semantics."
+        );
+
+        Ok(())
+    }
 }
