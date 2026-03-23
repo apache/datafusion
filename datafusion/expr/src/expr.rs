@@ -4193,9 +4193,9 @@ mod test {
 
         #[test]
         fn no_inputs() {
-            let result = intersect_metadata_for_union(
-                std::iter::empty::<&HashMap<String, String>>(),
-            );
+            let result = intersect_metadata_for_union(std::iter::empty::<
+                &HashMap<String, String>,
+            >());
             assert!(result.is_empty());
         }
     }
