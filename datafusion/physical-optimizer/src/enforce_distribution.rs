@@ -1377,6 +1377,12 @@ pub fn ensure_distribution(
                 }
             };
 
+            let streaming_benefit = if child.data {
+                preserving_order_enables_streaming(&plan, &child.plan)?
+            } else {
+                false
+            };
+
             // There is an ordering requirement of the operator:
             if let Some(required_input_ordering) = required_input_ordering {
                 // Either:
@@ -1388,11 +1394,6 @@ pub fn ensure_distribution(
                     .equivalence_properties()
                     .ordering_satisfy_requirement(sort_req.clone())?;
 
-                let streaming_benefit = if child.data {
-                    preserving_order_enables_streaming(&plan, &child.plan)?
-                } else {
-                    false
-                };
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && !streaming_benefit
                     && child.data

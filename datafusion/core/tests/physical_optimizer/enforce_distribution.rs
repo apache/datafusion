@@ -3406,8 +3406,7 @@ fn preserve_ordering_for_streaming_sorted_aggregate() -> Result<()> {
 
     let test_config = TestConfig::default().with_query_execution_partitions(2);
 
-    let plan_distrib =
-        test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
     AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
       RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
@@ -3441,8 +3440,7 @@ fn preserve_ordering_for_streaming_partially_sorted_aggregate() -> Result<()> {
 
     let test_config = TestConfig::default().with_query_execution_partitions(2);
 
-    let plan_distrib =
-        test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
     AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0])
       RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
