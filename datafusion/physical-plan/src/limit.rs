@@ -574,7 +574,6 @@ mod tests {
     use arrow::array::RecordBatchOptions;
     use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::col;
 
     #[tokio::test]

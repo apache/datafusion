@@ -35,7 +35,8 @@ use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools as _;
@@ -109,10 +110,7 @@ impl ScalarUDFImpl for MakeArray {
         Ok(DataType::new_list(element_type, true))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(make_array_inner)(&args.args)
     }
 

@@ -143,10 +143,7 @@ fn spark_last_day(days: i32) -> Result<i32> {
 mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
-    use arrow::array::{Array, Date32Array};
-    use arrow::datatypes::Field;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ReturnFieldArgs};
+    use arrow::array::Array;
 
     #[test]
     fn test_last_day_nullability_matches_input() {

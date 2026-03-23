@@ -546,8 +546,6 @@ mod tests {
     use arrow::array::*;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr::expressions::{Column, Literal};
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use std::sync::Arc;
 
     fn test_i32_result(
         expr: NthValue,

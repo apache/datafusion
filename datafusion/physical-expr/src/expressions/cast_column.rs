@@ -140,15 +140,18 @@ impl PhysicalExpr for CastColumnExpr {
         let value = self.expr.evaluate(batch)?;
         match value {
             ColumnarValue::Array(array) => {
-                let casted =
-                    cast_column(&array, self.target_field.as_ref(), &self.cast_options)?;
+                let casted = cast_column(
+                    &array,
+                    self.target_field.data_type(),
+                    &self.cast_options,
+                )?;
                 Ok(ColumnarValue::Array(casted))
             }
             ColumnarValue::Scalar(scalar) => {
                 let as_array = scalar.to_array_of_size(1)?;
                 let casted = cast_column(
                     &as_array,
-                    self.target_field.as_ref(),
+                    self.target_field.data_type(),
                     &self.cast_options,
                 )?;
                 let result = ScalarValue::try_from_array(casted.as_ref(), 0)?;

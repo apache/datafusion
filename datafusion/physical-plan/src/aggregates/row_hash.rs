@@ -1037,25 +1037,16 @@ impl GroupedHashAggregateStream {
                     self.group_values.len()
                 };
 
-                // Clamp to the sort boundary when using partial group ordering,
-                // otherwise remove_groups panics (#20445).
-                let n = match &self.group_ordering {
-                    GroupOrdering::None => n,
-                    _ => match self.group_ordering.emit_to() {
-                        Some(EmitTo::First(max)) => n.min(max),
-                        _ => 0,
-                    },
-                };
-
-                if n > 0
-                    && let Some(batch) = self.emit(EmitTo::First(n), false)?
+                if let Some(emit_to) = self.group_ordering.oom_emit_to(n)
+                    && let Some(batch) = self.emit(emit_to, false)?
                 {
-                    Ok(Some(ExecutionState::ProducingOutput(batch)))
-                } else {
-                    Err(oom)
+                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
                 }
+                Err(oom)
             }
-            _ => Err(oom),
+            OutOfMemoryMode::EmitEarly
+            | OutOfMemoryMode::Spill
+            | OutOfMemoryMode::ReportError => Err(oom),
         }
     }
 
@@ -1368,12 +1359,10 @@ mod tests {
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
