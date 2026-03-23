@@ -212,14 +212,11 @@ fn nested_messages_batch(
     );
 
     let struct_array = StructArray::new(fields.clone(), columns, None);
-    
+
     // Compute the message data type first, then move item_field into kind.array()
     let message_data_type = kind.field_data_type(item_field.clone());
-    let messages_array = kind.array(
-        item_field,
-        vec![messages.len()],
-        Arc::new(struct_array),
-    );
+    let messages_array =
+        kind.array(item_field, vec![messages.len()], Arc::new(struct_array));
     let schema = Arc::new(Schema::new(vec![
         Field::new("row_id", DataType::Int32, false),
         Field::new("messages", message_data_type, true),
@@ -862,15 +859,46 @@ async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_list_struct_schema_evolution_end_to_end() -> Result<()> {
-    assert_nested_list_struct_schema_evolution(NestedListKind::List).await
+/// Macro to generate paired test functions for List and LargeList variants.
+/// Expands to two `#[tokio::test]` functions with the specified names.
+macro_rules! test_struct_schema_evolution_pair {
+    (
+        list: $list_test:ident,
+        large_list: $large_list_test:ident,
+        fn: $assertion_fn:path $(, args: $($arg:expr),+)?
+    ) => {
+        #[tokio::test]
+        async fn $list_test() {
+            $assertion_fn(NestedListKind::List $(, $($arg),+)?).await;
+        }
+
+        #[tokio::test]
+        async fn $large_list_test() {
+            $assertion_fn(NestedListKind::LargeList $(, $($arg),+)?).await;
+        }
+    };
+    (
+        list: $list_test:ident,
+        large_list: $large_list_test:ident,
+        fn_result: $assertion_fn:path
+    ) => {
+        #[tokio::test]
+        async fn $list_test() -> Result<()> {
+            $assertion_fn(NestedListKind::List).await
+        }
+
+        #[tokio::test]
+        async fn $large_list_test() -> Result<()> {
+            $assertion_fn(NestedListKind::LargeList).await
+        }
+    };
 }
 
-#[tokio::test]
-async fn test_large_list_struct_schema_evolution_end_to_end() -> Result<()> {
-    assert_nested_list_struct_schema_evolution(NestedListKind::LargeList).await
-}
+test_struct_schema_evolution_pair!(
+    list: test_list_struct_schema_evolution_end_to_end,
+    large_list: test_large_list_struct_schema_evolution_end_to_end,
+    fn_result: assert_nested_list_struct_schema_evolution
+);
 
 async fn assert_nested_list_struct_schema_evolution_errors(
     kind: NestedListKind,
@@ -934,29 +962,21 @@ async fn assert_incompatible_chain_field_fails(kind: NestedListKind) {
     .await;
 }
 
-#[tokio::test]
-async fn test_list_struct_schema_evolution_non_nullable_missing_field_fails() {
-    assert_non_nullable_missing_chain_field_fails(NestedListKind::List).await;
-}
-
-#[tokio::test]
-async fn test_large_list_struct_schema_evolution_non_nullable_missing_field_fails() {
-    assert_non_nullable_missing_chain_field_fails(NestedListKind::LargeList).await;
-}
-
 fn incompatible_chain_type() -> DataType {
     DataType::Struct(vec![Arc::new(Field::new("value", DataType::Utf8, true))].into())
 }
 
-#[tokio::test]
-async fn test_list_struct_schema_evolution_incompatible_field_fails() {
-    assert_incompatible_chain_field_fails(NestedListKind::List).await;
-}
+test_struct_schema_evolution_pair!(
+    list: test_list_struct_schema_evolution_non_nullable_missing_field_fails,
+    large_list: test_large_list_struct_schema_evolution_non_nullable_missing_field_fails,
+    fn: assert_non_nullable_missing_chain_field_fails
+);
 
-#[tokio::test]
-async fn test_large_list_struct_schema_evolution_incompatible_field_fails() {
-    assert_incompatible_chain_field_fails(NestedListKind::LargeList).await;
-}
+test_struct_schema_evolution_pair!(
+    list: test_list_struct_schema_evolution_incompatible_field_fails,
+    large_list: test_large_list_struct_schema_evolution_incompatible_field_fails,
+    fn: assert_incompatible_chain_field_fails
+);
 
 /// Test demonstrating that a single PhysicalExprAdapterFactory instance can be
 /// reused across multiple ListingTable instances.
