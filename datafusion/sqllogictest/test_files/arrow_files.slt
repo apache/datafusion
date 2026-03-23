@@ -388,3 +388,7 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 # querying corrupted stream format should result in error
 query error DataFusion error: Arrow error: Parser error: Unsupported message header type in IPC stream: 'NONE'
 SELECT * FROM arrow_stream_corrupted_metadata_length
+
+# Config reset
+statement ok
+RESET datafusion.sql_parser.map_string_types_to_utf8view;

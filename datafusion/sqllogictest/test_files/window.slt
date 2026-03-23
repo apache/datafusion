@@ -6122,6 +6122,30 @@ INNER JOIN issue_20194_t2 t2
 ----
 6774502793 10040029 1
 
+# Config reset
+statement ok
+reset datafusion.execution.batch_size;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.enable_window_limits;
+
+statement ok
+reset datafusion.optimizer.repartition_windows;
+
+statement ok
+reset datafusion.optimizer.repartition_sorts;
+
+statement ok
+reset datafusion.optimizer.skip_failed_rules;
+
+statement ok
+reset datafusion.optimizer.prefer_existing_sort;
+
 statement ok
 DROP TABLE issue_20194_t1;
 

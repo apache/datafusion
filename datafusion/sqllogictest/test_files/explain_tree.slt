@@ -2077,3 +2077,10 @@ physical_plan
 
 statement ok
 DROP TABLE t
+
+# Config reset
+statement ok
+RESET datafusion.explain.format;
+
+statement ok
+RESET datafusion.explain.tree_maximum_render_width;

@@ -865,6 +865,22 @@ limit 1000;
 ----
 1
 
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.explain.show_sizes;
+
+statement ok
+reset datafusion.explain.logical_plan_only;
+
+statement ok
+reset datafusion.optimizer.repartition_file_min_size;
+
 # Tear down test_filter_with_limit table:
 statement ok
 DROP TABLE test_limit_with_partitions;
