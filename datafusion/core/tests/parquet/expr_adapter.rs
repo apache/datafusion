@@ -127,6 +127,10 @@ fn message_fields(
     fields.into()
 }
 
+fn field_by_name<'a>(fields: &'a Fields, name: &str) -> Option<&'a Field> {
+    fields.iter().find(|field| field.name() == name).map(AsRef::as_ref)
+}
+
 fn nested_messages_batch(
     kind: NestedListKind,
     row_id: i32,
@@ -146,16 +150,12 @@ fn nested_messages_batch(
     )) as ArrayRef;
 
     let mut columns = vec![ids, names];
-    if fields.iter().any(|field| field.name() == "chain") {
-        match fields
-            .iter()
-            .find(|field| field.name() == "chain")
-            .map(|field| field.data_type())
-        {
-            Some(DataType::Utf8) => columns.push(Arc::new(StringArray::from(
+    if let Some(chain_field) = field_by_name(&fields, "chain") {
+        match chain_field.data_type() {
+            DataType::Utf8 => columns.push(Arc::new(StringArray::from(
                 messages.iter().map(|msg| msg.chain).collect::<Vec<_>>(),
             )) as ArrayRef),
-            Some(DataType::Struct(chain_fields)) => {
+            DataType::Struct(chain_fields) => {
                 let chain_struct = StructArray::new(
                     chain_fields.clone(),
                     vec![Arc::new(StringArray::from(
@@ -168,7 +168,7 @@ fn nested_messages_batch(
             other => panic!("unexpected chain field type: {other:?}"),
         }
     }
-    if fields.iter().any(|field| field.name() == "ignored") {
+    if field_by_name(&fields, "ignored").is_some() {
         columns.push(Arc::new(Int32Array::from(
             messages.iter().map(|msg| msg.ignored).collect::<Vec<_>>(),
         )) as ArrayRef);
@@ -880,6 +880,31 @@ async fn test_list_struct_schema_evolution_non_nullable_missing_field_fails() {
         DataType::Utf8,
         false,
         "non-nullable",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_large_list_struct_schema_evolution_non_nullable_missing_field_fails() {
+    assert_nested_list_struct_schema_evolution_errors(
+        NestedListKind::LargeList,
+        DataType::Utf8,
+        false,
+        "non-nullable",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_list_struct_schema_evolution_incompatible_field_fails() {
+    let target_chain_type = DataType::Struct(
+        vec![Arc::new(Field::new("value", DataType::Utf8, true))].into(),
+    );
+    assert_nested_list_struct_schema_evolution_errors(
+        NestedListKind::List,
+        target_chain_type,
+        true,
+        "Cannot cast struct field 'chain'",
     )
     .await;
 }
