@@ -135,11 +135,21 @@ fn nested_messages_batch(
 ) -> RecordBatch {
     let item_field = Arc::new(Field::new("item", DataType::Struct(fields.clone()), true));
 
-    let ids_vec: Vec<i32> = messages.iter().map(|msg| msg.id).collect();
-    let names_vec: Vec<Option<&str>> =
-        messages.iter().map(|msg| Some(msg.name)).collect();
-    let chain_vec: Vec<Option<&str>> = messages.iter().map(|msg| msg.chain).collect();
-    let ignored_vec: Vec<Option<i32>> = messages.iter().map(|msg| msg.ignored).collect();
+    let (ids_vec, names_vec, chain_vec, ignored_vec) = messages.iter().fold(
+        (
+            Vec::with_capacity(messages.len()),
+            Vec::with_capacity(messages.len()),
+            Vec::with_capacity(messages.len()),
+            Vec::with_capacity(messages.len()),
+        ),
+        |(mut ids, mut names, mut chains, mut ignoreds), msg| {
+            ids.push(msg.id);
+            names.push(Some(msg.name));
+            chains.push(msg.chain);
+            ignoreds.push(msg.ignored);
+            (ids, names, chains, ignoreds)
+        },
+    );
 
     let columns: Vec<ArrayRef> = fields
         .iter()
