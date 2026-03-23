@@ -151,11 +151,16 @@ fn nested_messages_batch(
         },
     );
 
+    // Build all arrays once
+    let id_array = Arc::new(Int32Array::from(ids_vec)) as ArrayRef;
+    let name_array = Arc::new(StringArray::from(names_vec)) as ArrayRef;
+    let ignored_array = Arc::new(Int32Array::from(ignored_vec)) as ArrayRef;
+
     let columns: Vec<ArrayRef> = fields
         .iter()
         .map(|field| match field.name().as_str() {
-            "id" => Arc::new(Int32Array::from(ids_vec.clone())) as ArrayRef,
-            "name" => Arc::new(StringArray::from(names_vec.clone())) as ArrayRef,
+            "id" => Arc::clone(&id_array),
+            "name" => Arc::clone(&name_array),
             "chain" => match field.data_type() {
                 DataType::Utf8 => {
                     Arc::new(StringArray::from(chain_vec.clone())) as ArrayRef
@@ -170,7 +175,7 @@ fn nested_messages_batch(
                 }
                 other => panic!("unexpected chain field type: {other:?}"),
             },
-            "ignored" => Arc::new(Int32Array::from(ignored_vec.clone())) as ArrayRef,
+            "ignored" => Arc::clone(&ignored_array),
             other => panic!("unexpected nested field: {other}"),
         })
         .collect();
