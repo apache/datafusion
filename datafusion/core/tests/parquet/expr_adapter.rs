@@ -206,13 +206,8 @@ fn nested_messages_batch(
     let ignored_array = Arc::new(Int32Array::from(ignored_vec)) as ArrayRef;
 
     // Build columns in canonical order (id, name, chain, ignored) based on field schema
-    let columns = build_message_columns(
-        &id_array,
-        &name_array,
-        &chain_vec,
-        &ignored_array,
-        &fields,
-    );
+    let columns =
+        build_message_columns(&id_array, &name_array, &chain_vec, &ignored_array, fields);
 
     let struct_array = StructArray::new(fields.clone(), columns, None);
 
@@ -337,7 +332,7 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
     let old_batch = nested_messages_batch(
         kind,
         1,
-        vec![
+        &[
             MessageValue {
                 id: 10,
                 name: "alpha",
@@ -351,18 +346,18 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
                 ignored: None,
             },
         ],
-        message_fields(DataType::Utf8, true, false, false),
+        &message_fields(DataType::Utf8, true, false, false),
     );
     let new_batch = nested_messages_batch(
         kind,
         2,
-        vec![MessageValue {
+        &[MessageValue {
             id: 30,
             name: "gamma",
             chain: Some("eth"),
             ignored: Some(99),
         }],
-        message_fields(DataType::Utf8, true, true, true),
+        &message_fields(DataType::Utf8, true, true, true),
     );
 
     let table_schema =
@@ -912,13 +907,13 @@ async fn assert_nested_list_struct_schema_evolution_errors(
     let batch = nested_messages_batch(
         kind,
         1,
-        vec![MessageValue {
+        &[MessageValue {
             id: 10,
             name: "alpha",
             chain: Some("eth"),
             ignored: None,
         }],
-        message_fields(DataType::Utf8, true, true, false),
+        &message_fields(DataType::Utf8, true, true, false),
     );
 
     let table_schema =
