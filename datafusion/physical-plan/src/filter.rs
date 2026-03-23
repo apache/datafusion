@@ -2532,7 +2532,7 @@ mod tests {
         let predicate = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Eq,
-            Arc::new(Literal::new(ScalarValue::Float32(Some(3.14)))),
+            Arc::new(Literal::new(ScalarValue::Float32(Some(42.5)))),
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
