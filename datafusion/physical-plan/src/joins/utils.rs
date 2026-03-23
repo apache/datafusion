@@ -39,7 +39,6 @@ pub use super::join_filter::JoinFilter;
 pub use super::join_hash_map::JoinHashMapType;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
-use ahash::RandomState;
 use arrow::array::{
     Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
     RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
@@ -61,6 +60,7 @@ use arrow::datatypes::{
 use arrow_ord::cmp::not_distinct;
 use arrow_schema::{ArrowError, DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -722,11 +722,12 @@ fn max_distinct_count(
                     }
                 }
                 Precision::Exact(count) => {
-                    let count = count - stats.null_count.get_value().unwrap_or(&0);
+                    let null_count = *stats.null_count.get_value().unwrap_or(&0);
+                    let non_null_count = count.checked_sub(null_count).unwrap_or(0);
                     if stats.null_count.is_exact().unwrap_or(false) {
-                        Precision::Exact(count)
+                        Precision::Exact(non_null_count)
                     } else {
-                        Precision::Inexact(count)
+                        Precision::Inexact(non_null_count)
                     }
                 }
             };
@@ -1926,7 +1927,6 @@ mod tests {
 
     use super::*;
 
-    use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
@@ -2918,12 +2918,12 @@ mod tests {
 
         let build_batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
-            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )?;
 
         let probe_batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)])),
-            vec![Arc::new(arrow::array::Int32Array::from(vec![4, 5, 6, 7]))],
+            vec![Arc::new(Int32Array::from(vec![4, 5, 6, 7]))],
         )?;
 
         let result = build_batch_empty_build_side(
@@ -2938,5 +2938,20 @@ mod tests {
         assert_eq!(result.num_columns(), 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_max_distinct_count_no_overflow_when_null_count_exceeds_num_rows() {
+        let num_rows = Exact(2);
+        let stats = ColumnStatistics {
+            distinct_count: Absent,
+            null_count: Exact(5),
+            min_value: Absent,
+            max_value: Absent,
+            sum_value: Absent,
+            byte_size: Absent,
+        };
+        let result = max_distinct_count(&num_rows, &stats);
+        assert_eq!(result, Exact(0));
     }
 }

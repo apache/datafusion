@@ -29,7 +29,8 @@ use crate::utils::make_scalar_function;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -96,10 +97,7 @@ impl ScalarUDFImpl for TranslateFunc {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // When from and to are scalars, pre-build the translation map once
         if let (Some(from_str), Some(to_str)) = (
             try_as_scalar_str(&args.args[1]),
@@ -172,13 +170,7 @@ impl ScalarUDFImpl for TranslateFunc {
     }
 }
 
-/// If `cv` is a non-null scalar string, return its value.
-fn try_as_scalar_str(cv: &ColumnarValue) -> Option<&str> {
-    match cv {
-        ColumnarValue::Scalar(s) => s.try_as_str().flatten(),
-        _ => None,
-    }
-}
+use super::common::try_as_scalar_str;
 
 fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = args[0].len();

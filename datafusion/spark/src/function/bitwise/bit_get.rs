@@ -128,7 +128,6 @@ fn spark_bit_get(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
 
     #[test]
     fn test_bit_get_nullability_non_nullable_inputs() {

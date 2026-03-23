@@ -30,7 +30,7 @@ use datafusion_common::utils::ListCoercion;
 use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -40,13 +40,13 @@ make_udf_expr_and_func!(
     ArrayRemove,
     array_remove,
     array element,
-    "removes the first element from the array equal to the given value.",
+    "removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     array_remove_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes the first element from the array equal to the given value.",
+    description = "Removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     syntax_example = "array_remove(array, element)",
     sql_example = r#"```sql
 > select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
@@ -55,6 +55,13 @@ make_udf_expr_and_func!(
 +----------------------------------------------+
 | [1, 2, 3, 2, 1, 4]                           |
 +----------------------------------------------+
+
+> select array_remove([1, 2, NULL, 2, 4], 2);
++---------------------------------------------------+
+| array_remove(List([1,2,NULL,2,4]),Int64(2)) |
++---------------------------------------------------+
+| [1, NULL, 2, 4]                              |
++---------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -110,10 +117,7 @@ impl ScalarUDFImpl for ArrayRemove {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_inner)(&args.args)
     }
 
@@ -130,14 +134,14 @@ make_udf_expr_and_func!(
     ArrayRemoveN,
     array_remove_n,
     array element max,
-    "removes the first `max` elements from the array equal to the given value.",
+    "removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     array_remove_n_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes the first `max` elements from the array equal to the given value.",
-    syntax_example = "array_remove_n(array, element, max))",
+    description = "Removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
+    syntax_example = "array_remove_n(array, element, max)",
     sql_example = r#"```sql
 > select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
 +---------------------------------------------------------+
@@ -145,6 +149,13 @@ make_udf_expr_and_func!(
 +---------------------------------------------------------+
 | [1, 3, 2, 1, 4]                                         |
 +---------------------------------------------------------+
+
+> select array_remove_n([1, 2, NULL, 2, 4], 2, 2);
++----------------------------------------------------------+
+| array_remove_n(List([1,2,NULL,2,4]),Int64(2),Int64(2)) |
++----------------------------------------------------------+
+| [1, NULL, 4]                                            |
++----------------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -205,10 +216,7 @@ impl ScalarUDFImpl for ArrayRemoveN {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_n_inner)(&args.args)
     }
 
@@ -225,13 +233,13 @@ make_udf_expr_and_func!(
     ArrayRemoveAll,
     array_remove_all,
     array element,
-    "removes all elements from the array equal to the given value.",
+    "removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     array_remove_all_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes all elements from the array equal to the given value.",
+    description = "Removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     syntax_example = "array_remove_all(array, element)",
     sql_example = r#"```sql
 > select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
@@ -240,6 +248,13 @@ make_udf_expr_and_func!(
 +--------------------------------------------------+
 | [1, 3, 1, 4]                                     |
 +--------------------------------------------------+
+
+> select array_remove_all([1, 2, NULL, 2, 4], 2);
++-----------------------------------------------------+
+| array_remove_all(List([1,2,NULL,2,4]),Int64(2)) |
++-----------------------------------------------------+
+| [1, NULL, 4]                                     |
++-----------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -289,10 +304,7 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_all_inner)(&args.args)
     }
 
@@ -390,7 +402,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     let mut valid = NullBufferBuilder::new(list_array.len());
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
-        if list_array.is_null(row_index) {
+        if list_array.is_null(row_index) || element_array.is_null(row_index) {
             offsets.push(offsets[row_index]);
             valid.append_null();
             continue;

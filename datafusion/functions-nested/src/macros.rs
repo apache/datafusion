@@ -50,7 +50,6 @@ macro_rules! make_udf_expr_and_func {
         make_udf_expr_and_func!($UDF, $EXPR_FN, $($arg)*, $DOC, $SCALAR_UDF_FN, $UDF::new);
     };
     ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $SCALAR_UDF_FN:ident, $CTOR:path) => {
-        paste::paste! {
             // "fluent expr_fn" style function
             #[doc = $DOC]
             pub fn $EXPR_FN($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
@@ -60,13 +59,11 @@ macro_rules! make_udf_expr_and_func {
                 ))
             }
             create_func!($UDF, $SCALAR_UDF_FN, $CTOR);
-        }
     };
     ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $SCALAR_UDF_FN:ident) => {
         make_udf_expr_and_func!($UDF, $EXPR_FN, $DOC, $SCALAR_UDF_FN, $UDF::new);
     };
     ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $SCALAR_UDF_FN:ident, $CTOR:path) => {
-        paste::paste! {
             // "fluent expr_fn" style function
             #[doc = $DOC]
             pub fn $EXPR_FN(arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
@@ -76,7 +73,6 @@ macro_rules! make_udf_expr_and_func {
                 ))
             }
             create_func!($UDF, $SCALAR_UDF_FN, $CTOR);
-        }
     };
 }
 
@@ -97,7 +93,6 @@ macro_rules! create_func {
         create_func!($UDF, $SCALAR_UDF_FN, $UDF::new);
     };
     ($UDF:ident, $SCALAR_UDF_FN:ident, $CTOR:path) => {
-        paste::paste! {
             #[doc = concat!("ScalarFunction that returns a [`ScalarUDF`](datafusion_expr::ScalarUDF) for ")]
             #[doc = stringify!($UDF)]
             pub fn $SCALAR_UDF_FN() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
@@ -110,6 +105,5 @@ macro_rules! create_func {
                     });
                 std::sync::Arc::clone(&INSTANCE)
             }
-        }
     };
 }

@@ -43,6 +43,7 @@ use std::sync::{Arc, LazyLock};
 get_or_init_udwf!(
     Lag,
     lag,
+    lag_udwf,
     "Returns the row value that precedes the current row by a specified \
     offset within partition. If no such row exists, then returns the \
     default value.",
@@ -51,6 +52,7 @@ get_or_init_udwf!(
 get_or_init_udwf!(
     Lead,
     lead,
+    lead_udwf,
     "Returns the value from a row that follows the current row by a \
     specified offset within the partition. If no such row exists, then \
     returns the default value.",
@@ -678,7 +680,6 @@ mod tests {
     use arrow::array::*;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr::expressions::{Column, Literal};
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
     fn test_i32_result(
         expr: WindowShift,
