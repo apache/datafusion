@@ -407,6 +407,18 @@ pub enum Expr {
     /// Unnest expression
     Unnest(Unnest),
     /// Call a lambda function with a set of arguments.
+    ///
+    /// For example, `array_transform([1,2,3], v -> v+1)` would be equivalent to:
+    ///
+    /// ```ignore
+    /// LambdaFunction(array_transform)
+    /// ├── args[0]: Literal([1,2,3])
+    /// └── args[1]: Lambda
+    ///     ├── params: ["v"]
+    ///     └── body: BinaryExpr(+)
+    ///         ├── LambdaVariable("v")
+    ///         └── Literal(1)
+    /// ```
     LambdaFunction(LambdaFunction),
     /// A Lambda expression with a set of parameters names and a body
     Lambda(Lambda),
