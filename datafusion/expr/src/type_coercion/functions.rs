@@ -184,6 +184,14 @@ pub fn value_fields_with_lambda_udf<L: Clone>(
                 );
             }
 
+
+            // coerced_types has been partitioned from current_fields
+            // and refers only to values and not to lambdas, so instead
+            // of zipping them, we iterate over current_fields and only
+            // consume from coerced_types when a given argument is a value
+            // to reconstruct the arguments list with the correct order
+            // this supports any value and lambda positioning including
+            // multiple lambdas interleaved with values
             let mut coerced_types = coerced_types.into_iter();
 
             Ok(current_fields
