@@ -2456,7 +2456,7 @@ This can be used to perform the inverse operation of <a class="reference interna
 <h4>Arguments<a class="headerlink" href="#id144" title="Link to this heading">#</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
-<li><p><strong>start_pos</strong>: Character position to start the substring at. The first character in the string has a position of 1.</p></li>
+<li><p><strong>start_pos</strong>: Character position to start the substring at. The first character in the string has a position of 1. If the start position is less than 1, it is treated as if it is before the start of the string and the (absolute) number of characters before position 1 is subtracted from <code class="docutils literal notranslate"><span class="pre">length</span></code> (if given). For example, <code class="docutils literal notranslate"><span class="pre">substr('abc',</span> <span class="pre">-3,</span> <span class="pre">6)</span></code> returns <code class="docutils literal notranslate"><span class="pre">'ab'</span></code>.</p></li>
 <li><p><strong>length</strong>: Number of characters to extract. If not specified, returns the rest of the string after the start position.</p></li>
 </ul>
 </section>
