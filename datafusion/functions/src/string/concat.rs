@@ -264,10 +264,10 @@ impl ScalarUDFImpl for ConcatFunc {
                     columns
                         .iter()
                         .for_each(|column| builder.write::<true>(column, i));
-                    builder.append_offset();
+                    builder.append_offset()?;
                 }
 
-                let string_array = builder.finish(None);
+                let string_array = builder.finish(None)?;
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             DataType::LargeUtf8 => {

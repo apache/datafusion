@@ -17,7 +17,7 @@
 
 use std::mem::size_of;
 
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, exec_datafusion_err, internal_err};
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, BinaryArray, ByteView, LargeStringArray,
@@ -61,6 +61,7 @@ impl StringArrayBuilder {
         match column {
             ColumnarValueRef::Scalar(s) => {
                 self.value_buffer.extend_from_slice(s);
+                self.tainted = true;
             }
             ColumnarValueRef::NullableArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
@@ -151,15 +152,18 @@ impl StringArrayBuilder {
 
 pub struct StringViewArrayBuilder {
     builder: StringViewBuilder,
-    block: String,
+    block: Vec<u8>,
+    /// If true, a safety check is required during the `append_offset` call
+    tainted: bool,
 }
 
 impl StringViewArrayBuilder {
-    pub fn with_capacity(_item_capacity: usize, data_capacity: usize) -> Self {
-        let builder = StringViewBuilder::with_capacity(data_capacity);
+    pub fn with_capacity(item_capacity: usize, _data_capacity: usize) -> Self {
+        let builder = StringViewBuilder::with_capacity(item_capacity);
         Self {
             builder,
-            block: String::new(),
+            block: vec![],
+            tainted: false,
         }
     }
 
@@ -170,59 +174,79 @@ impl StringViewArrayBuilder {
     ) {
         match column {
             ColumnarValueRef::Scalar(s) => {
-                self.block.push_str(std::str::from_utf8(s).unwrap());
+                self.block.extend_from_slice(s);
+                self.tainted = true;
             }
             ColumnarValueRef::NullableArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(array.value(i));
+                    self.block.extend_from_slice(array.value(i).as_bytes());
                 }
             }
             ColumnarValueRef::NullableLargeStringArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(array.value(i));
+                    self.block.extend_from_slice(array.value(i).as_bytes());
                 }
             }
             ColumnarValueRef::NullableStringViewArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(array.value(i));
+                    self.block.extend_from_slice(array.value(i).as_bytes());
                 }
             }
             ColumnarValueRef::NullableBinaryArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block
-                        .push_str(std::str::from_utf8(array.value(i)).unwrap());
+                    self.block.extend_from_slice(array.value(i));
                 }
+                self.tainted = true;
             }
             ColumnarValueRef::NonNullableArray(array) => {
-                self.block.push_str(array.value(i));
+                self.block.extend_from_slice(array.value(i).as_bytes());
             }
             ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.block.push_str(array.value(i));
+                self.block.extend_from_slice(array.value(i).as_bytes());
             }
             ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.block.push_str(array.value(i));
+                self.block.extend_from_slice(array.value(i).as_bytes());
             }
             ColumnarValueRef::NonNullableBinaryArray(array) => {
-                self.block
-                    .push_str(std::str::from_utf8(array.value(i)).unwrap());
+                self.block.extend_from_slice(array.value(i));
+                self.tainted = true;
             }
         }
     }
 
-    pub fn append_offset(&mut self) {
-        self.builder.append_value(&self.block);
+    pub fn append_offset(&mut self) -> Result<()> {
+        let block_str = if self.tainted {
+            std::str::from_utf8(&self.block)
+                .map_err(|_| exec_datafusion_err!("invalid UTF-8 in binary literal"))?
+        } else {
+            // SAFETY: all data that was appended was valid UTF8
+            unsafe { std::str::from_utf8_unchecked(&self.block) }
+        };
+        self.builder.append_value(block_str);
         self.block.clear();
+        Ok(())
     }
 
-    pub fn finish(mut self, null_buffer: Option<NullBuffer>) -> StringViewArray {
+    /// Finalize the builder into a concrete [`StringViewArray`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when:
+    ///
+    /// - the provided `null_buffer` does not match amount of `append_offset` calls.
+    pub fn finish(mut self, null_buffer: Option<NullBuffer>) -> Result<StringViewArray> {
         let array = self.builder.finish();
         match null_buffer {
-            Some(nulls) => {
-                let array_data = array.into_data().into_builder().nulls(Some(nulls));
-                // SAFETY: the underlying data is valid; we are only adding a null buffer
-                StringViewArray::from(unsafe { array_data.build_unchecked() })
+            Some(nulls) if nulls.len() != array.len() => {
+                internal_err!("Null buffer and views buffer must be the same length")
             }
-            None => array,
+            Some(nulls) => {
+                let array_builder = array.into_data().into_builder().nulls(Some(nulls));
+                // SAFETY: the underlying data is valid; we are only adding a null buffer
+                let array_data = unsafe { array_builder.build_unchecked() };
+                Ok(StringViewArray::from(array_data))
+            }
+            None => Ok(array),
         }
     }
 }
@@ -259,6 +283,7 @@ impl LargeStringArrayBuilder {
         match column {
             ColumnarValueRef::Scalar(s) => {
                 self.value_buffer.extend_from_slice(s);
+                self.tainted = true;
             }
             ColumnarValueRef::NullableArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {

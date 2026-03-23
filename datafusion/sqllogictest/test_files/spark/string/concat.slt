@@ -101,12 +101,19 @@ hello|world Utf8
 query error Execution error: invalid UTF-8 in binary literal
 SELECT concat(x'636166c3', x'68656c6c6f');
 
+query error Execution error: invalid UTF-8 in binary literal
+SELECT concat(x'636166c3', arrow_cast(x'68656c6c6f', 'Utf8View'));
+
 statement ok
 create table t as values (x'636166c3', x'68656c6c6f');
 
 # Invalid UTF8 sequence for concatenation, array case
 query error Arrow error: Invalid argument error: Invalid UTF8 sequence at string
 SELECT concat(column1, column2) from t;
+
+# Invalid UTF8 sequence for concatenation, array case
+query error DataFusion error: Execution error: invalid UTF-8 in binary literal
+SELECT concat(column1, arrow_cast(column2, 'Utf8View')) from t;
 
 statement ok
 drop table t
