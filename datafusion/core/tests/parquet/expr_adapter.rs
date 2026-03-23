@@ -881,14 +881,15 @@ async fn test_large_list_struct_schema_evolution_non_nullable_missing_field_fail
     .await;
 }
 
+fn incompatible_chain_type() -> DataType {
+    DataType::Struct(vec![Arc::new(Field::new("value", DataType::Utf8, true))].into())
+}
+
 #[tokio::test]
 async fn test_list_struct_schema_evolution_incompatible_field_fails() {
-    let target_chain_type = DataType::Struct(
-        vec![Arc::new(Field::new("value", DataType::Utf8, true))].into(),
-    );
     assert_nested_list_struct_schema_evolution_errors(
         NestedListKind::List,
-        target_chain_type,
+        incompatible_chain_type(),
         true,
         "Cannot cast struct field 'chain'",
     )
@@ -897,12 +898,9 @@ async fn test_list_struct_schema_evolution_incompatible_field_fails() {
 
 #[tokio::test]
 async fn test_large_list_struct_schema_evolution_incompatible_field_fails() {
-    let target_chain_type = DataType::Struct(
-        vec![Arc::new(Field::new("value", DataType::Utf8, true))].into(),
-    );
     assert_nested_list_struct_schema_evolution_errors(
         NestedListKind::LargeList,
-        target_chain_type,
+        incompatible_chain_type(),
         true,
         "Cannot cast struct field 'chain'",
     )
