@@ -216,7 +216,10 @@ fn test_context() -> SessionContext {
     SessionContext::new_with_config(cfg)
 }
 
-fn nested_list_table_schema(kind: NestedListKind, target_message_fields: Fields) -> SchemaRef {
+fn nested_list_table_schema(
+    kind: NestedListKind,
+    target_message_fields: Fields,
+) -> SchemaRef {
     let target_item = Arc::new(Field::new(
         "item",
         DataType::Struct(target_message_fields),
@@ -855,26 +858,64 @@ async fn assert_nested_list_struct_schema_evolution_errors(
     );
 }
 
-#[tokio::test]
-async fn test_list_struct_schema_evolution_non_nullable_missing_field_fails() {
+type ChainTypeProvider = fn() -> DataType;
+
+fn utf8_chain_type() -> DataType {
+    DataType::Utf8
+}
+
+async fn assert_nested_list_struct_schema_evolution_error_case(
+    kind: NestedListKind,
+    chain_type: Option<DataType>,
+    chain_nullable: bool,
+    expected_error: &str,
+    default_chain_type_provider: Option<ChainTypeProvider>,
+) {
+    let chain_type = chain_type.unwrap_or_else(|| {
+        default_chain_type_provider
+            .map(|provider| provider())
+            .unwrap_or(DataType::Utf8)
+    });
+
     assert_nested_list_struct_schema_evolution_errors(
-        NestedListKind::List,
-        DataType::Utf8,
+        kind,
+        chain_type,
+        chain_nullable,
+        expected_error,
+    )
+    .await;
+}
+
+async fn assert_non_nullable_missing_chain_field_fails(kind: NestedListKind) {
+    assert_nested_list_struct_schema_evolution_error_case(
+        kind,
+        None,
         false,
         "non-nullable",
+        Some(utf8_chain_type),
+    )
+    .await;
+}
+
+async fn assert_incompatible_chain_field_fails(kind: NestedListKind) {
+    assert_nested_list_struct_schema_evolution_error_case(
+        kind,
+        Some(incompatible_chain_type()),
+        true,
+        "Cannot cast struct field 'chain'",
+        None,
     )
     .await;
 }
 
 #[tokio::test]
+async fn test_list_struct_schema_evolution_non_nullable_missing_field_fails() {
+    assert_non_nullable_missing_chain_field_fails(NestedListKind::List).await;
+}
+
+#[tokio::test]
 async fn test_large_list_struct_schema_evolution_non_nullable_missing_field_fails() {
-    assert_nested_list_struct_schema_evolution_errors(
-        NestedListKind::LargeList,
-        DataType::Utf8,
-        false,
-        "non-nullable",
-    )
-    .await;
+    assert_non_nullable_missing_chain_field_fails(NestedListKind::LargeList).await;
 }
 
 fn incompatible_chain_type() -> DataType {
@@ -883,24 +924,12 @@ fn incompatible_chain_type() -> DataType {
 
 #[tokio::test]
 async fn test_list_struct_schema_evolution_incompatible_field_fails() {
-    assert_nested_list_struct_schema_evolution_errors(
-        NestedListKind::List,
-        incompatible_chain_type(),
-        true,
-        "Cannot cast struct field 'chain'",
-    )
-    .await;
+    assert_incompatible_chain_field_fails(NestedListKind::List).await;
 }
 
 #[tokio::test]
 async fn test_large_list_struct_schema_evolution_incompatible_field_fails() {
-    assert_nested_list_struct_schema_evolution_errors(
-        NestedListKind::LargeList,
-        incompatible_chain_type(),
-        true,
-        "Cannot cast struct field 'chain'",
-    )
-    .await;
+    assert_incompatible_chain_field_fails(NestedListKind::LargeList).await;
 }
 
 /// Test demonstrating that a single PhysicalExprAdapterFactory instance can be
