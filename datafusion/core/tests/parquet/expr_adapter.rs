@@ -216,6 +216,18 @@ fn test_context() -> SessionContext {
     SessionContext::new_with_config(cfg)
 }
 
+fn nested_list_table_schema(kind: NestedListKind, target_message_fields: Fields) -> SchemaRef {
+    let target_item = Arc::new(Field::new(
+        "item",
+        DataType::Struct(target_message_fields),
+        true,
+    ));
+    Arc::new(Schema::new(vec![
+        Field::new("row_id", DataType::Int32, false),
+        Field::new("messages", kind.field_data_type(target_item), true),
+    ]))
+}
+
 async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Result<()> {
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
     let prefix = format!("{}_struct_evolution", kind.name());
@@ -270,15 +282,7 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         Arc::new(Field::new("chain", DataType::Utf8, true)),
     ]
     .into();
-    let target_item = Arc::new(Field::new(
-        "item",
-        DataType::Struct(target_message_fields.clone()),
-        true,
-    ));
-    let table_schema = Arc::new(Schema::new(vec![
-        Field::new("row_id", DataType::Int32, false),
-        Field::new("messages", kind.field_data_type(target_item), true),
-    ]));
+    let table_schema = nested_list_table_schema(kind, target_message_fields.clone());
 
     let ctx = test_context();
     register_memory_listing_table(
@@ -827,15 +831,7 @@ async fn assert_nested_list_struct_schema_evolution_errors(
         Arc::new(Field::new("chain", chain_type, chain_nullable)),
     ]
     .into();
-    let target_item = Arc::new(Field::new(
-        "item",
-        DataType::Struct(target_message_fields),
-        true,
-    ));
-    let table_schema = Arc::new(Schema::new(vec![
-        Field::new("row_id", DataType::Int32, false),
-        Field::new("messages", kind.field_data_type(target_item), true),
-    ]));
+    let table_schema = nested_list_table_schema(kind, target_message_fields);
 
     let ctx = test_context();
     register_memory_listing_table(
