@@ -18,7 +18,7 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{Column, JoinType, NullEquality, not_impl_err, plan_err};
 use datafusion::logical_expr::requalify_sides_if_needed;
-use datafusion::logical_expr::utils::split_conjunction;
+use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
 };
@@ -57,7 +57,7 @@ pub async fn from_join_rel(
             // - If an Eq or IsNotDistinctFrom op is encountered, add the left column, right column and is_null_equal_nulls to `join_ons` vector
             // - Otherwise we add the expression to join_filter (use conjunction if filter already exists)
             let (join_ons, null_equality, join_filter) =
-                split_eq_and_noneq_join_predicate_with_nulls_equality(&on);
+                split_eq_and_noneq_join_predicate_with_nulls_equality(on);
             let (left_cols, right_cols): (Vec<_>, Vec<_>) =
                 itertools::multiunzip(join_ons);
             left.join_detailed(
@@ -84,9 +84,9 @@ pub async fn from_join_rel(
 }
 
 fn split_eq_and_noneq_join_predicate_with_nulls_equality(
-    filter: &Expr,
+    filter: Expr,
 ) -> (Vec<(Column, Column)>, NullEquality, Option<Expr>) {
-    let exprs = split_conjunction(filter);
+    let exprs = split_conjunction_owned(filter);
 
     let mut eq_keys: Vec<(Column, Column)> = vec![];
     let mut indistinct_keys: Vec<(Column, Column)> = vec![];
@@ -98,17 +98,21 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
                 left,
                 op: op @ (Operator::Eq | Operator::IsNotDistinctFrom),
                 right,
-            }) => match (left.as_ref(), right.as_ref()) {
+            }) => match (*left, *right) {
                 (Expr::Column(l), Expr::Column(r)) => match op {
-                    Operator::Eq => eq_keys.push((l.clone(), r.clone())),
-                    Operator::IsNotDistinctFrom => {
-                        indistinct_keys.push((l.clone(), r.clone()))
-                    }
+                    Operator::Eq => eq_keys.push((l, r)),
+                    Operator::IsNotDistinctFrom => indistinct_keys.push((l, r)),
                     _ => unreachable!(),
                 },
-                _ => accum_filters.push(expr.clone()),
+                (left, right) => {
+                    accum_filters.push(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    }));
+                }
             },
-            _ => accum_filters.push(expr.clone()),
+            _ => accum_filters.push(expr),
         }
     }
 
@@ -116,11 +120,11 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
         match (eq_keys.is_empty(), indistinct_keys.is_empty()) {
             // Mixed: use eq_keys as equijoin keys, demote indistinct keys to filter
             (false, false) => {
-                for (l, r) in &indistinct_keys {
+                for (l, r) in indistinct_keys {
                     accum_filters.push(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(Expr::Column(l.clone())),
+                        left: Box::new(Expr::Column(l)),
                         op: Operator::IsNotDistinctFrom,
-                        right: Box::new(Expr::Column(r.clone())),
+                        right: Box::new(Expr::Column(r)),
                     }));
                 }
                 (eq_keys, NullEquality::NullEqualsNothing)
@@ -175,7 +179,7 @@ mod tests {
         });
 
         let (keys, null_eq, filter) =
-            split_eq_and_noneq_join_predicate_with_nulls_equality(&expr);
+            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
 
         assert_eq!(keys.len(), 1);
         assert_eq!(null_eq, NullEquality::NullEqualsNothing);
@@ -192,7 +196,7 @@ mod tests {
         });
 
         let (keys, null_eq, filter) =
-            split_eq_and_noneq_join_predicate_with_nulls_equality(&expr);
+            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
 
         assert_eq!(keys.len(), 1);
         assert_eq!(null_eq, NullEquality::NullEqualsNull);
@@ -217,7 +221,7 @@ mod tests {
         }));
 
         let (keys, null_eq, filter) =
-            split_eq_and_noneq_join_predicate_with_nulls_equality(&expr);
+            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
 
         // Only the Eq key should be an equijoin key.
         assert_eq!(keys.len(), 1);
@@ -251,7 +255,7 @@ mod tests {
         });
 
         let (keys, _, filter) =
-            split_eq_and_noneq_join_predicate_with_nulls_equality(&expr);
+            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
 
         assert!(keys.is_empty());
         assert!(filter.is_some());
