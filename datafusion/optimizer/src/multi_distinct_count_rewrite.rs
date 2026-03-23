@@ -113,6 +113,14 @@ impl OptimizerRule for MultiDistinctCountRewrite {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        if !config
+            .options()
+            .optimizer
+            .enable_multi_distinct_count_rewrite
+        {
+            return Ok(Transformed::no(plan));
+        }
+
         let LogicalPlan::Aggregate(Aggregate {
             input,
             aggr_expr,
@@ -351,15 +359,25 @@ mod tests {
     use datafusion_expr::{Expr, col};
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct};
 
+    fn optimize_with_rule_config(
+        plan: LogicalPlan,
+        rule: Arc<dyn OptimizerRule + Send + Sync>,
+        enable_multi_distinct_count_rewrite: bool,
+    ) -> Result<LogicalPlan> {
+        Optimizer::with_rules(vec![rule]).optimize(
+            plan,
+            &OptimizerContext::new().with_enable_multi_distinct_count_rewrite(
+                enable_multi_distinct_count_rewrite,
+            ),
+            |_, _| {},
+        )
+    }
+
     fn optimize_with_rule(
         plan: LogicalPlan,
         rule: Arc<dyn OptimizerRule + Send + Sync>,
     ) -> Result<LogicalPlan> {
-        Optimizer::with_rules(vec![rule]).optimize(
-            plan,
-            &OptimizerContext::new(),
-            |_, _| {},
-        )
+        optimize_with_rule_config(plan, rule, true)
     }
 
     #[test]
@@ -582,6 +600,25 @@ mod tests {
             optimize_with_rule(plan, Arc::new(MultiDistinctCountRewrite::new()))?;
         let after = optimized.display_indent_schema().to_string();
         assert_eq!(before, after);
+        Ok(())
+    }
+
+    #[test]
+    fn skips_rewrite_when_config_disabled() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![count_distinct(col("b")), count_distinct(col("c"))],
+            )?
+            .build()?;
+        let before = plan.display_indent_schema().to_string();
+        let optimized = optimize_with_rule_config(
+            plan,
+            Arc::new(MultiDistinctCountRewrite::new()),
+            false,
+        )?;
+        assert_eq!(before, optimized.display_indent_schema().to_string());
         Ok(())
     }
 

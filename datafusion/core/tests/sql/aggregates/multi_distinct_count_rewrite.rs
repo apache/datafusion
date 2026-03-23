@@ -20,11 +20,20 @@
 use super::*;
 use arrow::array::{Float64Array, Int32Array, StringArray};
 use datafusion::common::test_util::batches_to_sort_string;
+use datafusion::execution::config::SessionConfig;
+use datafusion::execution::context::SessionContext;
 use datafusion_catalog::MemTable;
+
+fn session_with_multi_distinct_count_rewrite() -> SessionContext {
+    SessionContext::new_with_config(SessionConfig::new().set_bool(
+        "datafusion.optimizer.enable_multi_distinct_count_rewrite",
+        true,
+    ))
+}
 
 #[tokio::test]
 async fn multi_count_distinct_matches_expected_with_nulls() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = session_with_multi_distinct_count_rewrite();
     let schema = Arc::new(Schema::new(vec![
         Field::new("g", DataType::Int32, false),
         Field::new("b", DataType::Utf8, true),
@@ -60,7 +69,7 @@ async fn multi_count_distinct_matches_expected_with_nulls() -> Result<()> {
 /// `COUNT(*)` + two `COUNT(DISTINCT …)` per group (BI-style); must match non-rewritten semantics.
 #[tokio::test]
 async fn multi_count_distinct_with_count_star_matches_expected() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = session_with_multi_distinct_count_rewrite();
     let schema = Arc::new(Schema::new(vec![
         Field::new("g", DataType::Int32, false),
         Field::new("b", DataType::Int32, false),
@@ -96,7 +105,7 @@ async fn multi_count_distinct_with_count_star_matches_expected() -> Result<()> {
 /// Multiple `GROUP BY` keys: join must align on all keys.
 #[tokio::test]
 async fn multi_count_distinct_two_group_keys_matches_expected() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = session_with_multi_distinct_count_rewrite();
     let schema = Arc::new(Schema::new(vec![
         Field::new("g1", DataType::Int32, false),
         Field::new("g2", DataType::Int32, false),
@@ -136,7 +145,7 @@ async fn multi_count_distinct_two_group_keys_matches_expected() -> Result<()> {
 /// Two `COUNT(DISTINCT …)` so the rewrite applies; semantics match plain aggregation.
 #[tokio::test]
 async fn multi_count_distinct_lower_matches_expected_case_collapsing() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = session_with_multi_distinct_count_rewrite();
     let schema = Arc::new(Schema::new(vec![
         Field::new("g", DataType::Int32, false),
         Field::new("b", DataType::Utf8, false),
@@ -173,7 +182,7 @@ async fn multi_count_distinct_lower_matches_expected_case_collapsing() -> Result
 /// Exercises the same “expression in distinct, not raw column” path as `CAST` in the rule.
 #[tokio::test]
 async fn multi_count_distinct_cast_float_to_int_collapses_nearby_values() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = session_with_multi_distinct_count_rewrite();
     let schema = Arc::new(Schema::new(vec![
         Field::new("g", DataType::Int32, false),
         Field::new("x", DataType::Float64, false),

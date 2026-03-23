@@ -969,6 +969,11 @@ config_namespace! {
         /// predicate push down.
         pub filter_null_join_keys: bool, default = false
 
+        /// When `true`, rewrite one grouped aggregate that has multiple `COUNT(DISTINCT …)` into
+        /// joins of per-distinct sub-aggregates (can lower peak memory; adds join work). Default
+        /// `false` until workload benchmarks justify enabling broadly.
+        pub enable_multi_distinct_count_rewrite: bool, default = false
+
         /// Should DataFusion repartition data using the aggregate keys to execute aggregates
         /// in parallel using the provided `target_partitions` level
         pub repartition_aggregations: bool, default = true

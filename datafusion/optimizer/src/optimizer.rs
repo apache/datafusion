@@ -218,6 +218,14 @@ impl OptimizerContext {
         Arc::make_mut(&mut self.options).optimizer.max_passes = v as usize;
         self
     }
+
+    /// Enable [`crate::multi_distinct_count_rewrite::MultiDistinctCountRewrite`] (default off).
+    pub fn with_enable_multi_distinct_count_rewrite(mut self, enable: bool) -> Self {
+        Arc::make_mut(&mut self.options)
+            .optimizer
+            .enable_multi_distinct_count_rewrite = enable;
+        self
+    }
 }
 
 impl Default for OptimizerContext {
