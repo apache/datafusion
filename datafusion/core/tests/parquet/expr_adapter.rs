@@ -127,6 +127,17 @@ fn message_fields(
     fields.into()
 }
 
+// Helper to construct the target message schema for struct evolution tests.
+// The schema always has id (Int64), name (Utf8), and chain with parameterized type.
+fn target_message_fields(chain_type: DataType, chain_nullable: bool) -> Fields {
+    vec![
+        Arc::new(Field::new("id", DataType::Int64, false)),
+        Arc::new(Field::new("name", DataType::Utf8, true)),
+        Arc::new(Field::new("chain", chain_type, chain_nullable)),
+    ]
+    .into()
+}
+
 // Helper to build message columns in canonical order (id, name, chain, ignored)
 // based on which optional fields are present in the schema.
 fn build_message_columns(
@@ -192,7 +203,13 @@ fn nested_messages_batch(
     let ignored_array = Arc::new(Int32Array::from(ignored_vec)) as ArrayRef;
 
     // Build columns in canonical order (id, name, chain, ignored) based on field schema
-    let columns = build_message_columns(&id_array, &name_array, &chain_vec, &ignored_array, &fields);
+    let columns = build_message_columns(
+        &id_array,
+        &name_array,
+        &chain_vec,
+        &ignored_array,
+        &fields,
+    );
 
     let struct_array = StructArray::new(fields.clone(), columns, None);
     let messages_array = kind.array(
@@ -308,13 +325,7 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
     )
     .await;
 
-    let target_message_fields: Fields = vec![
-        Arc::new(Field::new("id", DataType::Int64, false)),
-        Arc::new(Field::new("name", DataType::Utf8, true)),
-        Arc::new(Field::new("chain", DataType::Utf8, true)),
-    ]
-    .into();
-    let table_schema = nested_list_table_schema(kind, target_message_fields.clone());
+    let table_schema = nested_list_table_schema(kind, target_message_fields(DataType::Utf8, true));
 
     let ctx = test_context();
     register_memory_listing_table(
@@ -857,13 +868,7 @@ async fn assert_nested_list_struct_schema_evolution_errors(
     );
     write_parquet(batch, Arc::clone(&store), &format!("{prefix}/data.parquet")).await;
 
-    let target_message_fields: Fields = vec![
-        Arc::new(Field::new("id", DataType::Int64, false)),
-        Arc::new(Field::new("name", DataType::Utf8, true)),
-        Arc::new(Field::new("chain", chain_type, chain_nullable)),
-    ]
-    .into();
-    let table_schema = nested_list_table_schema(kind, target_message_fields);
+    let table_schema = nested_list_table_schema(kind, target_message_fields(chain_type, chain_nullable));
 
     let ctx = test_context();
     register_memory_listing_table(
