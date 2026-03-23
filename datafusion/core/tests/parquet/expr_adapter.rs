@@ -100,7 +100,7 @@ impl NestedListKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct MessageValue<'a> {
     id: i32,
     name: &'a str,
@@ -212,14 +212,17 @@ fn nested_messages_batch(
     );
 
     let struct_array = StructArray::new(fields.clone(), columns, None);
+    
+    // Compute the message data type first, then move item_field into kind.array()
+    let message_data_type = kind.field_data_type(item_field.clone());
     let messages_array = kind.array(
-        item_field.clone(),
+        item_field,
         vec![messages.len()],
         Arc::new(struct_array),
     );
     let schema = Arc::new(Schema::new(vec![
         Field::new("row_id", DataType::Int32, false),
-        Field::new("messages", kind.field_data_type(item_field), true),
+        Field::new("messages", message_data_type, true),
     ]));
 
     RecordBatch::try_new(
