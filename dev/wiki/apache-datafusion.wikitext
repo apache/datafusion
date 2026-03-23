@@ -17,9 +17,7 @@ Draft Wikipedia article.
 
 == History ==
 
-DataFusion began around 2017, originally authored by Andrew Grove, and was donated to the Apache Arrow project in February 2019, when it was announced as a Rust-native query engine for Arrow.<ref name="donation-post" /> During the early 2020s it was developed within Apache Arrow.<ref name="sigmod-paper" />
-
-In 2024, a paper describing DataFusion was accepted to the industry track of the [[ACM SIGMOD]] conference.<ref name="sigmod-accepted">{{cite web |title=SIGMOD 2024 Industrial Track: Accepted Papers |url=https://2024.sigmod.org/industrial-list.shtml |website=SIGMOD 2024 |access-date=2026-03-22}}</ref><ref name="sigmod-paper" /> In April 2024, the project graduated from Apache Arrow and became a top-level Apache project.<ref name="asf-tlp" />
+DataFusion originally authored by Andy Grove starting in 2017. It was donated to the Apache Arrow Project in February 2019.<ref name="donation-post" /> In 2024, a paper describing DataFusion was accepted to the industry track of the [[ACM SIGMOD]] conference.<ref name="sigmod-accepted">{{cite web |title=SIGMOD 2024 Industrial Track: Accepted Papers |url=https://2024.sigmod.org/industrial-list.shtml |website=SIGMOD 2024 |access-date=2026-03-22}}</ref><ref name="sigmod-paper" /> In April 2024, the project graduated from Apache Arrow and became a top-level Apache project.<ref name="asf-tlp" />
 
 == Features ==
 
