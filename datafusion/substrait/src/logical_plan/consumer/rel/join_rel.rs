@@ -101,7 +101,9 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
             }) => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => match op {
                     Operator::Eq => eq_keys.push((l.clone(), r.clone())),
-                    Operator::IsNotDistinctFrom => indistinct_keys.push((l.clone(), r.clone())),
+                    Operator::IsNotDistinctFrom => {
+                        indistinct_keys.push((l.clone(), r.clone()))
+                    }
                     _ => unreachable!(),
                 },
                 _ => accum_filters.push(expr.clone()),
@@ -110,26 +112,26 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
         }
     }
 
-    let (join_keys, null_equality) = match (eq_keys.is_empty(), indistinct_keys.is_empty())
-    {
-        // Mixed: use eq_keys as equijoin keys, demote indistinct keys to filter
-        (false, false) => {
-            for (l, r) in &indistinct_keys {
-                accum_filters.push(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(Expr::Column(l.clone())),
-                    op: Operator::IsNotDistinctFrom,
-                    right: Box::new(Expr::Column(r.clone())),
-                }));
+    let (join_keys, null_equality) =
+        match (eq_keys.is_empty(), indistinct_keys.is_empty()) {
+            // Mixed: use eq_keys as equijoin keys, demote indistinct keys to filter
+            (false, false) => {
+                for (l, r) in &indistinct_keys {
+                    accum_filters.push(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(Expr::Column(l.clone())),
+                        op: Operator::IsNotDistinctFrom,
+                        right: Box::new(Expr::Column(r.clone())),
+                    }));
+                }
+                (eq_keys, NullEquality::NullEqualsNothing)
             }
-            (eq_keys, NullEquality::NullEqualsNothing)
-        }
-        // Only eq keys
-        (false, true) => (eq_keys, NullEquality::NullEqualsNothing),
-        // Only indistinct keys
-        (true, false) => (indistinct_keys, NullEquality::NullEqualsNull),
-        // No keys at all
-        (true, true) => (vec![], NullEquality::NullEqualsNothing),
-    };
+            // Only eq keys
+            (false, true) => (eq_keys, NullEquality::NullEqualsNothing),
+            // Only indistinct keys
+            (true, false) => (indistinct_keys, NullEquality::NullEqualsNull),
+            // No keys at all
+            (true, true) => (vec![], NullEquality::NullEqualsNothing),
+        };
 
     let join_filter = accum_filters.into_iter().reduce(Expr::and);
     (join_keys, null_equality, join_filter)
@@ -224,7 +226,8 @@ mod tests {
         assert_eq!(null_eq, NullEquality::NullEqualsNothing);
 
         // The IsNotDistinctFrom predicate should be demoted to the filter.
-        let filter = filter.expect("filter should contain the demoted indistinct predicate");
+        let filter =
+            filter.expect("filter should contain the demoted indistinct predicate");
         match &filter {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 assert_eq!(*op, Operator::IsNotDistinctFrom);

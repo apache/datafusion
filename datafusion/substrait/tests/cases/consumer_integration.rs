@@ -763,37 +763,38 @@ mod tests {
         Ok(())
     }
 
-    /// Regression test: a Substrait join expression containing both `equal` and
-    /// `is_not_distinct_from` (as Spark can produce) must preserve the
-    /// null-safe semantics of `IS NOT DISTINCT FROM` by demoting it to the
-    /// join filter when mixed with regular equality keys.
-    ///
-    /// The plan is loaded from a JSON-encoded Substrait protobuf to exercise
-    /// the full consumer path (`from_substrait_plan` → `from_join_rel`).
+    /// Regression: a Substrait join with both `equal` and `is_not_distinct_from`
+    /// must demote `IS NOT DISTINCT FROM` to the join filter (matching the SQL
+    /// planner behavior tested in `join_is_not_distinct_from.slt:179-205`).
     #[tokio::test]
     async fn test_mixed_join_equal_and_indistinct_from_substrait_plan() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("mixed_join_equal_and_indistinct.json").await?;
+        // Eq becomes the equijoin key; IS NOT DISTINCT FROM is demoted to filter.
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Projection: left.id, left.val, left.comment, right.id AS id0, right.val AS val0, right.comment AS comment0
+          Inner Join: left.id = right.id Filter: left.val IS NOT DISTINCT FROM right.val
+            SubqueryAlias: left
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+            SubqueryAlias: right
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+        "#
+        );
+
+        // Also execute to verify NULL=NULL rows (ids 3,4) are preserved.
         let path = "tests/testdata/test_plans/mixed_join_equal_and_indistinct.json";
         let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
             File::open(path).expect("file not found"),
         ))
         .expect("failed to parse json");
-
         let ctx = SessionContext::new();
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
-
-        // Execute and count rows.
-        // Both tables have 6 identical rows; rows 3 and 4 have val=NULL.
-        // With correct handling, IS NOT DISTINCT FROM is demoted to the join
-        // filter, so NULL=NULL matches and all 6 rows appear in the output.
         let df = ctx.execute_logical_plan(plan).await?;
         let results = df.collect().await?;
         let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
-
-        assert_eq!(
-            total_rows, 6,
-            "Expected 6 rows (including NULL=NULL matches via IS NOT DISTINCT FROM), \
-             got {total_rows}. Mixed equal/is_not_distinct_from lost null-safe semantics."
-        );
+        assert_eq!(total_rows, 6);
 
         Ok(())
     }
