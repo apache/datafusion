@@ -277,10 +277,41 @@ fn nested_list_table_schema(
     ]))
 }
 
-async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Result<()> {
+// Helper to set up a nested list test fixture.
+// Creates an in-memory store, writes the provided batches to parquet files,
+// creates a SessionContext, and registers the resulting table.
+// Returns the prepared context ready for queries.
+async fn setup_nested_list_test(
+    kind: NestedListKind,
+    prefix_base: &str,
+    batches: Vec<(String, RecordBatch)>,
+    table_schema: SchemaRef,
+) -> SessionContext {
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let prefix = format!("{}_struct_evolution", kind.name());
+    let prefix = format!("{}_{}", kind.name(), prefix_base);
 
+    for (filename, batch) in batches {
+        write_parquet(
+            batch,
+            Arc::clone(&store),
+            &format!("{prefix}/{filename}"),
+        )
+        .await;
+    }
+
+    let ctx = test_context();
+    register_memory_listing_table(
+        &ctx,
+        Arc::clone(&store),
+        &format!("memory:///{prefix}/"),
+        table_schema,
+    )
+    .await;
+
+    ctx
+}
+
+async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Result<()> {
     let old_batch = nested_messages_batch(
         kind,
         1,
@@ -312,26 +343,16 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         message_fields(DataType::Utf8, true, true, true),
     );
 
-    write_parquet(
-        old_batch,
-        Arc::clone(&store),
-        &format!("{prefix}/old.parquet"),
-    )
-    .await;
-    write_parquet(
-        new_batch,
-        Arc::clone(&store),
-        &format!("{prefix}/new.parquet"),
-    )
-    .await;
+    let table_schema =
+        nested_list_table_schema(kind, target_message_fields(DataType::Utf8, true));
 
-    let table_schema = nested_list_table_schema(kind, target_message_fields(DataType::Utf8, true));
-
-    let ctx = test_context();
-    register_memory_listing_table(
-        &ctx,
-        Arc::clone(&store),
-        &format!("memory:///{prefix}/"),
+    let ctx = setup_nested_list_test(
+        kind,
+        "struct_evolution",
+        vec![
+            ("old.parquet".to_string(), old_batch),
+            ("new.parquet".to_string(), new_batch),
+        ],
         table_schema,
     )
     .await;
@@ -852,9 +873,6 @@ async fn assert_nested_list_struct_schema_evolution_errors(
     chain_nullable: bool,
     expected_error: &str,
 ) {
-    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let prefix = format!("{}_struct_evolution_error", kind.name());
-
     let batch = nested_messages_batch(
         kind,
         1,
@@ -866,15 +884,14 @@ async fn assert_nested_list_struct_schema_evolution_errors(
         }],
         message_fields(DataType::Utf8, true, true, false),
     );
-    write_parquet(batch, Arc::clone(&store), &format!("{prefix}/data.parquet")).await;
 
-    let table_schema = nested_list_table_schema(kind, target_message_fields(chain_type, chain_nullable));
+    let table_schema =
+        nested_list_table_schema(kind, target_message_fields(chain_type, chain_nullable));
 
-    let ctx = test_context();
-    register_memory_listing_table(
-        &ctx,
-        Arc::clone(&store),
-        &format!("memory:///{prefix}/"),
+    let ctx = setup_nested_list_test(
+        kind,
+        "struct_evolution_error",
+        vec![("data.parquet".to_string(), batch)],
         table_schema,
     )
     .await;
