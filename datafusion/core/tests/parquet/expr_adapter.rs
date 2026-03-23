@@ -127,10 +127,6 @@ fn message_fields(
     fields.into()
 }
 
-fn field_by_name<'a>(fields: &'a Fields, name: &str) -> Option<&'a Field> {
-    fields.iter().find(|field| field.name() == name).map(AsRef::as_ref)
-}
-
 fn nested_messages_batch(
     kind: NestedListKind,
     row_id: i32,
@@ -139,40 +135,35 @@ fn nested_messages_batch(
 ) -> RecordBatch {
     let item_field = Arc::new(Field::new("item", DataType::Struct(fields.clone()), true));
 
-    let ids = Arc::new(Int32Array::from(
-        messages.iter().map(|msg| msg.id).collect::<Vec<_>>(),
-    )) as ArrayRef;
-    let names = Arc::new(StringArray::from(
-        messages
-            .iter()
-            .map(|msg| Some(msg.name))
-            .collect::<Vec<_>>(),
-    )) as ArrayRef;
+    let ids_vec: Vec<i32> = messages.iter().map(|msg| msg.id).collect();
+    let names_vec: Vec<Option<&str>> =
+        messages.iter().map(|msg| Some(msg.name)).collect();
+    let chain_vec: Vec<Option<&str>> = messages.iter().map(|msg| msg.chain).collect();
+    let ignored_vec: Vec<Option<i32>> = messages.iter().map(|msg| msg.ignored).collect();
 
-    let mut columns = vec![ids, names];
-    if let Some(chain_field) = field_by_name(&fields, "chain") {
-        match chain_field.data_type() {
-            DataType::Utf8 => columns.push(Arc::new(StringArray::from(
-                messages.iter().map(|msg| msg.chain).collect::<Vec<_>>(),
-            )) as ArrayRef),
-            DataType::Struct(chain_fields) => {
-                let chain_struct = StructArray::new(
-                    chain_fields.clone(),
-                    vec![Arc::new(StringArray::from(
-                        messages.iter().map(|msg| msg.chain).collect::<Vec<_>>(),
-                    )) as ArrayRef],
-                    None,
-                );
-                columns.push(Arc::new(chain_struct) as ArrayRef);
-            }
-            other => panic!("unexpected chain field type: {other:?}"),
-        }
-    }
-    if field_by_name(&fields, "ignored").is_some() {
-        columns.push(Arc::new(Int32Array::from(
-            messages.iter().map(|msg| msg.ignored).collect::<Vec<_>>(),
-        )) as ArrayRef);
-    }
+    let columns: Vec<ArrayRef> = fields
+        .iter()
+        .map(|field| match field.name().as_str() {
+            "id" => Arc::new(Int32Array::from(ids_vec.clone())) as ArrayRef,
+            "name" => Arc::new(StringArray::from(names_vec.clone())) as ArrayRef,
+            "chain" => match field.data_type() {
+                DataType::Utf8 => {
+                    Arc::new(StringArray::from(chain_vec.clone())) as ArrayRef
+                }
+                DataType::Struct(chain_fields) => {
+                    let chain_struct = StructArray::new(
+                        chain_fields.clone(),
+                        vec![Arc::new(StringArray::from(chain_vec.clone())) as ArrayRef],
+                        None,
+                    );
+                    Arc::new(chain_struct) as ArrayRef
+                }
+                other => panic!("unexpected chain field type: {other:?}"),
+            },
+            "ignored" => Arc::new(Int32Array::from(ignored_vec.clone())) as ArrayRef,
+            other => panic!("unexpected nested field: {other}"),
+        })
+        .collect();
 
     let struct_array = StructArray::new(fields.clone(), columns, None);
     let messages_array = kind.array(
