@@ -187,7 +187,10 @@ impl LambdaUDF for ArrayTransform {
         // Fast path for fully null input array and also the only way to safely work with
         // a fully null fixed size list array as it can't be handled by remove_list_null_values below
         if list_array.null_count() == list_array.len() {
-            return Ok(ColumnarValue::Array(new_null_array(args.return_type(), list_array.len())))
+            return Ok(ColumnarValue::Array(new_null_array(
+                args.return_type(),
+                list_array.len(),
+            )));
         }
 
         // null sublists may contain values that cause problems, like a 0 used on a division
@@ -287,15 +290,11 @@ fn value_lambda_pair<'a, V: Debug, L: Debug>(
 //todo: make this function public and move to a more generic crate like datafusion-common
 fn remove_list_null_values(list: &dyn Array) -> Result<ArrayRef> {
     match list.data_type() {
-        DataType::List(_) => {
-            Ok(Arc::new(truncate_nulls(list.as_list::<i32>())?))
-        }
-        DataType::LargeList(_) => {
-            Ok(Arc::new(truncate_nulls(list.as_list::<i64>())?))
-        }
-        DataType::FixedSizeList(_, _) => {
-            Ok(Arc::new(replace_nulls_with_valid(list.as_fixed_size_list())?))
-        }
+        DataType::List(_) => Ok(Arc::new(truncate_nulls(list.as_list::<i32>())?)),
+        DataType::LargeList(_) => Ok(Arc::new(truncate_nulls(list.as_list::<i64>())?)),
+        DataType::FixedSizeList(_, _) => Ok(Arc::new(replace_nulls_with_valid(
+            list.as_fixed_size_list(),
+        )?)),
         dt => exec_err!("expected list, got {dt}"),
     }
 }

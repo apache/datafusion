@@ -184,7 +184,6 @@ pub fn value_fields_with_lambda_udf<L: Clone>(
                 );
             }
 
-
             // coerced_types has been partitioned from current_fields
             // and refers only to values and not to lambdas, so instead
             // of zipping them, we iterate over current_fields and only
