@@ -267,3 +267,7 @@ SELECT id, string_col, int_col, bigint_col FROM alltypes_plain ORDER BY id LIMIT
 2 0 0 0
 3 1 1 10
 4 0 0 0
+
+# Config reset
+statement ok
+reset datafusion.sql_parser.map_string_types_to_utf8view;

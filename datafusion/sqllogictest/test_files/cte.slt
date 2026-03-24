@@ -1232,3 +1232,13 @@ explain WITH RECURSIVE numbers AS (
   UNION ALL
   select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
+
+# Config reset
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+RESET datafusion.execution.enable_recursive_ctes;
+
+statement ok
+RESET datafusion.sql_parser.enable_ident_normalization;
