@@ -508,7 +508,9 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         let result_expr = result_expr.unalias();
-        let info = SimplifyContext::default().with_schema(Arc::clone(schema));
+        let info = SimplifyContext::builder()
+            .with_schema(Arc::clone(schema))
+            .build();
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
@@ -541,7 +543,9 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         if result_expr.ne(expr) {
-            let info = SimplifyContext::default().with_schema(Arc::clone(schema));
+            let info = SimplifyContext::builder()
+                .with_schema(Arc::clone(schema))
+                .build();
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
@@ -581,7 +585,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         .data()?;
 
     let pull_up_expr = if result_expr.ne(filter_expr) {
-        let info = SimplifyContext::default().with_schema(schema);
+        let info = SimplifyContext::builder().with_schema(schema).build();
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
