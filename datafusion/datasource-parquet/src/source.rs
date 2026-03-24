@@ -23,19 +23,22 @@ use std::sync::Arc;
 
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
-use crate::opener::ParquetOpener;
-use crate::opener::build_pruning_predicates;
+use crate::ParquetMorselizer;
+use crate::opener::{
+    EncryptionContext, ParquetMorselizerState, build_pruning_predicates,
+};
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
+use datafusion_datasource::morsel::Morselizer;
 
 use arrow::datatypes::TimeUnit;
-use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{DataFusionError, internal_err};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -474,6 +477,75 @@ impl ParquetSource {
         }
     }
 
+    fn create_parquet_morselizer(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> datafusion_common::Result<ParquetMorselizer> {
+        let expr_adapter_factory = base_config
+            .expr_adapter_factory
+            .clone()
+            .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory) as _);
+
+        let parquet_file_reader_factory =
+            self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
+                Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
+            });
+
+        #[cfg(not(feature = "parquet_encryption"))]
+        let encryption_context = EncryptionContext::default();
+
+        #[cfg(feature = "parquet_encryption")]
+        let encryption_context = {
+            let file_decryption_properties = self
+                .table_parquet_options()
+                .crypto
+                .file_decryption
+                .clone()
+                .map(FileDecryptionProperties::from)
+                .map(Arc::new);
+
+            EncryptionContext::new(
+                file_decryption_properties,
+                self.get_encryption_factory_with_config(),
+            )
+        };
+
+        let coerce_int96 = self
+            .table_parquet_options
+            .global
+            .coerce_int96
+            .as_ref()
+            .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
+
+        Ok(ParquetMorselizer::new(ParquetMorselizerState {
+            partition_index: partition,
+            projection: self.projection.clone(),
+            batch_size: self
+                .batch_size
+                .expect("Batch size must set before creating ParquetMorselizer"),
+            limit: base_config.limit,
+            preserve_order: base_config.preserve_order,
+            predicate: self.predicate.clone(),
+            table_schema: self.table_schema.clone(),
+            metadata_size_hint: self.metadata_size_hint,
+            metrics: self.metrics().clone(),
+            parquet_file_reader_factory,
+            pushdown_filters: self.pushdown_filters(),
+            reorder_filters: self.reorder_filters(),
+            force_filter_selections: self.force_filter_selections(),
+            enable_page_index: self.enable_page_index(),
+            enable_bloom_filter: self.bloom_filter_on_read(),
+            enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
+            coerce_int96,
+            expr_adapter_factory,
+            encryption_context,
+            max_predicate_cache_size: self.max_predicate_cache_size(),
+            reverse_row_groups: self.reverse_row_groups,
+        }))
+    }
+
     pub(crate) fn with_reverse_row_groups(mut self, reverse_row_groups: bool) -> Self {
         self.reverse_row_groups = reverse_row_groups;
         self
@@ -512,65 +584,24 @@ impl From<ParquetSource> for Arc<dyn FileSource> {
 impl FileSource for ParquetSource {
     fn create_file_opener(
         &self,
+        _object_store: Arc<dyn ObjectStore>,
+        _base_config: &FileScanConfig,
+        _partition: usize,
+    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
+        internal_err!(
+            "ParquetSource::create_file_opener called but it supports Morsel API"
+        )
+    }
+
+    fn create_morselizer(
+        &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
-        let expr_adapter_factory = base_config
-            .expr_adapter_factory
-            .clone()
-            .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory) as _);
-
-        let parquet_file_reader_factory =
-            self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
-                Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
-            });
-
-        #[cfg(feature = "parquet_encryption")]
-        let file_decryption_properties = self
-            .table_parquet_options()
-            .crypto
-            .file_decryption
-            .clone()
-            .map(FileDecryptionProperties::from)
-            .map(Arc::new);
-
-        let coerce_int96 = self
-            .table_parquet_options
-            .global
-            .coerce_int96
-            .as_ref()
-            .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
-
-        let opener = Arc::new(ParquetOpener {
-            partition_index: partition,
-            projection: self.projection.clone(),
-            batch_size: self
-                .batch_size
-                .expect("Batch size must set before creating ParquetOpener"),
-            limit: base_config.limit,
-            preserve_order: base_config.preserve_order,
-            predicate: self.predicate.clone(),
-            table_schema: self.table_schema.clone(),
-            metadata_size_hint: self.metadata_size_hint,
-            metrics: self.metrics().clone(),
-            parquet_file_reader_factory,
-            pushdown_filters: self.pushdown_filters(),
-            reorder_filters: self.reorder_filters(),
-            force_filter_selections: self.force_filter_selections(),
-            enable_page_index: self.enable_page_index(),
-            enable_bloom_filter: self.bloom_filter_on_read(),
-            enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
-            coerce_int96,
-            #[cfg(feature = "parquet_encryption")]
-            file_decryption_properties,
-            expr_adapter_factory,
-            #[cfg(feature = "parquet_encryption")]
-            encryption_factory: self.get_encryption_factory_with_config(),
-            max_predicate_cache_size: self.max_predicate_cache_size(),
-            reverse_row_groups: self.reverse_row_groups,
-        });
-        Ok(opener)
+    ) -> datafusion_common::Result<Box<dyn Morselizer>> {
+        let morselizer =
+            self.create_parquet_morselizer(object_store, base_config, partition)?;
+        Ok(Box::new(morselizer))
     }
 
     fn as_any(&self) -> &dyn Any {

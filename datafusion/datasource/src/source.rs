@@ -229,19 +229,9 @@ pub trait DataSource: Send + Sync + Debug {
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
 
-    /// Injects arbitrary run-time state into this DataSource, returning a new instance
-    /// that incorporates that state *if* it is relevant to the concrete DataSource implementation.
-    ///
-    /// This is a generic entry point: the `state` can be any type wrapped in
-    /// `Arc<dyn Any + Send + Sync>`.  A data source that cares about the state should
-    /// down-cast it to the concrete type it expects and, if successful, return a
-    /// modified copy of itself that captures the provided value.  If the state is
-    /// not applicable, the default behaviour is to return `None` so that parent
-    /// nodes can continue propagating the attempt further down the plan tree.
-    fn with_new_state(
-        &self,
-        _state: Arc<dyn Any + Send + Sync>,
-    ) -> Option<Arc<dyn DataSource>> {
+    /// Return an equivalent data source with a fresh shared runtime state, if
+    /// this concrete data source needs one.
+    fn with_new_shared_state(&self) -> Option<Arc<dyn DataSource>> {
         None
     }
 }
@@ -308,6 +298,18 @@ impl ExecutionPlan for DataSourceExec {
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        // Rebuild the data source so runtime-only shared stream state does not
+        // leak across executions of the same logical scan.
+        let data_source = self
+            .data_source
+            .with_new_shared_state()
+            .unwrap_or_else(|| Arc::clone(&self.data_source));
+        Ok(Arc::new(
+            self.as_ref().clone().with_data_source(data_source),
+        ))
     }
 
     /// Implementation of [`ExecutionPlan::repartitioned`] which relies upon the inner [`DataSource::repartitioned`].
@@ -451,14 +453,9 @@ impl ExecutionPlan for DataSourceExec {
 
     fn with_new_state(
         &self,
-        state: Arc<dyn Any + Send + Sync>,
+        _state: Arc<dyn Any + Send + Sync>,
     ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.data_source
-            .with_new_state(state)
-            .map(|new_data_source| {
-                Arc::new(self.clone().with_data_source(new_data_source))
-                    as Arc<dyn ExecutionPlan>
-            })
+        None
     }
 }
 

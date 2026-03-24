@@ -47,6 +47,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
+crossbeam-queue = "0.3"
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -72,6 +73,7 @@ zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+insta = { workspace = true }
 tempfile = { workspace = true }
 
 # Note: add additional linter rules in lib.rs.

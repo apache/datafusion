@@ -94,6 +94,22 @@ pub struct GlobalRequirements {
     preserve_order: bool,
 }
 
+// TODO: File ticket -- the preserve_order flag was not correctly set in certain limit cases
+
+/// Returns true if pushing a fetch through `plan` must also preserve input
+/// ordering semantics.
+///
+/// This is needed for plans such as [`SortPreservingMergeExec`] that absorb a
+/// fetch while still relying on their input partitions to remain ordered.
+fn fetch_requires_preserve_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.required_input_ordering()
+        .into_iter()
+        .zip(plan.maintains_input_order())
+        .any(|(ordering, maintains_input_order)| {
+            ordering.is_some() && maintains_input_order
+        })
+}
+
 impl LimitPushdown {
     #[expect(missing_docs)]
     pub fn new() -> Self {
@@ -223,6 +239,7 @@ pub fn pushdown_limit_helper(
             0,
             pushdown_plan.fetch(),
         );
+        global_state.preserve_order |= fetch_requires_preserve_order(&pushdown_plan);
     }
 
     let Some(global_fetch) = global_state.fetch else {

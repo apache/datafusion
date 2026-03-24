@@ -20,9 +20,15 @@
 
 use crate::file_groups::FileGroup;
 use crate::{
-    PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType, file_stream::FileStream,
-    source::DataSource, statistics::MinMaxStatistics,
+    PartitionedFile,
+    display::FileGroupsDisplay,
+    file::FileSource,
+    file_compression_type::FileCompressionType,
+    file_stream::{
+        FileStreamBuilder, SharedFileStreamState, new_shared_file_stream_state,
+    },
+    source::DataSource,
+    statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -208,6 +214,8 @@ pub struct FileScanConfig {
     /// If the number of file partitions > target_partitions, the file partitions will be grouped
     /// in a round-robin fashion such that number of file partitions = target_partitions.
     pub partitioned_by_file_group: bool,
+    /// Shared scheduling state across sibling `FileStream`s for this scan.
+    pub(crate) shared_file_stream_state: SharedFileStreamState,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -533,6 +541,7 @@ impl FileScanConfigBuilder {
         });
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
+        let num_file_groups = file_groups.len();
 
         // If there is an output ordering, we should preserve it.
         let preserve_order = preserve_order || !output_ordering.is_empty();
@@ -550,6 +559,10 @@ impl FileScanConfigBuilder {
             expr_adapter_factory: expr_adapter,
             statistics,
             partitioned_by_file_group,
+            shared_file_stream_state: new_shared_file_stream_state(
+                num_file_groups,
+                preserve_order,
+            ),
         }
     }
 }
@@ -586,9 +599,16 @@ impl DataSource for FileScanConfig {
 
         let source = self.file_source.with_batch_size(batch_size);
 
-        let opener = source.create_file_opener(object_store, self, partition)?;
+        let morselizer = source.create_morselizer(object_store, self, partition)?;
 
-        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        let stream = FileStreamBuilder::new_with_morselizer(
+            self,
+            partition,
+            morselizer,
+            source.metrics(),
+        )
+        .with_shared_state(self.shared_file_stream_state.clone())
+        .build()?;
         Ok(Box::pin(cooperative(stream)))
     }
 
@@ -940,6 +960,16 @@ impl DataSource for FileScanConfig {
     ) -> Result<TreeNodeRecursion> {
         // Delegate to the file source
         self.file_source.apply_expressions(f)
+    }
+
+    fn with_new_shared_state(&self) -> Option<Arc<dyn DataSource>> {
+        Some(Arc::new(FileScanConfig {
+            shared_file_stream_state: new_shared_file_stream_state(
+                self.file_groups.len(),
+                self.preserve_order,
+            ),
+            ..self.clone()
+        }))
     }
 }
 
@@ -2451,6 +2481,56 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    // TODO reduce repetition
+    fn test_reset_state_recreates_shared_file_stream_state() {
+        use crate::source::DataSourceExec;
+        use datafusion_physical_plan::ExecutionPlan;
+
+        let table_schema = TableSchema::new(
+            Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)])),
+            vec![],
+        );
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_file(PartitionedFile::new("test.parquet", 10))
+        .build();
+
+        let exec = DataSourceExec::from_data_source(config);
+        let initial_config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .unwrap();
+        let initial_state = &initial_config.shared_file_stream_state;
+
+        assert_eq!(initial_state.registered_stream_count(), 0);
+        initial_state.register_stream();
+        assert_eq!(initial_state.registered_stream_count(), 1);
+
+        // expect that reset_state clears the configuration
+        let reset_exec = exec.reset_state().unwrap();
+        let reset_exec = reset_exec
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .unwrap();
+        let reset_config = reset_exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .unwrap();
+        let reset_state = &reset_config.shared_file_stream_state;
+
+        assert_eq!(
+            reset_state.registered_stream_count(),
+            0,
+            "reset_state should attach a fresh shared file stream state"
+        );
     }
 
     #[test]
