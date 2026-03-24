@@ -46,6 +46,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::instant::Instant;
 
 use crate::morsel::{FileOpenerMorselizer, Morsel, MorselPlanner, Morselizer};
+use datafusion_common_runtime::SpawnedTask;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{FutureExt, Stream, StreamExt as _};
@@ -596,14 +597,25 @@ impl FileStream {
     /// according to `OnError`.
     fn check_io(&mut self, cx: &mut Context<'_>) -> Result<()> {
         for mut waiting_planner in self.queues.take_waiting_planners() {
-            match waiting_planner.io_future.poll_unpin(cx) {
-                Poll::Ready(Ok(())) => {
+            match waiting_planner.io_task.poll_unpin(cx) {
+                Poll::Ready(Ok(Ok(()))) => {
                     self.file_stream_metrics.files_opened.add(1);
                     self.push_ready_planners(std::iter::once(waiting_planner.planner));
                     self.trace.io_completed(self.queues.planner_count());
                 }
-                Poll::Ready(Err(e)) => {
+                Poll::Ready(Ok(Err(e))) => {
                     self.file_stream_metrics.file_open_errors.add(1);
+                    match self.on_error {
+                        OnError::Skip => {
+                            self.file_stream_metrics.files_processed.add(1);
+                        }
+                        OnError::Fail => return Err(e),
+                    }
+                }
+                Poll::Ready(Err(join_err)) => {
+                    self.file_stream_metrics.file_open_errors.add(1);
+                    let e =
+                        datafusion_common::DataFusionError::External(Box::new(join_err));
                     match self.on_error {
                         OnError::Skip => {
                             self.file_stream_metrics.files_processed.add(1);
@@ -858,9 +870,13 @@ impl FileStream {
 }
 
 /// A planner that has already discovered its next I/O phase.
+///
+/// The I/O future is spawned onto the tokio runtime so it progresses
+/// independently of when this `FileStream` is polled, enabling true
+/// parallel prefetch of row-group data.
 struct WaitingPlanner {
     planner: Box<dyn MorselPlanner>,
-    io_future: BoxFuture<'static, Result<()>>,
+    io_task: SpawnedTask<Result<()>>,
     _io_permit: OutstandingIoPermit,
 }
 
@@ -870,9 +886,10 @@ impl WaitingPlanner {
         io_future: BoxFuture<'static, Result<()>>,
         io_permit: OutstandingIoPermit,
     ) -> Self {
+        let io_task = SpawnedTask::spawn(io_future);
         Self {
             planner,
-            io_future,
+            io_task,
             _io_permit: io_permit,
         }
     }
