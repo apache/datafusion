@@ -480,3 +480,13 @@ SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551555s'
 
 statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60 \+ secs' when setting 'datafusion\.runtime\.list_files_cache_ttl'
 SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
+
+# Config reset
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema
+
+statement ok
+RESET datafusion.catalog.information_schema
+
+statement ok
+RESET datafusion.execution.coalesce_batches

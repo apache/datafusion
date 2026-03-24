@@ -259,6 +259,19 @@ SELECT t1.a, t2.x FROM t1 INNER JOIN t2 ON t1.a = t2.x LIMIT 100;
 2 2
 3 3
 
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.explain.logical_plan_only;
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;
+
 statement ok
 DROP TABLE t1;
 

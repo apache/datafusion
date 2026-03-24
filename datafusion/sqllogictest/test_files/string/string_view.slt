@@ -1192,5 +1192,9 @@ logical_plan
 01)Projection: temp.column2 || temp.column3
 02)--TableScan: temp projection=[column2, column3]
 
+# Config reset
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
 statement ok
 drop table test

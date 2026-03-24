@@ -635,7 +635,10 @@ SELECT id, s['value'] + 1 FROM simple_struct WHERE id > 1 ORDER BY id LIMIT 2;
 # Section 7: Multi-Partition Tests
 #####################
 
-# Set target_partitions = 4 for parallel execution
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
@@ -1990,3 +1993,10 @@ FROM t
 WHERE COALESCE(get_field(s, 'f1'), get_field(s, 'f2')) = 1;
 ----
 1
+
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4;
