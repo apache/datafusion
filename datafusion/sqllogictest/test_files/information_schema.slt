@@ -870,3 +870,18 @@ date_trunc Timestamp(ns, "+TZ") [precision, expression] [String, Timestamp(ns, "
 
 statement ok
 show functions
+
+# Config reset
+statement ok
+reset datafusion.catalog.information_schema;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.execution.planning_concurrency;
+
+statement ok
+reset datafusion.execution.parquet.created_by;

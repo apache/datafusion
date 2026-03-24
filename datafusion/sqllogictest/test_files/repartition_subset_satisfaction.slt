@@ -519,6 +519,22 @@ prod 2023-01-01T09:12:30 197.7
 # CLEANUP
 ##########
 
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.enable_round_robin_repartition;
+
+statement ok
+reset datafusion.optimizer.preserve_file_partitions;
+
+statement ok
+reset datafusion.optimizer.subset_repartition_threshold;
+
 statement ok
 DROP TABLE fact_table_ordered;
 

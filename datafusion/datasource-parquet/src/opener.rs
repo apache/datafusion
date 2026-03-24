@@ -48,7 +48,7 @@ use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
@@ -135,6 +135,7 @@ impl FileOpener for ParquetOpener {
         let file_name = file_location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, self.partition_index);
 
         let metadata_size_hint = partitioned_file
             .metadata_size_hint
@@ -605,6 +606,7 @@ impl FileOpener for ParquetOpener {
                     arrow_reader_metrics,
                     predicate_cache_inner_records,
                     predicate_cache_records,
+                    baseline_metrics,
                 },
                 |mut state| async move {
                     let result = state.transition().await;
@@ -646,6 +648,7 @@ struct PushDecoderStreamState {
     arrow_reader_metrics: ArrowReaderMetrics,
     predicate_cache_inner_records: Gauge,
     predicate_cache_records: Gauge,
+    baseline_metrics: BaselineMetrics,
 }
 
 impl PushDecoderStreamState {
@@ -671,8 +674,11 @@ impl PushDecoderStreamState {
                     }
                 }
                 Ok(DecodeResult::Data(batch)) => {
+                    let mut timer = self.baseline_metrics.elapsed_compute().timer();
                     self.copy_arrow_reader_metrics();
-                    return Some(self.project_batch(&batch));
+                    let result = self.project_batch(&batch);
+                    timer.stop();
+                    return Some(result);
                 }
                 Ok(DecodeResult::Finished) => {
                     return None;
