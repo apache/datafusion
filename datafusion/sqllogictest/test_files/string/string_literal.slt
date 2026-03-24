@@ -138,10 +138,10 @@ SELECT substr(1, 3)
 statement error Function 'substr' failed to match any signature
 SELECT substr(1, 3, 4)
 
-statement error Execution error: negative substring length not allowed
+statement error Execution error: negative count not allowed
 select substr(arrow_cast('foo', 'Utf8View'), 1, -1);
 
-statement error Execution error: negative substring length not allowed
+statement error Execution error: negative count not allowed
 select substr('', 1, -1);
 
 # StringView scalar to StringView scalar

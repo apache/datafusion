@@ -285,6 +285,7 @@ SELECT id, string_col, int_col, bigint_col FROM alltypes_plain ORDER BY id LIMIT
 3 1 1 10
 4 0 0 0
 
+<<<<<<< HEAD
 # projection should follow column names even when external table column order differs
 query TB
 SELECT string_col, bool_col FROM alltypes_plain_reordered ORDER BY id LIMIT 2
@@ -298,3 +299,8 @@ EXPLAIN SELECT string_col, bool_col FROM alltypes_plain_reordered
 ----
 logical_plan TableScan: alltypes_plain_reordered projection=[string_col, bool_col]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/alltypes_plain.avro]]}, projection=[string_col, bool_col], file_type=avro
+
+
+# Config reset
+statement ok
+reset datafusion.sql_parser.map_string_types_to_utf8view;
