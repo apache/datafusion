@@ -47,8 +47,8 @@ use std::fs;
 use std::io::{IsTerminal, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(feature = "postgres")]
@@ -74,6 +74,19 @@ enum TimingSummaryMode {
 struct FileTiming {
     relative_path: PathBuf,
     elapsed: Duration,
+}
+
+type DataFusionConfigChangeErrors = Arc<Mutex<Vec<String>>>;
+
+fn config_change_result(
+    config_change_errors: &DataFusionConfigChangeErrors,
+) -> Result<()> {
+    let errors = config_change_errors.lock().unwrap();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(DataFusionError::External(errors.join("\n\n").into()))
+    }
 }
 
 pub fn main() -> Result<()> {
@@ -482,7 +495,7 @@ async fn run_test_file_substrait_round_trip(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let res = run_file_in_runner(path, runner, filters, colored_output).await;
+    let res = run_file_in_runner(path, &mut runner, filters, colored_output).await;
     pb.finish_and_clear();
     res
 }
@@ -512,26 +525,37 @@ async fn run_test_file(
     pb.set_style(mp_style);
     pb.set_message(format!("{:?}", &relative_path));
 
+    // If DataFusion configuration has changed during test file runs, errors will be
+    // pushed to this vec.
+    // HACK: managed externally because `sqllogictest` is an external dependency, and
+    // it doesn't have an API to directly access the inner runner.
+    let config_change_errors = Arc::new(Mutex::new(Vec::new()));
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
             pb.clone(),
         )
-        .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone()))
+        .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone())
+        .with_config_change_errors(Arc::clone(&config_change_errors)))
     });
     runner.add_label("Datafusion");
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner, filters, colored_output).await;
+    let result = run_file_in_runner(path, &mut runner, filters, colored_output).await;
     pb.finish_and_clear();
-    result
+
+    result?;
+
+    // If there was no correctness error, check that the config is unchanged.
+    runner.shutdown_async().await;
+    config_change_result(&config_change_errors)
 }
 
 async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     path: PathBuf,
-    mut runner: sqllogictest::Runner<D, M>,
+    runner: &mut sqllogictest::Runner<D, M>,
     filters: &[Filter],
     colored_output: bool,
 ) -> Result<()> {
@@ -644,7 +668,7 @@ async fn run_test_file_with_postgres(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner, filters, false).await;
+    let result = run_file_in_runner(path, &mut runner, filters, false).await;
     pb.finish_and_clear();
     result
 }
@@ -688,13 +712,15 @@ async fn run_complete_file(
     pb.set_style(mp_style);
     pb.set_message(format!("{:?}", &relative_path));
 
+    let config_change_errors = Arc::new(Mutex::new(Vec::new()));
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
             pb.clone(),
         )
-        .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone()))
+        .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone())
+        .with_config_change_errors(Arc::clone(&config_change_errors)))
     });
 
     let col_separator = " ";
@@ -712,7 +738,9 @@ async fn run_complete_file(
 
     pb.finish_and_clear();
 
-    res
+    res?;
+    runner.shutdown_async().await;
+    config_change_result(&config_change_errors)
 }
 
 #[cfg(feature = "postgres")]

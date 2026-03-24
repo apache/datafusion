@@ -1376,8 +1376,13 @@ pub fn ensure_distribution(
                 match requirement {
                     // Operator requires specific distribution.
                     Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
-                        // Since there is no ordering requirement, preserving ordering is pointless
-                        child = replace_order_preserving_variants(child)?;
+                        // If the parent doesn't maintain input order, preserving
+                        // ordering is pointless. However, if it does maintain
+                        // input order, we keep order-preserving variants so
+                        // ordering can flow through to ancestors that need it.
+                        if !maintains {
+                            child = replace_order_preserving_variants(child)?;
+                        }
                     }
                     Distribution::UnspecifiedDistribution => {
                         // Since ordering is lost, trying to preserve ordering is pointless

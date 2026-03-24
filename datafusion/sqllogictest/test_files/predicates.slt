@@ -864,5 +864,9 @@ WHERE NULL NOT IN (SELECT * FROM empty); -- all rows should be returned
 ----
 1
 
+# Config reset
+statement ok
+RESET datafusion.catalog.information_schema;
+
 statement ok
 drop table t;
