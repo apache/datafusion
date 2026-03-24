@@ -59,10 +59,11 @@
 //! from future fairness calculations so their share of the budget can be
 //! redistributed.
 
-use super::MorselQueue;
 use crate::morsel::{Morsel, MorselPlanner};
-use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use crossbeam_queue::SegQueue;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::{Arc, RwLock};
 use std::task::Waker;
 
 /// Shared scheduling mode for sibling `FileStream`s.
@@ -117,19 +118,24 @@ pub struct FileStreamId(usize);
 ///
 /// The shared state will wake waiting tasks whenever shared capacity may have
 /// become available again, or when new shared ready work is published.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SharedFileStreamState {
-    inner: Arc<Mutex<SharedFileStreamStateInner>>,
+    /// Shared outstanding-I/O accounting and fairness state.
+    io_state: Arc<RwLock<IoState>>,
+    /// Shared ready morsels used for unordered morsel stealing.
+    ready_morsels: Arc<SegQueue<Box<dyn Morsel>>>,
+    /// Shared ready planners used for unordered morsel stealing.
+    ready_planners: Arc<SegQueue<Box<dyn MorselPlanner>>>,
+    /// Tasks waiting to be woken when shared capacity or ready work appears.
+    waiters: Arc<SegQueue<Waker>>,
 }
 
-#[derive(Debug)]
-struct SharedFileStreamStateInner {
-    /// Shared outstanding-I/O accounting and fairness state.
-    io_state: IoState,
-    /// Shared ready-work queues used for unordered morsel stealing.
-    shared_ready_work: MorselQueue,
-    /// Tasks waiting to be woken when shared capacity or ready work appears.
-    waiters: VecDeque<Waker>,
+impl fmt::Debug for SharedFileStreamState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharedFileStreamState")
+            .field("io_state", &self.io_state)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Shared outstanding-I/O accounting and fairness state for sibling streams.
@@ -161,45 +167,40 @@ impl SharedFileStreamState {
     /// state, not per individual stream.
     pub fn new(max_outstanding_ios: usize, mode: SharedFileStreamMode) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(SharedFileStreamStateInner {
-                io_state: IoState {
-                    mode,
-                    outstanding_ios: 0,
-                    max_outstanding_ios,
-                    next_stream_id: 0,
-                    streams: BTreeMap::new(),
-                },
-                shared_ready_work: MorselQueue::new(VecDeque::new()),
-                waiters: VecDeque::new(),
+            io_state: Arc::new(RwLock::new(IoState {
+                mode,
+                outstanding_ios: 0,
+                max_outstanding_ios,
+                next_stream_id: 0,
+                streams: BTreeMap::new(),
             })),
+            ready_morsels: Arc::new(SegQueue::new()),
+            ready_planners: Arc::new(SegQueue::new()),
+            waiters: Arc::new(SegQueue::new()),
         }
     }
 
     /// Register a sibling stream with this shared state and return its stable id.
     pub fn register_stream(&self) -> FileStreamId {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("shared file stream state poisoned");
-
-        inner.io_state.register_stream()
+        self.io_state
+            .write()
+            .expect("shared file stream state poisoned")
+            .register_stream()
     }
 
     /// Returns the configured shared scheduling mode.
     pub fn mode(&self) -> SharedFileStreamMode {
-        self.inner
-            .lock()
+        self.io_state
+            .read()
             .expect("shared file stream state poisoned")
-            .io_state
             .mode
     }
 
     /// Returns the number of currently registered sibling streams.
     pub fn registered_stream_count(&self) -> usize {
-        self.inner
-            .lock()
+        self.io_state
+            .read()
             .expect("shared file stream state poisoned")
-            .io_state
             .streams
             .len()
     }
@@ -207,20 +208,18 @@ impl SharedFileStreamState {
     /// Returns the maximum number of outstanding planner I/O operations
     /// allowed across all sibling streams.
     pub fn max_outstanding_ios(&self) -> usize {
-        self.inner
-            .lock()
+        self.io_state
+            .read()
             .expect("shared file stream state poisoned")
-            .io_state
             .max_outstanding_ios
     }
 
     /// Returns the number of currently outstanding planner I/O operations
     /// across all sibling streams.
     pub fn outstanding_ios(&self) -> usize {
-        self.inner
-            .lock()
+        self.io_state
+            .read()
             .expect("shared file stream state poisoned")
-            .io_state
             .outstanding_ios
     }
 
@@ -232,17 +231,17 @@ impl SharedFileStreamState {
     /// The stream must not have any outstanding permits when it unregisters.
     pub fn unregister_stream(&self, stream_id: FileStreamId) {
         let waiters = {
-            let mut inner = self
-                .inner
-                .lock()
+            let mut io_state = self
+                .io_state
+                .write()
                 .expect("shared file stream state poisoned");
-            if let Some(stream) = inner.io_state.streams.remove(&stream_id) {
+            if let Some(stream) = io_state.streams.remove(&stream_id) {
                 assert_eq!(
                     stream.outstanding_ios, 0,
                     "stream must not unregister while it still holds I/O permits"
                 );
             }
-            Self::take_waiters_locked(&mut inner)
+            Self::take_waiters(&mut io_state, &self.waiters)
         };
 
         Self::wake_waiters(waiters);
@@ -254,13 +253,13 @@ impl SharedFileStreamState {
     /// Callers should typically register a waker after failing to acquire an
     /// I/O permit and before returning `Poll::Pending`.
     pub fn register_waker(&self, stream_id: FileStreamId, waker: &Waker) {
-        let mut inner = self
-            .inner
-            .lock()
+        let mut io_state = self
+            .io_state
+            .write()
             .expect("shared file stream state poisoned");
 
-        inner.waiters.push_back(waker.clone());
-        if let Some(stream) = inner.io_state.streams.get_mut(&stream_id) {
+        self.waiters.push(waker.clone());
+        if let Some(stream) = io_state.streams.get_mut(&stream_id) {
             stream.waker = Some(waker.clone());
         }
     }
@@ -273,17 +272,17 @@ impl SharedFileStreamState {
         &self,
         stream_id: FileStreamId,
     ) -> Option<OutstandingIoPermit> {
-        let mut inner = self
-            .inner
-            .lock()
+        let mut io_state = self
+            .io_state
+            .write()
             .expect("shared file stream state poisoned");
 
-        if !inner.io_state.can_issue_io(stream_id) {
+        if !io_state.can_issue_io(stream_id) {
             return None;
         }
 
-        inner.io_state.acquire_io(stream_id);
-        drop(inner);
+        io_state.acquire_io(stream_id);
+        drop(io_state);
 
         Some(OutstandingIoPermit {
             state: Some(self.clone()),
@@ -294,12 +293,12 @@ impl SharedFileStreamState {
     /// Publish one ready morsel into the shared queue.
     pub fn push_ready_morsel(&self, morsel: Box<dyn Morsel>) {
         let waiters = {
-            let mut inner = self
-                .inner
-                .lock()
+            self.ready_morsels.push(morsel);
+            let mut io_state = self
+                .io_state
+                .write()
                 .expect("shared file stream state poisoned");
-            inner.shared_ready_work.push_morsel(morsel);
-            Self::take_waiters_locked(&mut inner)
+            Self::take_waiters(&mut io_state, &self.waiters)
         };
         Self::wake_waiters(waiters);
     }
@@ -307,50 +306,45 @@ impl SharedFileStreamState {
     /// Publish one ready planner into the shared queue.
     pub fn push_ready_planner(&self, planner: Box<dyn MorselPlanner>) {
         let waiters = {
-            let mut inner = self
-                .inner
-                .lock()
+            self.ready_planners.push(planner);
+            let mut io_state = self
+                .io_state
+                .write()
                 .expect("shared file stream state poisoned");
-            inner.shared_ready_work.push_ready_planner(planner);
-            Self::take_waiters_locked(&mut inner)
+            Self::take_waiters(&mut io_state, &self.waiters)
         };
         Self::wake_waiters(waiters);
     }
 
     /// Try to steal one ready morsel from the shared queue.
     pub fn pop_ready_morsel(&self) -> Option<Box<dyn Morsel>> {
-        self.inner
-            .lock()
-            .expect("shared file stream state poisoned")
-            .shared_ready_work
-            .pop_morsel()
+        self.ready_morsels.pop()
     }
 
     /// Try to steal one ready planner from the shared queue.
     pub fn pop_ready_planner(&self) -> Option<Box<dyn MorselPlanner>> {
-        self.inner
-            .lock()
-            .expect("shared file stream state poisoned")
-            .shared_ready_work
-            .pop_ready_planner()
+        self.ready_planners.pop()
     }
 
     fn release_io_permit(&self, stream_id: FileStreamId) {
         let waiters = {
-            let mut inner = self
-                .inner
-                .lock()
+            let mut io_state = self
+                .io_state
+                .write()
                 .expect("shared file stream state poisoned");
-            inner.io_state.release_io(stream_id);
-            Self::take_waiters_locked(&mut inner)
+            io_state.release_io(stream_id);
+            Self::take_waiters(&mut io_state, &self.waiters)
         };
 
         Self::wake_waiters(waiters);
     }
 
-    fn take_waiters_locked(inner: &mut SharedFileStreamStateInner) -> Vec<Waker> {
-        let mut waiters = inner.waiters.drain(..).collect::<Vec<_>>();
-        for stream in inner.io_state.streams.values_mut() {
+    fn take_waiters(io_state: &mut IoState, shared_waiters: &SegQueue<Waker>) -> Vec<Waker> {
+        let mut waiters = Vec::new();
+        while let Some(waiter) = shared_waiters.pop() {
+            waiters.push(waiter);
+        }
+        for stream in io_state.streams.values_mut() {
             if let Some(waker) = stream.waker.take() {
                 waiters.push(waker);
             }
