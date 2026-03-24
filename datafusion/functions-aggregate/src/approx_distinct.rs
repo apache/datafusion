@@ -17,8 +17,8 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use crate::hyperloglog::HyperLogLog;
-use arrow::array::{BinaryArray, StringViewArray};
+use crate::hyperloglog::{HLL_HASH_STATE, HyperLogLog};
+use arrow::array::{Array, BinaryArray, StringViewArray};
 use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
@@ -44,7 +44,7 @@ use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 
 make_udaf_expr_and_func!(
@@ -212,8 +212,19 @@ where
 impl Accumulator for StringViewHLLAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array: &StringViewArray = downcast_value!(values[0], StringViewArray);
-        // flatten because we would skip nulls
-        self.hll.extend(array.iter().flatten());
+
+        // When all strings are stored inline in the StringView (≤ 12 bytes),
+        // hash the raw u128 view directly instead of materializing a &str.
+        if array.data_buffers().is_empty() {
+            for (i, &view) in array.views().iter().enumerate() {
+                if !array.is_null(i) {
+                    self.hll.add_hashed(HLL_HASH_STATE.hash_one(view));
+                }
+            }
+        } else {
+            self.hll.extend(array.iter().flatten());
+        }
+
         Ok(())
     }
 

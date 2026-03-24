@@ -1960,3 +1960,13 @@ query I
 SELECT COUNT(*) FROM t0 AS tt0 WHERE (4==(3/0));
 ----
 0
+
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.max_passes;

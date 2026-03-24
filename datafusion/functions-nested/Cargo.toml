@@ -72,6 +72,10 @@ name = "array_concat"
 
 [[bench]]
 harness = false
+name = "array_min_max"
+
+[[bench]]
+harness = false
 name = "array_expression"
 
 [[bench]]
@@ -109,3 +113,7 @@ name = "array_to_string"
 [[bench]]
 harness = false
 name = "array_position"
+
+[[bench]]
+harness = false
+name = "array_sort"

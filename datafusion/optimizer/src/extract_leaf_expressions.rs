@@ -1246,16 +1246,13 @@ fn try_push_into_inputs(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::optimize_projections::OptimizeProjections;
     use crate::test::udfs::PlacementTestUDF;
     use crate::test::*;
     use crate::{Optimizer, OptimizerContext};
-    use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
-    use datafusion_expr::{Expr, ExpressionPlacement};
     use datafusion_expr::{
         ScalarUDF, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };

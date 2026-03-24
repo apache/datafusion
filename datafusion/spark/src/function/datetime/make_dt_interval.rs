@@ -244,13 +244,11 @@ fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Option<i64>
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use arrow::array::{DurationMicrosecondArray, Float64Array, Int32Array};
     use arrow::datatypes::DataType::Duration;
-    use arrow::datatypes::{DataType, Field, TimeUnit::Microsecond};
-    use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
-    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
+    use arrow::datatypes::TimeUnit::Microsecond;
+    use datafusion_common::internal_datafusion_err;
 
     use super::*;
 

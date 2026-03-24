@@ -60,7 +60,6 @@ mod tests {
     use crate::expressions::{Column, col};
     use crate::{LexRequirement, PhysicalSortExpr};
 
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;

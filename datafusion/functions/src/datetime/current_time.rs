@@ -139,9 +139,8 @@ fn datetime_to_time_nanos<Tz: TimeZone>(dt: &chrono::DateTime<Tz>) -> Option<i64
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
+    use datafusion_common::DFSchema;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{DFSchema, ScalarValue};
-    use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
     use std::sync::Arc;
 
     fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> SimplifyContext {
@@ -152,10 +151,11 @@ mod tests {
             Some(tz.to_string())
         };
         let schema = Arc::new(DFSchema::empty());
-        SimplifyContext::default()
+        SimplifyContext::builder()
             .with_schema(schema)
             .with_config_options(Arc::new(config))
             .with_query_execution_start_time(Some(start_time))
+            .build()
     }
 
     #[test]

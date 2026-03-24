@@ -35,6 +35,7 @@ use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
 };
+use crate::limit::LocalLimitExec;
 use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
     EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
@@ -695,7 +696,22 @@ impl ExecutionPlan for FilterExec {
         let filter_input = Arc::clone(self.input());
         let new_predicate = conjunction(unhandled_filters);
         let updated_node = if new_predicate.eq(&lit(true)) {
-            // FilterExec is no longer needed, but we may need to leave a projection in place
+            // FilterExec is no longer needed, but we may need to leave a projection in place.
+            // If this FilterExec had a fetch limit, propagate it to the child.
+            // When the child also has a fetch, use the minimum of both to preserve
+            // the tighter constraint.
+            let filter_input = if let Some(outer_fetch) = self.fetch {
+                let effective_fetch = match filter_input.fetch() {
+                    Some(inner_fetch) => outer_fetch.min(inner_fetch),
+                    None => outer_fetch,
+                };
+                match filter_input.with_fetch(Some(effective_fetch)) {
+                    Some(node) => node,
+                    None => Arc::new(LocalLimitExec::new(filter_input, effective_fetch)),
+                }
+            } else {
+                filter_input
+            };
             match self.projection().as_ref() {
                 Some(projection_indices) => {
                     let filter_child_schema = filter_input.schema();
@@ -1075,7 +1091,6 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
-    use datafusion_common::ScalarValue;
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {

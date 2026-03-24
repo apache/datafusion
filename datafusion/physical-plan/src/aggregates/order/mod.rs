@@ -150,7 +150,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::Int32Array;
 
     #[test]
     fn test_oom_emit_to_none_ordering() {

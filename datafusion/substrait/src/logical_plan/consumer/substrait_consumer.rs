@@ -588,7 +588,7 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
 mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::datatypes::{Field, Schema};
 
     fn make_schema(fields: &[(&str, DataType)]) -> Arc<DFSchema> {
         let arrow_fields: Vec<Field> = fields

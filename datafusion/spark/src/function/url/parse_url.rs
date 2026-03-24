@@ -336,10 +336,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, StringArray};
-    use datafusion_common::Result;
+    use arrow::array::Int32Array;
     use std::array::from_ref;
-    use std::sync::Arc;
 
     fn sa(vals: &[Option<&str>]) -> ArrayRef {
         Arc::new(StringArray::from(vals.to_vec())) as ArrayRef

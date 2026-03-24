@@ -813,7 +813,7 @@ DROP TABLE agg_source;
 statement ok
 DROP TABLE agg_parquet;
 
-# Reset configs to defaults
+# Config reset
 statement ok
 SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
 
@@ -825,3 +825,6 @@ SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
 
 statement ok
 SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+
+statement ok
+RESET datafusion.execution.parquet.max_row_group_size;

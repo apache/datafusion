@@ -446,7 +446,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
     use arrow::array::{GenericStringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;

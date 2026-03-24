@@ -28,7 +28,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 const BATCH_SIZE: usize = 8192;
-const STRING_LENGTH: usize = 20;
+const SHORT_STRING_LENGTH: usize = 8;
+const LONG_STRING_LENGTH: usize = 20;
 
 fn prepare_accumulator(data_type: DataType) -> Box<dyn Accumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", data_type, true)]));
@@ -55,12 +56,12 @@ fn create_i64_array(n_distinct: usize) -> Int64Array {
         .collect()
 }
 
-/// Creates a pool of `n_distinct` random strings.
-fn create_string_pool(n_distinct: usize) -> Vec<String> {
+/// Creates a pool of `n_distinct` random strings of the given length.
+fn create_string_pool(n_distinct: usize, string_length: usize) -> Vec<String> {
     let mut rng = StdRng::seed_from_u64(42);
     (0..n_distinct)
         .map(|_| {
-            (0..STRING_LENGTH)
+            (0..string_length)
                 .map(|_| rng.random_range(b'a'..=b'z') as char)
                 .collect()
         })
@@ -98,29 +99,39 @@ fn approx_distinct_benchmark(c: &mut Criterion) {
             })
         });
 
-        let string_pool = create_string_pool(n_distinct);
+        for (label, str_len) in
+            [("short", SHORT_STRING_LENGTH), ("long", LONG_STRING_LENGTH)]
+        {
+            let string_pool = create_string_pool(n_distinct, str_len);
 
-        // --- Utf8 benchmarks ---
-        let values = Arc::new(create_string_array(&string_pool)) as ArrayRef;
-        c.bench_function(&format!("approx_distinct utf8 {pct}% distinct"), |b| {
-            b.iter(|| {
-                let mut accumulator = prepare_accumulator(DataType::Utf8);
-                accumulator
-                    .update_batch(std::slice::from_ref(&values))
-                    .unwrap()
-            })
-        });
+            // --- Utf8 benchmarks ---
+            let values = Arc::new(create_string_array(&string_pool)) as ArrayRef;
+            c.bench_function(
+                &format!("approx_distinct utf8 {label} {pct}% distinct"),
+                |b| {
+                    b.iter(|| {
+                        let mut accumulator = prepare_accumulator(DataType::Utf8);
+                        accumulator
+                            .update_batch(std::slice::from_ref(&values))
+                            .unwrap()
+                    })
+                },
+            );
 
-        // --- Utf8View benchmarks ---
-        let values = Arc::new(create_string_view_array(&string_pool)) as ArrayRef;
-        c.bench_function(&format!("approx_distinct utf8view {pct}% distinct"), |b| {
-            b.iter(|| {
-                let mut accumulator = prepare_accumulator(DataType::Utf8View);
-                accumulator
-                    .update_batch(std::slice::from_ref(&values))
-                    .unwrap()
-            })
-        });
+            // --- Utf8View benchmarks ---
+            let values = Arc::new(create_string_view_array(&string_pool)) as ArrayRef;
+            c.bench_function(
+                &format!("approx_distinct utf8view {label} {pct}% distinct"),
+                |b| {
+                    b.iter(|| {
+                        let mut accumulator = prepare_accumulator(DataType::Utf8View);
+                        accumulator
+                            .update_batch(std::slice::from_ref(&values))
+                            .unwrap()
+                    })
+                },
+            );
+        }
     }
 }
 

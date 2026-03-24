@@ -228,11 +228,8 @@ mod tests {
     use crate::utils::test::test_function;
     use arrow::array::{Array, BooleanArray, StringArray};
     use arrow::datatypes::DataType::Boolean;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
-    use std::sync::Arc;
 
     use super::*;
 

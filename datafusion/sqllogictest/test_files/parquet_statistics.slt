@@ -92,7 +92,6 @@ physical_plan
 statement ok
 DROP TABLE test_table;
 
-
 ######
 # When the setting is false, the statistics are NOT gathered
 ######
@@ -117,3 +116,13 @@ physical_plan
 # cleanup
 statement ok
 DROP TABLE test_table;
+
+# Config reset
+statement ok
+RESET datafusion.execution.collect_statistics;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
+statement ok
+RESET datafusion.explain.show_statistics;
