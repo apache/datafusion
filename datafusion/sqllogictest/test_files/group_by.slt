@@ -1979,6 +1979,11 @@ SELECT col0, col1, COUNT(col2), SUM(col3) FROM tab3 GROUP BY ALL
 0 2 2 -3
 1 NULL 1 -2
 
+query I
+SELECT COUNT(*) AS c FROM tab3 GROUP BY ALL
+----
+5
+
 # query below should work in multi partition, successfully.
 query II
 SELECT l.col0, LAST_VALUE(r.col1 ORDER BY r.col0) as last_col1

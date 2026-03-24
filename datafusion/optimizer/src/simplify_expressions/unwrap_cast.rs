@@ -588,7 +588,9 @@ mod tests {
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::default().with_schema(Arc::clone(schema)),
+            SimplifyContext::builder()
+                .with_schema(Arc::clone(schema))
+                .build(),
         );
 
         simplifier.simplify(expr).unwrap()
