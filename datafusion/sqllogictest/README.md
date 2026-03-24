@@ -76,7 +76,7 @@ The sqllogictest runner can emit deterministic per-file elapsed timings to help
 identify slow test files.
 
 Timing summary output is disabled by default and enabled with
-`--timing-summary` (or `SLT_TIMING_SUMMARY=1`).
+`--timing-summary` (or `SLT_TIMING_SUMMARY=true`).
 
 When timing summary is enabled, periodic `Progress:` lines are suppressed by
 default to keep output stable.
