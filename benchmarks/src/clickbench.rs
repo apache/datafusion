@@ -208,9 +208,6 @@ impl RunOpt {
         }
 
         let rt = self.common.build_runtime()?;
-        let ctx = SessionContext::new_with_config_rt(config, rt);
-
-        self.register_hits(&ctx).await?;
 
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {
@@ -224,6 +221,12 @@ impl RunOpt {
                 }
                 break;
             };
+
+            // Create a fresh session context for each query so the table
+            // is re-registered (and metadata re-fetched) every time.
+            let ctx = SessionContext::new_with_config_rt(config.clone(), rt.clone());
+            self.register_hits_via_ddl(&ctx).await?;
+
             benchmark_run.start_new_case(&format!("Query {query_id}"));
             let query_run = self.benchmark_query(&sql, query_id, &ctx).await;
             match query_run {
@@ -345,6 +348,21 @@ impl RunOpt {
                 Box::new(e),
             )
         })?;
+        Ok(())
+    }
+
+    /// Registers hits_raw via CREATE EXTERNAL TABLE DDL and creates the hits view.
+    /// This is used to re-register the table for each query to observe metadata fetching.
+    async fn register_hits_via_ddl(&self, ctx: &SessionContext) -> Result<()> {
+        let path = self.path.as_os_str().to_str().unwrap();
+        let create_table_sql = format!(
+            "CREATE EXTERNAL TABLE hits_raw \
+             STORED AS PARQUET \
+             LOCATION '{path}' \
+             OPTIONS ('binary_as_string' 'true')"
+        );
+        ctx.sql(&create_table_sql).await?.collect().await?;
+        ctx.sql(HITS_VIEW_DDL).await?.collect().await?;
         Ok(())
     }
 
