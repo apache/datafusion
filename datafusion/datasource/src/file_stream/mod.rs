@@ -55,15 +55,9 @@ const DEFAULT_OUTSTANDING_IOS_PER_PARTITION: usize = 2;
 
 /// Keep at most this many morsels buffered before pausing additional planning.
 ///
-/// The default is one morsel per available core. The intent is that once work
-/// stealing is added, each other core can find at least one morsel to steal
-/// without requiring the scan to eagerly buffer an unbounded amount of work.
-///
 /// TODO make this a config option
 fn max_buffered_morsels() -> usize {
-    std::thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
+    2
 }
 
 /// Resolve the shared outstanding-I/O budget for one `DataSourceExec`.

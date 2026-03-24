@@ -133,7 +133,7 @@ impl ReadTrace {
     pub(super) fn plan_result(&self, morsels: usize, planners: usize, has_io: bool) {
         self.emit(
             "planner_step",
-            format!("morsels={} planners={} io={}", morsels, planners, has_io),
+            format!("morsels={morsels} planners={planners} io={has_io}"),
         );
     }
 
