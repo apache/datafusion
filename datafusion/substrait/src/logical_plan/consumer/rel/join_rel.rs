@@ -211,8 +211,8 @@ mod tests {
     /// flag stays consistent (NullEqualsNothing for the eq keys).
     #[test]
     fn split_mixed_eq_and_indistinct_demotes_indistinct_to_filter() {
-        let expr = indistinct(col("val_l"), col("val_r"))
-            .and(col("id_l").eq(col("id_r")));
+        let expr =
+            indistinct(col("val_l"), col("val_r")).and(col("id_l").eq(col("id_r")));
 
         let (keys, null_eq, filter) =
             split_eq_and_noneq_join_predicate_with_nulls_equality(expr);

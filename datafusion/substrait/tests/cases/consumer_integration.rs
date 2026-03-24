@@ -26,6 +26,7 @@
 mod tests {
     use crate::utils::test::add_plan_schemas_to_ctx;
     use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::arrow::util::pretty::pretty_format_batches;
     use datafusion::common::Result;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
@@ -33,7 +34,6 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
     use substrait::proto::Plan;
-    use datafusion::arrow::util::pretty::pretty_format_batches;
 
     async fn execute_plan(name: &str) -> Result<Vec<RecordBatch>> {
         let path = format!("tests/testdata/test_plans/{name}");
@@ -53,7 +53,12 @@ mod tests {
         let header = &all_lines[..3];
         let mut data: Vec<&str> = all_lines[3..all_lines.len() - 1].to_vec();
         data.sort();
-        header.iter().copied().chain(data).collect::<Vec<_>>().join("\n")
+        header
+            .iter()
+            .copied()
+            .chain(data)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     async fn tpch_plan_to_string(query_id: i32) -> Result<String> {
