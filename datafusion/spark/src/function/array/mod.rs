@@ -60,7 +60,7 @@ pub mod expr_fn {
     export_functions!((
         sequence,
         "Returns a sequence of the array from the start index and end index.",
-        start stop
+        start stop step
     ));
 }
 
