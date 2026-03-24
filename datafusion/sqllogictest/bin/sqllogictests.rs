@@ -78,10 +78,10 @@ struct FileTiming {
 
 type DataFusionConfigChangeErrors = Arc<Mutex<Vec<String>>>;
 
-fn take_config_change_result(
+fn config_change_result(
     config_change_errors: &DataFusionConfigChangeErrors,
 ) -> Result<()> {
-    let errors = std::mem::take(&mut *config_change_errors.lock().unwrap());
+    let errors = config_change_errors.lock().unwrap();
     if errors.is_empty() {
         Ok(())
     } else {
@@ -527,6 +527,8 @@ async fn run_test_file(
 
     // If DataFusion configuration has changed during test file runs, errors will be
     // pushed to this vec.
+    // HACK: managed externally because `sqllogictest` is an external dependency, and
+    // it doesn't have an API to directly access the inner runner.
     let config_change_errors = Arc::new(Mutex::new(Vec::new()));
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
@@ -548,7 +550,7 @@ async fn run_test_file(
 
     // If there was no correctness error, check that the config is unchanged.
     runner.shutdown_async().await;
-    take_config_change_result(&config_change_errors)
+    config_change_result(&config_change_errors)
 }
 
 async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
@@ -738,7 +740,7 @@ async fn run_complete_file(
 
     res?;
     runner.shutdown_async().await;
-    take_config_change_result(&config_change_errors)
+    config_change_result(&config_change_errors)
 }
 
 #[cfg(feature = "postgres")]
