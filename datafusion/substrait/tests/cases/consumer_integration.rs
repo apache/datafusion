@@ -53,10 +53,12 @@ mod tests {
         let header = &all_lines[..3];
         let mut data: Vec<&str> = all_lines[3..all_lines.len() - 1].to_vec();
         data.sort();
+        let footer = &all_lines[all_lines.len() - 1..];
         header
             .iter()
             .copied()
             .chain(data)
+            .chain(footer.iter().copied())
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -823,6 +825,7 @@ mod tests {
         | 4  |     | c4      | 4   |      | c4       |
         | 5  | e   | c5      | 5   | e    | c5       |
         | 6  | f   | c6      | 6   | f    | c6       |
+        +----+-----+---------+-----+------+----------+
         "
         );
 
@@ -859,6 +862,7 @@ mod tests {
         | 4  |     | c4      | 4   |      | c4       |
         | 5  | e   | c5      | 5   | e    | c5       |
         | 6  | f   | c6      | 6   | f    | c6       |
+        +----+-----+---------+-----+------+----------+
         "
         );
 
