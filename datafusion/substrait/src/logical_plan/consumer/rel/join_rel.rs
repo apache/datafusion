@@ -169,36 +169,39 @@ mod tests {
         Expr::Column(Column::from_name(name))
     }
 
+    fn indistinct(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left),
+            op: Operator::IsNotDistinctFrom,
+            right: Box::new(right),
+        })
+    }
+
+    fn fmt_keys(keys: &[(Column, Column)]) -> String {
+        keys.iter()
+            .map(|(l, r)| format!("{l} = {r}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     #[test]
     fn split_only_eq_keys() {
-        // equal(a, b)
-        let expr = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(col("a")),
-            op: Operator::Eq,
-            right: Box::new(col("b")),
-        });
-
+        let expr = col("a").eq(col("b"));
         let (keys, null_eq, filter) =
             split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
 
-        assert_eq!(keys.len(), 1);
+        assert_eq!(fmt_keys(&keys), "a = b");
         assert_eq!(null_eq, NullEquality::NullEqualsNothing);
         assert!(filter.is_none());
     }
 
     #[test]
     fn split_only_indistinct_keys() {
-        // is_not_distinct_from(a, b)
-        let expr = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(col("a")),
-            op: Operator::IsNotDistinctFrom,
-            right: Box::new(col("b")),
-        });
-
+        let expr = indistinct(col("a"), col("b"));
         let (keys, null_eq, filter) =
             split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
 
-        assert_eq!(keys.len(), 1);
+        assert_eq!(fmt_keys(&keys), "a = b");
         assert_eq!(null_eq, NullEquality::NullEqualsNull);
         assert!(filter.is_none());
     }
@@ -208,56 +211,51 @@ mod tests {
     /// flag stays consistent (NullEqualsNothing for the eq keys).
     #[test]
     fn split_mixed_eq_and_indistinct_demotes_indistinct_to_filter() {
-        // is_not_distinct_from(val_l, val_r) AND equal(id_l, id_r)
-        let expr = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(col("val_l")),
-            op: Operator::IsNotDistinctFrom,
-            right: Box::new(col("val_r")),
-        })
-        .and(Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(col("id_l")),
-            op: Operator::Eq,
-            right: Box::new(col("id_r")),
-        }));
+        let expr = indistinct(col("val_l"), col("val_r"))
+            .and(col("id_l").eq(col("id_r")));
 
         let (keys, null_eq, filter) =
             split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
 
-        // Only the Eq key should be an equijoin key.
-        assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0].0, Column::from_name("id_l"));
-        assert_eq!(keys[0].1, Column::from_name("id_r"));
+        assert_eq!(fmt_keys(&keys), "id_l = id_r");
         assert_eq!(null_eq, NullEquality::NullEqualsNothing);
+        assert_eq!(
+            filter.unwrap().to_string(),
+            "val_l IS NOT DISTINCT FROM val_r"
+        );
+    }
 
-        // The IsNotDistinctFrom predicate should be demoted to the filter.
-        let filter =
-            filter.expect("filter should contain the demoted indistinct predicate");
-        match &filter {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                assert_eq!(*op, Operator::IsNotDistinctFrom);
-                assert_eq!(**left, col("val_l"));
-                assert_eq!(**right, col("val_r"));
-            }
-            other => panic!("expected BinaryExpr, got {other:?}"),
-        }
+    /// Multiple IS NOT DISTINCT FROM keys with a single Eq key should demote
+    /// all indistinct keys to the filter.
+    #[test]
+    fn split_mixed_multiple_indistinct_demoted() {
+        let expr = indistinct(col("a_l"), col("a_r"))
+            .and(indistinct(col("b_l"), col("b_r")))
+            .and(col("id_l").eq(col("id_r")));
+
+        let (keys, null_eq, filter) =
+            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
+
+        assert_eq!(fmt_keys(&keys), "id_l = id_r");
+        assert_eq!(null_eq, NullEquality::NullEqualsNothing);
+        assert_eq!(
+            filter.unwrap().to_string(),
+            "a_l IS NOT DISTINCT FROM a_r AND b_l IS NOT DISTINCT FROM b_r"
+        );
     }
 
     #[test]
     fn split_non_column_eq_goes_to_filter() {
-        // equal(literal, column) — non-column operand goes to filter
-        let expr = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(Expr::Literal(
-                datafusion::common::ScalarValue::Utf8(Some("x".into())),
-                None,
-            )),
-            op: Operator::Eq,
-            right: Box::new(col("b")),
-        });
+        let expr = Expr::Literal(
+            datafusion::common::ScalarValue::Utf8(Some("x".into())),
+            None,
+        )
+        .eq(col("b"));
 
         let (keys, _, filter) =
             split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
 
         assert!(keys.is_empty());
-        assert!(filter.is_some());
+        assert_eq!(filter.unwrap().to_string(), "Utf8(\"x\") = b");
     }
 }
