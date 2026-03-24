@@ -201,10 +201,10 @@ impl ProjectionExprs {
 
     /// Set the expression analyzer registry for statistics estimation.
     ///
-    /// The physical planner injects the registry from [`SessionState`] when
+    /// The physical planner injects the registry from `SessionState` when
     /// creating projections. Projections created later by optimizer rules
     /// do not receive the registry and fall back to
-    /// [`DefaultExpressionAnalyzer`]. Propagating the registry to all
+    /// `DefaultExpressionAnalyzer`. Propagating the registry to all
     /// operator construction sites requires an operator-level statistics
     /// registry, which is orthogonal to this work.
     pub fn with_expression_analyzer_registry(

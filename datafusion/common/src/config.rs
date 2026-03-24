@@ -1133,9 +1133,8 @@ config_namespace! {
 
         /// When set to true, the physical planner will use the ExpressionAnalyzer
         /// framework for expression-level statistics estimation (NDV, selectivity,
-        /// min/max, null fraction) in projections and filters. When false, projections
-        /// return unknown statistics for non-column expressions and filters use the
-        /// default selectivity heuristic.
+        /// min/max, null fraction). When false, existing behavior without
+        /// expression-level statistics support is used.
         pub enable_expression_analyzer: bool, default = false
 
         /// When set to true, the optimizer will insert filters before a join between

@@ -186,7 +186,7 @@ impl FilterExecBuilder {
     /// Set the expression analyzer registry for selectivity estimation.
     ///
     /// Same limitation as [`ProjectionExprs::with_expression_analyzer_registry`]:
-    /// the planner injects this from [`SessionState`], but filters created
+    /// the planner injects this from `SessionState`, but filters created
     /// by optimizer rules (e.g., filter pushdown into unions) fall back to
     /// the default selectivity. An operator-level statistics registry is
     /// needed for full coverage.
