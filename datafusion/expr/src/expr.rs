@@ -447,10 +447,7 @@ impl LambdaFunction {
 
     /// Invokes the inner function [`LambdaUDF::lambdas_parameters`]
     /// using the arguments of this invocation
-    pub fn lambdas_parameters(
-        &self,
-        schema: &dyn ExprSchema,
-    ) -> Result<Vec<Option<Vec<Field>>>> {
+    pub fn lambdas_parameters(&self, schema: &dyn ExprSchema) -> Result<Vec<Vec<Field>>> {
         let args = self
             .args
             .iter()
@@ -460,9 +457,15 @@ impl LambdaFunction {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let coerced = value_fields_with_lambda_udf(&args, self.func.as_ref())?;
+        let coerced_values = value_fields_with_lambda_udf(&args, self.func.as_ref())?
+            .into_iter()
+            .filter_map(|arg| match arg {
+                ValueOrLambda::Value(value) => Some(value),
+                ValueOrLambda::Lambda(_lambda) => None,
+            })
+            .collect::<Vec<_>>();
 
-        self.func.lambdas_parameters(&coerced)
+        self.func.lambdas_parameters(&coerced_values)
     }
 }
 

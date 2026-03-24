@@ -146,12 +146,8 @@ impl Serializeable for Expr {
 
                     fn lambdas_parameters(
                         &self,
-                        _args: &[datafusion_expr::ValueOrLambda<
-                            arrow::datatypes::FieldRef,
-                            (),
-                        >],
-                    ) -> Result<Vec<Option<Vec<arrow::datatypes::Field>>>>
-                    {
+                        _value_fields: &[arrow::datatypes::FieldRef],
+                    ) -> Result<Vec<Vec<arrow::datatypes::Field>>> {
                         not_impl_err!("mock LambdaUDF")
                     }
 

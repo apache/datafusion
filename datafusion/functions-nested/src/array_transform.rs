@@ -130,11 +130,16 @@ impl LambdaUDF for ArrayTransform {
         Ok(vec![coerced])
     }
 
-    fn lambdas_parameters(
-        &self,
-        args: &[ValueOrLambda<FieldRef, ()>],
-    ) -> Result<Vec<Option<Vec<Field>>>> {
-        let (list, _lambda) = value_lambda_pair(self.name(), args)?;
+    fn lambdas_parameters(&self, value_fields: &[FieldRef]) -> Result<Vec<Vec<Field>>> {
+        let list = if value_fields.len() == 1 {
+            &value_fields[0]
+        } else {
+            return plan_err!(
+                "{} function requires 1 value arguments, got {}",
+                self.name(),
+                value_fields.len()
+            );
+        };
 
         let field = match list.data_type() {
             DataType::List(field) => field,
@@ -148,7 +153,7 @@ impl LambdaUDF for ArrayTransform {
         let value = Field::new("", field.data_type().clone(), field.is_nullable())
             .with_metadata(field.metadata().clone());
 
-        Ok(vec![None, Some(vec![value])])
+        Ok(vec![vec![value]])
     }
 
     fn return_field_from_args(&self, args: LambdaReturnFieldArgs) -> Result<Arc<Field>> {

@@ -413,16 +413,50 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let coerced = value_fields_with_lambda_udf(&current_fields, fm.as_ref())?;
+            let coerced_values =
+                value_fields_with_lambda_udf(&current_fields, fm.as_ref())?
+                    .into_iter()
+                    .filter_map(|arg| match arg {
+                        ValueOrLambda::Value(value) => Some(value),
+                        ValueOrLambda::Lambda(_lambda) => None,
+                    })
+                    .collect::<Vec<_>>();
 
-            let lambdas_parameters = fm.lambdas_parameters(&coerced)?;
+            // lambdas_parameters refers only to lambdas and not to values, so instead
+            // of zipping it with partially_planned, we iterate over partially_planned and only
+            // consume from lambdas_parameters when a given argument is a lambda
+            // to reconstruct the arguments list with the correct order
+            // this supports any value and lambda positioning including
+            // multiple lambdas interleaved with values
+            let mut lambdas_parameters =
+                fm.lambdas_parameters(&coerced_values)?.into_iter();
+
+            let num_lambdas = partially_planned.len() - coerced_values.len();
+
+            // functions can support multiple lambdas where some trailing ones are optional,
+            // but to simplify the implementor, lambdas_parameters returns the parameters of all of them,
+            // so we can't do equality check. one example is spark reduce:
+            // https://spark.apache.org/docs/latest/api/sql/index.html#reduce
+            if lambdas_parameters.len() < num_lambdas {
+                return plan_err!(
+                    "{} invocation defined {num_lambdas} but lambdas_parameters returned only {}",
+                    fm.name(),
+                    lambdas_parameters.len()
+                );
+            }
 
             let args = partially_planned
                 .into_iter()
-                .zip(lambdas_parameters)
-                .map(|(e, lambda_parameters)| match (e, lambda_parameters) {
-                    (ExprOrLambda::Expr(expr), None) => Ok(expr),
-                    (ExprOrLambda::Lambda(lambda), Some(lambda_params)) => {
+                .map(|arg| match arg {
+                    ExprOrLambda::Expr(expr) => Ok(expr),
+                    ExprOrLambda::Lambda(lambda) => {
+                        let lambda_params =
+                            lambdas_parameters.next().ok_or_else(|| {
+                                internal_datafusion_err!(
+                                    "lambdas_parameters len should have been checked above"
+                                )
+                            })?;
+
                         if lambda.params.len() > lambda_params.len() {
                             return plan_err!(
                                 "lambda defined {} params but UDF support only {}",
@@ -452,14 +486,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             )?),
                         }))
                     }
-                    (ExprOrLambda::Expr(_), Some(_)) => plan_err!(
-                        "{} reported parameters for an argument that is not a lambda",
-                        fm.name()
-                    ),
-                    (ExprOrLambda::Lambda(_), None) => plan_err!(
-                        "{} don't reported the parameters of one of it's lambdas",
-                        fm.name()
-                    ),
                 })
                 .collect::<Result<Vec<_>>>()?;
 

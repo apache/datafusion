@@ -308,10 +308,10 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// [`Volatility`]: datafusion_expr_common::signature::Volatility
     fn signature(&self) -> &LambdaSignature;
 
-    /// Returns a list of the same size as args where each value is the logic below applied to value at the correspondent position in args:
-    ///
-    /// If it's a value, return None
-    /// If it's a lambda, return the list of all parameters that that lambda supports
+    /// Return the field of all the parameters supported by all the supported lambdas of this function
+    /// based on the field of the value arguments. If a lambda support multiple parameters, or if multiple
+    /// lambdas are supported and some are optional, all should be returned,
+    /// regardless of whether they are used on a particular invocation
     ///
     /// Example for array_transform:
     ///
@@ -319,33 +319,27 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// ```ignore
     /// let lambdas_parameters = array_transform.lambdas_parameters(&[
-    ///      ValueOrLambdaParameter::Value(Field::new("", DataType::new_list(DataType::Float32, false)))]), // the Field of the literal `[2, 8]`
-    ///      ValueOrLambdaParameter::Lambda, // A lambda
-    /// ]?;
+    ///      Arc::new(Field::new("", DataType::new_list(DataType::Float32, false))), // the Field of the literal `[2, 8]`
+    /// ])?;
     ///
     /// assert_eq!(
     ///      lambdas_parameters,
     ///      vec![
-    ///         // it's a value, return None
-    ///         None,
-    ///         // it's a lambda, return it's supported parameters, regardless of how many are actually used
-    ///         Some(vec![
+    ///         // the lambda supported parameters, regardless of how many are actually used
+    ///         vec![
     ///             // the value being transformed
     ///             Field::new("", DataType::Float32, false),
     ///             // the 1-based index being transformed, not used on the example above,
     ///             //but implementations doesn't need to care about it
     ///             Field::new("", DataType::Int32, false),
-    ///         ])
+    ///         ]
     ///      ]
     /// )
     /// ```
     ///
     /// The implementation can assume that some other part of the code has coerced
     /// the actual argument types to match [`Self::signature`].
-    fn lambdas_parameters(
-        &self,
-        args: &[ValueOrLambda<FieldRef, ()>],
-    ) -> Result<Vec<Option<Vec<Field>>>>;
+    fn lambdas_parameters(&self, value_fields: &[FieldRef]) -> Result<Vec<Vec<Field>>>;
 
     /// What type will be returned by this function, given the arguments?
     ///
@@ -486,8 +480,8 @@ mod tests {
 
         fn lambdas_parameters(
             &self,
-            _args: &[ValueOrLambda<FieldRef, ()>],
-        ) -> Result<Vec<Option<Vec<Field>>>> {
+            _value_fields: &[FieldRef],
+        ) -> Result<Vec<Vec<Field>>> {
             unimplemented!()
         }
 

@@ -40,7 +40,9 @@ use crate::expressions::{LambdaExpr, Literal};
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{
+    Result, ScalarValue, exec_err, internal_datafusion_err, internal_err,
+};
 use datafusion_expr::type_coercion::functions::value_fields_with_lambda_udf;
 use datafusion_expr::{
     ColumnarValue, LambdaArgument, LambdaFunctionArgs, LambdaReturnFieldArgs, LambdaUDF,
@@ -249,47 +251,65 @@ impl PhysicalExpr for LambdaFunctionExpr {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let args_metadata = arg_fields
+        let value_fields = arg_fields
             .iter()
-            .map(|field| match field {
-                ValueOrLambda::Value(field) => ValueOrLambda::Value(Arc::clone(field)),
-                ValueOrLambda::Lambda(_field) => ValueOrLambda::Lambda(()),
+            .filter_map(|field| match field {
+                ValueOrLambda::Value(field) => Some(Arc::clone(field)),
+                ValueOrLambda::Lambda(_field) => None,
             })
             .collect::<Vec<_>>();
 
-        let params = self.fun().lambdas_parameters(&args_metadata)?;
+        // lambdas_parameters refers only to lambdas and not to values, so instead
+        // of zipping it with self.args, we iterate over self.args and only
+        // consume from lambdas_parameters when a given argument is a lambda
+        // to reconstruct the arguments list with the correct order
+        // this supports any value and lambda positioning including
+        // multiple lambdas interleaved with values
+        let mut lambdas_parameters =
+            self.fun().lambdas_parameters(&value_fields)?.into_iter();
+        let num_lambdas = self.args.len() - value_fields.len();
 
-        let args = std::iter::zip(&self.args, params)
-            .map(|(arg, lambda_params)| {
-                match (arg.as_any().downcast_ref::<LambdaExpr>(), lambda_params) {
-                    (Some(lambda), Some(lambda_params)) => {
-                        if lambda.params().len() > lambda_params.len() {
-                            return exec_err!(
-                                "lambda defined {} params but UDF support only {}",
-                                lambda.params().len(),
-                                lambda_params.len()
-                            );
-                        }
+        // functions can support multiple lambdas where some trailing ones are optional,
+        // but to simplify the implementor, lambdas_parameters returns the parameters of all of them,
+        // so we can't do equality check. one example is spark reduce:
+        // https://spark.apache.org/docs/latest/api/sql/index.html#reduce
+        if lambdas_parameters.len() < num_lambdas {
+            return exec_err!(
+                "{} invocation defined {num_lambdas} but lambdas_parameters returned only {}",
+                self.name(),
+                lambdas_parameters.len()
+            );
+        }
 
-                        let params = std::iter::zip(lambda.params(), lambda_params)
-                            .map(|(name, param)| Arc::new(param.with_name(name)))
-                            .collect();
+        let args = self
+            .args
+            .iter()
+            .map(|arg| match arg.as_any().downcast_ref::<LambdaExpr>() {
+                Some(lambda) => {
+                    let lambda_params = lambdas_parameters.next().ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "params len should have been checked above"
+                        )
+                    })?;
 
-                        Ok(ValueOrLambda::Lambda(LambdaArgument::new(
-                            params,
-                            Arc::clone(lambda.body()),
-                        )))
+                    if lambda.params().len() > lambda_params.len() {
+                        return exec_err!(
+                            "lambda defined {} params but UDF support only {}",
+                            lambda.params().len(),
+                            lambda_params.len()
+                        );
                     }
-                    (Some(_lambda), None) => exec_err!(
-                        "{} don't reported the parameters of one of it's lambdas",
-                        self.fun.name()
-                    ),
-                    (None, Some(_lambda_params)) => exec_err!(
-                        "{} reported parameters for an argument that is not a lambda",
-                        self.fun.name()
-                    ),
-                    (None, None) => Ok(ValueOrLambda::Value(arg.evaluate(batch)?)),
+
+                    let params = std::iter::zip(lambda.params(), lambda_params)
+                        .map(|(name, param)| Arc::new(param.with_name(name)))
+                        .collect();
+
+                    Ok(ValueOrLambda::Lambda(LambdaArgument::new(
+                        params,
+                        Arc::clone(lambda.body()),
+                    )))
                 }
+                None => Ok(ValueOrLambda::Value(arg.evaluate(batch)?)),
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -400,8 +420,8 @@ mod tests {
 
         fn lambdas_parameters(
             &self,
-            _args: &[ValueOrLambda<FieldRef, ()>],
-        ) -> Result<Vec<Option<Vec<Field>>>> {
+            _value_fields: &[FieldRef],
+        ) -> Result<Vec<Vec<Field>>> {
             unimplemented!()
         }
 
