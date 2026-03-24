@@ -69,7 +69,7 @@ impl<'a> PhysicalExprSimplifier<'a> {
                 let rewritten = not::simplify_not_expr(node, schema)?
                     .transform_data(|node| unwrap_cast_in_comparison(node, schema))?
                     .transform_data(|node| {
-                        const_evaluator::simplify_const_expr_immediate(node, &batch)
+                        const_evaluator::simplify_const_expr_immediate(node, batch)
                     })?;
 
                 #[cfg(debug_assertions)]
@@ -97,7 +97,7 @@ mod tests {
     use crate::expressions::{
         BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr, col, in_list, lit,
     };
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 

@@ -25,7 +25,7 @@ use datafusion_physical_expr::window::{
     StandardWindowFunctionExpr, WindowExpr,
 };
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
-use datafusion_physical_plan::limit::GlobalLimitExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -206,6 +206,12 @@ fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
         ctx.reset_limit(limit.fetch().map(|fetch| fetch + limit.skip()));
         return true;
     }
+    // In distributed execution, GlobalLimitExec becomes LocalLimitExec
+    // per partition. Handle it the same way (LocalLimitExec has no skip).
+    if let Some(limit) = node.as_any().downcast_ref::<LocalLimitExec>() {
+        ctx.reset_limit(Some(limit.fetch()));
+        return true;
+    }
     if let Some(limit) = node.as_any().downcast_ref::<SortPreservingMergeExec>() {
         ctx.reset_limit(limit.fetch());
         return true;
@@ -252,5 +258,112 @@ fn bound_to_usize(bound: &WindowFrameBound) -> Option<usize> {
             Some(*scalar as usize)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::WindowFrame;
+    use datafusion_functions_window::row_number::row_number_udwf;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_plan::InputOrderMode;
+    use datafusion_physical_plan::displayable;
+    use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+    use datafusion_physical_plan::windows::{
+        BoundedWindowAggExec, create_udwf_window_expr,
+    };
+    use insta::assert_snapshot;
+
+    fn plan_str(plan: &dyn ExecutionPlan) -> String {
+        displayable(plan).indent(true).to_string()
+    }
+
+    fn schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
+    }
+
+    /// Build: LocalLimitExec or GlobalLimitExec → BoundedWindowAggExec(row_number) → SortExec
+    fn build_window_plan(
+        use_local_limit: bool,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let s = schema();
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+
+        let ordering =
+            LexOrdering::new(vec![PhysicalSortExpr::new_default(col("a", &s)?).asc()])
+                .unwrap();
+
+        let sort: Arc<dyn ExecutionPlan> = Arc::new(
+            SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
+        );
+
+        let window_expr = Arc::new(StandardWindowExpr::new(
+            create_udwf_window_expr(
+                &row_number_udwf(),
+                &[],
+                &s,
+                "row_number".to_string(),
+                false,
+            )?,
+            &[],
+            ordering.as_ref(),
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+        ));
+
+        let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+            vec![window_expr],
+            sort,
+            InputOrderMode::Sorted,
+            true,
+        )?);
+
+        let limit: Arc<dyn ExecutionPlan> = if use_local_limit {
+            Arc::new(LocalLimitExec::new(window, 100))
+        } else {
+            Arc::new(GlobalLimitExec::new(window, 0, Some(100)))
+        };
+
+        Ok(limit)
+    }
+
+    fn optimize(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        let mut config = ConfigOptions::new();
+        config.optimizer.enable_window_limits = true;
+        LimitPushPastWindows::new().optimize(plan, &config).unwrap()
+    }
+
+    /// GlobalLimitExec above a windowed sort should push fetch into the SortExec.
+    #[test]
+    fn global_limit_pushes_past_window() {
+        let plan = build_window_plan(false).unwrap();
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
+              PlaceholderRowExec
+        "#);
+    }
+
+    /// LocalLimitExec above a windowed sort should also push fetch into the SortExec.
+    /// This is the case in distributed execution where GlobalLimitExec becomes LocalLimitExec.
+    #[test]
+    fn local_limit_pushes_past_window() {
+        let plan = build_window_plan(true).unwrap();
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        LocalLimitExec: fetch=100
+          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
+              PlaceholderRowExec
+        "#);
     }
 }

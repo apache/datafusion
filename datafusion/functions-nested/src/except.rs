@@ -19,14 +19,19 @@
 
 use crate::utils::{check_datatypes, make_scalar_function};
 use arrow::array::new_null_array;
-use arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, cast::AsArray};
+use arrow::array::{
+    Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt32Array, UInt64Array,
+    cast::AsArray,
+};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::compute::take;
 use arrow::datatypes::{DataType, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::utils::{ListCoercion, take_function_args};
 use datafusion_common::{HashSet, Result, internal_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -115,10 +120,7 @@ impl ScalarUDFImpl for ArrayExcept {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_except_inner)(&args.args)
     }
 
@@ -171,15 +173,21 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
 ) -> Result<GenericListArray<OffsetSize>> {
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
-    let l_values = l.values().to_owned();
-    let r_values = r.values().to_owned();
-    let l_values = converter.convert_columns(&[l_values])?;
-    let r_values = converter.convert_columns(&[r_values])?;
+    // Only convert the visible portion of the values array. For sliced
+    // ListArrays, values() returns the full underlying array but only
+    // elements between the first and last offset are referenced.
+    let l_first = l.offsets()[0].as_usize();
+    let l_len = l.offsets()[l.len()].as_usize() - l_first;
+    let l_values = converter.convert_columns(&[l.values().slice(l_first, l_len)])?;
+
+    let r_first = r.offsets()[0].as_usize();
+    let r_len = r.offsets()[r.len()].as_usize() - r_first;
+    let r_values = converter.convert_columns(&[r.values().slice(r_first, r_len)])?;
 
     let mut offsets = Vec::<OffsetSize>::with_capacity(l.len() + 1);
     offsets.push(OffsetSize::usize_as(0));
 
-    let mut rows = Vec::with_capacity(l_values.num_rows());
+    let mut indices: Vec<usize> = Vec::with_capacity(l_values.num_rows());
     let mut dedup = HashSet::new();
 
     let nulls = NullBuffer::union(l.nulls(), r.nulls());
@@ -193,33 +201,104 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
             .as_ref()
             .is_some_and(|nulls| nulls.is_null(list_index))
         {
-            offsets.push(OffsetSize::usize_as(rows.len()));
+            offsets.push(OffsetSize::usize_as(indices.len()));
             continue;
         }
 
-        for element_index in r_start.as_usize()..r_end.as_usize() {
+        for element_index in r_start.as_usize() - r_first..r_end.as_usize() - r_first {
             let right_row = r_values.row(element_index);
             dedup.insert(right_row);
         }
-        for element_index in l_start.as_usize()..l_end.as_usize() {
+        for element_index in l_start.as_usize() - l_first..l_end.as_usize() - l_first {
             let left_row = l_values.row(element_index);
             if dedup.insert(left_row) {
-                rows.push(left_row);
+                indices.push(element_index + l_first);
             }
         }
 
-        offsets.push(OffsetSize::usize_as(rows.len()));
+        offsets.push(OffsetSize::usize_as(indices.len()));
         dedup.clear();
     }
 
-    if let Some(values) = converter.convert_rows(rows)?.first() {
-        Ok(GenericListArray::<OffsetSize>::new(
-            field.to_owned(),
-            OffsetBuffer::new(offsets.into()),
-            values.to_owned(),
-            nulls,
-        ))
+    // Gather distinct left-side values by index.
+    // Use UInt64Array for LargeList to support values arrays exceeding u32::MAX.
+    let values = if indices.is_empty() {
+        arrow::array::new_empty_array(&l.value_type())
+    } else if OffsetSize::IS_LARGE {
+        let indices =
+            UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
+        take(l.values().as_ref(), &indices, None)?
     } else {
-        internal_err!("array_except failed to convert rows")
+        let indices =
+            UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
+        take(l.values().as_ref(), &indices, None)?
+    };
+
+    Ok(GenericListArray::<OffsetSize>::new(
+        field.to_owned(),
+        OffsetBuffer::new(offsets.into()),
+        values,
+        nulls,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArrayExcept;
+    use arrow::array::{Array, AsArray, Int32Array, ListArray};
+    use arrow::datatypes::{Field, Int32Type};
+    use datafusion_common::{Result, config::ConfigOptions};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_array_except_sliced_lists() -> Result<()> {
+        // l: [[1,2], [3,4], [5,6], [7,8]]  →  slice(1,2)  →  [[3,4], [5,6]]
+        // r: [[3],   [5],   [6],   [8]]    →  slice(1,2)  →  [[5],   [6]]
+        // except(l, r) should be [[3,4], [5]]
+        let l_full = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4)]),
+            Some(vec![Some(5), Some(6)]),
+            Some(vec![Some(7), Some(8)]),
+        ]);
+        let r_full = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(3)]),
+            Some(vec![Some(5)]),
+            Some(vec![Some(6)]),
+            Some(vec![Some(8)]),
+        ]);
+        let l_sliced = l_full.slice(1, 2);
+        let r_sliced = r_full.slice(1, 2);
+
+        let list_field = Arc::new(Field::new("item", l_sliced.data_type().clone(), true));
+        let return_field =
+            Arc::new(Field::new("return", l_sliced.data_type().clone(), true));
+
+        let result = ArrayExcept::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(l_sliced)),
+                ColumnarValue::Array(Arc::new(r_sliced)),
+            ],
+            arg_fields: vec![Arc::clone(&list_field), Arc::clone(&list_field)],
+            number_rows: 2,
+            return_field,
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(2)?;
+        let output = output.as_list::<i32>();
+
+        // Row 0: [3,4] except [5] = [3,4]
+        let row0 = output.value(0);
+        let row0 = row0.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(row0.values().as_ref(), &[3, 4]);
+
+        // Row 1: [5,6] except [6] = [5]
+        let row1 = output.value(1);
+        let row1 = row1.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(row1.values().as_ref(), &[5]);
+
+        Ok(())
     }
 }

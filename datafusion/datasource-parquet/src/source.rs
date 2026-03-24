@@ -35,6 +35,7 @@ use datafusion_datasource::file_stream::FileOpener;
 use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -816,6 +817,26 @@ impl FileSource for ParquetSource {
         // - Detection of exact ordering (return Exact to remove Sort operator)
         // - Partial sort pushdown for prefix matches
     }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn PhysicalExpr,
+        ) -> datafusion_common::Result<TreeNodeRecursion>,
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
+        // Visit predicate (filter) expression if present
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(predicate) = &self.predicate {
+            tnr = tnr.visit_sibling(|| f(predicate.as_ref()))?;
+        }
+
+        // Visit projection expressions
+        for proj_expr in &self.projection {
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
+        }
+
+        Ok(tnr)
+    }
 }
 
 #[cfg(test)]
@@ -874,7 +895,6 @@ mod tests {
     #[test]
     fn test_reverse_scan_with_other_options() {
         use arrow::datatypes::Schema;
-        use datafusion_common::config::TableParquetOptions;
 
         let schema = Arc::new(Schema::empty());
         let options = TableParquetOptions::default();

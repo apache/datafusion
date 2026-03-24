@@ -26,6 +26,7 @@ use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
+use std::fmt::Write;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::iter::repeat_n;
@@ -995,7 +996,7 @@ impl Hash for ScalarValue {
 fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
     let len = arr.len();
     let hashes_buffer = &mut vec![0; len];
-    let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+    let random_state = crate::hash_utils::RandomState::with_seed(0);
     let hashes = create_hashes(&[arr], &random_state, hashes_buffer)
         .expect("hash_nested_array: failed to create row hashes");
     // Hash back to std::hash::Hasher
@@ -1999,6 +2000,209 @@ impl ScalarValue {
         }
     }
 
+    #[inline]
+    fn can_use_direct_add(lhs: &ScalarValue, rhs: &ScalarValue) -> bool {
+        matches!(
+            (lhs, rhs),
+            (ScalarValue::Int8(_), ScalarValue::Int8(_))
+                | (ScalarValue::Int16(_), ScalarValue::Int16(_))
+                | (ScalarValue::Int32(_), ScalarValue::Int32(_))
+                | (ScalarValue::Int64(_), ScalarValue::Int64(_))
+                | (ScalarValue::UInt8(_), ScalarValue::UInt8(_))
+                | (ScalarValue::UInt16(_), ScalarValue::UInt16(_))
+                | (ScalarValue::UInt32(_), ScalarValue::UInt32(_))
+                | (ScalarValue::UInt64(_), ScalarValue::UInt64(_))
+                | (ScalarValue::Float16(_), ScalarValue::Float16(_))
+                | (ScalarValue::Float32(_), ScalarValue::Float32(_))
+                | (ScalarValue::Float64(_), ScalarValue::Float64(_))
+                | (
+                    ScalarValue::Decimal32(_, _, _),
+                    ScalarValue::Decimal32(_, _, _)
+                )
+                | (
+                    ScalarValue::Decimal64(_, _, _),
+                    ScalarValue::Decimal64(_, _, _)
+                )
+                | (
+                    ScalarValue::Decimal128(_, _, _),
+                    ScalarValue::Decimal128(_, _, _),
+                )
+                | (
+                    ScalarValue::Decimal256(_, _, _),
+                    ScalarValue::Decimal256(_, _, _),
+                )
+        )
+    }
+
+    #[inline]
+    fn add_optional<T: ArrowNativeTypeOp>(
+        lhs: &mut Option<T>,
+        rhs: Option<T>,
+        checked: bool,
+    ) -> Result<()> {
+        match rhs {
+            Some(rhs) => {
+                if let Some(lhs) = lhs.as_mut() {
+                    *lhs = if checked {
+                        lhs.add_checked(rhs).map_err(|e| arrow_datafusion_err!(e))?
+                    } else {
+                        lhs.add_wrapping(rhs)
+                    };
+                }
+            }
+            None => *lhs = None,
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn add_decimal_values<T: DecimalType>(
+        lhs_value: &mut Option<T::Native>,
+        lhs_precision: &mut u8,
+        lhs_scale: &mut i8,
+        rhs_value: Option<T::Native>,
+        rhs_precision: u8,
+        rhs_scale: i8,
+    ) -> Result<()>
+    where
+        T::Native: ArrowNativeTypeOp,
+    {
+        Self::validate_decimal_or_internal_err::<T>(*lhs_precision, *lhs_scale)?;
+        Self::validate_decimal_or_internal_err::<T>(rhs_precision, rhs_scale)?;
+
+        let result_scale = (*lhs_scale).max(rhs_scale);
+        // Decimal scales can be negative, so use a wider signed type for the
+        // intermediate precision arithmetic.
+        let lhs_precision_delta = i16::from(*lhs_precision) - i16::from(*lhs_scale);
+        let rhs_precision_delta = i16::from(rhs_precision) - i16::from(rhs_scale);
+        let result_precision =
+            (i16::from(result_scale) + lhs_precision_delta.max(rhs_precision_delta) + 1)
+                .min(i16::from(T::MAX_PRECISION)) as u8;
+
+        Self::validate_decimal_or_internal_err::<T>(result_precision, result_scale)?;
+
+        let lhs_mul = T::Native::usize_as(10)
+            .pow_checked((result_scale - *lhs_scale) as u32)
+            .map_err(|e| arrow_datafusion_err!(e))?;
+        let rhs_mul = T::Native::usize_as(10)
+            .pow_checked((result_scale - rhs_scale) as u32)
+            .map_err(|e| arrow_datafusion_err!(e))?;
+
+        let result_value = match (*lhs_value, rhs_value) {
+            (Some(lhs_value), Some(rhs_value)) => Some(
+                lhs_value
+                    .mul_checked(lhs_mul)
+                    .and_then(|lhs| {
+                        rhs_value
+                            .mul_checked(rhs_mul)
+                            .and_then(|rhs| lhs.add_checked(rhs))
+                    })
+                    .map_err(|e| arrow_datafusion_err!(e))?,
+            ),
+            _ => None,
+        };
+
+        *lhs_value = result_value;
+        *lhs_precision = result_precision;
+        *lhs_scale = result_scale;
+
+        Ok(())
+    }
+
+    #[inline]
+    fn try_add_in_place_impl(
+        &mut self,
+        other: &ScalarValue,
+        checked: bool,
+    ) -> Result<bool> {
+        match (self, other) {
+            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Float16(lhs), ScalarValue::Float16(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
+                Self::add_optional(lhs, *rhs, checked)?;
+            }
+            (
+                ScalarValue::Decimal32(lhs, p, s),
+                ScalarValue::Decimal32(rhs, rhs_p, rhs_s),
+            ) => {
+                Self::add_decimal_values::<Decimal32Type>(
+                    lhs, p, s, *rhs, *rhs_p, *rhs_s,
+                )?;
+            }
+            (
+                ScalarValue::Decimal64(lhs, p, s),
+                ScalarValue::Decimal64(rhs, rhs_p, rhs_s),
+            ) => {
+                Self::add_decimal_values::<Decimal64Type>(
+                    lhs, p, s, *rhs, *rhs_p, *rhs_s,
+                )?;
+            }
+            (
+                ScalarValue::Decimal128(lhs, p, s),
+                ScalarValue::Decimal128(rhs, rhs_p, rhs_s),
+            ) => {
+                Self::add_decimal_values::<Decimal128Type>(
+                    lhs, p, s, *rhs, *rhs_p, *rhs_s,
+                )?;
+            }
+            (
+                ScalarValue::Decimal256(lhs, p, s),
+                ScalarValue::Decimal256(rhs, rhs_p, rhs_s),
+            ) => {
+                Self::add_decimal_values::<Decimal256Type>(
+                    lhs, p, s, *rhs, *rhs_p, *rhs_s,
+                )?;
+            }
+            _ => return Ok(false),
+        }
+
+        Ok(true)
+    }
+
+    #[inline]
+    pub(crate) fn try_add_wrapping_in_place(
+        &mut self,
+        other: &ScalarValue,
+    ) -> Result<bool> {
+        self.try_add_in_place_impl(other, false)
+    }
+
+    #[inline]
+    pub(crate) fn try_add_checked_in_place(
+        &mut self,
+        other: &ScalarValue,
+    ) -> Result<bool> {
+        self.try_add_in_place_impl(other, true)
+    }
+
     /// Calculate arithmetic negation for a scalar value
     pub fn arithmetic_negate(&self) -> Result<Self> {
         fn neg_checked_with_ctx<T: ArrowNativeTypeOp>(
@@ -2134,7 +2338,16 @@ impl ScalarValue {
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn add<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let r = add_wrapping(&self.to_scalar()?, &other.borrow().to_scalar()?)?;
+        let other = other.borrow();
+        if Self::can_use_direct_add(self, other) {
+            let mut result = self.clone();
+            if result.try_add_wrapping_in_place(other)? {
+                return Ok(result);
+            }
+            debug_assert!(false, "fast-path eligibility drifted from implementation");
+        }
+
+        let r = add_wrapping(&self.to_scalar()?, &other.to_scalar()?)?;
         Self::try_from_array(r.as_ref(), 0)
     }
 
@@ -2143,7 +2356,16 @@ impl ScalarValue {
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn add_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let r = add(&self.to_scalar()?, &other.borrow().to_scalar()?)?;
+        let other = other.borrow();
+        if Self::can_use_direct_add(self, other) {
+            let mut result = self.clone();
+            if result.try_add_checked_in_place(other)? {
+                return Ok(result);
+            }
+            debug_assert!(false, "fast-path eligibility drifted from implementation");
+        }
+
+        let r = add(&self.to_scalar()?, &other.to_scalar()?)?;
         Self::try_from_array(r.as_ref(), 0)
     }
 
@@ -3675,6 +3897,22 @@ impl ScalarValue {
                     .with_field(field)
                     .build_fixed_size_list_scalar(list_size)
             }
+            DataType::ListView(field) => {
+                let list_array = array.as_list_view::<i32>();
+                let nested_array = list_array.value(index);
+                // Store as List scalar since ScalarValue has no ListView variant.
+                SingleRowListArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_list_scalar()
+            }
+            DataType::LargeListView(field) => {
+                let list_array = array.as_list_view::<i64>();
+                let nested_array = list_array.value(index);
+                // Store as LargeList scalar since ScalarValue has no LargeListView variant.
+                SingleRowListArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_large_list_scalar()
+            }
             DataType::Date32 => typed_cast!(array, index, as_date32_array, Date32)?,
             DataType::Date64 => typed_cast!(array, index, as_date64_array, Date64)?,
             DataType::Time32(TimeUnit::Second) => {
@@ -3900,20 +4138,16 @@ impl ScalarValue {
 
         let scalar_array = self.to_array()?;
 
-        // For struct types, use name-based casting logic that matches fields by name
-        // and recursively casts nested structs. The field name wrapper is arbitrary
-        // since cast_column only uses the DataType::Struct field definitions inside.
-        let cast_arr = match target_type {
-            DataType::Struct(_) => {
-                // Field name is unused; only the struct's inner field names matter
-                let target_field = Field::new("_", target_type.clone(), true);
-                crate::nested_struct::cast_column(
-                    &scalar_array,
-                    &target_field,
-                    cast_options,
-                )?
-            }
-            _ => cast_with_options(&scalar_array, target_type, cast_options)?,
+        // For types that contain structs (including nested inside Lists, Dictionaries,
+        // etc.), use name-based casting logic that matches struct fields by name and
+        // recursively casts nested structs.
+        let cast_arr = if crate::nested_struct::requires_nested_struct_cast(
+            scalar_array.data_type(),
+            target_type,
+        ) {
+            crate::nested_struct::cast_column(&scalar_array, target_type, cast_options)?
+        } else {
+            cast_with_options(&scalar_array, target_type, cast_options)?
         };
 
         ScalarValue::try_from_array(&cast_arr, 0)
@@ -4959,8 +5193,10 @@ impl fmt::Display for ScalarValue {
             | ScalarValue::BinaryView(e) => match e {
                 Some(bytes) => {
                     // print up to first 10 bytes, with trailing ... if needed
+                    const HEX_CHARS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
                     for b in bytes.iter().take(10) {
-                        write!(f, "{b:02X}")?;
+                        f.write_char(HEX_CHARS_UPPER[(b >> 4) as usize] as char)?;
+                        f.write_char(HEX_CHARS_UPPER[(b & 0x0f) as usize] as char)?;
                     }
                     if bytes.len() > 10 {
                         write!(f, "...")?;
@@ -5317,7 +5553,6 @@ impl ScalarType<i32> for Date32Type {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::cast::{as_list_array, as_map_array, as_struct_array};
@@ -5335,7 +5570,6 @@ mod tests {
     };
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
-    use chrono::NaiveDate;
     use insta::assert_snapshot;
     use rand::Rng;
 
@@ -5927,6 +6161,68 @@ mod tests {
     }
 
     #[test]
+    fn scalar_add_trait_null_test() -> Result<()> {
+        let int_value = ScalarValue::Int32(Some(42));
+
+        assert_eq!(
+            int_value.add(ScalarValue::Int32(None))?,
+            ScalarValue::Int32(None)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_add_trait_wrapping_overflow_test() -> Result<()> {
+        let int_value = ScalarValue::Int32(Some(i32::MAX));
+        let one = ScalarValue::Int32(Some(1));
+
+        assert_eq!(int_value.add(one)?, ScalarValue::Int32(Some(i32::MIN)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_add_trait_decimal_scale_test() -> Result<()> {
+        let decimal = ScalarValue::Decimal128(Some(123), 10, 2);
+        let decimal_2 = ScalarValue::Decimal128(Some(4), 9, 1);
+
+        assert_eq!(
+            decimal.add(decimal_2)?,
+            ScalarValue::Decimal128(Some(163), 11, 2)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_add_trait_decimal256_scale_test() -> Result<()> {
+        let decimal = ScalarValue::Decimal256(Some(i256::from(123)), 10, 2);
+        let decimal_2 = ScalarValue::Decimal256(Some(i256::from(4)), 9, 1);
+
+        assert_eq!(
+            decimal.add(decimal_2)?,
+            ScalarValue::Decimal256(Some(i256::from(163)), 11, 2)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_add_trait_decimal_negative_scale_test() -> Result<()> {
+        let decimal = ScalarValue::Decimal128(Some(1), DECIMAL128_MAX_PRECISION, i8::MIN);
+        let decimal_2 =
+            ScalarValue::Decimal128(Some(1), DECIMAL128_MAX_PRECISION, i8::MIN);
+
+        assert_eq!(
+            decimal.add(decimal_2)?,
+            ScalarValue::Decimal128(Some(2), DECIMAL128_MAX_PRECISION, i8::MIN)
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn scalar_sub_trait_test() -> Result<()> {
         let float_value = ScalarValue::Float64(Some(123.));
         let float_value_2 = ScalarValue::Float64(Some(123.));
@@ -6025,6 +6321,43 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn scalar_decimal_add_overflow_test() {
+        check_scalar_decimal_add_overflow::<Decimal128Type>(
+            ScalarValue::Decimal128(Some(i128::MAX), DECIMAL128_MAX_PRECISION, 0),
+            ScalarValue::Decimal128(Some(1), DECIMAL128_MAX_PRECISION, 0),
+        );
+        check_scalar_decimal_add_overflow::<Decimal256Type>(
+            ScalarValue::Decimal256(Some(i256::MAX), DECIMAL256_MAX_PRECISION, 0),
+            ScalarValue::Decimal256(Some(i256::ONE), DECIMAL256_MAX_PRECISION, 0),
+        );
+    }
+
+    #[test]
+    fn scalar_decimal_in_place_add_error_preserves_lhs() {
+        let mut lhs =
+            ScalarValue::Decimal128(Some(i128::MAX), DECIMAL128_MAX_PRECISION, 0);
+        let original = lhs.clone();
+
+        let err = lhs
+            .try_add_checked_in_place(&ScalarValue::Decimal128(
+                Some(1),
+                DECIMAL128_MAX_PRECISION,
+                0,
+            ))
+            .unwrap_err()
+            .strip_backtrace();
+
+        assert_eq!(
+            err,
+            format!(
+                "Arrow error: Arithmetic overflow: Overflow happened on: {} + 1",
+                i128::MAX
+            )
+        );
+        assert_eq!(lhs, original);
+    }
+
     // Verifies that ScalarValue has the same behavior with compute kernel when it overflows.
     fn check_scalar_add_overflow<T>(left: ScalarValue, right: ScalarValue)
     where
@@ -6037,6 +6370,22 @@ mod tests {
         let arrow_left_array = left_array.as_primitive::<T>();
         let arrow_right_array = right_array.as_primitive::<T>();
         let arrow_result = add(arrow_left_array, arrow_right_array);
+
+        assert_eq!(scalar_result.is_ok(), arrow_result.is_ok());
+    }
+
+    // Verifies the decimal fast path preserves the same overflow behavior as Arrow kernels.
+    fn check_scalar_decimal_add_overflow<T>(left: ScalarValue, right: ScalarValue)
+    where
+        T: ArrowPrimitiveType,
+    {
+        let scalar_result = left.add(&right);
+
+        let left_array = left.to_array().expect("Failed to convert to array");
+        let right_array = right.to_array().expect("Failed to convert to array");
+        let arrow_left_array = left_array.as_primitive::<T>();
+        let arrow_right_array = right_array.as_primitive::<T>();
+        let arrow_result = add_wrapping(arrow_left_array, arrow_right_array);
 
         assert_eq!(scalar_result.is_ok(), arrow_result.is_ok());
     }

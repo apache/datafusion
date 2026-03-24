@@ -1596,6 +1596,37 @@ physical_plan
 05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# don't reorder join based on stats, and use the order in the query
+
+statement ok
+set datafusion.optimizer.join_reordering = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN
+SELECT join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
+FROM join_t1
+INNER JOIN join_t2
+ON join_t1.t1_id + cast(11 as INT UNSIGNED)  = join_t2.t2_id
+----
+physical_plan
+01)ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(join_t1.t1_id + UInt32(11)@2, t2_id@0)], projection=[t1_id@0, t1_name@1, t2_id@3]
+03)----CoalescePartitionsExec
+04)------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as join_t1.t1_id + UInt32(11)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+08)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.join_reordering = true;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
+
 statement ok
 set datafusion.optimizer.repartition_joins = true;
 
@@ -2052,6 +2083,37 @@ ORDER BY 1
 22 11
 33 11
 44 11
+
+# don't reorder join based on stats, and use the order in the query
+
+statement ok
+set datafusion.optimizer.join_reordering = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN
+SELECT join_t1.t1_id, join_t2.t2_id
+FROM join_t1
+INNER JOIN join_t2 ON join_t1.t1_id > join_t2.t2_id
+WHERE join_t1.t1_id > 10 AND join_t2.t2_int > 1
+----
+physical_plan
+01)NestedLoopJoinExec: join_type=Inner, filter=t1_id@0 > t2_id@1
+02)--CoalescePartitionsExec
+03)----FilterExec: t1_id@0 > 10
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+07)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.join_reordering = true;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
 
 # Left as inner table nested loop join
 
@@ -5056,6 +5118,49 @@ LEFT ANTI JOIN t2 ON k1 = k2
 WHERE k1 < 0
 ----
 
+# Also check that the reported number of output rows/batches are correct in the "empty build side"
+# optimization.
+# Issue: https://github.com/apache/datafusion/issues/20809
+query TT
+EXPLAIN ANALYZE
+WITH t1 (k) AS (
+    VALUES (1), (2)
+), t2 (k) AS (
+    VALUES (1)
+)
+SELECT *
+FROM t1
+LEFT ANTI JOIN (
+    SELECT *
+    FROM t2
+    WHERE k <> 1
+) t2 ON t1.k = t2.k;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, array_map_created_count=0, build_input_batches=0, build_input_rows=0, input_batches=1, input_rows=2, build_mem_used=<slt:ignore>, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=N/A (0/0), probe_hit_rate=0% (0/2)]     
+02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, expr_0_eval_time=<slt:ignore>]
+03)----FilterExec: column1@0 != 1, metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, selectivity=0% (0/1)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+05)--ProjectionExec: expr=[column1@0 as k], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, expr_0_eval_time=<slt:ignore>]
+06)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+query I
+WITH t1 (k) AS (
+    VALUES (1), (2)
+), t2 (k) AS (
+    VALUES (1)
+)
+SELECT *
+FROM t1
+LEFT ANTI JOIN (
+    SELECT *
+    FROM t2
+    WHERE k <> 1
+) t2 ON t1.k = t2.k;
+----
+1
+2
+
 # Mark testing
 statement ok
 CREATE OR REPLACE TABLE t1(b INT, c INT, d INT);
@@ -5318,3 +5423,69 @@ DROP TABLE issue_20437_small;
 
 statement count 0
 DROP TABLE issue_20437_large;
+
+# Test count(*) with right semi/anti joins returns correct row counts
+# issue: https://github.com/apache/datafusion/issues/20669 
+
+statement ok
+CREATE TABLE t1 (k INT, v INT);
+
+statement ok
+CREATE TABLE t2 (k INT, v INT);
+
+statement ok
+INSERT INTO t1 SELECT i AS k, i AS v FROM generate_series(1, 100) t(i);
+
+statement ok
+INSERT INTO t2 VALUES (1, 1);
+
+query I
+WITH t AS (
+    SELECT *
+    FROM t1
+    LEFT ANTI JOIN t2 ON t1.k = t2.k
+)
+SELECT count(*)
+FROM t;
+----
+99
+
+query I
+WITH t AS (
+    SELECT *
+    FROM t1
+    LEFT SEMI JOIN t2 ON t1.k = t2.k
+)
+SELECT count(*)
+FROM t;
+----
+1
+
+statement count 0
+DROP TABLE t1;
+
+statement count 0
+DROP TABLE t2;
+
+statement ok
+CREATE TABLE t1(a INT, b INT) AS VALUES 
+  (NULL, 1), (NULL, 2), (NULL, 3), (NULL, 4), (NULL, 5);
+
+statement ok
+CREATE TABLE t2(c INT) AS VALUES (1), (2);
+
+# This query panicked before the fix: the ORDER BY forces a SortExec,
+# the LIMIT gets pushed into SortExec.fetch, and the HashJoinExec
+# calls partition_statistics() on the SortExec child during execution.
+query II
+SELECT sub.a, sub.b FROM (
+  SELECT * FROM t1 ORDER BY b LIMIT 1
+) sub 
+JOIN t2 ON sub.a = t2.c;
+----
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;

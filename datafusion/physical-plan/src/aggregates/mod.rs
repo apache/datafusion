@@ -45,6 +45,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
@@ -86,8 +87,9 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
 }
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
-const AGGREGATION_HASH_SEED: ahash::RandomState =
-    ahash::RandomState::with_seeds('A' as u64, 'G' as u64, 'G' as u64, 'R' as u64);
+const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
+    // This seed is chosen to be a large 64-bit number
+    datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
 
 /// Whether an aggregate stage consumes raw input data or intermediate
 /// accumulator state from a previous aggregation stage.
@@ -1382,6 +1384,36 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to group by expressions
+        let mut tnr = TreeNodeRecursion::Continue;
+        for expr in self.group_by.input_exprs() {
+            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+        }
+
+        // Apply to aggregate expressions
+        for aggr in self.aggr_expr.iter() {
+            for expr in aggr.expressions() {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+        }
+
+        // Apply to filter expressions (FILTER WHERE clauses)
+        for filter in self.filter_expr.iter().flatten() {
+            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
+        }
+
+        // Apply to dynamic filter expression if present
+        if let Some(dyn_filter) = &self.dynamic_filter {
+            tnr = tnr.visit_sibling(|| f(dyn_filter.filter.as_ref()))?;
+        }
+
+        Ok(tnr)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -1398,7 +1430,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.schema),
         )?;
         me.limit_options = self.limit_options;
-        me.dynamic_filter = self.dynamic_filter.clone();
+        me.dynamic_filter.clone_from(&self.dynamic_filter);
 
         Ok(Arc::new(me))
     }
@@ -1416,9 +1448,9 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let child_statistics = self.input().partition_statistics(partition)?;
-        self.statistics_inner(&child_statistics)
+        Ok(Arc::new(self.statistics_inner(&child_statistics)?))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -1990,9 +2022,9 @@ mod tests {
         UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
-    use arrow::datatypes::{DataType, Int32Type};
+    use arrow::datatypes::Int32Type;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{DataFusionError, ScalarValue, internal_err};
+    use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -2006,7 +2038,6 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::Literal;
-    use datafusion_physical_expr::expressions::lit;
 
     use crate::projection::ProjectionExec;
     use datafusion_physical_expr::projection::ProjectionExpr;
@@ -2479,6 +2510,13 @@ mod tests {
             vec![]
         }
 
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
         fn with_new_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
@@ -2500,16 +2538,19 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             if partition.is_some() {
-                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+                return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             let (_, batches) = some_data();
-            Ok(common::compute_record_batch_statistics(
+            Ok(Arc::new(common::compute_record_batch_statistics(
                 &[batches],
                 &self.schema(),
                 None,
-            ))
+            )))
         }
     }
 

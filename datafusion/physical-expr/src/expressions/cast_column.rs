@@ -17,6 +17,7 @@
 
 //! Physical expression for struct-aware casting of columns.
 
+use super::cast::cast_expr_properties;
 use crate::physical_expr::PhysicalExpr;
 use arrow::{
     compute::CastOptions,
@@ -27,6 +28,7 @@ use datafusion_common::{
     Result, ScalarValue, format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_expr_common::sort_properties::ExprProperties;
 use std::{
     any::Any,
     fmt::{self, Display},
@@ -138,15 +140,18 @@ impl PhysicalExpr for CastColumnExpr {
         let value = self.expr.evaluate(batch)?;
         match value {
             ColumnarValue::Array(array) => {
-                let casted =
-                    cast_column(&array, self.target_field.as_ref(), &self.cast_options)?;
+                let casted = cast_column(
+                    &array,
+                    self.target_field.data_type(),
+                    &self.cast_options,
+                )?;
                 Ok(ColumnarValue::Array(casted))
             }
             ColumnarValue::Scalar(scalar) => {
                 let as_array = scalar.to_array_of_size(1)?;
                 let casted = cast_column(
                     &as_array,
-                    self.target_field.as_ref(),
+                    self.target_field.data_type(),
                     &self.cast_options,
                 )?;
                 let result = ScalarValue::try_from_array(casted.as_ref(), 0)?;
@@ -175,6 +180,12 @@ impl PhysicalExpr for CastColumnExpr {
             Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
         )))
+    }
+
+    /// A [`CastColumnExpr`] preserves the ordering of its child if the cast is done
+    /// under the same datatype family.
+    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+        cast_expr_properties(&children[0], self.target_field.data_type())
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

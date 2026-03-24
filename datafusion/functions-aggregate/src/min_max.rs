@@ -1154,7 +1154,6 @@ mod tests {
         check(&mut max(), &[&[zero, neg_inf]], zero);
     }
 
-    use datafusion_common::Result;
     use rand::Rng;
 
     fn get_random_vec_i32(len: usize) -> Vec<i32> {

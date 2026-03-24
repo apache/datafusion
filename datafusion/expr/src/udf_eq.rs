@@ -125,7 +125,6 @@ mod tests {
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use std::any::Any;
-    use std::hash::DefaultHasher;
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {

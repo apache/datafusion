@@ -29,7 +29,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -49,31 +50,33 @@ struct ListColumnView {
 make_udf_expr_and_func!(
     ArraysZip,
     arrays_zip,
-    "combines multiple arrays into a single array of structs.",
+    "combines one or multiple arrays into a single array of structs.",
     arrays_zip_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.",
-    syntax_example = "arrays_zip(array1, array2[, ..., array_n])",
+    syntax_example = "arrays_zip(array1[, ..., array_n])",
     sql_example = r#"```sql
-> select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
+> select arrays_zip([1, 2, 3]);
 +---------------------------------------------------+
-| arrays_zip([1, 2, 3], ['a', 'b', 'c'])             |
+| arrays_zip([1, 2, 3])                             |
 +---------------------------------------------------+
-| [{c0: 1, c1: a}, {c0: 2, c1: b}, {c0: 3, c1: c}] |
+| [{1: 1}, {1: 2}, {1: 3}]                          |
 +---------------------------------------------------+
 > select arrays_zip([1, 2], [3, 4, 5]);
 +---------------------------------------------------+
-| arrays_zip([1, 2], [3, 4, 5])                       |
+| arrays_zip([1, 2], [3, 4, 5])                     |
 +---------------------------------------------------+
-| [{c0: 1, c1: 3}, {c0: 2, c1: 4}, {c0: , c1: 5}]  |
+| [{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]     |
 +---------------------------------------------------+
 ```"#,
     argument(name = "array1", description = "First array expression."),
-    argument(name = "array2", description = "Second array expression."),
-    argument(name = "array_n", description = "Subsequent array expressions.")
+    argument(
+        name = "array_n",
+        description = "Optional additional array expressions."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArraysZip {
@@ -111,7 +114,7 @@ impl ScalarUDFImpl for ArraysZip {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.is_empty() {
-            return exec_err!("arrays_zip requires at least two arguments");
+            return exec_err!("arrays_zip requires at least one argument");
         }
 
         let mut fields = Vec::with_capacity(arg_types.len());
@@ -125,7 +128,7 @@ impl ScalarUDFImpl for ArraysZip {
                     return exec_err!("arrays_zip expects array arguments, got {dt}");
                 }
             };
-            fields.push(Field::new(format!("c{i}"), element_type, true));
+            fields.push(Field::new(format!("{}", i + 1), element_type, true));
         }
 
         Ok(List(Arc::new(Field::new_list_field(
@@ -134,10 +137,7 @@ impl ScalarUDFImpl for ArraysZip {
         ))))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(arrays_zip_inner)(&args.args)
     }
 
@@ -157,8 +157,8 @@ impl ScalarUDFImpl for ArraysZip {
 /// lengths, shorter arrays are padded with NULLs.
 /// Supports List, LargeList, and Null input types.
 fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() < 2 {
-        return exec_err!("arrays_zip requires at least two arguments");
+    if args.is_empty() {
+        return exec_err!("arrays_zip requires at least one argument");
     }
 
     let num_rows = args[0].len();
@@ -227,7 +227,7 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let struct_fields: Fields = element_types
         .iter()
         .enumerate()
-        .map(|(i, dt)| Field::new(format!("c{i}"), dt.clone(), true))
+        .map(|(i, dt)| Field::new(format!("{}", i + 1), dt.clone(), true))
         .collect::<Vec<_>>()
         .into();
 

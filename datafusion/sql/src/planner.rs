@@ -621,9 +621,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<FieldRef> {
         // First check if any of the registered type_planner can handle this type
         if let Some(type_planner) = self.context_provider.get_type_planner()
-            && let Some(data_type) = type_planner.plan_type(sql_type)?
+            && let Some(data_type) = type_planner.plan_type_field(sql_type)?
         {
-            return Ok(data_type.into_nullable_field_ref());
+            return Ok(data_type);
         }
 
         // If no type_planner can handle this type, use the default conversion

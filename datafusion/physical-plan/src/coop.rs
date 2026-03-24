@@ -71,6 +71,7 @@
 //! that report [`SchedulingType::NonCooperative`] in their [plan properties](ExecutionPlan::properties).
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::PhysicalExpr;
 #[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
@@ -281,6 +282,13 @@ impl ExecutionPlan for CooperativeExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -303,7 +311,7 @@ impl ExecutionPlan for CooperativeExec {
         Ok(make_cooperative(child_stream))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 
@@ -393,11 +401,10 @@ pub fn make_cooperative(stream: SendableRecordBatchStream) -> SendableRecordBatc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stream::RecordBatchStreamAdapter;
 
     use arrow_schema::SchemaRef;
 
-    use futures::{StreamExt, stream};
+    use futures::stream;
 
     // This is the hardcoded value Tokio uses
     const TASK_BUDGET: usize = 128;

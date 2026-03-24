@@ -669,6 +669,21 @@ config_namespace! {
         /// # Default
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
+
+        /// How many bytes to buffer in the probe side of hash joins while the build side is
+        /// concurrently being built.
+        ///
+        /// Without this, hash joins will wait until the full materialization of the build side
+        /// before polling the probe side. This is useful in scenarios where the query is not
+        /// completely CPU bounded, allowing to do some early work concurrently and reducing the
+        /// latency of the query.
+        ///
+        /// Note that when hash join buffering is enabled, the probe side will start eagerly
+        /// polling data, not giving time for the producer side of dynamic filters to produce any
+        /// meaningful predicate. Queries with dynamic filters might see performance degradation.
+        ///
+        /// Disabled by default, set to a number greater than 0 for enabling it.
+        pub hash_join_buffering_capacity: usize, default = 0
     }
 }
 
@@ -922,6 +937,11 @@ config_namespace! {
         /// past window functions, if possible
         pub enable_window_limits: bool, default = true
 
+        /// When set to true, the optimizer will push TopK (Sort with fetch)
+        /// below hash repartition when the partition key is a prefix of the
+        /// sort key, reducing data volume before the shuffle.
+        pub enable_topk_repartition: bool, default = true
+
         /// When set to true, the optimizer will attempt to push down TopK dynamic filters
         /// into the file scan phase.
         pub enable_topk_dynamic_filter_pushdown: bool, default = true
@@ -1067,6 +1087,12 @@ config_namespace! {
         /// When set to true, the physical plan optimizer will run a top down
         /// process to reorder the join keys
         pub top_down_join_key_reordering: bool, default = true
+
+        /// When set to true, the physical plan optimizer may swap join inputs
+        /// based on statistics. When set to false, statistics-driven join
+        /// input reordering is disabled and the original join order in the
+        /// query is used.
+        pub join_reordering: bool, default = true
 
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
@@ -2711,10 +2737,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
                 },
             );
         }
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
         ConfigFileEncryptionProperties {
             encrypt_footer: f.encrypt_footer(),
             footer_key_as_hex: hex::encode(f.footer_key()),
@@ -2852,10 +2875,7 @@ impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
             column_decryption_properties.insert(column_name.clone(), props);
         }
 
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
         ConfigFileDecryptionProperties {
             footer_key_as_hex: hex::encode(
                 f.footer_key(None).unwrap_or_default().as_ref(),

@@ -213,7 +213,7 @@ where
 }
 
 fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
-    let date = Date32Type::to_naive_date(days);
+    let date = Date32Type::to_naive_date_opt(days)?;
 
     let day_of_week = day_of_week.trim().to_uppercase();
     let day_of_week = match day_of_week.as_str() {
@@ -253,7 +253,6 @@ fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn return_type_is_not_used() {

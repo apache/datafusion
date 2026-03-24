@@ -36,6 +36,7 @@ use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, Statistics, assert_or_internal_err, config::ConfigOptions, project_schema,
 };
@@ -45,7 +46,9 @@ use datafusion_physical_expr::equivalence::{
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
+use datafusion_physical_expr::{
+    EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr,
+};
 
 use futures::{Future, FutureExt};
 
@@ -142,6 +145,20 @@ impl ExecutionPlan for TestMemoryExec {
         Vec::new()
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to all sort information orderings
+        let mut tnr = TreeNodeRecursion::Continue;
+        for ordering in &self.sort_information {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
@@ -169,11 +186,11 @@ impl ExecutionPlan for TestMemoryExec {
         unimplemented!()
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            Ok(Statistics::new_unknown(&self.schema))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema)))
         } else {
-            self.statistics_inner()
+            Ok(Arc::new(self.statistics_inner()?))
         }
     }
 

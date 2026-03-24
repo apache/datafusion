@@ -23,7 +23,10 @@ use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
 use crate::ExecutionPlanProperties;
-use crate::execution_plan::{EmissionType, boundedness_from_children, stub_properties};
+use crate::execution_plan::{
+    EmissionType, boundedness_from_children, has_same_children_properties,
+    stub_properties,
+};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -69,6 +72,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -85,7 +89,7 @@ use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, l
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
@@ -95,7 +99,7 @@ use super::partitioned_hash_eval::SeededRandomState;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 pub(crate) const HASH_JOIN_SEED: SeededRandomState =
-    SeededRandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
+    SeededRandomState::with_seed(12210250226015887276);
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
@@ -151,23 +155,23 @@ fn try_create_array_map(
 
     let range = ArrayMap::calculate_range(min_val, max_val);
     let num_row: usize = batches.iter().map(|x| x.num_rows()).sum();
-    let dense_ratio = (num_row as f64) / ((range + 1) as f64);
 
     // TODO: support create ArrayMap<u64>
     if num_row >= u32::MAX as usize {
         return Ok(None);
     }
 
-    if range >= perfect_hash_join_small_build_threshold as u64
-        && dense_ratio <= perfect_hash_join_min_key_density
-    {
+    // When the key range spans the full integer domain (e.g. i64::MIN to i64::MAX),
+    // range is u64::MAX and `range + 1` below would overflow.
+    if range == usize::MAX as u64 {
         return Ok(None);
     }
 
-    // If range equals usize::MAX, then range + 1 would overflow to 0, which would cause
-    // ArrayMap to allocate an invalid zero-sized array or cause indexing issues.
-    // This check prevents such overflow and ensures valid array allocation.
-    if range == usize::MAX as u64 {
+    let dense_ratio = (num_row as f64) / ((range + 1) as f64);
+
+    if range >= perfect_hash_join_small_build_threshold as u64
+        && dense_ratio <= perfect_hash_join_min_key_density
+    {
         return Ok(None);
     }
 
@@ -372,9 +376,9 @@ impl HashJoinExecBuilder {
             children.len() == 2,
             "wrong number of children passed into `HashJoinExecBuilder`"
         );
+        self.preserve_properties &= has_same_children_properties(&self.exec, &children)?;
         self.exec.right = children.swap_remove(1);
         self.exec.left = children.swap_remove(0);
-        self.preserve_properties = false;
         Ok(self)
     }
 
@@ -837,9 +841,8 @@ impl HashJoinExec {
     }
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
-        if self.join_type != JoinType::Inner
-            || !config.optimizer.enable_join_dynamic_filter_pushdown
-        {
+        let (_, probe_preserved) = self.join_type.on_lr_is_preserved();
+        if !probe_preserved || !config.optimizer.enable_join_dynamic_filter_pushdown {
             return false;
         }
 
@@ -1232,6 +1235,30 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join key expressions from both sides
+        let mut tnr = TreeNodeRecursion::Continue;
+        for (left, right) in &self.on {
+            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
+            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
+        }
+
+        // Apply to join filter expression if present
+        if let Some(filter) = &self.filter {
+            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
+        }
+
+        // Apply to dynamic filter expression if present
+        if let Some(df) = &self.dynamic_filter {
+            tnr = tnr.visit_sibling(|| f(df.filter.as_ref()))?;
+        }
+
+        Ok(tnr)
+    }
+
     /// Creates a new HashJoinExec with different children while preserving configuration.
     ///
     /// This method is called during query optimization when the optimizer creates new
@@ -1417,24 +1444,60 @@ impl ExecutionPlan for HashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
-        // TODO stats: it is not possible in general to know the output size of joins
-        // There are some special cases though, for example:
-        // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let stats = estimate_join_statistics(
-            self.left.partition_statistics(None)?,
-            self.right.partition_statistics(None)?,
-            &self.on,
-            &self.join_type,
-            &self.join_schema,
-        )?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = match (partition, self.mode) {
+            // For CollectLeft mode, the left side is collected into a single partition,
+            // so all left partitions are available to each output partition.
+            // For the right side, we need the specific partition statistics.
+            (Some(partition), PartitionMode::CollectLeft) => {
+                let left_stats = self.left.partition_statistics(None)?;
+                let right_stats = self.right.partition_statistics(Some(partition))?;
+
+                estimate_join_statistics(
+                    (*left_stats).clone(),
+                    (*right_stats).clone(),
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+
+            // For Partitioned mode, both sides are partitioned, so each output partition
+            // only has access to the corresponding partition from both sides.
+            (Some(partition), PartitionMode::Partitioned) => {
+                let left_stats = self.left.partition_statistics(Some(partition))?;
+                let right_stats = self.right.partition_statistics(Some(partition))?;
+
+                estimate_join_statistics(
+                    (*left_stats).clone(),
+                    (*right_stats).clone(),
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+
+            // For Auto mode or when no specific partition is requested, fall back to
+            // the current behavior of getting all partition statistics.
+            (None, _) | (Some(_), PartitionMode::Auto) => {
+                // TODO stats: it is not possible in general to know the output size of joins
+                // There are some special cases though, for example:
+                // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
+                let left_stats = self.left.partition_statistics(None)?;
+                let right_stats = self.right.partition_statistics(None)?;
+                estimate_join_statistics(
+                    (*left_stats).clone(),
+                    (*right_stats).clone(),
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+        };
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
         // Apply fetch limit to statistics
-        stats.with_fetch(self.fetch, 0, 1)
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the
@@ -2079,10 +2142,11 @@ mod tests {
         test::exec::MockExec,
     };
 
-    use arrow::array::{Date32Array, Int32Array, StructArray, UInt32Array, UInt64Array};
+    use arrow::array::{
+        Date32Array, Int32Array, Int64Array, StructArray, UInt32Array, UInt64Array,
+    };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
-    use arrow_schema::Schema;
     use datafusion_common::hash_utils::create_hashes;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
@@ -2092,7 +2156,6 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
@@ -4241,7 +4304,7 @@ mod tests {
             ("y", &vec![200, 300]),
         );
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let hashes_buff = &mut vec![0; left.num_rows()];
         let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 
@@ -4308,7 +4371,7 @@ mod tests {
             ("y", &vec![200, 300]),
         );
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let hashes_buff = &mut vec![0; left.num_rows()];
         let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 
@@ -5493,6 +5556,38 @@ mod tests {
 
         assert_phj_used(&metrics, true);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_perfect_hash_join_overflow_full_int64_range() -> Result<()> {
+        let task_ctx = prepare_task_ctx(8192, true);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![i64::MIN, i64::MAX]))],
+        )?;
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let right = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?;
+        let on: JoinOn = vec![(
+            Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+        )];
+        let (_columns, batches, _metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2);
         Ok(())
     }
 

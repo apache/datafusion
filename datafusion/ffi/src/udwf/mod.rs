@@ -222,6 +222,10 @@ impl Clone for FFI_WindowUDF {
 
 impl From<Arc<WindowUDF>> for FFI_WindowUDF {
     fn from(udf: Arc<WindowUDF>) -> Self {
+        if let Some(udwf) = udf.inner().as_any().downcast_ref::<ForeignWindowUDF>() {
+            return udwf.udf.clone();
+        }
+
         let name = udf.name().into();
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();

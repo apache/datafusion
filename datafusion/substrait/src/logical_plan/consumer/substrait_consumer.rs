@@ -18,7 +18,7 @@
 use super::{
     from_aggregate_rel, from_cast, from_cross_rel, from_exchange_rel, from_fetch_rel,
     from_field_reference, from_filter_rel, from_if_then, from_join_rel, from_literal,
-    from_project_rel, from_read_rel, from_scalar_function, from_set_rel,
+    from_nested, from_project_rel, from_read_rel, from_scalar_function, from_set_rel,
     from_singular_or_list, from_sort_rel, from_subquery, from_substrait_rel,
     from_substrait_rex, from_window_function,
 };
@@ -141,7 +141,15 @@ use substrait::proto::{
 ///
 ///     // and user-defined literals
 ///     fn consume_user_defined_literal(&self, literal: &proto::expression::literal::UserDefined) -> Result<ScalarValue> {
-///         let type_string = self.extensions.types.get(&literal.type_reference).unwrap();
+///         // extract type_reference from the new TypeAnchorType oneof
+///         let type_ref = match literal.type_anchor_type {
+///             Some(proto::expression::literal::user_defined::TypeAnchorType::TypeReference(r)) => r,
+///             Some(proto::expression::literal::user_defined::TypeAnchorType::TypeAliasReference(_)) => {
+///                 return not_impl_err!("Type alias references are not yet supported")
+///             }
+///             None => 0,
+///         };
+///         let type_string = self.extensions.types.get(&type_ref).unwrap();
 ///         match type_string.as_str() {
 ///             "u!foo" => not_impl_err!("handle foo conversion"),
 ///             "u!bar" => not_impl_err!("handle bar conversion"),
@@ -342,10 +350,10 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     async fn consume_nested(
         &self,
-        _expr: &Nested,
-        _input_schema: &DFSchema,
+        expr: &Nested,
+        input_schema: &DFSchema,
     ) -> datafusion::common::Result<Expr> {
-        not_impl_err!("Nested expression not supported")
+        from_nested(self, expr, input_schema).await
     }
 
     async fn consume_enum(
@@ -444,10 +452,22 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         user_defined_literal: &proto::expression::literal::UserDefined,
     ) -> datafusion::common::Result<ScalarValue> {
-        substrait_err!(
-            "Missing handler for user-defined literals {}",
-            user_defined_literal.type_reference
-        )
+        let type_ref = match user_defined_literal.type_anchor_type {
+            Some(
+                proto::expression::literal::user_defined::TypeAnchorType::TypeReference(
+                    ref_val,
+                ),
+            ) => ref_val,
+            Some(
+                proto::expression::literal::user_defined::TypeAnchorType::TypeAliasReference(_),
+            ) => {
+                return not_impl_err!(
+                    "Type alias references in user-defined literals are not yet supported"
+                )
+            }
+            None => 0,
+        };
+        substrait_err!("Missing handler for user-defined literals {}", type_ref)
     }
 }
 
@@ -568,7 +588,7 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
 mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::datatypes::{Field, Schema};
 
     fn make_schema(fields: &[(&str, DataType)]) -> Arc<DFSchema> {
         let arrow_fields: Vec<Field> = fields

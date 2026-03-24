@@ -19,9 +19,11 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, GenericListArray, OffsetSizeTrait, new_empty_array, new_null_array,
+    Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt32Array, UInt64Array,
+    new_empty_array, new_null_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::compute::{concat, take};
 use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
@@ -31,7 +33,8 @@ use datafusion_common::{
     Result, assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use hashbrown::HashSet;
@@ -138,10 +141,7 @@ impl ScalarUDFImpl for ArrayUnion {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_union_inner)(&args.args)
     }
 
@@ -228,10 +228,7 @@ impl ScalarUDFImpl for ArrayIntersect {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_intersect_inner)(&args.args)
     }
 
@@ -299,10 +296,7 @@ impl ScalarUDFImpl for ArrayDistinct {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_distinct_inner)(&args.args)
     }
 
@@ -368,17 +362,44 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
         "{set_op:?} is not implemented for '{l:?}' and '{r:?}'"
     );
 
-    // Convert all values to rows in batch for performance.
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
-    let rows_l = converter.convert_columns(&[Arc::clone(l.values())])?;
-    let rows_r = converter.convert_columns(&[Arc::clone(r.values())])?;
+
+    // Only convert the visible portion of the values array. For sliced
+    // ListArrays, values() returns the full underlying array but only
+    // elements between the first and last offset are referenced.
+    let l_first = l.offsets()[0].as_usize();
+    let l_len = l.offsets()[l.len()].as_usize() - l_first;
+    let rows_l = converter.convert_columns(&[l.values().slice(l_first, l_len)])?;
+
+    let r_first = r.offsets()[0].as_usize();
+    let r_len = r.offsets()[r.len()].as_usize() - r_first;
+    let rows_r = converter.convert_columns(&[r.values().slice(r_first, r_len)])?;
+
+    // Combine the *sliced* value arrays so 0-based indices from the row
+    // converter map directly into the concatenated array.
+    let l_values = l.values().slice(l_first, l_len);
+    let r_values = r.values().slice(r_first, r_len);
+    let combined_values = concat(&[l_values.as_ref(), r_values.as_ref()])?;
+    let r_offset = l_len;
 
     match set_op {
         SetOp::Union => generic_set_loop::<OffsetSize, true>(
-            l, r, &rows_l, &rows_r, field, &converter,
+            l,
+            r,
+            &rows_l,
+            &rows_r,
+            field,
+            &combined_values,
+            r_offset,
         ),
         SetOp::Intersect => generic_set_loop::<OffsetSize, false>(
-            l, r, &rows_l, &rows_r, field, &converter,
+            l,
+            r,
+            &rows_l,
+            &rows_r,
+            field,
+            &combined_values,
+            r_offset,
         ),
     }
 }
@@ -391,10 +412,13 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
     rows_l: &arrow::row::Rows,
     rows_r: &arrow::row::Rows,
     field: Arc<Field>,
-    converter: &RowConverter,
+    combined_values: &ArrayRef,
+    r_offset: usize,
 ) -> Result<ArrayRef> {
     let l_offsets = l.value_offsets();
     let r_offsets = r.value_offsets();
+    let l_first = l.offsets()[0].as_usize();
+    let r_first = r.offsets()[0].as_usize();
 
     let mut result_offsets = Vec::with_capacity(l.len() + 1);
     result_offsets.push(OffsetSize::usize_as(0));
@@ -406,7 +430,7 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
         rows_l.num_rows().min(rows_r.num_rows())
     };
 
-    let mut final_rows = Vec::with_capacity(initial_capacity);
+    let mut indices: Vec<usize> = Vec::with_capacity(initial_capacity);
 
     // Reuse hash sets across iterations
     let mut seen = HashSet::new();
@@ -419,10 +443,10 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
             continue;
         }
 
-        let l_start = l_offsets[i].as_usize();
-        let l_end = l_offsets[i + 1].as_usize();
-        let r_start = r_offsets[i].as_usize();
-        let r_end = r_offsets[i + 1].as_usize();
+        let l_start = l_offsets[i].as_usize() - l_first;
+        let l_end = l_offsets[i + 1].as_usize() - l_first;
+        let r_start = r_offsets[i].as_usize() - r_first;
+        let r_end = r_offsets[i + 1].as_usize() - r_first;
 
         seen.clear();
 
@@ -430,25 +454,27 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
             for idx in l_start..l_end {
                 let row = rows_l.row(idx);
                 if seen.insert(row) {
-                    final_rows.push(row);
+                    indices.push(idx);
                 }
             }
             for idx in r_start..r_end {
                 let row = rows_r.row(idx);
                 if seen.insert(row) {
-                    final_rows.push(row);
+                    indices.push(idx + r_offset);
                 }
             }
         } else {
             let l_len = l_end - l_start;
             let r_len = r_end - r_start;
 
-            // Select shorter side for lookup, longer side for probing
-            let (lookup_rows, lookup_range, probe_rows, probe_range) = if l_len < r_len {
-                (rows_l, l_start..l_end, rows_r, r_start..r_end)
-            } else {
-                (rows_r, r_start..r_end, rows_l, l_start..l_end)
-            };
+            // Select shorter side for lookup, longer side for probing.
+            // Track the probe side's offset into the combined values array.
+            let (lookup_rows, lookup_range, probe_rows, probe_range, probe_offset) =
+                if l_len < r_len {
+                    (rows_l, l_start..l_end, rows_r, r_start..r_end, r_offset)
+                } else {
+                    (rows_r, r_start..r_end, rows_l, l_start..l_end, 0)
+                };
             lookup_set.clear();
             lookup_set.reserve(lookup_range.len());
 
@@ -461,18 +487,25 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait, const IS_UNION: bool>(
             for idx in probe_range {
                 let row = probe_rows.row(idx);
                 if lookup_set.contains(&row) && seen.insert(row) {
-                    final_rows.push(row);
+                    indices.push(idx + probe_offset);
                 }
             }
         }
         result_offsets.push(last_offset + OffsetSize::usize_as(seen.len()));
     }
 
-    let final_values = if final_rows.is_empty() {
+    // Gather distinct values by index from the combined values array.
+    // Use UInt64Array for LargeList to support values arrays exceeding u32::MAX.
+    let final_values = if indices.is_empty() {
         new_empty_array(&l.value_type())
+    } else if OffsetSize::IS_LARGE {
+        let indices =
+            UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
+        take(combined_values.as_ref(), &indices, None)?
     } else {
-        let arrays = converter.convert_rows(final_rows)?;
-        Arc::clone(&arrays[0])
+        let indices =
+            UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
+        take(combined_values.as_ref(), &indices, None)?
     };
 
     let arr = GenericListArray::<OffsetSize>::try_new(
@@ -536,10 +569,17 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     let mut offsets = Vec::with_capacity(array.len() + 1);
     offsets.push(OffsetSize::usize_as(0));
 
-    // Convert all values to row format in a single batch for performance
     let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-    let rows = converter.convert_columns(&[Arc::clone(array.values())])?;
-    let mut final_rows = Vec::with_capacity(rows.num_rows());
+
+    // Only convert the visible portion of the values array. For sliced
+    // ListArrays, values() returns the full underlying array but only
+    // elements between the first and last offset are referenced.
+    let first_offset = value_offsets[0].as_usize();
+    let visible_len = value_offsets[array.len()].as_usize() - first_offset;
+    let rows =
+        converter.convert_columns(&[array.values().slice(first_offset, visible_len)])?;
+
+    let mut indices: Vec<usize> = Vec::with_capacity(rows.num_rows());
     let mut seen = HashSet::new();
     for i in 0..array.len() {
         let last_offset = *offsets.last().unwrap();
@@ -550,8 +590,8 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
             continue;
         }
 
-        let start = value_offsets[i].as_usize();
-        let end = value_offsets[i + 1].as_usize();
+        let start = value_offsets[i].as_usize() - first_offset;
+        let end = value_offsets[i + 1].as_usize() - first_offset;
         seen.clear();
         seen.reserve(end - start);
 
@@ -559,18 +599,26 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         for idx in start..end {
             let row = rows.row(idx);
             if seen.insert(row) {
-                final_rows.push(row);
+                indices.push(idx + first_offset);
             }
         }
         offsets.push(last_offset + OffsetSize::usize_as(seen.len()));
     }
 
-    // Convert all collected distinct rows back
-    let final_values = if final_rows.is_empty() {
+    // Gather distinct values in a single pass, using the computed `indices`.
+    // Indices are absolute positions in array.values() (first_offset was added
+    // back when collecting them), so we can take directly from the full values.
+    // Use UInt64Array for LargeList to support values arrays exceeding u32::MAX.
+    let final_values = if indices.is_empty() {
         new_empty_array(&dt)
+    } else if OffsetSize::IS_LARGE {
+        let indices =
+            UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
+        take(array.values().as_ref(), &indices, None)?
     } else {
-        let arrays = converter.convert_rows(final_rows)?;
-        Arc::clone(&arrays[0])
+        let indices =
+            UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
+        take(array.values().as_ref(), &indices, None)?
     };
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
@@ -587,14 +635,132 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{Int32Array, ListArray},
+        array::{Array, AsArray, Int32Array, ListArray},
         buffer::OffsetBuffer,
-        datatypes::{DataType, Field},
+        datatypes::{DataType, Field, Int32Type},
     };
-    use datafusion_common::{DataFusionError, config::ConfigOptions};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+    use datafusion_common::{DataFusionError, Result, config::ConfigOptions};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
-    use crate::set_ops::array_distinct_udf;
+    use crate::set_ops::{ArrayDistinct, ArrayIntersect, ArrayUnion, array_distinct_udf};
+
+    /// Build two sliced ListArrays and return them along with the shared list
+    /// field.
+    ///
+    /// l: [[1,2], [3,4], [5,6], [7,8]]  →  slice(1,2)  →  [[3,4], [5,6]]
+    /// r: [[1,3], [3,5], [5,7], [7,1]]  →  slice(1,2)  →  [[3,5], [5,7]]
+    fn make_sliced_pair() -> (ListArray, ListArray, Arc<Field>) {
+        let l = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4)]),
+            Some(vec![Some(5), Some(6)]),
+            Some(vec![Some(7), Some(8)]),
+        ]);
+        let r = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(3)]),
+            Some(vec![Some(3), Some(5)]),
+            Some(vec![Some(5), Some(7)]),
+            Some(vec![Some(7), Some(1)]),
+        ]);
+        let field = Arc::new(Field::new("item", l.data_type().clone(), true));
+        (l.slice(1, 2), r.slice(1, 2), field)
+    }
+
+    fn collect_i32_list(list: &ListArray) -> Vec<Vec<i32>> {
+        (0..list.len())
+            .map(|i| {
+                let arr = list.value(i);
+                arr.as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_array_union_sliced_lists() -> Result<()> {
+        let (l, r, field) = make_sliced_pair();
+
+        let result = ArrayUnion::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(l)),
+                ColumnarValue::Array(Arc::new(r)),
+            ],
+            arg_fields: vec![Arc::clone(&field), Arc::clone(&field)],
+            number_rows: 2,
+            return_field: Arc::clone(&field),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(2)?;
+        let output = output.as_list::<i32>();
+        let rows = collect_i32_list(output);
+
+        // Row 0: union([3,4], [3,5]) = [3,4,5]
+        assert_eq!(rows[0], vec![3, 4, 5]);
+        // Row 1: union([5,6], [5,7]) = [5,6,7]
+        assert_eq!(rows[1], vec![5, 6, 7]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_intersect_sliced_lists() -> Result<()> {
+        let (l, r, field) = make_sliced_pair();
+
+        let result = ArrayIntersect::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(l)),
+                ColumnarValue::Array(Arc::new(r)),
+            ],
+            arg_fields: vec![Arc::clone(&field), Arc::clone(&field)],
+            number_rows: 2,
+            return_field: Arc::clone(&field),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(2)?;
+        let output = output.as_list::<i32>();
+        let rows = collect_i32_list(output);
+
+        // Row 0: intersect([3,4], [3,5]) = [3]
+        assert_eq!(rows[0], vec![3]);
+        // Row 1: intersect([5,6], [5,7]) = [5]
+        assert_eq!(rows[1], vec![5]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_distinct_sliced_list() -> Result<()> {
+        // [[1,1], [3,3,4], [5,5,6], [7,7]]  →  slice(1,2)  →  [[3,3,4], [5,5,6]]
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1)]),
+            Some(vec![Some(3), Some(3), Some(4)]),
+            Some(vec![Some(5), Some(5), Some(6)]),
+            Some(vec![Some(7), Some(7)]),
+        ]);
+        let sliced = list.slice(1, 2);
+        let field = Arc::new(Field::new("item", sliced.data_type().clone(), true));
+
+        let result = ArrayDistinct::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(Arc::new(sliced))],
+            arg_fields: vec![Arc::clone(&field)],
+            number_rows: 2,
+            return_field: field,
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(2)?;
+        let output = output.as_list::<i32>();
+        let rows = collect_i32_list(output);
+
+        // Row 0: distinct([3,3,4]) = [3,4]
+        assert_eq!(rows[0], vec![3, 4]);
+        // Row 1: distinct([5,5,6]) = [5,6]
+        assert_eq!(rows[1], vec![5, 6]);
+        Ok(())
+    }
 
     #[test]
     fn test_array_distinct_inner_nullability_result_type_match_return_type()

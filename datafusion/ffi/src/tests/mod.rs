@@ -37,6 +37,8 @@ use udf_udaf_udwf::{
 use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::config::extension_options::FFI_ExtensionOptions;
+use crate::execution_plan::FFI_ExecutionPlan;
+use crate::execution_plan::tests::EmptyExec;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
@@ -84,6 +86,8 @@ pub struct ForeignLibraryModule {
 
     pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
+    pub create_timezone_udf: extern "C" fn() -> FFI_ScalarUDF,
+
     pub create_table_function:
         extern "C" fn(FFI_LogicalExtensionCodec) -> FFI_TableFunction,
 
@@ -97,6 +101,8 @@ pub struct ForeignLibraryModule {
 
     /// Create extension options, for either ConfigOptions or TableOptions
     pub create_extension_options: extern "C" fn() -> FFI_ExtensionOptions,
+
+    pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -147,6 +153,13 @@ extern "C" fn construct_table_provider_factory(
     table_provider_factory::create(codec)
 }
 
+pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    let plan = Arc::new(EmptyExec::new(schema));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
 #[export_root_module]
 /// This defines the entry point for using the module.
 pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
@@ -157,11 +170,13 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_table_factory: construct_table_provider_factory,
         create_scalar_udf: create_ffi_abs_func,
         create_nullary_udf: create_ffi_random_func,
+        create_timezone_udf: udf_udaf_udwf::create_timezone_func,
         create_table_function: create_ffi_table_func,
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
+        create_empty_exec,
         version: super::version,
     }
     .leak_into_prefix()
