@@ -339,7 +339,10 @@ impl SharedFileStreamState {
         Self::wake_waiters(waiters);
     }
 
-    fn take_waiters(io_state: &mut IoState, shared_waiters: &SegQueue<Waker>) -> Vec<Waker> {
+    fn take_waiters(
+        io_state: &mut IoState,
+        shared_waiters: &SegQueue<Waker>,
+    ) -> Vec<Waker> {
         let mut waiters = Vec::new();
         while let Some(waiter) = shared_waiters.pop() {
             waiters.push(waiter);
