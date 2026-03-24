@@ -999,6 +999,7 @@ mod tests {
         DataFusionError, ScalarValue, config::ConfigOptions,
         utils::SingleRowListArrayBuilder,
     };
+    use datafusion_expr::simplify::SimplifyContext;
     use datafusion_expr::{
         ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col, lit,
         simplify::ExprSimplifyResult,
@@ -1017,7 +1018,7 @@ mod tests {
         .build_list_scalar());
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -1040,7 +1041,7 @@ mod tests {
         let haystack = make_array(vec![lit(1), lit(2), lit(3)]);
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -1063,7 +1064,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::Null, None);
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -1080,7 +1081,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::List(Arc::new(haystack)), None);
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -1095,7 +1096,7 @@ mod tests {
         let haystack = col("c1");
         let needle = col("c2");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Original(args)) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)

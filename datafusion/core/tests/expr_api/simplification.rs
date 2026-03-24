@@ -88,9 +88,10 @@ fn test_evaluate_with_start_time(
     expected_expr: Expr,
     date_time: &DateTime<Utc>,
 ) {
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(schema())
-        .with_query_execution_start_time(Some(*date_time));
+        .with_query_execution_start_time(Some(*date_time))
+        .build();
     let simplifier = ExprSimplifier::new(context);
     let simplified_expr = simplifier
         .simplify(input_expr.clone())
@@ -153,9 +154,10 @@ fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
 
 #[test]
 fn basic() {
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(schema())
-        .with_query_execution_start_time(Some(Utc::now()));
+        .with_query_execution_start_time(Some(Utc::now()))
+        .build();
 
     // The `Expr` is a core concept in DataFusion, and DataFusion can
     // help simplify it.
@@ -171,7 +173,7 @@ fn basic() {
 
 #[test]
 fn fold_and_simplify() {
-    let context = SimplifyContext::default().with_schema(schema());
+    let context = SimplifyContext::builder().with_schema(schema()).build();
 
     // What will it do with the expression `concat('foo', 'bar') == 'foobar')`?
     let expr = concat(vec![lit("foo"), lit("bar")]).eq(lit("foobar"));
@@ -565,7 +567,9 @@ fn expr_test_schema() -> DFSchemaRef {
 }
 
 fn test_simplify(input_expr: Expr, expected_expr: Expr) {
-    let context = SimplifyContext::default().with_schema(expr_test_schema());
+    let context = SimplifyContext::builder()
+        .with_schema(expr_test_schema())
+        .build();
     let simplifier = ExprSimplifier::new(context);
     let simplified_expr = simplifier
         .simplify(input_expr.clone())
@@ -581,9 +585,10 @@ fn test_simplify_with_cycle_count(
     expected_expr: Expr,
     expected_count: u32,
 ) {
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(expr_test_schema())
-        .with_query_execution_start_time(Some(Utc::now()));
+        .with_query_execution_start_time(Some(Utc::now()))
+        .build();
     let simplifier = ExprSimplifier::new(context);
     let (simplified_expr, count) = simplifier
         .simplify_with_cycle_count_transformed(input_expr.clone())

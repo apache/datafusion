@@ -9109,6 +9109,26 @@ SELECT string_to_array('abcxxxdef', 'xxx')
 ----
 [abc, def]
 
+query I
+SELECT cardinality(string_to_array('', ','))
+----
+0
+
+query I
+SELECT cardinality(string_to_array('', ''))
+----
+0
+
+query I
+SELECT cardinality(string_to_array('', ',', 'x'))
+----
+0
+
+query I
+SELECT cardinality(string_to_array('', '', 'x'))
+----
+0
+
 query ?
 SELECT string_to_array('abc', '')
 ----
