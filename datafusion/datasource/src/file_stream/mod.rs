@@ -142,6 +142,12 @@ pub struct FileStream {
     ///
     /// [`MorselPlan`]: crate::morsel::MorselPlan
     preserve_order: bool,
+    /// If true, this stream must preserve output partition boundaries.
+    ///
+    /// In this mode, ready work may still be reordered within this partition,
+    /// but it must not migrate to a sibling `FileStream`, as doing so would
+    /// change which partition produces the rows.
+    preserve_partitions: bool,
     /// Shared scheduling state across all sibling `FileStream`s for the same
     /// `DataSourceExec`.
     ///
@@ -297,6 +303,7 @@ pub struct FileStreamBuilder<'a> {
     metrics: &'a ExecutionPlanMetricsSet,
     on_error: OnError,
     preserve_order: bool,
+    preserve_partitions: bool,
     shared_file_stream_state: Option<SharedFileStreamState>,
 }
 
@@ -329,6 +336,7 @@ impl<'a> FileStreamBuilder<'a> {
             morselizer,
             on_error: OnError::Fail,
             preserve_order: config.preserve_order,
+            preserve_partitions: config.partitioned_by_file_group,
             metrics,
             shared_file_stream_state: None,
         }
@@ -376,6 +384,7 @@ impl<'a> FileStreamBuilder<'a> {
             baseline_metrics: BaselineMetrics::new(self.metrics, self.partition),
             on_error: self.on_error,
             preserve_order: self.preserve_order,
+            preserve_partitions: self.preserve_partitions,
             shared_file_stream_state,
             stream_id: Some(stream_id),
             trace,
@@ -387,12 +396,13 @@ impl<'a> FileStreamBuilder<'a> {
 impl FileStream {
     /// Return true if this stream may publish and steal ready work from the
     /// shared queue.
+    ///
+    /// The shared queue permits output to be reordered, so only do this when
+    /// stream does not need to preserve ordering within the stream or across
+    /// partitions.
     fn can_share_ready_work(&self) -> bool {
-        // Only enable shared ready-work queues when there are actual sibling
-        // streams. Sending work through shared state in the single-stream case
-        // changes local scheduling behavior without enabling any useful
-        // stealing.
         !self.preserve_order
+            && !self.preserve_partitions
             && self.shared_file_stream_state.registered_stream_count() > 1
     }
 
