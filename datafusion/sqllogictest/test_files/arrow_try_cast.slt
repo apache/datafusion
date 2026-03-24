@@ -81,3 +81,29 @@ select arrow_try_cast('456', 'Int64') as a,
        arrow_try_cast(789, 'Utf8') as b;
 ----
 456 789
+
+# Tests that exercise physical execution (not constant folding)
+
+# Cast column values to Int64, with mixed valid/null/invalid inputs
+query I
+select arrow_try_cast(a, 'Int64') from (values('100'), (NULL), ('foo')) t(a);
+----
+100
+NULL
+NULL
+
+# Cast column values to Float64
+query R
+select arrow_try_cast(a, 'Float64') from (values('3.14'), ('not_num'), (NULL)) t(a);
+----
+3.14
+NULL
+NULL
+
+# Cast integer column to Utf8
+query T
+select arrow_try_cast(a, 'Utf8') from (values(1), (2), (NULL)) t(a);
+----
+1
+2
+NULL
