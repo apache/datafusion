@@ -103,7 +103,6 @@ fn join_error(err: tokio::task::JoinError) -> object_store::Error {
         store: "TokioRuntime",
         source: Box::new(err),
     }
-    .into()
 }
 
 async fn spawn_on_io_runtime<F, T>(future: F) -> object_store::Result<T>
