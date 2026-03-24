@@ -142,11 +142,12 @@ pub struct FileStream {
     ///
     /// [`MorselPlan`]: crate::morsel::MorselPlan
     preserve_order: bool,
-    /// If true, this stream must preserve output partition boundaries.
+    /// Preserve output partition boundaries.
     ///
-    /// In this mode, ready work may still be reordered within this partition,
-    /// but it must not migrate to a sibling `FileStream`, as doing so would
-    /// change which partition produces the rows.
+    /// If false (the default), morsels may be run by a sibling `FileStream`
+    ///
+    /// If true, morsels will be produced by the same stream that created
+    /// planned them.
     preserve_partitions: bool,
     /// Shared scheduling state across all sibling `FileStream`s for the same
     /// `DataSourceExec`.
