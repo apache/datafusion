@@ -34,6 +34,7 @@ use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{
     ListFilesCacheFunc, MetadataCacheFunc, ParquetMetadataFunc, StatisticsCacheFunc,
 };
+use datafusion_cli::object_storage::init_object_store_io_runtime;
 use datafusion_cli::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
 };
@@ -172,6 +173,7 @@ pub async fn main() -> ExitCode {
 /// Main CLI entrypoint
 async fn main_inner() -> Result<()> {
     env_logger::init();
+    init_object_store_io_runtime();
     let args = Args::parse();
 
     if !args.quiet {
