@@ -793,6 +793,13 @@ impl OptimizerRule for PushDownFilter {
             filter.predicate = new_predicate;
         }
 
+        // If the child has a fetch (limit) or skip (offset), pushing a filter
+        // below it would change semantics: the limit/offset should apply before
+        // the filter, not after.
+        if filter.input.fetch()?.is_some() || filter.input.skip()?.is_some() {
+            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+        }
+
         match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(child_filter) => {
                 let parents_predicates = split_conjunction_owned(filter.predicate);
@@ -4293,6 +4300,65 @@ mod tests {
         Filter: val > Int64(150)
           Projection: leaf_udf(test.a) AS val, test.b, test.c
             TableScan: test, full_filters=[test.b > Int64(5)]
+        "
+        )
+    }
+
+    #[test]
+    fn filter_not_pushed_down_through_table_scan_with_fetch() -> Result<()> {
+        let scan = test_table_scan()?;
+        let scan_with_fetch = match scan {
+            LogicalPlan::TableScan(scan) => LogicalPlan::TableScan(TableScan {
+                fetch: Some(10),
+                ..scan
+            }),
+            _ => unreachable!(),
+        };
+        let plan = LogicalPlanBuilder::from(scan_with_fetch)
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        // Filter must NOT be pushed into the table scan when it has a fetch (limit)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > Int64(10)
+          TableScan: test, fetch=10
+        "
+        )
+    }
+
+    #[test]
+    fn filter_push_down_through_sort_without_fetch() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![col("a").sort(true, true)])?
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        // Filter should be pushed below the sort
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS FIRST
+          TableScan: test, full_filters=[test.a > Int64(10)]
+        "
+        )
+    }
+
+    #[test]
+    fn filter_not_pushed_down_through_sort_with_fetch() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort_with_limit(vec![col("a").sort(true, true)], Some(5))?
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        // Filter must NOT be pushed below the sort when it has a fetch (limit),
+        // because the limit should apply before the filter.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > Int64(10)
+          Sort: test.a ASC NULLS FIRST, fetch=5
+            TableScan: test
         "
         )
     }
