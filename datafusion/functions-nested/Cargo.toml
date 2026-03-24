@@ -65,6 +65,8 @@ log = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
 rand = { workspace = true }
+# used to test array_transform
+datafusion-physical-expr = { workspace = true }
 
 [[bench]]
 harness = false

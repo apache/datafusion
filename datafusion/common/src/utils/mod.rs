@@ -26,6 +26,7 @@ pub mod string_utils;
 use crate::assert_or_internal_err;
 use crate::error::{_exec_datafusion_err, _exec_err, _internal_datafusion_err};
 use crate::{Result, ScalarValue};
+use arrow::array::GenericListArray;
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
     cast::AsArray,
@@ -977,8 +978,8 @@ pub fn take_function_args<const N: usize, T>(
 /// you must adjust the offsets using [`adjust_offsets_for_slice`]
 pub fn list_values(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type() {
-        DataType::List(_) => Ok(Arc::clone(array.as_list::<i32>().values())),
-        DataType::LargeList(_) => Ok(Arc::clone(array.as_list::<i64>().values())),
+        DataType::List(_) => Ok(sliced_list_values(array.as_list::<i32>())),
+        DataType::LargeList(_) => Ok(sliced_list_values(array.as_list::<i64>())),
         DataType::FixedSizeList(_, _) => {
             Ok(Arc::clone(array.as_fixed_size_list().values()))
         }
@@ -986,11 +987,49 @@ pub fn list_values(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
+fn sliced_list_values<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> ArrayRef {
+    let values = list.values();
+    let offsets = list.offsets();
+
+    if let (Some(first), Some(last)) = (offsets.first(), offsets.last()) {
+        let first = first.to_usize().unwrap();
+        let last = last.to_usize().unwrap();
+
+        if first != 0 || last != values.len() {
+            return values.slice(first, last - first);
+        }
+    }
+
+    Arc::clone(values)
+}
+
+/// If `list` is sliced, returns an adjusted offset buffer so that
+/// it points to the sliced portion of the list values, and not the whole list values
+pub fn adjust_offsets_for_slice<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> OffsetBuffer<O> {
+    let offsets = list.offsets();
+
+    if let (Some(first), Some(last)) = (offsets.first(), offsets.last())
+        && (!first.is_zero() || last.to_usize().unwrap() != list.values().len())
+    {
+        let offsets = offsets.iter().map(|offset| *offset - *first).collect();
+
+        //todo: use unsafe Offset::new_unchecked?
+        return OffsetBuffer::new(offsets);
+    }
+
+    offsets.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ScalarValue::Null;
-    use arrow::array::Float64Array;
+    use arrow::{
+        array::{Float64Array, Int32Array},
+        datatypes::Int32Type,
+    };
     use sqlparser::ast::Ident;
 
     #[test]
@@ -1290,5 +1329,96 @@ mod tests {
         let expected = vec![vec![1, 4], vec![2, 5], vec![3, 6]];
         assert_eq!(expected, transposed);
         Ok(())
+    }
+
+    #[test]
+    fn test_sliced_list_values() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(6), Some(7)]),
+        ];
+
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        assert_eq!(
+            sliced_list_values(&list).as_primitive(),
+            &Int32Array::from(vec![
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+                Some(6),
+                Some(7)
+            ])
+        );
+
+        assert_eq!(
+            sliced_list_values(&list.slice(0, 1)).as_primitive(),
+            &Int32Array::from(vec![Some(0), Some(1), Some(2)])
+        );
+
+        assert_eq!(
+            sliced_list_values(&list.slice(2, 1)).as_primitive(),
+            &Int32Array::from(vec![Some(3), None, Some(5)])
+        );
+
+        assert_eq!(
+            sliced_list_values(&list.slice(3, 1)).as_primitive(),
+            &Int32Array::from(vec![Some(6), Some(7)])
+        );
+
+        assert!(sliced_list_values(&list.slice(0, 0)).is_empty());
+        assert!(sliced_list_values(&list.slice(1, 0)).is_empty());
+        assert!(sliced_list_values(&list.slice(3, 0)).is_empty());
+    }
+
+    #[test]
+    fn test_adjust_offsets() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(6), Some(7)]),
+        ];
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list),
+            OffsetBuffer::from_lengths([3, 0, 3, 2])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(0, 1)),
+            OffsetBuffer::from_lengths([3])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(1, 2)),
+            OffsetBuffer::from_lengths([0, 3])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(1, 3)),
+            OffsetBuffer::from_lengths([0, 3, 2])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(0, 0)),
+            OffsetBuffer::from_lengths([])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(1, 0)),
+            OffsetBuffer::from_lengths([])
+        );
+
+        assert_eq!(
+            adjust_offsets_for_slice(&list.slice(3, 0)),
+            OffsetBuffer::from_lengths([])
+        );
     }
 }
