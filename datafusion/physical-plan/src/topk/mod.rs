@@ -757,6 +757,17 @@ impl TopKHeap {
         Ok((batches, topk_rows))
     }
 
+    /// Build output batches by interleaving selected rows in bounded chunks.
+    ///
+    /// Rationale: Arrow variable-width arrays (`Utf8`, `Binary`, `List`, `Map`,
+    /// and nested occurrences inside `Struct`) use i32 offsets. Interleaving too
+    /// many rows at once can exceed those offsets and fail. We therefore split
+    /// the `indices` into ranges that keep per-column accumulated offsets below
+    /// `i32::MAX`.
+    ///
+    /// Fast paths in `split_indices_by_i32_offsets` keep the common case cheap:
+    /// when there are no variable-width columns (or total var-width data is far
+    /// below the threshold) we only split by row-count.
     fn interleave_topk_rows(
         &self,
         topk_rows: &[TopKRow],
@@ -793,6 +804,12 @@ impl TopKHeap {
         (record_batches, batch_id_array_pos)
     }
 
+    /// Convert sorted `TopKRow`s into indices for `interleave_record_batch`.
+    ///
+    /// Returned tuple meaning: `(batch_array_pos, row_index_within_that_batch)`.
+    ///
+    /// `batch_array_pos` is an index into the `Vec<&RecordBatch>` returned by
+    /// `collect_record_batches`, not the original `batch_id`.
     fn collect_indices(
         &self,
         topk_rows: &[TopKRow],
@@ -1484,6 +1501,28 @@ mod tests {
         let record_batches = vec![&batch];
         let all_indices = vec![(0, 0), (0, 1), (0, 2)];
 
+        let ranges = split_indices_by_i32_offsets(&record_batches, &all_indices, 10, 5)?;
+
+        assert_eq!(ranges, vec![0..2, 2..3]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_split_indices_by_i32_offsets_struct_utf8() -> Result<()> {
+        let nested_utf8 =
+            Arc::new(StringArray::from(vec!["aaa", "bb", "cccc"])) as ArrayRef;
+        let struct_array = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("s", DataType::Utf8, false)),
+            nested_utf8,
+        )])) as ArrayRef;
+        let batch = RecordBatch::try_from_iter(vec![("nested", struct_array)])?;
+
+        let record_batches = vec![&batch];
+        let all_indices = vec![(0, 0), (0, 1), (0, 2)];
+
+        // The nested Utf8 lengths are [3, 2, 4]. With max_offset=5 this should
+        // split after the second row for the same reason as the top-level Utf8 case.
         let ranges = split_indices_by_i32_offsets(&record_batches, &all_indices, 10, 5)?;
 
         assert_eq!(ranges, vec![0..2, 2..3]);
