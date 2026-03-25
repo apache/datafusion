@@ -57,7 +57,7 @@ const DEFAULT_OUTSTANDING_IOS_PER_PARTITION: usize = 2;
 ///
 /// TODO make this a config option
 fn max_buffered_morsels() -> usize {
-    2
+    1
 }
 
 /// Resolve the shared outstanding-I/O budget for one `DataSourceExec`.
