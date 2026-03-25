@@ -19,7 +19,7 @@
 //!
 //! This module encapsulates the complexity of join filter evaluation, including:
 //! - Immediate filtering for INNER joins
-//! - Deferred filtering for outer/semi/anti/mark joins
+//! - Deferred filtering for outer/mark joins
 //! - Metadata tracking for grouping output rows by input row
 //! - Correcting filter masks to handle multiple matches per input row
 
@@ -158,13 +158,9 @@ pub fn needs_deferred_filtering(
         && matches!(
             join_type,
             JoinType::Left
-                | JoinType::LeftSemi
                 | JoinType::LeftMark
                 | JoinType::Right
-                | JoinType::RightSemi
                 | JoinType::RightMark
-                | JoinType::LeftAnti
-                | JoinType::RightAnti
                 | JoinType::Full
         )
 }
@@ -253,9 +249,7 @@ fn last_index_for_row(
 /// This function groups them by input row and applies join-type-specific logic:
 ///
 /// - **Outer joins**: Keep first matching row, convert rest to nulls, add null-joined for unmatched
-/// - **Semi joins**: Keep first matching row, discard rest
-/// - **Anti joins**: Keep row only if NO matches passed filter
-/// - **Mark joins**: Like semi but first match only
+/// - **Mark joins**: Like outer but only keep first match, mark with boolean
 ///
 /// # Arguments
 /// * `join_type` - The type of join being performed
@@ -267,7 +261,7 @@ fn last_index_for_row(
 /// # Returns
 /// Corrected mask indicating which rows to include in final output:
 /// - `true`: Include this row
-/// - `false`: Convert to null-joined row (outer joins) or include as unmatched (anti joins)
+/// - `false`: Convert to null-joined row (outer joins)
 /// - `null`: Discard this row
 pub fn get_corrected_filter_mask(
     join_type: JoinType,
@@ -329,51 +323,13 @@ pub fn get_corrected_filter_mask(
             corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
-        JoinType::LeftSemi | JoinType::RightSemi => {
-            // For semi joins: Keep only first matching row per input row, discard rest
-            for i in 0..row_indices_length {
-                let last_index =
-                    last_index_for_row(i, row_indices, batch_ids, row_indices_length);
-                if filter_mask.value(i) && !seen_true {
-                    seen_true = true;
-                    corrected_mask.append_value(true);
-                } else {
-                    corrected_mask.append_null(); // to be ignored and not set to output
-                }
-
-                if last_index {
-                    seen_true = false;
-                }
-            }
-
-            Some(corrected_mask.finish())
-        }
-        JoinType::LeftAnti | JoinType::RightAnti => {
-            // For anti joins: Keep row only if NO matches passed the filter
-            for i in 0..row_indices_length {
-                let last_index =
-                    last_index_for_row(i, row_indices, batch_ids, row_indices_length);
-
-                if filter_mask.value(i) {
-                    seen_true = true;
-                }
-
-                if last_index {
-                    if !seen_true {
-                        corrected_mask.append_value(true);
-                    } else {
-                        corrected_mask.append_null();
-                    }
-
-                    seen_true = false;
-                } else {
-                    corrected_mask.append_null();
-                }
-            }
-            // Generate null joined rows for records which have no matching join key,
-            // for LeftAnti non-matched considered as true
-            corrected_mask.append_n(expected_size - corrected_mask.len(), true);
-            Some(corrected_mask.finish())
+        JoinType::LeftSemi | JoinType::RightSemi
+        | JoinType::LeftAnti | JoinType::RightAnti => {
+            // Semi/anti joins are handled by SemiAntiSortMergeJoinStream
+            unreachable!(
+                "Semi/anti joins should not reach get_corrected_filter_mask; \
+                 they are handled by SemiAntiSortMergeJoinStream"
+            )
         }
         JoinType::Full => {
             // For full joins: Similar to outer but handle both sides
@@ -412,14 +368,12 @@ pub fn get_corrected_filter_mask(
 ///
 /// Different join types require different handling of filtered results:
 /// - Outer joins: Add null-joined rows for false mask values
-/// - Semi/Anti joins: May need projection to remove right columns
 /// - Full joins: Add null-joined rows for both sides
 pub fn filter_record_batch_by_join_type(
     record_batch: &RecordBatch,
     corrected_mask: &BooleanArray,
     join_type: JoinType,
     schema: &SchemaRef,
-    streamed_schema: &SchemaRef,
     buffered_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
     let filtered_record_batch = filter_record_batch(record_batch, corrected_mask)?;
@@ -448,18 +402,10 @@ pub fn filter_record_batch_by_join_type(
                 &[filtered_record_batch, null_joined_streamed_batch],
             )?)
         }
-        JoinType::LeftSemi
-        | JoinType::LeftAnti
-        | JoinType::RightSemi
-        | JoinType::RightAnti => {
-            // For semi/anti joins, project to only include the outer side columns
-            // Both Left and Right semi/anti use streamed_schema.len() because:
-            // - For Left: columns are [left, right], so we take first streamed_schema.len()
-            // - For Right: columns are [right, left], and streamed side is right, so we take first streamed_schema.len()
-            let output_column_indices: Vec<usize> =
-                (0..streamed_schema.fields().len()).collect();
-            Ok(filtered_record_batch.project(&output_column_indices)?)
-        }
+        JoinType::LeftSemi | JoinType::LeftAnti
+        | JoinType::RightSemi | JoinType::RightAnti => unreachable!(
+            "Semi/anti joins are handled by SemiAntiSortMergeJoinStream"
+        ),
         JoinType::Right | JoinType::RightMark => {
             // For right joins, add null-joined rows where mask is false
             let null_mask = compute::not(corrected_mask)?;
