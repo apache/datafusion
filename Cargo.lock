@@ -259,9 +259,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-avro"
-version = "58.0.0"
+version = "58.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a316d5703ef6f1c23c18f13a16e2a58bc6a6e2fc8f690139fcdfb5ca168c0b95"
+checksum = "36a3aadd016f63dfd4941ae8e13539ba98a3c2995adc3c88b9336d2514f6c8a7"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -276,7 +276,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snap",
- "strum_macros 0.27.2",
+ "strum_macros",
  "uuid",
  "zstd",
 ]
@@ -2090,7 +2090,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum",
- "strum_macros 0.28.0",
+ "strum_macros",
  "tempfile",
  "test-utils",
  "tokio",
@@ -5801,18 +5801,6 @@ name = "strum"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
-
-[[package]]
-name = "strum_macros"
-version = "0.27.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "strum_macros"
