@@ -22,7 +22,6 @@
 //! compliant with the `SendableRecordBatchStream` trait.
 
 pub mod shared_state;
-mod trace;
 
 pub use shared_state::{
     FileStreamId, OutstandingIoPermit, SharedFileStreamMode, SharedFileStreamState,
@@ -49,7 +48,6 @@ use crate::morsel::{FileOpenerMorselizer, Morsel, MorselPlanner, Morselizer};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{FutureExt, Stream, StreamExt as _};
-use trace::{ReadTrace, file_stream_trace_enabled};
 
 const DEFAULT_OUTSTANDING_IOS_PER_PARTITION: usize = 2;
 
@@ -169,8 +167,6 @@ pub struct FileStream {
     /// state during construction and remains valid for the lifetime of the
     /// stream.
     stream_id: FileStreamId,
-    /// Optional runtime trace for observing scheduler behavior.
-    trace: ReadTrace,
     /// Has this stream reported that it is done producing local work?
     ///
     /// This avoids repeatedly acquiring the shared-state write lock after the
@@ -386,9 +382,6 @@ impl<'a> FileStreamBuilder<'a> {
         let projected_schema = self.config.projected_schema()?;
         let file_group = self.config.file_groups[self.partition].clone();
         let stream_id = shared_file_stream_state.register_stream();
-        let trace =
-            ReadTrace::new(file_stream_trace_enabled(), self.partition, stream_id);
-
         Ok(FileStream {
             queues: MorselQueue::new(file_group.into_inner().into_iter().collect()),
             reader: None,
@@ -402,7 +395,6 @@ impl<'a> FileStreamBuilder<'a> {
             preserve_partitions: self.preserve_partitions,
             shared_file_stream_state,
             stream_id,
-            trace,
             done_producing_marked: false,
             state: StreamState::Active,
         })
@@ -459,12 +451,10 @@ impl FileStream {
             return;
         }
         if self.can_share_ready_work() {
-            self.trace.planners_ready(planners.len(), true);
             for planner in planners {
                 self.shared_file_stream_state.push_ready_planner(planner);
             }
         } else {
-            self.trace.planners_ready(planners.len(), false);
             self.queues.extend_ready_planners(planners);
         }
     }
@@ -476,12 +466,10 @@ impl FileStream {
             return;
         }
         if self.can_share_ready_work() {
-            self.trace.morsels_ready(morsels.len(), true);
             for morsel in morsels {
                 self.shared_file_stream_state.push_ready_morsel(morsel);
             }
         } else {
-            self.trace.morsels_ready(morsels.len(), false);
             self.queues.extend_morsels(morsels);
         }
     }
@@ -501,13 +489,11 @@ impl FileStream {
 
         if let Some(morsel) = self.shared_file_stream_state.pop_ready_morsel() {
             self.queues.push_morsel(morsel);
-            self.trace.stole_work("morsel");
             return true;
         }
 
         if let Some(planner) = self.shared_file_stream_state.pop_ready_planner() {
             self.queues.push_ready_planner(planner);
-            self.trace.stole_work("planner");
             return true;
         }
 
@@ -542,8 +528,6 @@ impl FileStream {
             let morsels = plan.take_morsels();
             let planners = plan.take_planners();
             let io_future = plan.take_io_future();
-            self.trace
-                .plan_result(morsels.len(), planners.len(), io_future.is_some());
             self.push_ready_morsels(morsels);
             self.push_ready_planners(planners);
             if let Some(io_future) = io_future {
@@ -554,7 +538,6 @@ impl FileStream {
                         .take()
                         .expect("planner I/O permit should be available"),
                 ));
-                self.trace.io_scheduled(self.queues.waiting_planners.len());
                 break;
             }
 
@@ -572,7 +555,6 @@ impl FileStream {
     /// The actual `plan()` calls happen in `poll_inner` once the stream has
     /// acquired a shared permit to potentially issue another outstanding I/O.
     fn morselize_next_file(&mut self, file: PartitionedFile) -> Result<()> {
-        self.trace.file_opened(&file);
         for planner in self.morselizer.morselize(file)? {
             self.push_ready_planners(std::iter::once(planner));
         }
@@ -627,7 +609,6 @@ impl FileStream {
                 Poll::Ready(Ok(())) => {
                     self.file_stream_metrics.files_opened.add(1);
                     self.push_ready_planners(std::iter::once(waiting_planner.planner));
-                    self.trace.io_completed(self.queues.planner_count());
                 }
                 Poll::Ready(Err(e)) => {
                     self.file_stream_metrics.file_open_errors.add(1);
@@ -654,7 +635,6 @@ impl FileStream {
             && let Some(morsel) = self.queues.pop_morsel()
         {
             self.reader = Some(morsel.into_stream());
-            self.trace.morsel_started(self.queues.morsel_len());
             self.file_stream_metrics.time_scanning_until_data.start();
             self.file_stream_metrics.time_scanning_total.start();
         }
@@ -794,7 +774,6 @@ impl FileStream {
                             None => batch,
                         };
                         self.file_stream_metrics.time_scanning_total.start();
-                        self.trace.batch_emitted(batch.num_rows());
                         return Poll::Ready(Some(Ok(batch)));
                     }
                     Poll::Ready(Some(Err(e))) => {
@@ -837,7 +816,6 @@ impl FileStream {
                 && !self.queues.has_morsels()
                 && !self.queues.has_ready_planners()
             {
-                self.trace.waiting("shared_work_or_io");
                 self.shared_file_stream_state
                     .register_waker(self.stream_id, cx.waker());
             // If the active reader just returned `Pending`, yield back to the
@@ -851,7 +829,6 @@ impl FileStream {
                 continue;
             }
 
-            self.trace.waiting("reader_or_io");
             return Poll::Pending;
         }
     }
