@@ -1503,7 +1503,7 @@ mod tests {
                             }
                             Some(Err(e)) => {
                                 outputs[stream_id.0]
-                                    .push(format!("Error: {}", e.message()));
+                                    .push(format!("Error: {}", e.strip_backtrace()));
                                 terminal_streams[stream_id.0] = true;
                             }
                             None => {
