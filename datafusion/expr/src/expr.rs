@@ -410,7 +410,7 @@ pub enum Expr {
     ///
     /// For example, `array_transform([1,2,3], v -> v+1)` would be equivalent to:
     ///
-    /// ```ignore
+    /// ```text
     /// LambdaFunction(array_transform)
     /// ├── args[0]: Literal([1,2,3])
     /// └── args[1]: Lambda
@@ -483,22 +483,7 @@ impl PartialEq for LambdaFunction {
 }
 
 /// A named reference to a lambda parameter which includes it's own [`FieldRef`],
-/// which is used to implement [`ExprSchemable`], for example. It is an option only to make
-/// easier for `expr_api` users to construct lambda variables, but any expression
-/// tree or [`LogicalPlan`] containing unresolved variables must be resolved before
-/// usage with either [`Expr::resolve_lambdas_variables`] or
-/// [`LogicalPlan::resolve_lambdas_variables`]. The default SQL planner produces
-/// already resolved variables and no further resolving is required.
-///
-/// After resolving, if any non-lambda argument from the lambda function
-/// which this variables originates from have it's type, nullability or
-/// metadata changed, the resolved field may became outdated and must be
-/// resolved again.
-///
-/// [`LogicalPlan`]: crate::LogicalPlan
-/// [`LogicalPlan::resolve_lambdas_variables`]: LogicalPlan::resolve_lambdas_variables
-///
-//  todo: if substrait come to produce resolved variables, cite it above too
+/// which is used to implement [`ExprSchemable`], for example
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub struct LambdaVariable {
     pub name: String,
@@ -507,12 +492,7 @@ pub struct LambdaVariable {
 }
 
 impl LambdaVariable {
-    /// Create a lambda variable from a name and an optional Field.
-    /// If the field is none, the expression tree or LogicalPlan which
-    /// owns this variable must be resolved before usage with either
-    /// [`Expr::resolve_lambdas_variables`] or [`LogicalPlan::resolve_lambdas_variables`].
-    ///
-    /// [`LogicalPlan::resolve_lambdas_variables`]: crate::LogicalPlan::resolve_lambdas_variables
+    /// Create a lambda variable from a name and a Field.
     pub fn new(name: String, field: FieldRef) -> Self {
         Self {
             name,

@@ -115,7 +115,10 @@ impl SessionStateDefaults {
     /// returns the list of default [`LambdaUDF`]s
     pub fn default_lambda_functions() -> Vec<Arc<dyn LambdaUDF>> {
         #[cfg(feature = "nested_expressions")]
-        functions_nested::all_default_lambda_functions()
+        return functions_nested::all_default_lambda_functions();
+
+        #[cfg(not(feature = "nested_expressions"))]
+        return Vec::new();
     }
 
     /// returns the list of default [`AggregateUDF`]s

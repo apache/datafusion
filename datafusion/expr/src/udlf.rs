@@ -365,8 +365,6 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// # struct Example{}
     /// # impl Example {
     /// fn return_field_from_args(&self, args: LambdaReturnFieldArgs) -> Result<FieldRef> {
-    ///     // report output is only nullable if any one of the arguments are nullable
-    ///     let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
     ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
     ///     Ok(field)
     /// }

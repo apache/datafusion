@@ -352,45 +352,44 @@ fn replace_nulls_with_valid(list: &FixedSizeListArray) -> Result<FixedSizeListAr
 fn truncate_nulls<O: OffsetSizeTrait>(
     list: &GenericListArray<O>,
 ) -> Result<GenericListArray<O>> {
-    if let Some(nulls) = list.nulls() {
-        if list.null_count() > 0 {
-            let contains_null_and_non_empty =
-                std::iter::zip(list.offsets().lengths(), nulls)
-                    .any(|(len, is_valid)| len > 0 && !is_valid);
+    if let Some(nulls) = list.nulls()
+        && nulls.null_count() > 0
+    {
+        let contains_null_and_non_empty = std::iter::zip(list.offsets().lengths(), nulls)
+            .any(|(len, is_valid)| len > 0 && !is_valid);
 
-            if contains_null_and_non_empty {
-                let mut indices = Vec::with_capacity(list.values().len());
+        if contains_null_and_non_empty {
+            let mut indices = Vec::with_capacity(list.values().len());
 
-                let lengths = list.offsets().windows(2).enumerate().map(|(i, window)| {
-                    let start = window[0].as_usize();
-                    let end = window[1].as_usize();
+            let lengths = list.offsets().windows(2).enumerate().map(|(i, window)| {
+                let start = window[0].as_usize();
+                let end = window[1].as_usize();
 
-                    if list.is_valid(i) {
-                        indices.extend((start..end).map(|i| i as u64));
+                if list.is_valid(i) {
+                    indices.extend((start..end).map(|i| i as u64));
 
-                        end - start
-                    } else {
-                        0
-                    }
-                });
+                    end - start
+                } else {
+                    0
+                }
+            });
 
-                let offsets = OffsetBuffer::from_lengths(lengths);
-                let indices = UInt64Array::from(indices);
-                let values = take(list.values(), &indices, None)?;
+            let offsets = OffsetBuffer::from_lengths(lengths);
+            let indices = UInt64Array::from(indices);
+            let values = take(list.values(), &indices, None)?;
 
-                let field = match list.data_type() {
-                    DataType::List(field) => field,
-                    DataType::LargeList(field) => field,
-                    _ => unreachable!(),
-                };
+            let field = match list.data_type() {
+                DataType::List(field) => field,
+                DataType::LargeList(field) => field,
+                _ => unreachable!(),
+            };
 
-                return Ok(GenericListArray::try_new(
-                    Arc::clone(field),
-                    offsets,
-                    values,
-                    list.nulls().cloned(),
-                )?);
-            }
+            return Ok(GenericListArray::try_new(
+                Arc::clone(field),
+                offsets,
+                values,
+                list.nulls().cloned(),
+            )?);
         }
     }
 
