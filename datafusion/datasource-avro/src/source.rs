@@ -20,8 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, RecordBatch, new_null_array};
-use arrow::compute::cast;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use datafusion_common::error::Result;
@@ -31,6 +29,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
+use datafusion_physical_expr_adapter::BatchAdapterFactory;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
 
@@ -112,28 +111,6 @@ impl AvroSource {
 
         (!identity_projection).then_some(projection)
     }
-}
-
-fn coerce_batch_to_schema(
-    batch: &RecordBatch,
-    target_schema: SchemaRef,
-) -> Result<RecordBatch> {
-    let mut columns = Vec::with_capacity(target_schema.fields().len());
-    for field in target_schema.fields() {
-        let array: ArrayRef = match batch.schema().column_with_name(field.name()) {
-            Some((idx, _)) => {
-                let source_array = Arc::clone(batch.column(idx));
-                if source_array.data_type() == field.data_type() {
-                    source_array
-                } else {
-                    cast(&source_array, field.data_type())?
-                }
-            }
-            None => new_null_array(field.data_type(), batch.num_rows()),
-        };
-        columns.push(array);
-    }
-    Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
 impl FileSource for AvroSource {
@@ -251,14 +228,13 @@ mod private {
                         file.rewind()?;
                         let reader =
                             config.open(BufReader::new(file), writer_projection)?;
+                        let batch_adapter =
+                            BatchAdapterFactory::new(Arc::clone(&projected_file_schema))
+                                .make_adapter(&reader.schema())?;
                         Ok(futures::stream::iter(reader)
                             .map(move |r| {
-                                r.map_err(Into::into).and_then(|batch| {
-                                    coerce_batch_to_schema(
-                                        &batch,
-                                        Arc::clone(&projected_file_schema),
-                                    )
-                                })
+                                r.map_err(Into::into)
+                                    .and_then(|batch| batch_adapter.adapt_batch(&batch))
                             })
                             .boxed())
                     }
@@ -274,14 +250,13 @@ mod private {
                         );
                         let reader = config
                             .open(BufReader::new(bytes.reader()), writer_projection)?;
+                        let batch_adapter =
+                            BatchAdapterFactory::new(Arc::clone(&projected_file_schema))
+                                .make_adapter(&reader.schema())?;
                         Ok(futures::stream::iter(reader)
                             .map(move |r| {
-                                r.map_err(Into::into).and_then(|batch| {
-                                    coerce_batch_to_schema(
-                                        &batch,
-                                        Arc::clone(&projected_file_schema),
-                                    )
-                                })
+                                r.map_err(Into::into)
+                                    .and_then(|batch| batch_adapter.adapt_batch(&batch))
                             })
                             .boxed())
                     }

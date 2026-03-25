@@ -1974,6 +1974,7 @@ dependencies = [
  "bytes",
  "datafusion-common",
  "datafusion-datasource",
+ "datafusion-physical-expr-adapter",
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
