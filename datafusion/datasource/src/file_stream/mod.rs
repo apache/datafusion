@@ -1492,7 +1492,8 @@ mod tests {
                                     .push(format!("Batch: {}", col.value(0)));
                             }
                             Some(Err(e)) => {
-                                outputs[stream_id.0].push(format!("Error: {}", e.strip_backtrace()));
+                                outputs[stream_id.0]
+                                    .push(format!("Error: {}", e.strip_backtrace()));
                                 terminal_streams[stream_id.0] = true;
                             }
                             None => {
