@@ -458,32 +458,34 @@ fn stats_cartesian_product(
     // Min, max and distinct_count on the other hand are invariants.
     let cross_join_stats = left_col_stats
         .into_iter()
-        .map(|s| ColumnStatistics {
-            null_count: s.null_count.multiply(&right_row_count),
-            distinct_count: s.distinct_count,
-            min_value: s.min_value,
-            max_value: s.max_value,
-            sum_value: s
-                .sum_value
-                .get_value()
-                // Cast the row count into the same type as any existing sum value
-                .and_then(|v| {
-                    Precision::<ScalarValue>::from(right_row_count)
-                        .cast_to(&v.data_type())
-                        .ok()
-                })
-                .map(|row_count| s.sum_value.multiply(&row_count))
-                .unwrap_or(Precision::Absent),
-            byte_size: Precision::Absent,
+        .map(|s| {
+            let widened_sum = s.sum_value.cast_to_sum_type();
+            ColumnStatistics {
+                null_count: s.null_count.multiply(&right_row_count),
+                distinct_count: s.distinct_count,
+                min_value: s.min_value,
+                max_value: s.max_value,
+                sum_value: widened_sum
+                    .get_value()
+                    // Cast the row count into the same type as any existing sum value
+                    .and_then(|v| {
+                        Precision::<ScalarValue>::from(right_row_count)
+                            .cast_to(&v.data_type())
+                            .ok()
+                    })
+                    .map(|row_count| widened_sum.multiply(&row_count))
+                    .unwrap_or(Precision::Absent),
+                byte_size: Precision::Absent,
+            }
         })
         .chain(right_col_stats.into_iter().map(|s| {
+            let widened_sum = s.sum_value.cast_to_sum_type();
             ColumnStatistics {
                 null_count: s.null_count.multiply(&left_row_count),
                 distinct_count: s.distinct_count,
                 min_value: s.min_value,
                 max_value: s.max_value,
-                sum_value: s
-                    .sum_value
+                sum_value: widened_sum
                     .get_value()
                     // Cast the row count into the same type as any existing sum value
                     .and_then(|v| {
@@ -491,7 +493,7 @@ fn stats_cartesian_product(
                             .cast_to(&v.data_type())
                             .ok()
                     })
-                    .map(|row_count| s.sum_value.multiply(&row_count))
+                    .map(|row_count| widened_sum.multiply(&row_count))
                     .unwrap_or(Precision::Absent),
                 byte_size: Precision::Absent,
             }
@@ -873,6 +875,49 @@ mod tests {
         };
 
         assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_stats_cartesian_product_unsigned_sum_widens_to_u64() {
+        let left_row_count = 2;
+        let right_row_count = 3;
+
+        let left = Statistics {
+            num_rows: Precision::Exact(left_row_count),
+            total_byte_size: Precision::Exact(10),
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Exact(2),
+                max_value: Precision::Exact(ScalarValue::UInt32(Some(10))),
+                min_value: Precision::Exact(ScalarValue::UInt32(Some(1))),
+                sum_value: Precision::Exact(ScalarValue::UInt32(Some(7))),
+                null_count: Precision::Exact(0),
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        let right = Statistics {
+            num_rows: Precision::Exact(right_row_count),
+            total_byte_size: Precision::Exact(10),
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Exact(3),
+                max_value: Precision::Exact(ScalarValue::UInt32(Some(12))),
+                min_value: Precision::Exact(ScalarValue::UInt32(Some(0))),
+                sum_value: Precision::Exact(ScalarValue::UInt32(Some(11))),
+                null_count: Precision::Exact(0),
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        let result = stats_cartesian_product(left, right);
+
+        assert_eq!(
+            result.column_statistics[0].sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(21)))
+        );
+        assert_eq!(
+            result.column_statistics[1].sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(22)))
+        );
     }
 
     #[tokio::test]

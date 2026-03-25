@@ -708,6 +708,19 @@ C prod 2017.6
 # CLEANUP
 ##########
 
+# Config reset (4 is hard-coded from SLT runner setting)
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.preserve_file_partitions;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
 statement ok
 DROP TABLE fact_table;
 
