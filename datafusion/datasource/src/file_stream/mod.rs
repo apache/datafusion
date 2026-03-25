@@ -441,6 +441,16 @@ impl FileStream {
             && self.shared_file_stream_state.registered_stream_count() > 1
     }
 
+    /// Return true if newly produced ready work should be published to the
+    /// shared queue instead of kept locally.
+    ///
+    /// A stream should first keep using its own newly produced planners and
+    /// morsels until it already has an active reader. Once it has a reader in
+    /// flight, any additional ready work can be shared with siblings.
+    fn should_publish_ready_work(&self) -> bool {
+        self.can_share_ready_work() && self.reader.is_some()
+    }
+
     /// Enqueue ready planners either locally or into the shared queue.
     fn push_ready_planners(
         &mut self,
@@ -450,7 +460,7 @@ impl FileStream {
         if planners.is_empty() {
             return;
         }
-        if self.can_share_ready_work() {
+        if self.should_publish_ready_work() {
             for planner in planners {
                 self.shared_file_stream_state.push_ready_planner(planner);
             }
@@ -465,7 +475,7 @@ impl FileStream {
         if morsels.is_empty() {
             return;
         }
-        if self.can_share_ready_work() {
+        if self.should_publish_ready_work() {
             for morsel in morsels {
                 self.shared_file_stream_state.push_ready_morsel(morsel);
             }
@@ -1945,10 +1955,14 @@ mod tests {
         Ok(())
     }
 
-    /// Verifies that an idle sibling stream can steal ready morsels even when
-    /// it has no local files of its own.
+    /// Verifies local-first scheduling rule.
+    ///
+    /// Even though sibling 1 is idle, sibling 0 should keep its newly
+    /// produced morsels local until it already has an active reader. With only
+    /// two ready morsels and no reader yet, nothing should migrate to sibling
+    /// 1.
     #[tokio::test]
-    async fn morsel_framework_sibling_stream_steals_when_only_one_has_files() -> Result<()>
+    async fn morsel_framework_keeps_work_local_until_reader_is_active() -> Result<()>
     {
         let test = MultiStreamMorselTest::new(2)
             .with_file_in_partition(
@@ -1964,9 +1978,10 @@ mod tests {
                     .return_none()
                     .build(),
             )
-            // Poll sibling 0 first so it discovers the file and publishes
-            // ready morsels. Poll sibling 1 next: because it has no local
-            // files, any batch it returns must have been stolen from sibling 0.
+            // Poll sibling 0 first so it discovers the file and produces two
+            // ready morsels. Poll sibling 1 next: because sibling 0 has not
+            // yet had to share any excess work behind an active reader,
+            // sibling 1 should still observe no local work.
             .with_reads(vec![TestStreamId(0), TestStreamId(1)]);
 
         insta::assert_snapshot!(
@@ -1974,9 +1989,9 @@ mod tests {
             @r"
         ----- Stream 0 Output -----
         Batch: 41
+        Batch: 42
         Done
         ----- Stream 1 Output -----
-        Batch: 42
         Done
         ----- All Streams Done Producing: true -----
         ----- File Stream Events -----
@@ -1992,10 +2007,10 @@ mod tests {
         Ok(())
     }
 
-    /// Verifies that a sibling stream waiting on its own file's I/O can steal
-    /// ready work from a faster sibling and continue making progress.
+    /// Verifies that local work remains on its original stream until there is
+    /// already an active reader to justify sharing overflow.
     #[tokio::test]
-    async fn morsel_framework_sibling_stream_steals_while_own_file_waits_on_io()
+    async fn morsel_framework_local_work_stays_home_before_reader_overflow()
     -> Result<()> {
         let test = MultiStreamMorselTest::new(2)
             .with_file_in_partition(
@@ -2021,11 +2036,12 @@ mod tests {
                     .return_none()
                     .build(),
             )
-            // Poll sibling 0 first so it publishes one ready morsel from the
-            // fast file. Poll sibling 1 next while its own file is still
-            // blocked on I/O: the batch it returns at that point must have
-            // been stolen from sibling 0. Poll sibling 0 again last so it can
-            // finish once sibling 1's local I/O has resolved.
+            // Poll sibling 0 first so it starts consuming its own fast-file
+            // work locally. Poll sibling 1 next while its own file is still
+            // blocked on I/O: it should only make progress on its own file
+            // once that I/O resolves, rather than immediately stealing from
+            // sibling 0. Poll sibling 0 again last to finish draining the
+            // remaining local fast-file work.
             .with_reads(vec![TestStreamId(0), TestStreamId(1), TestStreamId(0)]);
 
         insta::assert_snapshot!(
@@ -2033,10 +2049,10 @@ mod tests {
             @r"
         ----- Stream 0 Output -----
         Batch: 41
-        Batch: 51
+        Batch: 42
         Done
         ----- Stream 1 Output -----
-        Batch: 42
+        Batch: 51
         Done
         ----- All Streams Done Producing: true -----
         ----- File Stream Events -----
@@ -2047,11 +2063,11 @@ mod tests {
         morsel_stream_batch_produced: MorselId(10), BatchId(41)
         morselize_file: slow.parquet
         planner_created: PlannerId(1)
-        morsel_stream_batch_produced: MorselId(11), BatchId(42)
         io_future_created: PlannerId(1), IoFutureId(100)
         io_future_resolved: PlannerId(1), IoFutureId(100)
         morsel_produced: PlannerId(1), MorselId(12)
         morsel_stream_batch_produced: MorselId(12), BatchId(51)
+        morsel_stream_batch_produced: MorselId(11), BatchId(42)
         "
         );
 
