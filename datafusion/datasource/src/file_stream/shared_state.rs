@@ -440,7 +440,8 @@ impl IoState {
         // producing and have no outstanding I/O no longer participate in the
         // fairness gate.
         self.streams.values().all(|state| {
-            state.outstanding_ios > 0 || (state.done_producing && state.outstanding_ios == 0)
+            state.outstanding_ios > 0
+                || (state.done_producing && state.outstanding_ios == 0)
         })
     }
 
@@ -458,7 +459,8 @@ impl IoState {
             .streams
             .iter()
             .filter_map(|(id, state)| {
-                if *id != stream_id && state.done_producing && state.outstanding_ios == 0 {
+                if *id != stream_id && state.done_producing && state.outstanding_ios == 0
+                {
                     None
                 } else {
                     Some(*id)
@@ -595,8 +597,7 @@ mod tests {
     /// outstanding I/O should not reduce the fair share available to active
     /// siblings.
     fn done_producing_stream_does_not_reduce_preserve_order_share() {
-        let state =
-            SharedFileStreamState::new(2, SharedFileStreamMode::PreserveOrder);
+        let state = SharedFileStreamState::new(2, SharedFileStreamMode::PreserveOrder);
         let stream1 = state.register_stream();
         let stream2 = state.register_stream();
 
@@ -615,8 +616,7 @@ mod tests {
     /// remain eligible for a preserve-order share calculation when it is the
     /// requesting stream.
     fn done_producing_requester_can_still_acquire_preserve_order_permit() {
-        let state =
-            SharedFileStreamState::new(2, SharedFileStreamMode::PreserveOrder);
+        let state = SharedFileStreamState::new(2, SharedFileStreamMode::PreserveOrder);
         let stream1 = state.register_stream();
         let stream2 = state.register_stream();
 
