@@ -713,8 +713,10 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 
         let num_rows = Precision::Inexact(estimate);
 
-        // TODO: once #20184 lands, pass enhanced child_stats to partition_statistics
-        // so column-level stats (NDV, min/max) propagate through the registry walk.
+        // TODO: column-level stats (NDV, min/max) enriched by the registry walk
+        // are lost here because partition_statistics(None) re-fetches raw child
+        // stats internally. Once #20184 lands, pass enhanced child_stats so the
+        // operator's built-in column mapping uses them instead.
         let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
         rescale_byte_size(&mut base, num_rows);
 
@@ -958,6 +960,67 @@ impl StatisticsProvider for UnionStatisticsProvider {
         let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
         rescale_byte_size(&mut base, total);
         Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
+    }
+}
+
+type ProviderFn = dyn Fn(&dyn ExecutionPlan, &[ExtendedStatistics]) -> Result<StatisticsResult>
+    + Send
+    + Sync;
+
+/// A [`StatisticsProvider`] backed by a user-supplied closure.
+///
+/// Useful for injecting custom statistics in tests or for cardinality feedback
+/// pipelines where real runtime statistics need to override plan estimates.
+/// The closure receives the current plan node and its children's enhanced
+/// statistics, returning a [`StatisticsResult`].
+///
+/// To distinguish between multiple nodes of the same type (e.g., two
+/// `FilterExec` nodes), match on structural properties like the input schema's
+/// column names, number of columns, or child row counts.
+///
+/// # Example
+///
+/// ```rust,ignore (requires crate-internal imports)
+/// let provider = ClosureStatisticsProvider::new(|plan, child_stats| {
+///     if plan.downcast_ref::<FilterExec>().is_some() {
+///         Ok(StatisticsResult::Computed(ExtendedStatistics::from(Statistics {
+///             num_rows: Precision::Inexact(42),
+///             ..Statistics::new_unknown(plan.schema().as_ref())
+///         })))
+///     } else {
+///         Ok(StatisticsResult::Delegate)
+///     }
+/// });
+/// ```
+pub struct ClosureStatisticsProvider {
+    f: Box<ProviderFn>,
+}
+
+impl ClosureStatisticsProvider {
+    /// Create a new provider from a closure.
+    pub fn new(
+        f: impl Fn(&dyn ExecutionPlan, &[ExtendedStatistics]) -> Result<StatisticsResult>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self { f: Box::new(f) }
+    }
+}
+
+impl Debug for ClosureStatisticsProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ClosureStatisticsProvider")
+    }
+}
+
+impl StatisticsProvider for ClosureStatisticsProvider {
+    fn compute_statistics(
+        &self,
+        plan: &dyn ExecutionPlan,
+        child_stats: &[ExtendedStatistics],
+    ) -> Result<StatisticsResult> {
+        (self.f)(plan, child_stats)
     }
 }
 
@@ -2151,6 +2214,84 @@ mod tests {
         ]);
         let stats = registry.compute(union.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Absent);
+        Ok(())
+    }
+
+    // =========================================================================
+    // ClosureStatisticsProvider tests
+    // =========================================================================
+
+    #[test]
+    fn test_closure_provider_basic() -> Result<()> {
+        // Override all FilterExec stats with a fixed row count
+        let provider = ClosureStatisticsProvider::new(|plan, _child_stats| {
+            if plan.downcast_ref::<FilterExec>().is_some() {
+                Ok(StatisticsResult::Computed(ExtendedStatistics::from(
+                    Statistics {
+                        num_rows: Precision::Inexact(42),
+                        total_byte_size: Precision::Absent,
+                        column_statistics: vec![],
+                    },
+                )))
+            } else {
+                Ok(StatisticsResult::Delegate)
+            }
+        });
+
+        let registry = StatisticsRegistry::with_providers(vec![
+            Arc::new(provider),
+            Arc::new(DefaultStatisticsProvider),
+        ]);
+
+        let source = make_source(1000);
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(lit(true), source)?);
+        let stats = registry.compute(filter.as_ref())?;
+        assert_eq!(stats.base.num_rows, Precision::Inexact(42));
+        Ok(())
+    }
+
+    #[test]
+    fn test_closure_provider_distinguishes_nodes_by_child_stats() -> Result<()> {
+        // Two FilterExec nodes with different input sizes.
+        // The closure uses the child row count as a proxy to distinguish them,
+        // which mirrors the cardinality feedback use case where you match a
+        // runtime-observed count to the right node in the plan tree.
+        let provider = ClosureStatisticsProvider::new(|plan, child_stats| {
+            if plan.downcast_ref::<FilterExec>().is_none() {
+                return Ok(StatisticsResult::Delegate);
+            }
+            match child_stats[0].base.num_rows.get_value().copied() {
+                Some(500) => Ok(StatisticsResult::Computed(ExtendedStatistics::from(
+                    Statistics {
+                        num_rows: Precision::Inexact(100),
+                        total_byte_size: Precision::Absent,
+                        column_statistics: vec![],
+                    },
+                ))),
+                Some(200) => Ok(StatisticsResult::Computed(ExtendedStatistics::from(
+                    Statistics {
+                        num_rows: Precision::Inexact(50),
+                        total_byte_size: Precision::Absent,
+                        column_statistics: vec![],
+                    },
+                ))),
+                _ => Ok(StatisticsResult::Delegate),
+            }
+        });
+
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(provider)]);
+
+        let filter_a: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(lit(true), make_source(500))?);
+        let filter_b: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(lit(true), make_source(200))?);
+
+        let stats_a = registry.compute(filter_a.as_ref())?;
+        let stats_b = registry.compute(filter_b.as_ref())?;
+
+        assert_eq!(stats_a.base.num_rows, Precision::Inexact(100));
+        assert_eq!(stats_b.base.num_rows, Precision::Inexact(50));
         Ok(())
     }
 }
