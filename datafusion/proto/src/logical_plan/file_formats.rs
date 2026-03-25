@@ -351,13 +351,13 @@ mod parquet {
     use super::*;
 
     use crate::protobuf::{
-        ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
-        ParquetOptions as ParquetOptionsProto,
+        CdcOptions as CdcOptionsProto, ParquetColumnOptions as ParquetColumnOptionsProto,
+        ParquetColumnSpecificOptions, ParquetOptions as ParquetOptionsProto,
         TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
         parquet_options,
     };
     use datafusion_common::config::{
-        ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        CdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     };
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
@@ -426,15 +426,12 @@ mod parquet {
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
-                content_defined_chunking: global_options.global.enable_content_defined_chunking,
-                cdc_min_chunk_size_opt: global_options.global.enable_content_defined_chunking.then(|| {
-                    parquet_options::CdcMinChunkSizeOpt::CdcMinChunkSize(global_options.global.cdc_min_chunk_size as u64)
-                }),
-                cdc_max_chunk_size_opt: global_options.global.enable_content_defined_chunking.then(|| {
-                    parquet_options::CdcMaxChunkSizeOpt::CdcMaxChunkSize(global_options.global.cdc_max_chunk_size as u64)
-                }),
-                cdc_norm_level_opt: global_options.global.enable_content_defined_chunking.then(|| {
-                    parquet_options::CdcNormLevelOpt::CdcNormLevel(global_options.global.cdc_norm_level as i32)
+                content_defined_chunking: global_options.global.use_content_defined_chunking.as_ref().map(|cdc| {
+                    CdcOptionsProto {
+                        min_chunk_size: cdc.min_chunk_size as u64,
+                        max_chunk_size: cdc.max_chunk_size as u64,
+                        norm_level: cdc.norm_level as i32,
+                    }
                 }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
@@ -535,16 +532,14 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
-            enable_content_defined_chunking: proto.content_defined_chunking,
-            cdc_min_chunk_size: proto.cdc_min_chunk_size_opt.as_ref().map(|opt| match opt {
-                parquet_options::CdcMinChunkSizeOpt::CdcMinChunkSize(v) => *v as usize,
-            }).unwrap_or(ParquetOptions::default().cdc_min_chunk_size),
-            cdc_max_chunk_size: proto.cdc_max_chunk_size_opt.as_ref().map(|opt| match opt {
-                parquet_options::CdcMaxChunkSizeOpt::CdcMaxChunkSize(v) => *v as usize,
-            }).unwrap_or(ParquetOptions::default().cdc_max_chunk_size),
-            cdc_norm_level: proto.cdc_norm_level_opt.as_ref().map(|opt| match opt {
-                parquet_options::CdcNormLevelOpt::CdcNormLevel(v) => *v as i64,
-            }).unwrap_or(ParquetOptions::default().cdc_norm_level),
+            use_content_defined_chunking: proto.content_defined_chunking.map(|cdc| {
+                let defaults = CdcOptions::default();
+                CdcOptions {
+                    min_chunk_size: if cdc.min_chunk_size != 0 { cdc.min_chunk_size as usize } else { defaults.min_chunk_size },
+                    max_chunk_size: if cdc.max_chunk_size != 0 { cdc.max_chunk_size as usize } else { defaults.max_chunk_size },
+                    norm_level: cdc.norm_level as i64,
+                }
+            }),
         }
         }
     }

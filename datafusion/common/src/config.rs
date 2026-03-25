@@ -688,6 +688,24 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options for content-defined chunking (CDC) when writing parquet files.
+    /// See [`ParquetOptions::use_content_defined_chunking`].
+    pub struct CdcOptions {
+        /// Minimum chunk size in bytes. The rolling hash will not trigger a split
+        /// until this many bytes have been accumulated. Default is 256 KiB.
+        pub min_chunk_size: usize, default = 256 * 1024
+
+        /// Maximum chunk size in bytes. A split is forced when the accumulated
+        /// size exceeds this value. Default is 1 MiB.
+        pub max_chunk_size: usize, default = 1024 * 1024
+
+        /// Normalization level. Increasing this improves deduplication ratio
+        /// but increases fragmentation. Recommended range is [-3, 3], default is 0.
+        pub norm_level: i64, default = 0
+    }
+}
+
+config_namespace! {
     /// Options for reading and writing parquet files
     ///
     /// See also: [`SessionConfig`]
@@ -875,25 +893,10 @@ config_namespace! {
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
 
         /// (writing) EXPERIMENTAL: Enable content-defined chunking (CDC) when writing
-        /// parquet files. When true, the other `cdc_*` options control the chunking
-        /// behavior. When CDC is enabled, parallel writing is automatically disabled
-        /// since the chunker state must persist across row groups.
-        pub enable_content_defined_chunking: bool, default = false
-
-        /// (writing) Minimum chunk size in bytes for content-defined chunking.
-        /// The rolling hash will not be updated until this size is reached for each chunk.
-        /// Default is 256 KiB. Only used when `enable_content_defined_chunking` is true.
-        pub cdc_min_chunk_size: usize, default = 256 * 1024
-
-        /// (writing) Maximum chunk size in bytes for content-defined chunking.
-        /// The chunker will create a new chunk whenever the chunk size exceeds this value.
-        /// Default is 1 MiB. Only used when `enable_content_defined_chunking` is true.
-        pub cdc_max_chunk_size: usize, default = 1024 * 1024
-
-        /// (writing) Normalization level for content-defined chunking.
-        /// Increasing this improves deduplication ratio but increases fragmentation.
-        /// Recommended range is [-3, 3], default is 0. Only used when `enable_content_defined_chunking` is true.
-        pub cdc_norm_level: i64, default = 0
+        /// parquet files. When `Some`, CDC is enabled with the given options; when `None`
+        /// (the default), CDC is disabled. When CDC is enabled, parallel writing is
+        /// automatically disabled since the chunker state must persist across row groups.
+        pub use_content_defined_chunking: Option<CdcOptions>, default = None
     }
 }
 

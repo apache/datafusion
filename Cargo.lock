@@ -2550,6 +2550,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "doc-comment",
+ "parquet",
  "pbjson 0.9.0",
  "prost",
  "serde",

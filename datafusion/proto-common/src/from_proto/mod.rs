@@ -39,7 +39,7 @@ use datafusion_common::{
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
-        CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
+        CdcOptions, CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
@@ -1089,16 +1089,14 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
             }).unwrap_or(None),
-            enable_content_defined_chunking: value.content_defined_chunking,
-            cdc_min_chunk_size: value.cdc_min_chunk_size_opt.map(|opt| match opt {
-                protobuf::parquet_options::CdcMinChunkSizeOpt::CdcMinChunkSize(v) => v as usize,
-            }).unwrap_or(ParquetOptions::default().cdc_min_chunk_size),
-            cdc_max_chunk_size: value.cdc_max_chunk_size_opt.map(|opt| match opt {
-                protobuf::parquet_options::CdcMaxChunkSizeOpt::CdcMaxChunkSize(v) => v as usize,
-            }).unwrap_or(ParquetOptions::default().cdc_max_chunk_size),
-            cdc_norm_level: value.cdc_norm_level_opt.map(|opt| match opt {
-                protobuf::parquet_options::CdcNormLevelOpt::CdcNormLevel(v) => v as i64,
-            }).unwrap_or(ParquetOptions::default().cdc_norm_level),
+            use_content_defined_chunking: value.content_defined_chunking.map(|cdc| {
+                let defaults = CdcOptions::default();
+                CdcOptions {
+                    min_chunk_size: if cdc.min_chunk_size != 0 { cdc.min_chunk_size as usize } else { defaults.min_chunk_size },
+                    max_chunk_size: if cdc.max_chunk_size != 0 { cdc.max_chunk_size as usize } else { defaults.max_chunk_size },
+                    norm_level: cdc.norm_level as i64,
+                }
+            }),
         })
     }
 }
@@ -1275,7 +1273,7 @@ pub(crate) fn csv_writer_options_from_proto(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::config::{ParquetOptions, TableParquetOptions};
+    use datafusion_common::config::{CdcOptions, ParquetOptions, TableParquetOptions};
 
     fn parquet_options_proto_round_trip(opts: ParquetOptions) -> ParquetOptions {
         let proto: crate::protobuf_common::ParquetOptions =
@@ -1294,7 +1292,7 @@ mod tests {
     #[test]
     fn test_parquet_options_cdc_disabled_round_trip() {
         let opts = ParquetOptions::default();
-        assert!(!opts.enable_content_defined_chunking);
+        assert!(opts.use_content_defined_chunking.is_none());
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(opts, recovered);
     }
@@ -1302,58 +1300,57 @@ mod tests {
     #[test]
     fn test_parquet_options_cdc_enabled_round_trip() {
         let opts = ParquetOptions {
-            enable_content_defined_chunking: true,
-            cdc_min_chunk_size: 128 * 1024,
-            cdc_max_chunk_size: 512 * 1024,
-            cdc_norm_level: 2,
+            use_content_defined_chunking: Some(CdcOptions {
+                min_chunk_size: 128 * 1024,
+                max_chunk_size: 512 * 1024,
+                norm_level: 2,
+            }),
             ..ParquetOptions::default()
         };
         let recovered = parquet_options_proto_round_trip(opts.clone());
-        assert_eq!(recovered.enable_content_defined_chunking, true);
-        assert_eq!(recovered.cdc_min_chunk_size, 128 * 1024);
-        assert_eq!(recovered.cdc_max_chunk_size, 512 * 1024);
-        assert_eq!(recovered.cdc_norm_level, 2);
+        let cdc = recovered.use_content_defined_chunking.unwrap();
+        assert_eq!(cdc.min_chunk_size, 128 * 1024);
+        assert_eq!(cdc.max_chunk_size, 512 * 1024);
+        assert_eq!(cdc.norm_level, 2);
     }
 
     #[test]
     fn test_parquet_options_cdc_negative_norm_level_round_trip() {
         let opts = ParquetOptions {
-            enable_content_defined_chunking: true,
-            cdc_norm_level: -3,
+            use_content_defined_chunking: Some(CdcOptions {
+                norm_level: -3,
+                ..CdcOptions::default()
+            }),
             ..ParquetOptions::default()
         };
         let recovered = parquet_options_proto_round_trip(opts);
-        assert_eq!(recovered.cdc_norm_level, -3);
+        assert_eq!(
+            recovered.use_content_defined_chunking.unwrap().norm_level,
+            -3
+        );
     }
 
     #[test]
     fn test_table_parquet_options_cdc_round_trip() {
         let mut opts = TableParquetOptions::default();
-        opts.global.enable_content_defined_chunking = true;
-        opts.global.cdc_min_chunk_size = 64 * 1024;
-        opts.global.cdc_max_chunk_size = 2 * 1024 * 1024;
-        opts.global.cdc_norm_level = -1;
+        opts.global.use_content_defined_chunking = Some(CdcOptions {
+            min_chunk_size: 64 * 1024,
+            max_chunk_size: 2 * 1024 * 1024,
+            norm_level: -1,
+        });
 
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
-        assert_eq!(recovered.global.enable_content_defined_chunking, true);
-        assert_eq!(recovered.global.cdc_min_chunk_size, 64 * 1024);
-        assert_eq!(recovered.global.cdc_max_chunk_size, 2 * 1024 * 1024);
-        assert_eq!(recovered.global.cdc_norm_level, -1);
+        let cdc = recovered.global.use_content_defined_chunking.unwrap();
+        assert_eq!(cdc.min_chunk_size, 64 * 1024);
+        assert_eq!(cdc.max_chunk_size, 2 * 1024 * 1024);
+        assert_eq!(cdc.norm_level, -1);
     }
 
     #[test]
     fn test_table_parquet_options_cdc_disabled_round_trip() {
         let opts = TableParquetOptions::default();
-        assert!(!opts.global.enable_content_defined_chunking);
+        assert!(opts.global.use_content_defined_chunking.is_none());
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
-        assert_eq!(recovered.global.enable_content_defined_chunking, false);
-        assert_eq!(
-            recovered.global.cdc_min_chunk_size,
-            ParquetOptions::default().cdc_min_chunk_size
-        );
-        assert_eq!(
-            recovered.global.cdc_max_chunk_size,
-            ParquetOptions::default().cdc_max_chunk_size
-        );
+        assert!(recovered.global.use_content_defined_chunking.is_none());
     }
 }
