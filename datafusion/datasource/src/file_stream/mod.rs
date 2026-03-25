@@ -1503,7 +1503,7 @@ mod tests {
                             }
                             Some(Err(e)) => {
                                 outputs[stream_id.0]
-                                    .push(format!("Error: {}", e.strip_backtrace()));
+                                    .push(format!("Error: {}", e.message()));
                                 terminal_streams[stream_id.0] = true;
                             }
                             None => {
@@ -1962,8 +1962,7 @@ mod tests {
     /// two ready morsels and no reader yet, nothing should migrate to sibling
     /// 1.
     #[tokio::test]
-    async fn morsel_framework_keeps_work_local_until_reader_is_active() -> Result<()>
-    {
+    async fn morsel_framework_keeps_work_local_until_reader_is_active() -> Result<()> {
         let test = MultiStreamMorselTest::new(2)
             .with_file_in_partition(
                 0,
@@ -2010,8 +2009,8 @@ mod tests {
     /// Verifies that local work remains on its original stream until there is
     /// already an active reader to justify sharing overflow.
     #[tokio::test]
-    async fn morsel_framework_local_work_stays_home_before_reader_overflow()
-    -> Result<()> {
+    async fn morsel_framework_local_work_stays_home_before_reader_overflow() -> Result<()>
+    {
         let test = MultiStreamMorselTest::new(2)
             .with_file_in_partition(
                 0,
@@ -2122,7 +2121,7 @@ mod tests {
             test.run().await.unwrap(),
             @r"
         ----- Stream 0 Output -----
-        Error: Internal error: planner boom.
+        Error: planner boom.
         This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
         ----- Stream 1 Output -----
         Done
