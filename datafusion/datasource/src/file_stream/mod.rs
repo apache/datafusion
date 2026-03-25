@@ -51,7 +51,7 @@ use futures::stream::BoxStream;
 use futures::{FutureExt, Stream, StreamExt as _};
 use trace::{ReadTrace, file_stream_trace_enabled};
 
-const DEFAULT_OUTSTANDING_IOS_PER_PARTITION: usize = 2;
+const DEFAULT_OUTSTANDING_IOS_PER_PARTITION: usize = 1;
 
 /// Keep at most this many morsels buffered before pausing additional planning.
 ///
