@@ -58,7 +58,6 @@ use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyContext;
-#[cfg(feature = "sql")]
 use datafusion_expr::{
     AggregateUDF, Explain, Expr, LambdaUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
