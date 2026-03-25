@@ -24,7 +24,8 @@ use chrono::Timelike;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -84,10 +85,7 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         Ok(Time64(Nanosecond))
     }
 
-    fn invoke_with_args(
-        &self,
-        _args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!(
             "invoke should not be called on a simplified current_time() function"
         )
@@ -141,9 +139,8 @@ fn datetime_to_time_nanos<Tz: TimeZone>(dt: &chrono::DateTime<Tz>) -> Option<i64
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
+    use datafusion_common::DFSchema;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{DFSchema, ScalarValue};
-    use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
     use std::sync::Arc;
 
     fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> SimplifyContext {
@@ -154,10 +151,11 @@ mod tests {
             Some(tz.to_string())
         };
         let schema = Arc::new(DFSchema::empty());
-        SimplifyContext::default()
+        SimplifyContext::builder()
             .with_schema(schema)
             .with_config_options(Arc::new(config))
             .with_query_execution_start_time(Some(start_time))
+            .build()
     }
 
     #[test]

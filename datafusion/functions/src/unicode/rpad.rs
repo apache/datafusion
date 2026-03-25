@@ -15,25 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use std::any::Any;
+use std::fmt::Write;
+use std::sync::Arc;
+
 use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::DataFusionError;
+use unicode_segmentation::UnicodeSegmentation;
+
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
-use std::fmt::Write;
-use std::sync::Arc;
-use unicode_segmentation::UnicodeSegmentation;
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -111,35 +113,68 @@ impl ScalarUDFImpl for RPadFunc {
         utf8_to_str_type(&arg_types[0], "rpad")
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let args = &args.args;
-        match (
-            args.len(),
-            args[0].data_type(),
-            args.get(2).map(|arg| arg.data_type()),
-        ) {
-            (2, Utf8 | Utf8View, _) => {
-                make_scalar_function(rpad::<i32, i32>, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs {
+            args, number_rows, ..
+        } = args;
+
+        const MAX_SCALAR_TARGET_LEN: usize = 16384;
+
+        // If target_len and fill (if specified) are constants, use the
+        // scalar fast path.
+        if let Some(target_len) = try_as_scalar_i64(&args[1]) {
+            let target_len: usize = match usize::try_from(target_len) {
+                Ok(n) if n <= i32::MAX as usize => n,
+                Ok(n) => {
+                    return exec_err!(
+                        "rpad requested length {n} too large, maximum allowed length is {}",
+                        i32::MAX
+                    );
+                }
+                Err(_) => 0, // negative → 0
+            };
+
+            let fill_str = if args.len() == 3 {
+                try_as_scalar_str(&args[2])
+            } else {
+                Some(" ")
+            };
+
+            // Skip the fast path for very large `target_len` values to avoid
+            // consuming too much memory. Such large padding values are uncommon
+            // in practice.
+            if target_len <= MAX_SCALAR_TARGET_LEN
+                && let Some(fill) = fill_str
+            {
+                let string_array = args[0].to_array_of_size(number_rows)?;
+                let result = match string_array.data_type() {
+                    Utf8View => rpad_scalar_args::<_, i32>(
+                        string_array.as_string_view(),
+                        target_len,
+                        fill,
+                    ),
+                    Utf8 => rpad_scalar_args::<_, i32>(
+                        string_array.as_string::<i32>(),
+                        target_len,
+                        fill,
+                    ),
+                    LargeUtf8 => rpad_scalar_args::<_, i64>(
+                        string_array.as_string::<i64>(),
+                        target_len,
+                        fill,
+                    ),
+                    other => {
+                        exec_err!("Unsupported data type {other:?} for function rpad")
+                    }
+                }?;
+                return Ok(ColumnarValue::Array(result));
             }
-            (2, LargeUtf8, _) => make_scalar_function(rpad::<i64, i64>, vec![])(args),
-            (3, Utf8 | Utf8View, Some(Utf8 | Utf8View)) => {
-                make_scalar_function(rpad::<i32, i32>, vec![])(args)
-            }
-            (3, LargeUtf8, Some(LargeUtf8)) => {
-                make_scalar_function(rpad::<i64, i64>, vec![])(args)
-            }
-            (3, Utf8 | Utf8View, Some(LargeUtf8)) => {
-                make_scalar_function(rpad::<i32, i64>, vec![])(args)
-            }
-            (3, LargeUtf8, Some(Utf8 | Utf8View)) => {
-                make_scalar_function(rpad::<i64, i32>, vec![])(args)
-            }
-            (_, _, _) => {
-                exec_err!("Unsupported combination of data types for function rpad")
-            }
+        }
+
+        match args[0].data_type() {
+            Utf8 | Utf8View => make_scalar_function(rpad::<i32>, vec![])(&args),
+            LargeUtf8 => make_scalar_function(rpad::<i64>, vec![])(&args),
+            other => exec_err!("Unsupported data type {other:?} for function rpad"),
         }
     }
 
@@ -148,204 +183,344 @@ impl ScalarUDFImpl for RPadFunc {
     }
 }
 
-fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
-    args: &[ArrayRef],
+use super::common::{try_as_scalar_i64, try_as_scalar_str};
+
+/// Optimized rpad for constant target_len and fill arguments.
+fn rpad_scalar_args<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
+    string_array: V,
+    target_len: usize,
+    fill: &str,
 ) -> Result<ArrayRef> {
-    if args.len() < 2 || args.len() > 3 {
+    if string_array.is_ascii() && fill.is_ascii() {
+        rpad_scalar_ascii::<V, T>(string_array, target_len, fill)
+    } else {
+        rpad_scalar_unicode::<V, T>(string_array, target_len, fill)
+    }
+}
+
+fn rpad_scalar_ascii<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
+    string_array: V,
+    target_len: usize,
+    fill: &str,
+) -> Result<ArrayRef> {
+    // With a scalar `target_len` and `fill`, we can precompute a padding
+    // buffer of `target_len` fill characters repeated cyclically.
+    let padding_buf = if !fill.is_empty() {
+        let mut buf = String::with_capacity(target_len);
+        while buf.len() < target_len {
+            let remaining = target_len - buf.len();
+            if remaining >= fill.len() {
+                buf.push_str(fill);
+            } else {
+                buf.push_str(&fill[..remaining]);
+            }
+        }
+        buf
+    } else {
+        String::new()
+    };
+
+    // Each output row is exactly `target_len` ASCII bytes (string + padding).
+    let data_capacity = string_array.len().saturating_mul(target_len);
+    let mut builder =
+        GenericStringBuilder::<T>::with_capacity(string_array.len(), data_capacity);
+
+    for maybe_string in string_array.iter() {
+        match maybe_string {
+            Some(string) => {
+                let str_len = string.len();
+                if target_len <= str_len {
+                    builder.append_value(&string[..target_len]);
+                } else if fill.is_empty() {
+                    builder.append_value(string);
+                } else {
+                    let pad_needed = target_len - str_len;
+                    builder.write_str(string)?;
+                    builder.write_str(&padding_buf[..pad_needed])?;
+                    builder.append_value("");
+                }
+            }
+            None => builder.append_null(),
+        }
+    }
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
+fn rpad_scalar_unicode<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
+    string_array: V,
+    target_len: usize,
+    fill: &str,
+) -> Result<ArrayRef> {
+    let fill_chars: Vec<char> = fill.chars().collect();
+
+    // With a scalar `target_len` and `fill`, we can precompute a padding buffer
+    // of `target_len` fill characters repeated cyclically. Because Unicode
+    // characters are variable-width, we build a byte-offset table to map from
+    // character count to the corresponding byte position in the padding buffer.
+    let (padding_buf, char_byte_offsets) = if !fill_chars.is_empty() {
+        let mut buf = String::new();
+        let mut offsets = Vec::with_capacity(target_len + 1);
+        offsets.push(0usize);
+        for i in 0..target_len {
+            buf.push(fill_chars[i % fill_chars.len()]);
+            offsets.push(buf.len());
+        }
+        (buf, offsets)
+    } else {
+        (String::new(), vec![0])
+    };
+
+    // Each output row is `target_len` chars; multiply by 4 (max UTF-8 bytes
+    // per char) for an upper bound in bytes.
+    let data_capacity = string_array.len().saturating_mul(target_len * 4);
+    let mut builder =
+        GenericStringBuilder::<T>::with_capacity(string_array.len(), data_capacity);
+    let mut graphemes_buf = Vec::new();
+
+    for maybe_string in string_array.iter() {
+        match maybe_string {
+            Some(string) => {
+                graphemes_buf.clear();
+                graphemes_buf.extend(string.graphemes(true));
+
+                if target_len < graphemes_buf.len() {
+                    let end: usize =
+                        graphemes_buf[..target_len].iter().map(|g| g.len()).sum();
+                    builder.append_value(&string[..end]);
+                } else if fill_chars.is_empty() {
+                    builder.append_value(string);
+                } else {
+                    let pad_chars = target_len - graphemes_buf.len();
+                    let pad_bytes = char_byte_offsets[pad_chars];
+                    builder.write_str(string)?;
+                    builder.write_str(&padding_buf[..pad_bytes])?;
+                    builder.append_value("");
+                }
+            }
+            None => builder.append_null(),
+        }
+    }
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
+fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() <= 1 || args.len() > 3 {
         return exec_err!(
-            "rpad was called with {} arguments. It requires 2 or 3 arguments.",
+            "rpad was called with {} arguments. It requires at least 2 and at most 3.",
             args.len()
         );
     }
 
     let length_array = as_int64_array(&args[1])?;
-    match (
-        args.len(),
-        args[0].data_type(),
-        args.get(2).map(|arg| arg.data_type()),
-    ) {
-        (2, Utf8View, _) => {
-            rpad_impl::<&StringViewArray, &StringViewArray, StringArrayLen>(
-                &args[0].as_string_view(),
-                length_array,
-                None,
-            )
-        }
-        (3, Utf8View, Some(Utf8View)) => {
-            rpad_impl::<&StringViewArray, &StringViewArray, StringArrayLen>(
-                &args[0].as_string_view(),
-                length_array,
-                Some(args[2].as_string_view()),
-            )
-        }
-        (3, Utf8View, Some(Utf8 | LargeUtf8)) => {
-            rpad_impl::<&StringViewArray, &GenericStringArray<FillArrayLen>, StringArrayLen>(
-                &args[0].as_string_view(),
-                length_array,
-                Some(args[2].as_string::<FillArrayLen>()),
-            )
-        }
-        (3, Utf8 | LargeUtf8, Some(Utf8View)) => rpad_impl::<
-            &GenericStringArray<StringArrayLen>,
-            &StringViewArray,
-            StringArrayLen,
-        >(
-            &args[0].as_string::<StringArrayLen>(),
+
+    match (args.len(), args[0].data_type()) {
+        (2, Utf8View) => rpad_impl::<&StringViewArray, &GenericStringArray<i32>, T>(
+            &args[0].as_string_view(),
             length_array,
-            Some(args[2].as_string_view()),
+            None,
         ),
-        (_, _, _) => rpad_impl::<
-            &GenericStringArray<StringArrayLen>,
-            &GenericStringArray<FillArrayLen>,
-            StringArrayLen,
-        >(
-            &args[0].as_string::<StringArrayLen>(),
+        (2, Utf8 | LargeUtf8) => rpad_impl::<
+            &GenericStringArray<T>,
+            &GenericStringArray<T>,
+            T,
+        >(&args[0].as_string::<T>(), length_array, None),
+        (3, Utf8View) => rpad_with_replace::<&StringViewArray, T>(
+            &args[0].as_string_view(),
             length_array,
-            args.get(2).map(|arg| arg.as_string::<FillArrayLen>()),
+            &args[2],
         ),
+        (3, Utf8 | LargeUtf8) => rpad_with_replace::<&GenericStringArray<T>, T>(
+            &args[0].as_string::<T>(),
+            length_array,
+            &args[2],
+        ),
+        (len, dt) => unreachable!("rpad: unexpected arg count ({len}) or type ({dt})"),
     }
 }
 
-/// Extends the string to length 'length' by appending the characters fill (a space by default).
-/// If the string is already longer than length then it is truncated (on the right).
-/// rpad('hi', 5, 'xy') = 'hixyx'
-fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
-    string_array: &StringArrType,
+fn rpad_with_replace<'a, V, T: OffsetSizeTrait>(
+    string_array: &V,
     length_array: &Int64Array,
-    fill_array: Option<FillArrType>,
+    fill_array: &'a ArrayRef,
 ) -> Result<ArrayRef>
 where
-    StringArrType: StringArrayType<'a>,
-    FillArrType: StringArrayType<'a>,
-    StringArrayLen: OffsetSizeTrait,
+    V: StringArrayType<'a>,
 {
-    let mut builder: GenericStringBuilder<StringArrayLen> = GenericStringBuilder::new();
-    let mut graphemes_buf = Vec::new();
-    let mut fill_chars_buf = Vec::new();
-
-    match fill_array {
-        None => {
-            string_array.iter().zip(length_array.iter()).try_for_each(
-                |(string, length)| -> Result<(), DataFusionError> {
-                    match (string, length) {
-                        (Some(string), Some(length)) => {
-                            if length > i32::MAX as i64 {
-                                return exec_err!(
-                                    "rpad requested length {} too large",
-                                    length
-                                );
-                            }
-                            let length = if length < 0 { 0 } else { length as usize };
-                            if length == 0 {
-                                builder.append_value("");
-                            } else if string.is_ascii() {
-                                // ASCII fast path: byte length == character length
-                                let str_len = string.len();
-                                if length < str_len {
-                                    builder.append_value(&string[..length]);
-                                } else {
-                                    builder.write_str(string)?;
-                                    for _ in 0..(length - str_len) {
-                                        builder.write_str(" ")?;
-                                    }
-                                    builder.append_value("");
-                                }
-                            } else {
-                                // Reuse buffer by clearing and refilling
-                                graphemes_buf.clear();
-                                graphemes_buf.extend(string.graphemes(true));
-
-                                if length < graphemes_buf.len() {
-                                    builder
-                                        .append_value(graphemes_buf[..length].concat());
-                                } else {
-                                    builder.write_str(string)?;
-                                    for _ in 0..(length - graphemes_buf.len()) {
-                                        builder.write_str(" ")?;
-                                    }
-                                    builder.append_value("");
-                                }
-                            }
-                        }
-                        _ => builder.append_null(),
-                    }
-                    Ok(())
-                },
-            )?;
-        }
-        Some(fill_array) => {
-            string_array
-                .iter()
-                .zip(length_array.iter())
-                .zip(fill_array.iter())
-                .try_for_each(
-                    |((string, length), fill)| -> Result<(), DataFusionError> {
-                        match (string, length, fill) {
-                            (Some(string), Some(length), Some(fill)) => {
-                                if length > i32::MAX as i64 {
-                                    return exec_err!(
-                                        "rpad requested length {} too large",
-                                        length
-                                    );
-                                }
-                                let length = if length < 0 { 0 } else { length as usize };
-                                if string.is_ascii() && fill.is_ascii() {
-                                    // ASCII fast path: byte length == character length,
-                                    // so we skip expensive grapheme segmentation.
-                                    let str_len = string.len();
-                                    if length < str_len {
-                                        builder.append_value(&string[..length]);
-                                    } else if fill.is_empty() {
-                                        builder.append_value(string);
-                                    } else {
-                                        let pad_len = length - str_len;
-                                        let fill_len = fill.len();
-                                        let full_reps = pad_len / fill_len;
-                                        let remainder = pad_len % fill_len;
-                                        builder.write_str(string)?;
-                                        for _ in 0..full_reps {
-                                            builder.write_str(fill)?;
-                                        }
-                                        if remainder > 0 {
-                                            builder.write_str(&fill[..remainder])?;
-                                        }
-                                        builder.append_value("");
-                                    }
-                                } else {
-                                    // Reuse buffer by clearing and refilling
-                                    graphemes_buf.clear();
-                                    graphemes_buf.extend(string.graphemes(true));
-
-                                    if length < graphemes_buf.len() {
-                                        builder.append_value(
-                                            graphemes_buf[..length].concat(),
-                                        );
-                                    } else if fill.is_empty() {
-                                        builder.append_value(string);
-                                    } else {
-                                        builder.write_str(string)?;
-                                        // Reuse fill_chars_buf by clearing and refilling
-                                        fill_chars_buf.clear();
-                                        fill_chars_buf.extend(fill.chars());
-                                        for l in 0..length - graphemes_buf.len() {
-                                            let c = *fill_chars_buf
-                                                .get(l % fill_chars_buf.len())
-                                                .unwrap();
-                                            builder.write_char(c)?;
-                                        }
-                                        builder.append_value("");
-                                    }
-                                }
-                            }
-                            _ => builder.append_null(),
-                        }
-                        Ok(())
-                    },
-                )?;
+    match fill_array.data_type() {
+        Utf8View => rpad_impl::<V, &StringViewArray, T>(
+            string_array,
+            length_array,
+            Some(fill_array.as_string_view()),
+        ),
+        LargeUtf8 => rpad_impl::<V, &GenericStringArray<i64>, T>(
+            string_array,
+            length_array,
+            Some(fill_array.as_string::<i64>()),
+        ),
+        Utf8 => rpad_impl::<V, &GenericStringArray<i32>, T>(
+            string_array,
+            length_array,
+            Some(fill_array.as_string::<i32>()),
+        ),
+        other => {
+            exec_err!("Unsupported data type {other:?} for function rpad")
         }
     }
+}
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+fn rpad_impl<'a, V, V2, T>(
+    string_array: &V,
+    length_array: &Int64Array,
+    fill_array: Option<V2>,
+) -> Result<ArrayRef>
+where
+    V: StringArrayType<'a>,
+    V2: StringArrayType<'a>,
+    T: OffsetSizeTrait,
+{
+    let array = if let Some(fill_array) = fill_array {
+        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+        let mut graphemes_buf = Vec::new();
+        let mut fill_chars_buf = Vec::new();
+
+        for ((string, target_len), fill) in string_array
+            .iter()
+            .zip(length_array.iter())
+            .zip(fill_array.iter())
+        {
+            if let (Some(string), Some(target_len), Some(fill)) =
+                (string, target_len, fill)
+            {
+                if target_len > i32::MAX as i64 {
+                    return exec_err!(
+                        "rpad requested length {target_len} too large, maximum allowed length is {}",
+                        i32::MAX
+                    );
+                }
+
+                let target_len = if target_len < 0 {
+                    0
+                } else {
+                    target_len as usize
+                };
+                if target_len == 0 {
+                    builder.append_value("");
+                    continue;
+                }
+
+                if string.is_ascii() && fill.is_ascii() {
+                    // ASCII fast path: byte length == character length,
+                    // so we skip expensive grapheme segmentation.
+                    let str_len = string.len();
+                    if target_len < str_len {
+                        builder.append_value(&string[..target_len]);
+                    } else if fill.is_empty() {
+                        builder.append_value(string);
+                    } else {
+                        let pad_len = target_len - str_len;
+                        let fill_len = fill.len();
+                        let full_reps = pad_len / fill_len;
+                        let remainder = pad_len % fill_len;
+                        builder.write_str(string)?;
+                        for _ in 0..full_reps {
+                            builder.write_str(fill)?;
+                        }
+                        if remainder > 0 {
+                            builder.write_str(&fill[..remainder])?;
+                        }
+                        builder.append_value("");
+                    }
+                } else {
+                    graphemes_buf.clear();
+                    graphemes_buf.extend(string.graphemes(true));
+
+                    fill_chars_buf.clear();
+                    fill_chars_buf.extend(fill.chars());
+
+                    if target_len < graphemes_buf.len() {
+                        let end: usize =
+                            graphemes_buf[..target_len].iter().map(|g| g.len()).sum();
+                        builder.append_value(&string[..end]);
+                    } else if fill_chars_buf.is_empty() {
+                        builder.append_value(string);
+                    } else {
+                        builder.write_str(string)?;
+                        for l in 0..target_len - graphemes_buf.len() {
+                            let c =
+                                *fill_chars_buf.get(l % fill_chars_buf.len()).unwrap();
+                            builder.write_char(c)?;
+                        }
+                        builder.append_value("");
+                    }
+                }
+            } else {
+                builder.append_null();
+            }
+        }
+
+        builder.finish()
+    } else {
+        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+        let mut graphemes_buf = Vec::new();
+
+        for (string, target_len) in string_array.iter().zip(length_array.iter()) {
+            if let (Some(string), Some(target_len)) = (string, target_len) {
+                if target_len > i32::MAX as i64 {
+                    return exec_err!(
+                        "rpad requested length {target_len} too large, maximum allowed length is {}",
+                        i32::MAX
+                    );
+                }
+
+                let target_len = if target_len < 0 {
+                    0
+                } else {
+                    target_len as usize
+                };
+                if target_len == 0 {
+                    builder.append_value("");
+                    continue;
+                }
+
+                if string.is_ascii() {
+                    // ASCII fast path: byte length == character length
+                    let str_len = string.len();
+                    if target_len < str_len {
+                        builder.append_value(&string[..target_len]);
+                    } else {
+                        builder.write_str(string)?;
+                        for _ in 0..(target_len - str_len) {
+                            builder.write_str(" ")?;
+                        }
+                        builder.append_value("");
+                    }
+                } else {
+                    graphemes_buf.clear();
+                    graphemes_buf.extend(string.graphemes(true));
+
+                    if target_len < graphemes_buf.len() {
+                        let end: usize =
+                            graphemes_buf[..target_len].iter().map(|g| g.len()).sum();
+                        builder.append_value(&string[..end]);
+                    } else {
+                        builder.write_str(string)?;
+                        for _ in 0..(target_len - graphemes_buf.len()) {
+                            builder.write_str(" ")?;
+                        }
+                        builder.append_value("");
+                    }
+                }
+            } else {
+                builder.append_null();
+            }
+        }
+
+        builder.finish()
+    };
+
+    Ok(Arc::new(array) as ArrayRef)
 }
 
 #[cfg(test)]

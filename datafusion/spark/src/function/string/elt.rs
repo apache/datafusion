@@ -150,11 +150,6 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 mod tests {
     use super::*;
     use arrow::array::Int64Array;
-    use datafusion_common::Result;
-
-    use arrow::array::{ArrayRef, StringArray};
-    use datafusion_common::DataFusionError;
-    use std::sync::Arc;
 
     fn run_elt_arrays(arrs: Vec<ArrayRef>) -> Result<Arc<StringArray>> {
         let arr = elt(&arrs)?;

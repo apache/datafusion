@@ -98,9 +98,9 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
-            "cte_quoted_reference.slt" => {
-                info!("Registering strict catalog provider for CTE tests");
-                register_strict_orders_catalog(test_ctx.session_ctx());
+            "cte.slt" => {
+                info!("Registering strict schema provider for CTE tests");
+                register_strict_schema_provider(test_ctx.session_ctx());
             }
             "information_schema_table_types.slt" => {
                 info!("Registering local temporary table");
@@ -178,10 +178,10 @@ impl TestContext {
 }
 
 // ==============================================================================
-// Strict Catalog / Schema Provider (sqllogictest-only)
+// Strict Schema Provider (sqllogictest-only)
 // ==============================================================================
 //
-// The goal of `cte_quoted_reference.slt` is to exercise end-to-end query planning
+// The goal of `StrictOrdersSchema` is to exercise end-to-end query planning
 // while detecting *unexpected* catalog lookups.
 //
 // Specifically, if DataFusion incorrectly treats a CTE reference (e.g. `"barbaz"`)
@@ -192,26 +192,6 @@ impl TestContext {
 // This makes the "extra provider lookup" bug observable in an end-to-end test,
 // rather than being silently ignored by default providers that return `Ok(None)`
 // for unknown tables.
-
-#[derive(Debug)]
-struct StrictOrdersCatalog {
-    schema: Arc<dyn SchemaProvider>,
-}
-
-impl CatalogProvider for StrictOrdersCatalog {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema_names(&self) -> Vec<String> {
-        vec!["public".to_string()]
-    }
-
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        (name == "public").then(|| Arc::clone(&self.schema))
-    }
-}
-
 #[derive(Debug)]
 struct StrictOrdersSchema {
     orders: Arc<dyn TableProvider>,
@@ -245,7 +225,7 @@ impl SchemaProvider for StrictOrdersSchema {
     }
 }
 
-fn register_strict_orders_catalog(ctx: &SessionContext) {
+fn register_strict_schema_provider(ctx: &SessionContext) {
     let schema = Arc::new(Schema::new(vec![Field::new(
         "order_id",
         DataType::Int32,
@@ -265,13 +245,14 @@ fn register_strict_orders_catalog(ctx: &SessionContext) {
         orders: Arc::new(orders),
     });
 
-    // Override the default "datafusion" catalog for this test file so that any
-    // unexpected lookup is caught immediately.
-    ctx.register_catalog(
-        "datafusion",
-        Arc::new(StrictOrdersCatalog {
-            schema: schema_provider,
-        }),
+    let previous = ctx
+        .catalog("datafusion")
+        .expect("default catalog should exist")
+        .register_schema("strict_schema", schema_provider)
+        .expect("strict schema registration should succeed");
+    assert!(
+        previous.is_none(),
+        "strict_schema unexpectedly already existed in datafusion catalog"
     );
 }
 

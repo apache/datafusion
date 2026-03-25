@@ -1764,7 +1764,7 @@ SELECT null, -null
 ----
 NULL NULL
 
-query error DataFusion error: Error during planning: Negation only supports numeric, interval and timestamp types
+query error type_coercion\ncaused by\nError during planning: Negation only supports numeric, interval and timestamp types
 SELECT -'100'
 
 query error DataFusion error: Error during planning: Unary operator '\+' only supports numeric, interval and timestamp types
@@ -2211,6 +2211,110 @@ query I
 select strpos('joséésoj', arrow_cast(null, 'Utf8'));
 ----
 NULL
+
+# strpos with array inputs
+statement ok
+CREATE TABLE strpos_table AS VALUES
+  ('alphabet', 'ph'),
+  ('hello world', 'world'),
+  ('hello world', 'xyz'),
+  ('hello world', ''),
+  ('josé', 'é'),
+  ('joséésoj', 'so'),
+  ('ДатаФусион', 'Фусион'),
+  ('数据融合📊🔥', '📊'),
+  ('数据融合📊🔥', '融合'),
+  (NULL, 'abc'),
+  ('hello', NULL),
+  ('ab', 'abcd');
+
+# Array haystack + array needle
+query I
+SELECT strpos(column1, column2) FROM strpos_table;
+----
+3
+7
+0
+1
+4
+6
+5
+5
+3
+NULL
+NULL
+0
+
+# Array haystack + scalar ASCII needle
+query I
+SELECT strpos(column1, 'o') FROM strpos_table;
+----
+0
+5
+5
+5
+2
+2
+0
+0
+0
+NULL
+5
+0
+
+# Array haystack + scalar Unicode needle
+query I
+SELECT strpos(column1, '📊') FROM strpos_table;
+----
+0
+0
+0
+0
+0
+0
+0
+5
+5
+NULL
+0
+0
+
+# Array haystack + scalar empty needle
+query I
+SELECT strpos(column1, '') FROM strpos_table;
+----
+1
+1
+1
+1
+1
+1
+1
+1
+1
+NULL
+1
+1
+
+# Array haystack + scalar null needle
+query I
+SELECT strpos(column1, arrow_cast(null, 'Utf8')) FROM strpos_table;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+statement ok
+DROP TABLE strpos_table;
 
 statement ok
 CREATE TABLE t1 (v1 int) AS VALUES (1), (2), (3);

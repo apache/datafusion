@@ -2361,7 +2361,6 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
 mod tests {
     use super::*;
     use arrow::datatypes::DataType::Utf8;
-    use datafusion_common::Result;
 
     #[test]
     fn test_format_string_nullability() -> Result<()> {

@@ -253,7 +253,6 @@ fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn return_type_is_not_used() {

@@ -743,12 +743,13 @@ impl SessionState {
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         let config_options = self.config_options();
-        let simplify_context = SimplifyContext::default()
+        let simplify_context = SimplifyContext::builder()
             .with_schema(Arc::new(df_schema.clone()))
             .with_config_options(Arc::clone(config_options))
             .with_query_execution_start_time(
                 self.execution_props().query_execution_start_time,
-            );
+            )
+            .build();
         let simplifier = ExprSimplifier::new(simplify_context);
         // apply type coercion here to ensure types match
         let mut expr = simplifier.coerce(expr, df_schema)?;
@@ -1835,11 +1836,12 @@ impl ContextProvider for SessionContextProvider<'_> {
             .get(name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))?;
-        let simplify_context = SimplifyContext::default()
+        let simplify_context = SimplifyContext::builder()
             .with_config_options(Arc::clone(self.state.config_options()))
             .with_query_execution_start_time(
                 self.state.execution_props().query_execution_start_time,
-            );
+            )
+            .build();
         let simplifier = ExprSimplifier::new(simplify_context);
         let schema = DFSchema::empty();
         let args = args

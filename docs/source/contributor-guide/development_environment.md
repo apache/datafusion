@@ -21,7 +21,38 @@
 
 This section describes how you can get started at developing DataFusion.
 
-## Windows setup
+## Quick Start
+
+For the fastest path to a working local environment, follow these steps
+from the repository root:
+
+```shell
+# 1. Install Rust (https://rust-lang.org/tools/install/) and verify the active toolchain with
+rustup show
+
+# 2. Install protoc 3.15+ (see details below)
+protoc --version
+
+# 3. Download test data used by examples and many tests
+git submodule update --init --recursive
+
+# 4. Build the workspace
+cargo build
+
+# 5. Verify that Rust integration tests can be run
+cargo test -p datafusion --test parquet_integration
+
+# 6. Verify that sqllogictests can run
+cargo test --profile=ci --test sqllogictests
+```
+
+Notes:
+
+- The pinned Rust version is defined in `rust-toolchain.toml`.
+- `protoc` is required to compile DataFusion from source.
+- Some tests and examples rely on git submodule data being present locally.
+
+## Windows Setup
 
 ```shell
 wget https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
@@ -34,7 +65,7 @@ cargo build
 
 DataFusion has support for [dev containers](https://containers.dev/) which may be used for
 developing DataFusion in an isolated environment either locally or remote if desired. Using dev containers for developing
-DataFusion is not a requirement by any means but is available for those where doing local development could be tricky
+DataFusion is not a requirement but is available where doing local development could be tricky
 such as with Windows and WSL2, those with older hardware, etc.
 
 For specific details on IDE support for dev containers see the documentation for [Visual Studio Code](https://code.visualstudio.com/docs/devcontainers/containers),
@@ -42,11 +73,11 @@ For specific details on IDE support for dev containers see the documentation for
 [Rust Rover](https://www.jetbrains.com/help/rust/connect-to-devcontainer.html), and
 [GitHub Codespaces](https://docs.github.com/en/codespaces/setting-up-your-project-for-codespaces/adding-a-dev-container-configuration/introduction-to-dev-containers).
 
-## Protoc Installation
+## `protoc` Installation
 
 Compiling DataFusion from sources requires an installed version of the protobuf compiler, `protoc`.
 
-On most platforms this can be installed from your system's package manager
+On most platforms this can be installed from your system's package manager. For example:
 
 ```
 # Ubuntu
@@ -71,7 +102,7 @@ libprotoc 3.15.0
 
 Alternatively a binary release can be downloaded from the [Release Page](https://github.com/protocolbuffers/protobuf/releases) or [built from source](https://github.com/protocolbuffers/protobuf/blob/main/src/README.md).
 
-## Bootstrap environment
+## Bootstrap Environment
 
 DataFusion is written in Rust and it uses a standard rust toolkit:
 

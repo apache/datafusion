@@ -515,10 +515,6 @@ mod tests {
 
     #[test]
     fn test_abs_nullability() {
-        use arrow::datatypes::{DataType, Field};
-        use datafusion_expr::ReturnFieldArgs;
-        use std::sync::Arc;
-
         let abs = SparkAbs::new();
 
         // --- non-nullable Int32 input ---

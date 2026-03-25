@@ -651,14 +651,12 @@ impl PruningStatistics for RowGroupPruningStatistics<'_> {
 #[cfg(test)]
 mod tests {
     use std::ops::Rem;
-    use std::sync::Arc;
 
     use super::*;
     use crate::reader::ParquetFileReader;
 
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::Result;
     use datafusion_expr::{Expr, cast, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
