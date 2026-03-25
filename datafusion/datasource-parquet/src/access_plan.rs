@@ -396,7 +396,6 @@ impl PreparedAccessPlan {
 
         Ok(self)
     }
-
 }
 
 #[cfg(test)]

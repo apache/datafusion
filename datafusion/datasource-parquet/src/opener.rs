@@ -736,7 +736,8 @@ impl RowGroupsPreparedParquetOpen {
         //
         // Row filter is used for late materialization in parquet decoding, see
         // `row_filter` for details.
-        if let Some(predicate) = pushdown_filters.then_some(predicate.as_ref()).flatten() {
+        if let Some(predicate) = pushdown_filters.then_some(predicate.as_ref()).flatten()
+        {
             let row_filter = row_filter::build_row_filter(
                 predicate,
                 &physical_file_schema,
@@ -776,7 +777,8 @@ impl RowGroupsPreparedParquetOpen {
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
         let indices = projection.column_indices();
-        let mask = ProjectionMask::roots(reader_metadata.parquet_schema(), indices.clone());
+        let mask =
+            ProjectionMask::roots(reader_metadata.parquet_schema(), indices.clone());
 
         let decoder = builder
             .with_projection(mask)
