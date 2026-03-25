@@ -37,12 +37,11 @@ name = "datafusion_proto_common"
 [features]
 default = []
 json = ["serde", "pbjson"]
-parquet = ["datafusion-common/parquet", "dep:parquet"]
+parquet = ["datafusion-common/parquet"]
 
 [dependencies]
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
-parquet = { workspace = true, optional = true }
 pbjson = { workspace = true, optional = true }
 prost = { workspace = true }
 serde = { version = "1.0", optional = true }
