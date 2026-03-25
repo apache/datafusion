@@ -38,9 +38,9 @@ use crate::joins::utils::JoinFilter;
 /// Metadata for tracking filter results during deferred filtering
 ///
 /// When a join filter is present and we need to ensure each input row produces
-/// at least one output (outer joins) or exactly one output (semi joins), we can't
-/// filter immediately. Instead, we accumulate all joined rows with metadata,
-/// then post-process to determine which rows to output.
+/// at least one output (outer/mark joins), we can't filter immediately. Instead,
+/// we accumulate all joined rows with metadata, then post-process to determine
+/// which rows to output.
 #[derive(Debug)]
 pub struct FilterMetadata {
     /// Did each output row pass the join filter?
@@ -149,7 +149,6 @@ impl Default for FilterMetadata {
 /// Deferred filtering is required when:
 /// - A filter exists AND
 /// - The join type requires ensuring each input row produces at least one output
-///   (or exactly one for semi joins)
 pub fn needs_deferred_filtering(
     filter: &Option<JoinFilter>,
     join_type: JoinType,

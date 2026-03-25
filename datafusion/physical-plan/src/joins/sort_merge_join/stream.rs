@@ -496,7 +496,7 @@ impl JoinedRecordBatches {
     /// No deferred filtering needed. Either every join match is output (Inner),
     /// or null-joined rows are handled separately. No need to track which input
     /// row produced which output row.
-    fn push_batch_without_metadata(&mut self, batch: RecordBatch, _join_type: JoinType) {
+    fn push_batch_without_metadata(&mut self, batch: RecordBatch) {
         self.joined_batches
             .push_batch(batch)
             .expect("Failed to push batch to BatchCoalescer");
@@ -751,6 +751,19 @@ impl SortMergeJoinStream {
             Arc::clone(&buffered_schema),
         )
         .with_compression_type(spill_compression);
+        debug_assert!(
+            matches!(
+                join_type,
+                JoinType::Inner
+                    | JoinType::Left
+                    | JoinType::Right
+                    | JoinType::Full
+                    | JoinType::LeftMark
+                    | JoinType::RightMark
+            ),
+            "SortMergeJoinStream does not handle {join_type:?}; \
+             semi/anti joins use SemiAntiSortMergeJoinStream"
+        );
         Ok(Self {
             state: SortMergeJoinState::Init,
             sort_options,
@@ -1072,6 +1085,10 @@ impl SortMergeJoinStream {
                     if self.filter.is_some() {
                         join_buffered = join_streamed;
                     }
+                    debug_assert!(
+                        self.filter.is_none() || join_buffered == join_streamed,
+                        "Mark join with filter: join_buffered and join_streamed must be equal"
+                    );
                 }
                 if matches!(
                     self.join_type,
@@ -1350,16 +1367,7 @@ impl SortMergeJoinStream {
                     // Push the filtered batch which contains rows passing join filter to the output
                     // For outer/mark joins with deferred filtering, push the unfiltered batch with metadata
                     // For INNER joins, filter immediately and push without metadata
-                    let needs_deferred_filtering = matches!(
-                        self.join_type,
-                        JoinType::Left
-                            | JoinType::Right
-                            | JoinType::LeftMark
-                            | JoinType::RightMark
-                            | JoinType::Full
-                    );
-
-                    if needs_deferred_filtering {
+                    if needs_deferred_filtering(&self.filter, self.join_type) {
                         // Outer/mark joins: push unfiltered batch with metadata for deferred filtering
                         let mask_to_use = if self.join_type != JoinType::Full {
                             &mask
@@ -1378,7 +1386,7 @@ impl SortMergeJoinStream {
                         // INNER joins: filter immediately and push without metadata
                         let filtered_batch = filter_record_batch(&output_batch, &mask)?;
                         self.joined_record_batches
-                            .push_batch_without_metadata(filtered_batch, self.join_type);
+                            .push_batch_without_metadata(filtered_batch);
                     }
 
                     // For outer joins, we need to push the null joined rows to the output if
@@ -1411,7 +1419,7 @@ impl SortMergeJoinStream {
                 }
             } else {
                 self.joined_record_batches
-                    .push_batch_without_metadata(output_batch, self.join_type);
+                    .push_batch_without_metadata(output_batch);
             }
         }
 
