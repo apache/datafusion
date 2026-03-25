@@ -311,6 +311,8 @@ async fn execute_with_predicate(
             values.push(column.value(i).to_string());
         }
     }
+    // TopK values may be in different orders, so sort before compare
+    values.sort_unstable();
     values
 }
 

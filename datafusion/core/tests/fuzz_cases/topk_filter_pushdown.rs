@@ -216,6 +216,7 @@ struct RunQueryResult {
     query: String,
     result: Vec<RecordBatch>,
     expected: Vec<RecordBatch>,
+    normalized_ordering_columns: Option<Vec<String>>,
 }
 
 impl RunQueryResult {
@@ -228,8 +229,65 @@ impl RunQueryResult {
     }
 
     fn is_ok(&self) -> bool {
-        self.expected_formatted() == self.result_formatted()
+        if let Some(columns) = &self.normalized_ordering_columns {
+            result_ordering_keys(columns, &self.expected)
+                == result_ordering_keys(columns, &self.result)
+        } else {
+            self.expected_formatted() == self.result_formatted()
+        }
     }
+}
+
+/// Compare only the ORDER BY key tuples for top-k fuzz tests.
+///
+/// These queries intentionally omit a total tie-breaker. When multiple rows
+/// share the same ORDER BY tuple, SQL permits any tied rows to appear in the
+/// top-k result. Dynamic-filter pushdown should therefore preserve the ordered
+/// key tuples and row count, but it does not need to return the exact same full
+/// rows for ties.
+///
+/// Example:
+/// for `SELECT * FROM test_table ORDER BY department ASC LIMIT 10`, the result
+/// is only guaranteed to be ordered by `department`. Two valid top-k results
+/// may therefore contain different rows as long as their `department` key
+/// tuples are identical.
+fn result_ordering_keys(columns: &[String], batches: &[RecordBatch]) -> Vec<Vec<String>> {
+    let formatted = pretty_format_batches(batches).unwrap().to_string();
+    let lines = formatted
+        .lines()
+        .filter(|line| line.starts_with('|'))
+        .collect::<Vec<_>>();
+
+    if lines.len() <= 2 {
+        return vec![];
+    }
+
+    let header = lines[0]
+        .trim_matches('|')
+        .split('|')
+        .map(|value| value.trim().to_string())
+        .collect::<Vec<_>>();
+
+    let indexes = columns
+        .iter()
+        .map(|column| {
+            header.iter().position(|h| h == column).unwrap_or_else(|| {
+                panic!("ORDER BY column `{column}` not found in result")
+            })
+        })
+        .collect::<Vec<_>>();
+
+    lines[1..lines.len() - 1]
+        .iter()
+        .map(|line| {
+            let values = line
+                .trim_matches('|')
+                .split('|')
+                .map(|value| value.trim().to_string())
+                .collect::<Vec<_>>();
+            indexes.iter().map(|idx| values[*idx].clone()).collect()
+        })
+        .collect()
 }
 
 /// Iterate over each line in the plan and check that one of them has `DataSourceExec` and `DynamicFilter` in the same line.
@@ -244,6 +302,7 @@ fn has_dynamic_filter_expr_pushdown(plan: &str) -> bool {
 
 async fn run_query(
     query: String,
+    normalized_ordering_columns: Option<Vec<String>>,
     cfg: SessionConfig,
     dataset: TestDataSet,
 ) -> RunQueryResult {
@@ -270,11 +329,13 @@ async fn run_query(
         query: query.to_string(),
         result: result.results,
         expected: expected_result.results,
+        normalized_ordering_columns,
     }
 }
 
 struct TestCase {
     query: String,
+    normalized_ordering_columns: Option<Vec<String>>,
     cfg: SessionConfig,
     dataset: TestDataSet,
 }
@@ -317,18 +378,24 @@ async fn test_fuzz_topk_filter_pushdown() {
                     .map(|col| orders.get(**col).unwrap())
                     .multi_cartesian_product()
                 {
+                    let ordering_column_names = order_columns
+                        .iter()
+                        .map(|column| (**column).to_string())
+                        .collect::<Vec<_>>();
                     let query = format!(
                         "SELECT * FROM test_table ORDER BY {} LIMIT {}",
                         orderings.into_iter().join(", "),
                         limit
                     );
-                    queries.push(query);
+                    let normalized_ordering_columns = (ordering_column_names.len() < 3)
+                        .then_some(ordering_column_names);
+                    queries.push((query, normalized_ordering_columns));
                 }
             }
         }
     }
 
-    queries.sort_unstable();
+    queries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     println!(
         "Generated {} queries in {:?}",
         queries.len(),
@@ -341,7 +408,7 @@ async fn test_fuzz_topk_filter_pushdown() {
 
     let mut test_cases = vec![];
     for enable_filter_pushdown in [true, false] {
-        for query in &queries {
+        for (query, normalized_ordering_columns) in &queries {
             for dataset in &datasets {
                 let mut cfg = SessionConfig::new();
                 cfg = cfg.set_bool(
@@ -350,6 +417,7 @@ async fn test_fuzz_topk_filter_pushdown() {
                 );
                 test_cases.push(TestCase {
                     query: query.to_string(),
+                    normalized_ordering_columns: normalized_ordering_columns.clone(),
                     cfg,
                     dataset: dataset.clone(),
                 });
@@ -360,7 +428,12 @@ async fn test_fuzz_topk_filter_pushdown() {
     let start = datafusion_common::instant::Instant::now();
     let mut join_set = JoinSet::new();
     for tc in test_cases {
-        join_set.spawn(run_query(tc.query, tc.cfg, tc.dataset));
+        join_set.spawn(run_query(
+            tc.query,
+            tc.normalized_ordering_columns,
+            tc.cfg,
+            tc.dataset,
+        ));
     }
     let mut results = join_set.join_all().await;
     results.sort_unstable_by(|a, b| a.query.cmp(&b.query));
