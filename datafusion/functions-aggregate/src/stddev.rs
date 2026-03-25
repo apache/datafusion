@@ -369,7 +369,6 @@ mod tests {
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
-    use std::sync::Arc;
 
     #[test]
     fn stddev_f64_merge_1() -> Result<()> {

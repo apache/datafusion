@@ -2147,7 +2147,6 @@ mod tests {
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
-    use arrow_schema::Schema;
     use datafusion_common::hash_utils::create_hashes;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
@@ -2157,7 +2156,6 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};

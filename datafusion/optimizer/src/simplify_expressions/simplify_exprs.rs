@@ -98,10 +98,11 @@ impl SimplifyExpressions {
             Arc::new(DFSchema::empty())
         };
 
-        let info = SimplifyContext::default()
+        let info = SimplifyContext::builder()
             .with_schema(schema)
             .with_config_options(config.options())
-            .with_query_execution_start_time(config.query_execution_start_time());
+            .with_query_execution_start_time(config.query_execution_start_time())
+            .build();
 
         // Inputs have already been rewritten (due to bottom-up traversal handled by Optimizer)
         // Just need to rewrite our own expressions

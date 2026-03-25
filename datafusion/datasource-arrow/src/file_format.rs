@@ -559,7 +559,7 @@ mod tests {
         AggregateUDF, Expr, LambdaUDF, LogicalPlan, ScalarUDF, WindowUDF,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
+    use object_store::{chunked::ChunkedStore, memory::InMemory};
 
     struct MockSession {
         config: SessionConfig,

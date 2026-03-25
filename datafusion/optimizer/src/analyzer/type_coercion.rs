@@ -45,9 +45,11 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
 use datafusion_expr::type_coercion::functions::value_fields_with_lambda_udf;
 use datafusion_expr::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
-use datafusion_expr::type_coercion::is_datetime;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
+};
+use datafusion_expr::type_coercion::{
+    is_datetime, is_interval, is_signed_numeric, is_timestamp,
 };
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
@@ -561,6 +563,20 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::IsNotUnknown(expr) => Ok(Transformed::yes(is_not_unknown(
                 get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
+            Expr::Negative(expr) => {
+                let data_type = expr.get_type(self.schema)?;
+                if data_type.is_null()
+                    || is_signed_numeric(&data_type)
+                    || is_interval(&data_type)
+                    || is_timestamp(&data_type)
+                {
+                    Ok(Transformed::no(Expr::Negative(expr)))
+                } else {
+                    plan_err!(
+                        "Negation only supports numeric, interval and timestamp types"
+                    )
+                }
+            }
             Expr::Like(Like {
                 negated,
                 expr,
@@ -780,7 +796,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::SimilarTo(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
-            | Expr::Negative(_)
             | Expr::Cast(_)
             | Expr::TryCast(_)
             | Expr::Wildcard { .. }
@@ -1395,6 +1410,17 @@ mod test {
         Projection: a < CAST(UInt32(2) AS Float64)
           EmptyRelation: rows=0
         "
+        )
+    }
+
+    #[test]
+    fn negative_expr_wrapped_by_is_null_errors() -> Result<()> {
+        let predicate = Expr::IsNull(Box::new(Expr::Negative(Box::new(lit("a")))));
+        let plan = LogicalPlan::Filter(Filter::try_new(predicate, empty())?);
+
+        assert_type_coercion_error(
+            plan,
+            "Negation only supports numeric, interval and timestamp types",
         )
     }
 

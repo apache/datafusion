@@ -557,9 +557,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_with_invalid_session() {
-        use async_trait::async_trait;
-        use datafusion_catalog::Session;
-        use datafusion_common::Result;
         use datafusion_common::config::TableOptions;
         use datafusion_execution::TaskContext;
         use datafusion_execution::config::SessionConfig;
@@ -567,7 +564,6 @@ mod tests {
         use datafusion_physical_plan::ExecutionPlan;
         use std::any::Any;
         use std::collections::HashMap;
-        use std::sync::Arc;
 
         // A mock Session that is NOT SessionState
         #[derive(Debug)]

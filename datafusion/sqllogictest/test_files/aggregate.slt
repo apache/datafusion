@@ -8778,9 +8778,12 @@ ORDER BY g;
 2 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
 3 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
 
-statement ok
-DROP TABLE stream_test;
+# Config reset
 
-# Restore default target partitions
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE stream_test;

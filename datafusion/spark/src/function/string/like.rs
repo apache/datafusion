@@ -94,9 +94,8 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, BooleanArray};
-    use arrow::datatypes::{DataType::Boolean, Field};
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarUDFImpl};
+    use arrow::datatypes::DataType::Boolean;
+    use datafusion_common::ScalarValue;
 
     macro_rules! test_like_string_invoke {
         ($INPUT1:expr, $INPUT2:expr, $EXPECTED:expr) => {

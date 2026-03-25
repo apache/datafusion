@@ -175,9 +175,10 @@ fn simplify_demo() -> Result<()> {
     // the ExecutionProps carries information needed to simplify
     // expressions, such as the current time (to evaluate `now()`
     // correctly)
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(schema)
-        .with_current_time();
+        .with_current_time()
+        .build();
     let simplifier = ExprSimplifier::new(context);
 
     // And then call the simplify_expr function:
@@ -192,9 +193,10 @@ fn simplify_demo() -> Result<()> {
 
     // here are some other examples of what DataFusion is capable of
     let schema = Schema::new(vec![make_field("i", DataType::Int64)]).to_dfschema_ref()?;
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(Arc::clone(&schema))
-        .with_current_time();
+        .with_current_time()
+        .build();
     let simplifier = ExprSimplifier::new(context);
 
     // basic arithmetic simplification
@@ -554,9 +556,10 @@ fn type_coercion_demo() -> Result<()> {
     assert!(physical_expr.evaluate(&batch).is_ok());
 
     // 2. Type coercion with `ExprSimplifier::coerce`.
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(Arc::new(df_schema.clone()))
-        .with_current_time();
+        .with_current_time()
+        .build();
     let simplifier = ExprSimplifier::new(context);
     let coerced_expr = simplifier.coerce(expr.clone(), &df_schema)?;
     let physical_expr = datafusion::physical_expr::create_physical_expr(

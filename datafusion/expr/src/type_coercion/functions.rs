@@ -1022,7 +1022,7 @@ mod tests {
     use crate::Volatility;
 
     use super::*;
-    use arrow::datatypes::{Field, IntervalUnit};
+    use arrow::datatypes::IntervalUnit;
     use datafusion_common::{
         assert_contains,
         types::{logical_binary, logical_int64},
