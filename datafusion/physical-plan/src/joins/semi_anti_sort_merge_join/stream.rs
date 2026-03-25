@@ -437,19 +437,19 @@ impl SemiAntiSortMergeJoinStream {
                 None => return Poll::Ready(Ok(false)),
                 Some(Err(e)) => return Poll::Ready(Err(e)),
                 Some(Ok(batch)) => {
+                    let batch_num_rows = batch.num_rows();
                     self.input_batches.add(1);
-                    self.input_rows.add(batch.num_rows());
-                    if batch.num_rows() == 0 {
+                    self.input_rows.add(batch_num_rows);
+                    if batch_num_rows == 0 {
                         continue;
                     }
                     let keys = evaluate_join_keys(&batch, &self.on_outer)?;
-                    let num_rows = batch.num_rows();
                     self.outer_batch = Some(batch);
                     self.outer_offset = 0;
                     self.outer_key_arrays = keys;
                     self.batch_emitted = false;
-                    self.matched = BooleanBufferBuilder::new(num_rows);
-                    self.matched.append_n(num_rows, false);
+                    self.matched = BooleanBufferBuilder::new(batch_num_rows);
+                    self.matched.append_n(batch_num_rows, false);
                     return Poll::Ready(Ok(true));
                 }
             }
@@ -463,9 +463,10 @@ impl SemiAntiSortMergeJoinStream {
                 None => return Poll::Ready(Ok(false)),
                 Some(Err(e)) => return Poll::Ready(Err(e)),
                 Some(Ok(batch)) => {
+                    let batch_num_rows = batch.num_rows();
                     self.input_batches.add(1);
-                    self.input_rows.add(batch.num_rows());
-                    if batch.num_rows() == 0 {
+                    self.input_rows.add(batch_num_rows);
+                    if batch_num_rows == 0 {
                         continue;
                     }
                     let keys = evaluate_join_keys(&batch, &self.on_inner)?;
@@ -1107,8 +1108,14 @@ fn eval_filter_for_inner_slice(
     matched: &mut BooleanBufferBuilder,
     outer_offset: usize,
     outer_group_len: usize,
+    // Passed in to avoid recounting bits we just counted at the call site.
     mut matched_count: usize,
 ) -> Result<usize> {
+    debug_assert_eq!(
+        matched_count,
+        UnalignedBitChunk::new(matched.as_slice(), outer_offset, outer_group_len)
+            .count_ones()
+    );
     for inner_row in 0..inner_slice.num_rows() {
         if matched_count == outer_group_len {
             break;
