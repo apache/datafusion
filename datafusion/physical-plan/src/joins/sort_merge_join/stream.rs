@@ -45,8 +45,8 @@ use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
 use arrow::compute::{
-    self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, is_not_null,
-    take, take_arrays,
+    self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, take,
+    take_arrays,
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::ipc::reader::StreamReader;
@@ -444,7 +444,7 @@ impl JoinedRecordBatches {
             .expect("Failed to push batch to BatchCoalescer");
     }
 
-    /// Pushes a batch with filter metadata (filtered outer/mark joins)
+    /// Pushes a batch with filter metadata (filtered outer joins)
     ///
     /// Deferred filtering: An input row may join with multiple buffered rows, but we
     /// don't know yet if all matches failed the filter. We track metadata so
@@ -465,12 +465,10 @@ impl JoinedRecordBatches {
             matches!(
                 join_type,
                 JoinType::Left
-                    | JoinType::LeftMark
                     | JoinType::Right
-                    | JoinType::RightMark
                     | JoinType::Full
             ),
-            "push_batch_with_filter_metadata should only be called for outer/mark joins that need deferred filtering"
+            "push_batch_with_filter_metadata should only be called for outer joins that need deferred filtering"
         );
 
         debug_assert_eq!(
@@ -758,11 +756,9 @@ impl SortMergeJoinStream {
                     | JoinType::Left
                     | JoinType::Right
                     | JoinType::Full
-                    | JoinType::LeftMark
-                    | JoinType::RightMark
             ),
             "SortMergeJoinStream does not handle {join_type:?}; \
-             semi/anti joins use SemiAntiSortMergeJoinStream"
+             semi/anti/mark joins use SemiAntiMarkSortMergeJoinStream"
         );
         Ok(Self {
             state: SortMergeJoinState::Init,
@@ -1056,8 +1052,6 @@ impl SortMergeJoinStream {
         let mut join_streamed = false;
         // Whether to join buffered rows
         let mut join_buffered = false;
-        // For Mark join we store a dummy id to indicate the row has a match
-        let mut mark_row_as_match = false;
 
         // determine whether we need to join streamed/buffered rows
         match self.current_ordering {
@@ -1067,39 +1061,13 @@ impl SortMergeJoinStream {
                     JoinType::Left
                         | JoinType::Right
                         | JoinType::Full
-                        | JoinType::LeftMark
-                        | JoinType::RightMark
                 ) {
                     join_streamed = !self.streamed_joined;
                 }
             }
             Ordering::Equal => {
-                if matches!(
-                    self.join_type,
-                    JoinType::LeftMark | JoinType::RightMark
-                ) {
-                    mark_row_as_match = true;
-                    join_streamed = !self.streamed_joined;
-                    // When a filter is present, we need buffered columns for
-                    // filter evaluation and deferred filtering handles dedup
-                    if self.filter.is_some() {
-                        join_buffered = join_streamed;
-                    }
-                    debug_assert!(
-                        self.filter.is_none() || join_buffered == join_streamed,
-                        "Mark join with filter: join_buffered and join_streamed must be equal"
-                    );
-                }
-                if matches!(
-                    self.join_type,
-                    JoinType::Inner
-                        | JoinType::Left
-                        | JoinType::Right
-                        | JoinType::Full
-                ) {
-                    join_streamed = true;
-                    join_buffered = true;
-                };
+                join_streamed = true;
+                join_buffered = true;
             }
             Ordering::Greater => {
                 if self.join_type == JoinType::Full {
@@ -1147,12 +1115,9 @@ impl SortMergeJoinStream {
             } else {
                 Some(self.buffered_data.scanning_batch_idx)
             };
-            // For Mark join we store a dummy id to indicate the row has a match
-            let scanning_idx = mark_row_as_match.then_some(0);
-
             self.streamed_batch.append_output_pair(
                 scanning_batch_idx,
-                scanning_idx,
+                None,
                 self.batch_size,
             );
             self.buffered_data.scanning_finish();
@@ -1278,9 +1243,7 @@ impl SortMergeJoinStream {
             // The row indices of joined buffered batch
             let right_indices: UInt64Array = chunk.buffered_indices.finish();
             let mut right_columns =
-                if matches!(self.join_type, JoinType::LeftMark | JoinType::RightMark) {
-                    vec![Arc::new(is_not_null(&right_indices)?) as ArrayRef]
-                } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
+                if let Some(buffered_idx) = chunk.buffered_batch_idx {
                     fetch_right_columns_by_idxs(
                         &self.buffered_data,
                         buffered_idx,
@@ -1290,7 +1253,6 @@ impl SortMergeJoinStream {
                     // If buffered batch none, meaning it is null joined batch.
                     // We need to create null arrays for buffered columns to join with streamed rows.
                     create_unmatched_columns(
-                        self.join_type,
                         &self.buffered_schema,
                         right_indices.len(),
                     )
@@ -1298,27 +1260,8 @@ impl SortMergeJoinStream {
 
             // Prepare the columns we apply join filter on later.
             // Only for joined rows between streamed and buffered.
-            let filter_columns = if let Some(buffered_batch_idx) =
-                chunk.buffered_batch_idx
-            {
-                if matches!(
-                    self.join_type,
-                    JoinType::LeftMark | JoinType::RightMark
-                ) {
-                    // Mark joins don't include buffered columns in output,
-                    // but need them for filter evaluation
-                    let right_cols = fetch_right_columns_by_idxs(
-                        &self.buffered_data,
-                        buffered_batch_idx,
-                        &right_indices,
-                    )?;
-
-                    if matches!(self.join_type, JoinType::LeftMark) {
-                        get_filter_columns(&self.filter, &left_columns, &right_cols)
-                    } else {
-                        get_filter_columns(&self.filter, &right_cols, &left_columns)
-                    }
-                } else if self.join_type == JoinType::Right {
+            let filter_columns = if chunk.buffered_batch_idx.is_some() {
+                if self.join_type == JoinType::Right {
                     get_filter_columns(&self.filter, &right_columns, &left_columns)
                 } else {
                     get_filter_columns(&self.filter, &left_columns, &right_columns)
@@ -1365,10 +1308,10 @@ impl SortMergeJoinStream {
                     };
 
                     // Push the filtered batch which contains rows passing join filter to the output
-                    // For outer/mark joins with deferred filtering, push the unfiltered batch with metadata
+                    // For outer joins with deferred filtering, push the unfiltered batch with metadata
                     // For INNER joins, filter immediately and push without metadata
                     if needs_deferred_filtering(&self.filter, self.join_type) {
-                        // Outer/mark joins: push unfiltered batch with metadata for deferred filtering
+                        // Outer joins: push unfiltered batch with metadata for deferred filtering
                         let mask_to_use = if self.join_type != JoinType::Full {
                             &mask
                         } else {
@@ -1524,19 +1467,14 @@ impl SortMergeJoinStream {
 }
 
 fn create_unmatched_columns(
-    join_type: JoinType,
     schema: &SchemaRef,
     size: usize,
 ) -> Vec<ArrayRef> {
-    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
-        vec![Arc::new(BooleanArray::from(vec![false; size])) as ArrayRef]
-    } else {
-        schema
-            .fields()
-            .iter()
-            .map(|f| new_null_array(f.data_type(), size))
-            .collect::<Vec<_>>()
-    }
+    schema
+        .fields()
+        .iter()
+        .map(|f| new_null_array(f.data_type(), size))
+        .collect::<Vec<_>>()
 }
 
 fn produce_buffered_null_batch(

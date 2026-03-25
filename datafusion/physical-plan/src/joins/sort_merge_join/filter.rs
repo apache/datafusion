@@ -19,7 +19,7 @@
 //!
 //! This module encapsulates the complexity of join filter evaluation, including:
 //! - Immediate filtering for INNER joins
-//! - Deferred filtering for outer/mark joins
+//! - Deferred filtering for outer joins
 //! - Metadata tracking for grouping output rows by input row
 //! - Correcting filter masks to handle multiple matches per input row
 
@@ -38,7 +38,7 @@ use crate::joins::utils::JoinFilter;
 /// Metadata for tracking filter results during deferred filtering
 ///
 /// When a join filter is present and we need to ensure each input row produces
-/// at least one output (outer/mark joins), we can't filter immediately. Instead,
+/// at least one output (outer joins), we can't filter immediately. Instead,
 /// we accumulate all joined rows with metadata, then post-process to determine
 /// which rows to output.
 #[derive(Debug)]
@@ -156,11 +156,7 @@ pub fn needs_deferred_filtering(
     filter.is_some()
         && matches!(
             join_type,
-            JoinType::Left
-                | JoinType::LeftMark
-                | JoinType::Right
-                | JoinType::RightMark
-                | JoinType::Full
+            JoinType::Left | JoinType::Right | JoinType::Full
         )
 }
 
@@ -248,7 +244,6 @@ fn last_index_for_row(
 /// This function groups them by input row and applies join-type-specific logic:
 ///
 /// - **Outer joins**: Keep first matching row, convert rest to nulls, add null-joined for unmatched
-/// - **Mark joins**: Like outer but only keep first match, mark with boolean
 ///
 /// # Arguments
 /// * `join_type` - The type of join being performed
@@ -299,35 +294,13 @@ pub fn get_corrected_filter_mask(
             corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
-        JoinType::LeftMark | JoinType::RightMark => {
-            // For mark joins: Like outer but only keep first match, mark with boolean
-            for i in 0..row_indices_length {
-                let last_index =
-                    last_index_for_row(i, row_indices, batch_ids, row_indices_length);
-                if filter_mask.value(i) && !seen_true {
-                    seen_true = true;
-                    corrected_mask.append_value(true);
-                } else if seen_true || !filter_mask.value(i) && !last_index {
-                    corrected_mask.append_null(); // to be ignored and not set to output
-                } else {
-                    corrected_mask.append_value(false); // to be converted to null joined row
-                }
-
-                if last_index {
-                    seen_true = false;
-                }
-            }
-
-            // Generate null joined rows for records which have no matching join key
-            corrected_mask.append_n(expected_size - corrected_mask.len(), false);
-            Some(corrected_mask.finish())
-        }
-        JoinType::LeftSemi | JoinType::RightSemi
+        JoinType::LeftMark | JoinType::RightMark
+        | JoinType::LeftSemi | JoinType::RightSemi
         | JoinType::LeftAnti | JoinType::RightAnti => {
-            // Semi/anti joins are handled by SemiAntiSortMergeJoinStream
+            // Semi/anti/mark joins are handled by SemiAntiMarkSortMergeJoinStream
             unreachable!(
-                "Semi/anti joins should not reach get_corrected_filter_mask; \
-                 they are handled by SemiAntiSortMergeJoinStream"
+                "Semi/anti/mark joins should not reach get_corrected_filter_mask; \
+                 they are handled by SemiAntiMarkSortMergeJoinStream"
             )
         }
         JoinType::Full => {
@@ -378,7 +351,7 @@ pub fn filter_record_batch_by_join_type(
     let filtered_record_batch = filter_record_batch(record_batch, corrected_mask)?;
 
     match join_type {
-        JoinType::Left | JoinType::LeftMark => {
+        JoinType::Left => {
             // For left joins, add null-joined rows where mask is false
             let null_mask = compute::not(corrected_mask)?;
             let null_joined_batch = filter_record_batch(record_batch, &null_mask)?;
@@ -402,10 +375,11 @@ pub fn filter_record_batch_by_join_type(
             )?)
         }
         JoinType::LeftSemi | JoinType::LeftAnti
-        | JoinType::RightSemi | JoinType::RightAnti => unreachable!(
-            "Semi/anti joins are handled by SemiAntiSortMergeJoinStream"
+        | JoinType::RightSemi | JoinType::RightAnti
+        | JoinType::LeftMark | JoinType::RightMark => unreachable!(
+            "Semi/anti/mark joins are handled by SemiAntiMarkSortMergeJoinStream"
         ),
-        JoinType::Right | JoinType::RightMark => {
+        JoinType::Right => {
             // For right joins, add null-joined rows where mask is false
             let null_mask = compute::not(corrected_mask)?;
             let null_joined_batch = filter_record_batch(record_batch, &null_mask)?;
@@ -465,33 +439,15 @@ fn create_null_joined_batch(
     batch: &RecordBatch,
     null_schema: &SchemaRef,
     join_side: JoinSide,
-    join_type: JoinType,
+    _join_type: JoinType,
     output_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
     let num_rows = batch.num_rows();
 
     // The input batch is a fully-joined batch [left_cols..., right_cols...]
-    // We need to extract the appropriate side and replace the other with nulls (or mark column)
-    let columns = match (join_side, join_type) {
-        (JoinSide::Left, JoinType::LeftMark) => {
-            // For LEFT mark: output is [left_cols..., mark_col]
-            // Batch is [left_cols..., right_cols...], extract left from beginning
-            // Number of left columns = output columns - 1 (mark column)
-            let left_col_count = output_schema.fields().len() - 1;
-            let mut result: Vec<ArrayRef> = batch.columns()[..left_col_count].to_vec();
-            result.push(Arc::new(BooleanArray::from(vec![false; num_rows])) as ArrayRef);
-            result
-        }
-        (JoinSide::Right, JoinType::RightMark) => {
-            // For RIGHT mark: output is [right_cols..., mark_col]
-            // For RIGHT joins, batch is [right_cols..., left_cols...] (right comes first!)
-            // Extract right columns from the beginning
-            let right_col_count = output_schema.fields().len() - 1; // -1 for mark column
-            let mut result: Vec<ArrayRef> = batch.columns()[..right_col_count].to_vec();
-            result.push(Arc::new(BooleanArray::from(vec![false; num_rows])) as ArrayRef);
-            result
-        }
-        (JoinSide::Left, _) => {
+    // We need to extract the appropriate side and replace the other with nulls
+    let columns = match join_side {
+        JoinSide::Left => {
             // For LEFT join: output is [left_cols..., right_cols...]
             // Extract left columns, then add null right columns
             let null_columns: Vec<ArrayRef> = null_schema
@@ -504,7 +460,7 @@ fn create_null_joined_batch(
             result.extend(null_columns);
             result
         }
-        (JoinSide::Right, _) => {
+        JoinSide::Right => {
             // For RIGHT join: batch is [left_cols..., right_cols...] (same as schema)
             // We want: [null_left..., actual_right...]
             // Extract left columns from beginning, replace with nulls, keep right columns
@@ -519,7 +475,7 @@ fn create_null_joined_batch(
             result.extend_from_slice(&batch.columns()[left_col_count..]);
             result
         }
-        (JoinSide::None, _) => {
+        JoinSide::None => {
             // This should not happen in normal join operations
             unreachable!(
                 "JoinSide::None should not be used in null-joined batch creation"

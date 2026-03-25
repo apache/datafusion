@@ -1278,7 +1278,7 @@ async fn join_right_anti_output_two_batches() -> Result<()> {
 
     let (_, batches) =
         join_collect_batch_size_equals_two(left, right, on, LeftAnti).await?;
-    // SemiAntiSortMergeJoinStream uses a coalescer, so batch boundaries differ
+    // SemiAntiMarkSortMergeJoinStream uses a coalescer, so batch boundaries differ
     // from the old stream. Only assert data correctness.
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 3);
@@ -1567,7 +1567,7 @@ async fn join_right_semi_output_two_batches() -> Result<()> {
         "| 2  | 5  | 8  |",
         "+----+----+----+",
     ];
-    // SemiAntiSortMergeJoinStream uses a coalescer, so batch boundaries differ
+    // SemiAntiMarkSortMergeJoinStream uses a coalescer, so batch boundaries differ
     // from the old stream. Only assert data correctness.
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 3);
@@ -2061,9 +2061,9 @@ async fn overallocation_single_batch_no_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = vec![
-        // Semi/anti joins use SemiAntiSortMergeJoinStream which only tracks
-        // inner key buffer memory; tested in semi_anti_sort_merge_join/tests.rs.
-        Inner, Left, Right, Full, LeftMark, RightMark,
+        // Semi/anti/mark joins use SemiAntiMarkSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested in semi_anti_mark_sort_merge_join/tests.rs.
+        Inner, Left, Right, Full,
     ];
 
     // Disable DiskManager to prevent spilling
@@ -2144,9 +2144,9 @@ async fn overallocation_multi_batch_no_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = vec![
-        // Semi/anti joins use SemiAntiSortMergeJoinStream which only tracks
-        // inner key buffer memory; tested in semi_anti_sort_merge_join/tests.rs.
-        Inner, Left, Right, Full, LeftMark, RightMark,
+        // Semi/anti/mark joins use SemiAntiMarkSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested in semi_anti_mark_sort_merge_join/tests.rs.
+        Inner, Left, Right, Full,
     ];
 
     // Disable DiskManager to prevent spilling
@@ -2206,9 +2206,9 @@ async fn overallocation_single_batch_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = [
-        // Semi/anti joins use SemiAntiSortMergeJoinStream which only tracks
-        // inner key buffer memory; tested in semi_anti_sort_merge_join/tests.rs.
-        Inner, Left, Right, Full, LeftMark, RightMark,
+        // Semi/anti/mark joins use SemiAntiMarkSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested in semi_anti_mark_sort_merge_join/tests.rs.
+        Inner, Left, Right, Full,
     ];
 
     // Enable DiskManager to allow spilling
@@ -2312,9 +2312,9 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = [
-        // Semi/anti joins use SemiAntiSortMergeJoinStream which only tracks
-        // inner key buffer memory; tested in semi_anti_sort_merge_join/tests.rs.
-        Inner, Left, Right, Full, LeftMark, RightMark,
+        // Semi/anti/mark joins use SemiAntiMarkSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested in semi_anti_mark_sort_merge_join/tests.rs.
+        Inner, Left, Right, Full,
     ];
 
     // Enable DiskManager to allow spilling

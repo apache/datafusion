@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
-use crate::joins::semi_anti_sort_merge_join::stream::SemiAntiSortMergeJoinStream;
+use crate::joins::semi_anti_mark_sort_merge_join::stream::SemiAntiMarkSortMergeJoinStream;
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::sort_merge_join::stream::SortMergeJoinStream;
 use crate::joins::utils::{
@@ -337,6 +337,8 @@ impl SortMergeJoinExec {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) {
             Ok(Arc::new(new_join))
         } else {
@@ -534,6 +536,8 @@ impl ExecutionPlan for SortMergeJoinExec {
                 | JoinType::LeftAnti
                 | JoinType::RightSemi
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) {
             let peak_mem_used =
                 MetricBuilder::new(&self.metrics).gauge("peak_mem_used", partition);
@@ -544,7 +548,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             )
             .with_compression_type(context.session_config().spill_compression());
 
-            Ok(Box::pin(SemiAntiSortMergeJoinStream::try_new(
+            Ok(Box::pin(SemiAntiMarkSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
