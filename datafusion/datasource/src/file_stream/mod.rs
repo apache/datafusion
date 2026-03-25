@@ -2121,7 +2121,7 @@ mod tests {
             test.run().await.unwrap(),
             @r"
         ----- Stream 0 Output -----
-        Error: planner boom.
+        Error: Internal error: planner boom.
         This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
         ----- Stream 1 Output -----
         Done
