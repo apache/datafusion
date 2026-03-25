@@ -28,7 +28,7 @@ use crate::PartitionedFile;
 use crate::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use arrow::array::{Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, Stream};
@@ -258,6 +258,9 @@ pub enum PlannerStep {
         io_polls: usize,
     },
     ReturnNone,
+    ReturnError {
+        message: String,
+    },
 }
 
 /// Builder for [`MockPlanner`].
@@ -290,6 +293,13 @@ impl MockPlannerBuilder {
 
     pub fn return_none(mut self) -> Self {
         self.steps.push(PlannerStep::ReturnNone);
+        self
+    }
+
+    pub fn return_error(mut self, message: impl Into<String>) -> Self {
+        self.steps.push(PlannerStep::ReturnError {
+            message: message.into(),
+        });
         self
     }
 
@@ -501,6 +511,7 @@ impl MorselPlanner for MockMorselPlanner {
                 Ok(Some(plan))
             }
             PlannerStep::ReturnNone => Ok(None),
+            PlannerStep::ReturnError { message } => internal_err!("{message}"),
         }
     }
 }

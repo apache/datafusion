@@ -410,6 +410,33 @@ impl<'a> FileStreamBuilder<'a> {
 }
 
 impl FileStream {
+    /// Mark this stream as done producing local work, if it has not already
+    /// reported that transition to the shared state.
+    ///
+    /// This is a one-way lifecycle transition. A stream that is done
+    /// producing may still continue running stolen work or release I/O permits
+    /// that were already issued.
+    fn mark_done_producing_if_needed(&mut self) {
+        if !self.done_producing_marked {
+            self.shared_file_stream_state
+                .mark_done_producing(self.stream_id);
+            self.done_producing_marked = true;
+        }
+    }
+
+    /// Transition this stream into the terminal error state.
+    ///
+    /// The order matters:
+    /// 1. clear any local queued work that will never be run after the error
+    /// 2. mark the stream as done producing so siblings do not wait on it for
+    ///    future local work that can no longer appear
+    /// 3. record the terminal stream state
+    fn transition_to_error(&mut self) {
+        self.queues.clear();
+        self.mark_done_producing_if_needed();
+        self.state = StreamState::Error;
+    }
+
     /// Return true if this stream may publish and steal ready work from the
     /// shared queue.
     ///
@@ -644,10 +671,8 @@ impl FileStream {
     /// 4. Launch and poll the active morsel reader.
     fn poll_inner(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<RecordBatch>>> {
         loop {
-            if !self.done_producing_marked && self.queues.is_empty() {
-                self.shared_file_stream_state
-                    .mark_done_producing(self.stream_id);
-                self.done_producing_marked = true;
+            if self.queues.is_empty() {
+                self.mark_done_producing_if_needed();
             }
 
             match self.state {
@@ -661,13 +686,11 @@ impl FileStream {
             }
 
             if let Err(e) = self.start_next_files() {
-                self.queues.clear();
-                self.state = StreamState::Error;
+                self.transition_to_error();
                 return Poll::Ready(Some(Err(e)));
             }
             if let Err(e) = self.check_io(cx) {
-                self.queues.clear();
-                self.state = StreamState::Error;
+                self.transition_to_error();
                 return Poll::Ready(Some(Err(e)));
             }
 
@@ -705,8 +728,7 @@ impl FileStream {
                     break;
                 };
                 if let Err(e) = self.plan_morsels(planner, io_permit) {
-                    self.queues.clear();
-                    self.state = StreamState::Error;
+                    self.transition_to_error();
                     return Poll::Ready(Some(Err(e)));
                 }
 
@@ -723,8 +745,7 @@ impl FileStream {
             // return `Pending`; otherwise the stream can stall waiting on an
             // I/O future that has never been polled.
             if let Err(e) = self.check_io(cx) {
-                self.queues.clear();
-                self.state = StreamState::Error;
+                self.transition_to_error();
                 return Poll::Ready(Some(Err(e)));
             }
 
@@ -784,8 +805,7 @@ impl FileStream {
 
                         match self.on_error {
                             OnError::Fail => {
-                                self.queues.clear();
-                                self.state = StreamState::Error;
+                                self.transition_to_error();
                                 return Poll::Ready(Some(Err(e)));
                             }
                             OnError::Skip => {
@@ -866,6 +886,9 @@ impl std::fmt::Debug for WaitingPlanner {
 
 impl Drop for FileStream {
     fn drop(&mut self) {
+        // A dropped sibling will never make progress again, so report that it
+        // is done producing before releasing any in-flight planners.
+        self.mark_done_producing_if_needed();
         // Release any outstanding permits before dropping the stream.
         self.queues.take_waiting_planners();
     }
@@ -1355,14 +1378,21 @@ mod tests {
         /// Per-partition file assignments used to build one sibling
         /// `FileStream` per partition.
         partitions: Vec<Vec<String>>,
-        /// The sequence of sibling streams to poll while exercising the
-        /// stealing scenario under test.
-        reads: Vec<TestStreamId>,
+        /// The scripted sequence of sibling stream actions to perform while
+        /// exercising the scheduler behavior under test.
+        actions: Vec<TestAction>,
     }
 
     /// Identifies one sibling stream in a [`MultiStreamMorselTest`].
     #[derive(Debug, Clone, Copy)]
     struct TestStreamId(usize);
+
+    /// One scripted action in a [`MultiStreamMorselTest`].
+    #[derive(Debug, Clone, Copy)]
+    enum TestAction {
+        Read(TestStreamId),
+        Drop(TestStreamId),
+    }
 
     impl MultiStreamMorselTest {
         /// Create a sibling-stream test harness with `num_partitions`
@@ -1371,7 +1401,7 @@ mod tests {
             Self {
                 morselizer: MockMorselizer::new(),
                 partitions: vec![vec![]; num_partitions],
-                reads: vec![],
+                actions: vec![],
             }
         }
 
@@ -1394,7 +1424,13 @@ mod tests {
         /// Configure the order in which sibling streams are polled while the
         /// test scenario is executing.
         fn with_reads(mut self, reads: Vec<TestStreamId>) -> Self {
-            self.reads = reads;
+            self.actions = reads.into_iter().map(TestAction::Read).collect();
+            self
+        }
+
+        /// Configure the scripted sibling-stream actions for this test.
+        fn with_actions(mut self, actions: Vec<TestAction>) -> Self {
+            self.actions = actions;
             self
         }
 
@@ -1425,7 +1461,13 @@ mod tests {
         /// This is the core helper for stealing tests: separate streams have
         /// distinct local queues, but share the same outstanding-I/O budget
         /// and shared ready-work queues.
-        fn build_streams(&self) -> Result<(MorselObserver, Vec<FileStream>)> {
+        fn build_streams(
+            &self,
+        ) -> Result<(
+            MorselObserver,
+            SharedFileStreamState,
+            Vec<Option<FileStream>>,
+        )> {
             let observer = self.morselizer.observer().clone();
             observer.clear();
 
@@ -1443,60 +1485,92 @@ mod tests {
                     )
                     .with_shared_state(shared_state.clone())
                     .build()
+                    .map(Some)
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok((observer, streams))
+            Ok((observer, shared_state, streams))
         }
 
         /// Run the configured poll sequence and format the per-stream outputs
         /// plus shared scheduler events into one snapshot string.
         async fn run(self) -> Result<String> {
-            let reads = self.reads.clone();
-            let (observer, mut streams) = self.build_streams()?;
+            let actions = self.actions.clone();
+            let (observer, shared_state, mut streams) = self.build_streams()?;
             let mut outputs = vec![vec![]; streams.len()];
+            let mut terminal_streams = vec![false; streams.len()];
 
-            for stream_id in reads {
-                let batch_id = next_batch_id(&mut streams[stream_id.0]).await?;
-                assert!(
-                    batch_id.is_some(),
-                    "expected stream {stream_id:?} to produce a batch"
-                );
-                outputs[stream_id.0].push(batch_id.unwrap());
+            for action in actions {
+                match action {
+                    TestAction::Read(stream_id) => {
+                        let stream = streams[stream_id.0]
+                            .as_mut()
+                            .expect("attempted to read from dropped stream");
+                        match stream.next().await {
+                            Some(Ok(batch)) => {
+                                let col = batch.column(0).as_primitive::<Int32Type>();
+                                assert_eq!(col.len(), 1);
+                                assert!(col.is_valid(0));
+                                outputs[stream_id.0]
+                                    .push(format!("Batch: {}", col.value(0)));
+                            }
+                            Some(Err(e)) => {
+                                outputs[stream_id.0].push(format!("Error: {e}"));
+                                terminal_streams[stream_id.0] = true;
+                            }
+                            None => {
+                                outputs[stream_id.0].push("Done".to_string());
+                                terminal_streams[stream_id.0] = true;
+                            }
+                        }
+                    }
+                    TestAction::Drop(stream_id) => {
+                        streams[stream_id.0].take();
+                        outputs[stream_id.0].push("Dropped".to_string());
+                        terminal_streams[stream_id.0] = true;
+                    }
+                }
             }
 
-            for stream in &mut streams {
-                assert_eq!(next_batch_id(stream).await?, None);
+            for (idx, stream) in streams.iter_mut().enumerate() {
+                if terminal_streams[idx] {
+                    continue;
+                }
+                let Some(stream) = stream.as_mut() else {
+                    continue;
+                };
+                loop {
+                    match stream.next().await {
+                        Some(Ok(batch)) => {
+                            let col = batch.column(0).as_primitive::<Int32Type>();
+                            assert_eq!(col.len(), 1);
+                            assert!(col.is_valid(0));
+                            outputs[idx].push(format!("Batch: {}", col.value(0)));
+                        }
+                        Some(Err(e)) => {
+                            outputs[idx].push(format!("Error: {e}"));
+                        }
+                        None => {
+                            outputs[idx].push("Done".to_string());
+                            break;
+                        }
+                    }
+                }
             }
 
             let mut parts = vec![];
             for (idx, output) in outputs.iter().enumerate() {
                 parts.push(format!("----- Stream {idx} Output -----"));
-                parts.push(
-                    output
-                        .iter()
-                        .map(|batch_id| format!("Batch: {batch_id}"))
-                        .chain(std::iter::once("Done".to_string()))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                );
+                parts.push(output.join("\n"));
             }
+            parts.push(format!(
+                "----- All Streams Done Producing: {} -----",
+                shared_state.all_streams_done_producing()
+            ));
             parts.push("----- File Stream Events -----".to_string());
             parts.push(observer.format_summary_events());
             Ok(parts.join("\n"))
         }
-    }
-
-    /// Read the next single-row batch from a test stream and return its batch
-    /// id.
-    async fn next_batch_id(stream: &mut FileStream) -> Result<Option<i32>> {
-        let batch = stream.next().await.transpose()?;
-        Ok(batch.map(|batch| {
-            let col = batch.column(0).as_primitive::<Int32Type>();
-            assert_eq!(col.len(), 1);
-            assert!(col.is_valid(0));
-            col.value(0)
-        }))
     }
 
     /// Verifies the simplest morsel-driven flow: one planner produces one
@@ -1926,6 +2000,7 @@ mod tests {
         ----- Stream 1 Output -----
         Batch: 42
         Done
+        ----- All Streams Done Producing: true -----
         ----- File Stream Events -----
         morselize_file: file1.parquet
         planner_created: PlannerId(0)
@@ -1985,6 +2060,7 @@ mod tests {
         ----- Stream 1 Output -----
         Batch: 42
         Done
+        ----- All Streams Done Producing: true -----
         ----- File Stream Events -----
         morselize_file: fast.parquet
         planner_created: PlannerId(0)
@@ -1998,6 +2074,68 @@ mod tests {
         io_future_resolved: PlannerId(1), IoFutureId(100)
         morsel_produced: PlannerId(1), MorselId(12)
         morsel_stream_batch_produced: MorselId(12), BatchId(51)
+        "
+        );
+
+        Ok(())
+    }
+
+    /// Verifies that dropping one sibling stream marks it as done producing so
+    /// another sibling can observe global completion rather than waiting on a
+    /// producer that will never make progress again.
+    #[tokio::test]
+    async fn dropped_sibling_marks_done_producing() -> Result<()> {
+        let test = MultiStreamMorselTest::new(2).with_actions(vec![
+            TestAction::Drop(TestStreamId(0)),
+            TestAction::Read(TestStreamId(1)),
+        ]);
+
+        insta::assert_snapshot!(
+            test.run().await.unwrap(),
+            @r"
+        ----- Stream 0 Output -----
+        Dropped
+        ----- Stream 1 Output -----
+        Done
+        ----- All Streams Done Producing: true -----
+        ----- File Stream Events -----
+        "
+        );
+
+        Ok(())
+    }
+
+    /// Verifies that a sibling stream that errors out marks itself as done
+    /// producing so surviving siblings do not continue waiting on a producer
+    /// that has already failed permanently.
+    #[tokio::test]
+    async fn errored_sibling_marks_done_producing() -> Result<()> {
+        let test = MultiStreamMorselTest::new(2)
+            .with_file_in_partition(
+                0,
+                "error.parquet",
+                MockPlanner::builder()
+                    .with_id(PlannerId(0))
+                    .return_error("planner boom")
+                    .build(),
+            )
+            .with_actions(vec![
+                TestAction::Read(TestStreamId(0)),
+                TestAction::Read(TestStreamId(1)),
+            ]);
+
+        insta::assert_snapshot!(
+            test.run().await.unwrap(),
+            @r"
+        ----- Stream 0 Output -----
+        Error: Internal error: planner boom.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        ----- Stream 1 Output -----
+        Done
+        ----- All Streams Done Producing: true -----
+        ----- File Stream Events -----
+        morselize_file: error.parquet
+        planner_created: PlannerId(0)
         "
         );
 
