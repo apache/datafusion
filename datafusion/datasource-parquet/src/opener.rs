@@ -656,12 +656,12 @@ impl RowGroupsPreparedParquetOpen {
         } = loaded;
         let PreparedParquetOpen {
             state,
-            partitioned_file,
+            partitioned_file: _,
             file_range: _,
             extensions: _,
             file_metrics,
-            mut file_pruner,
-            metadata_size_hint,
+            file_pruner,
+            metadata_size_hint: _,
             async_file_reader,
             logical_file_schema: _,
             output_schema,
@@ -723,144 +723,104 @@ impl RowGroupsPreparedParquetOpen {
             return Ok(vec![]);
         }
 
-        // Row-group fanout is currently only safe for plain unordered scans.
-        // Filter pushdown and page-index pruning tests compare full output
-        // batches across scan modes, and allowing individual row-group planners
-        // to overtake one another changes the observable row order within a
-        // single file. Keep those scans on the single-planner path until the
-        // scheduler has explicit within-file ordering support for child
-        // planners.
-        let split_by_row_group = limit.is_none()
-            && file_pruner.is_none()
-            && !preserve_order
-            && predicate.is_none()
-            && !pushdown_filters
-            && page_pruning_predicate.is_none();
-        let prepared_plans = if split_by_row_group {
-            prepared_plan.into_single_row_group_plans(file_metadata.as_ref())?
-        } else {
-            vec![prepared_plan]
+        // Keep each file range as a single prepared plan. Splitting into one
+        // planner per row group adds scheduler overhead and is not beneficial
+        // for the common scan path today.
+        //
+        // Step: construct builder for the final RecordBatch stream
+        let mut builder =
+            ParquetPushDecoderBuilder::new_with_metadata(reader_metadata.clone())
+                .with_batch_size(batch_size);
+
+        // Step: optionally add row filter to the builder.
+        //
+        // Row filter is used for late materialization in parquet decoding, see
+        // `row_filter` for details.
+        if let Some(predicate) = pushdown_filters.then_some(predicate.as_ref()).flatten() {
+            let row_filter = row_filter::build_row_filter(
+                predicate,
+                &physical_file_schema,
+                file_metadata.as_ref(),
+                reorder_predicates,
+                &file_metrics,
+            );
+
+            match row_filter {
+                Ok(Some(filter)) => {
+                    builder = builder.with_row_filter(filter);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    debug!("Ignoring error building row filter for '{predicate:?}': {e}");
+                }
+            };
         };
-
-        let mut reusable_reader = Some(async_file_reader);
-        let mut reading_states = Vec::with_capacity(prepared_plans.len());
-        for prepared_plan in prepared_plans {
-            // ---------------------------------------------------------
-            // Step: construct builder for the final RecordBatch stream
-            // ---------------------------------------------------------
-            let mut builder =
-                ParquetPushDecoderBuilder::new_with_metadata(reader_metadata.clone())
-                    .with_batch_size(batch_size);
-
-            // -----------------------------------------------------------------
-            // Step: optionally add row filter to the builder
-            //
-            // Row filter is used for late materialization in parquet decoding,
-            // see `row_filter` for details.
-            // -----------------------------------------------------------------
-            if let Some(predicate) =
-                pushdown_filters.then_some(predicate.as_ref()).flatten()
-            {
-                let row_filter = row_filter::build_row_filter(
-                    predicate,
-                    &physical_file_schema,
-                    file_metadata.as_ref(),
-                    reorder_predicates,
-                    &file_metrics,
-                );
-
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{predicate:?}': {e}"
-                        );
-                    }
-                };
-            };
-            if force_filter_selections {
-                builder =
-                    builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
-            }
-
-            if let Some(row_selection) = prepared_plan.row_selection {
-                builder = builder.with_row_selection(row_selection);
-            }
-            builder = builder.with_row_groups(prepared_plan.row_group_indexes);
-
-            if let Some(limit) = limit {
-                builder = builder.with_limit(limit)
-            }
-
-            if let Some(max_predicate_cache_size) = max_predicate_cache_size {
-                builder = builder.with_max_predicate_cache_size(max_predicate_cache_size);
-            }
-
-            // Metrics from the arrow reader itself.
-            let arrow_reader_metrics = ArrowReaderMetrics::enabled();
-
-            let indices = projection.column_indices();
-            let mask =
-                ProjectionMask::roots(reader_metadata.parquet_schema(), indices.clone());
-
-            let decoder = builder
-                .with_projection(mask)
-                .with_metrics(arrow_reader_metrics.clone())
-                .build()?;
-
-            let predicate_cache_inner_records =
-                file_metrics.predicate_cache_inner_records.clone();
-            let predicate_cache_records = file_metrics.predicate_cache_records.clone();
-
-            // Rebase column indices to match the narrowed stream schema.
-            // The projection expressions have indices based on
-            // `physical_file_schema`, but the stream only contains the columns
-            // selected by the `ProjectionMask`.
-            let stream_schema = Arc::new(physical_file_schema.project(&indices)?);
-            let replace_schema = stream_schema != output_schema;
-            let projection = projection
-                .clone()
-                .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
-            let projector = projection.make_projector(&stream_schema)?;
-            let push_decoder_state = PushDecoderStreamState {
-                decoder,
-                reader: if let Some(reader) = reusable_reader.take() {
-                    reader
-                } else {
-                    state.parquet_file_reader_factory.create_reader(
-                        state.partition_index,
-                        partitioned_file.clone(),
-                        metadata_size_hint,
-                        &state.metrics,
-                    )?
-                },
-                projector,
-                output_schema: Arc::clone(&output_schema),
-                replace_schema,
-                arrow_reader_metrics,
-                predicate_cache_inner_records,
-                predicate_cache_records,
-                baseline_metrics: baseline_metrics.clone(),
-            };
-
-            // Keep file-scoped early-stop behavior only on the single-planner
-            // fallback path. A row-group split path would need a file-shared
-            // pruner to preserve the exact semantics across child planners.
-            if let Some(file_pruner) = file_pruner.take() {
-                reading_states.push(ReadingParquetState::with_early_stop(
-                    push_decoder_state,
-                    file_pruner,
-                    file_metrics.files_ranges_pruned_statistics.clone(),
-                ));
-            } else {
-                reading_states.push(ReadingParquetState::new(push_decoder_state));
-            }
+        if force_filter_selections {
+            builder = builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
         }
 
-        Ok(reading_states)
+        if let Some(row_selection) = prepared_plan.row_selection {
+            builder = builder.with_row_selection(row_selection);
+        }
+        builder = builder.with_row_groups(prepared_plan.row_group_indexes);
+
+        if let Some(limit) = limit {
+            builder = builder.with_limit(limit)
+        }
+
+        if let Some(max_predicate_cache_size) = max_predicate_cache_size {
+            builder = builder.with_max_predicate_cache_size(max_predicate_cache_size);
+        }
+
+        // Metrics from the arrow reader itself.
+        let arrow_reader_metrics = ArrowReaderMetrics::enabled();
+
+        let indices = projection.column_indices();
+        let mask = ProjectionMask::roots(reader_metadata.parquet_schema(), indices.clone());
+
+        let decoder = builder
+            .with_projection(mask)
+            .with_metrics(arrow_reader_metrics.clone())
+            .build()?;
+
+        let predicate_cache_inner_records =
+            file_metrics.predicate_cache_inner_records.clone();
+        let predicate_cache_records = file_metrics.predicate_cache_records.clone();
+
+        // Rebase column indices to match the narrowed stream schema.
+        // The projection expressions have indices based on
+        // `physical_file_schema`, but the stream only contains the columns
+        // selected by the `ProjectionMask`.
+        let stream_schema = Arc::new(physical_file_schema.project(&indices)?);
+        let replace_schema = stream_schema != output_schema;
+        let projection = projection
+            .clone()
+            .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
+        let projector = projection.make_projector(&stream_schema)?;
+        let push_decoder_state = PushDecoderStreamState {
+            decoder,
+            reader: async_file_reader,
+            projector,
+            output_schema: Arc::clone(&output_schema),
+            replace_schema,
+            arrow_reader_metrics,
+            predicate_cache_inner_records,
+            predicate_cache_records,
+            baseline_metrics: baseline_metrics.clone(),
+        };
+
+        // Keep file-scoped early-stop behavior on the single-planner path.
+        let reading_state = if let Some(file_pruner) = file_pruner {
+            ReadingParquetState::with_early_stop(
+                push_decoder_state,
+                file_pruner,
+                file_metrics.files_ranges_pruned_statistics.clone(),
+            )
+        } else {
+            ReadingParquetState::new(push_decoder_state)
+        };
+
+        Ok(vec![reading_state])
     }
 }
 

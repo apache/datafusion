@@ -247,7 +247,7 @@ impl MockPlanner {
 /// makes it possible to model the generic `MorselPlan` API closely in tests.
 #[derive(Debug, Clone)]
 pub enum PlannerStep {
-    ReturnPlan {
+    Plan {
         morsels: Vec<MockMorselSpec>,
         planners: Vec<MockPlanner>,
         /// Optional identifier for the I/O future returned by this step.
@@ -257,8 +257,8 @@ pub enum PlannerStep {
         io_future_id: Option<IoFutureId>,
         io_polls: usize,
     },
-    ReturnNone,
-    ReturnError {
+    None,
+    Error {
         message: String,
     },
 }
@@ -292,12 +292,12 @@ impl MockPlannerBuilder {
     }
 
     pub fn return_none(mut self) -> Self {
-        self.steps.push(PlannerStep::ReturnNone);
+        self.steps.push(PlannerStep::None);
         self
     }
 
     pub fn return_error(mut self, message: impl Into<String>) -> Self {
-        self.steps.push(PlannerStep::ReturnError {
+        self.steps.push(PlannerStep::Error {
             message: message.into(),
         });
         self
@@ -374,9 +374,9 @@ impl ReturnPlanBuilder {
         self
     }
 
-    /// Build the corresponding [`PlannerStep::ReturnPlan`]
+    /// Build the corresponding [`PlannerStep::Plan`]
     pub fn build(self) -> PlannerStep {
-        PlannerStep::ReturnPlan {
+        PlannerStep::Plan {
             morsels: self.morsels,
             planners: self.planners,
             io_future_id: self.io_future_id,
@@ -444,7 +444,7 @@ impl MorselPlanner for MockMorselPlanner {
         };
 
         match step {
-            PlannerStep::ReturnPlan {
+            PlannerStep::Plan {
                 morsels,
                 planners,
                 io_future_id,
@@ -510,8 +510,8 @@ impl MorselPlanner for MockMorselPlanner {
 
                 Ok(Some(plan))
             }
-            PlannerStep::ReturnNone => Ok(None),
-            PlannerStep::ReturnError { message } => internal_err!("{message}"),
+            PlannerStep::None => Ok(None),
+            PlannerStep::Error { message } => internal_err!("{message}"),
         }
     }
 }
