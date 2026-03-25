@@ -17,13 +17,20 @@
 
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::Statistics;
+use datafusion::common::stats::Precision;
+use datafusion::datasource::source_as_provider;
 use datafusion::functions_nested::map::map;
 use datafusion::logical_expr::LogicalPlanBuilder;
-use datafusion::physical_plan::Accumulator;
+use datafusion::logical_expr::TableType;
+use datafusion::physical_plan::{Accumulator, ExecutionPlan};
 use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
     consumer::from_substrait_plan, producer::to_substrait_plan,
 };
+use std::any::Any;
 use std::cmp::Ordering;
 use std::mem::size_of_val;
 
@@ -37,7 +44,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::expr::{Exists, SetComparison, SetQuantifier};
 use datafusion::logical_expr::{
     EmptyRelation, Extension, InvariantLevel, LogicalPlan, Operator, PartitionEvaluator,
-    Repartition, Subquery, UserDefinedLogicalNode, Values, Volatility,
+    Repartition, Subquery, TableScan, UserDefinedLogicalNode, Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -46,7 +53,195 @@ use std::hash::Hash;
 use std::sync::Arc;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
-use substrait::proto::{Plan, Rel, plan_rel};
+use substrait::proto::{Plan, ReadRel, Rel, plan_rel};
+
+/// A minimal [`TableProvider`] that exposes configurable statistics.
+#[derive(Debug)]
+struct TableWithStatistics {
+    schema: Arc<Schema>,
+    row_count: usize,
+    total_byte_size: Option<usize>,
+}
+
+#[async_trait::async_trait]
+impl TableProvider for TableWithStatistics {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        let total_byte_size = match self.total_byte_size {
+            Some(b) => Precision::Exact(b),
+            None => Precision::Absent,
+        };
+        Some(Statistics {
+            num_rows: Precision::Exact(self.row_count),
+            total_byte_size,
+            column_statistics: Statistics::unknown_column(&self.schema),
+        })
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        let projected_schema: SchemaRef = match projection {
+            Some(indices) => Arc::new(Schema::new(
+                indices
+                    .iter()
+                    .map(|i| self.schema.field(*i).clone())
+                    .collect::<Vec<_>>(),
+            )),
+            None => Arc::clone(&self.schema),
+        };
+        Ok(Arc::new(EmptyExec::new(projected_schema)))
+    }
+}
+
+/// A [`TableProvider`] that returns `Some(Statistics)` with all fields
+/// `Absent` — distinct from `None` — to verify hint injection for providers
+/// that report statistics but have no useful values.
+#[derive(Debug)]
+struct TableWithAbsentStatistics {
+    schema: Arc<Schema>,
+}
+
+#[async_trait::async_trait]
+impl TableProvider for TableWithAbsentStatistics {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        Some(Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: Statistics::unknown_column(&self.schema),
+        })
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        let projected_schema: SchemaRef = match projection {
+            Some(indices) => Arc::new(Schema::new(
+                indices
+                    .iter()
+                    .map(|i| self.schema.field(*i).clone())
+                    .collect::<Vec<_>>(),
+            )),
+            None => Arc::clone(&self.schema),
+        };
+        Ok(Arc::new(EmptyExec::new(projected_schema)))
+    }
+}
+
+/// Navigates a Substrait [`Plan`] to the first [`ReadRel`], unwrapping an
+/// optional top-level `Project` node on the way.
+fn extract_read_rel(proto: &Plan) -> &ReadRel {
+    let root_rel = proto
+        .relations
+        .first()
+        .expect("plan has a relation")
+        .rel_type
+        .as_ref()
+        .expect("relation type is set");
+    let input_rel = match root_rel {
+        plan_rel::RelType::Root(root) => root.input.as_ref().expect("root has input"),
+        plan_rel::RelType::Rel(rel) => rel,
+    };
+    match input_rel.rel_type.as_ref().expect("rel_type is set") {
+        RelType::Read(r) => r.as_ref(),
+        RelType::Project(p) => match p
+            .input
+            .as_ref()
+            .expect("project has input")
+            .rel_type
+            .as_ref()
+            .expect("rel_type is set")
+        {
+            RelType::Read(r) => r.as_ref(),
+            other => panic!("expected Read inside Project, got {other:?}"),
+        },
+        other => panic!("expected Read or Project at root, got {other:?}"),
+    }
+}
+
+/// Extracts a [`TableScan`] from a [`LogicalPlan`], unwrapping an optional
+/// top-level `Projection` node on the way.
+fn extract_table_scan(plan: &LogicalPlan) -> &TableScan {
+    match plan {
+        LogicalPlan::TableScan(scan) => scan,
+        LogicalPlan::Projection(proj) => match proj.input.as_ref() {
+            LogicalPlan::TableScan(scan) => scan,
+            other => panic!("expected TableScan inside Projection, got {other:?}"),
+        },
+        other => panic!("expected TableScan or Projection, got {other:?}"),
+    }
+}
+
+fn test_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]))
+}
+
+/// Serializes `SELECT a FROM stats_table` to Substrait using a provider
+/// with the given statistics.
+async fn make_stats_plan(
+    row_count: usize,
+    total_byte_size: Option<usize>,
+) -> Result<Box<Plan>> {
+    let provider = Arc::new(TableWithStatistics {
+        schema: test_schema(),
+        row_count,
+        total_byte_size,
+    });
+    let ctx = SessionContext::new();
+    ctx.register_table("stats_table", provider)?;
+    let plan = ctx
+        .sql("SELECT a FROM stats_table")
+        .await?
+        .into_optimized_plan()?;
+    to_substrait_plan(&plan, &ctx.state())
+}
+
+/// Deserializes `proto` against `consumer_provider` as `stats_table` and
+/// returns the statistics visible on the resolved provider after hint injection.
+async fn consumer_statistics(
+    proto: &Plan,
+    consumer_provider: Arc<dyn TableProvider>,
+) -> Result<Option<Statistics>> {
+    let ctx = SessionContext::new();
+    ctx.register_table("stats_table", consumer_provider)?;
+    let plan = from_substrait_plan(&ctx.state(), proto).await?;
+    let table_scan = extract_table_scan(&plan);
+    let provider = source_as_provider(&table_scan.source)?;
+    Ok(provider.statistics())
+}
 
 #[derive(Debug)]
 struct MockSerializerRegistry;
@@ -102,7 +297,7 @@ impl PartialOrd for MockUserDefinedLogicalPlan {
 }
 
 impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -209,6 +404,162 @@ async fn roundtrip_empty_relation_no_rows() -> Result<()> {
         schema: DFSchemaRef::new(DFSchema::empty()),
     });
     roundtrip_logical_plan_with_ctx(plan, ctx).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn producer_sets_stats_hints() -> Result<()> {
+    // row_count only: record_size absent → proto3 default 0.0
+    let proto = make_stats_plan(100, None).await?;
+    let stats = extract_read_rel(&proto)
+        .common
+        .as_ref()
+        .and_then(|c| c.hint.as_ref())
+        .and_then(|h| h.stats.as_ref())
+        .expect("hint.stats should be set");
+    assert_eq!(stats.row_count, 100.0);
+    assert_eq!(stats.record_size, 0.0);
+
+    // row_count + total_byte_size: record_size = bytes / rows
+    let proto = make_stats_plan(100, Some(1000)).await?;
+    let stats = extract_read_rel(&proto)
+        .common
+        .as_ref()
+        .and_then(|c| c.hint.as_ref())
+        .and_then(|h| h.stats.as_ref())
+        .expect("hint.stats should be set");
+    assert_eq!(stats.row_count, 100.0);
+    assert_eq!(stats.record_size, 10.0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn consumer_injects_row_count_hint() -> Result<()> {
+    use datafusion::datasource::MemTable;
+    let schema = test_schema();
+    let proto = make_stats_plan(42, None).await?;
+    let batch =
+        datafusion::arrow::record_batch::RecordBatch::new_empty(Arc::clone(&schema));
+    let provider = Arc::new(MemTable::try_new(schema, vec![vec![batch]])?);
+    // Exact(42) from producer becomes Inexact after round-trip (hint.stats is advisory)
+    let stats = consumer_statistics(&proto, provider)
+        .await?
+        .expect("stats injected");
+    assert_eq!(stats.num_rows, Precision::Inexact(42));
+    Ok(())
+}
+
+#[tokio::test]
+async fn consumer_preserves_provider_statistics_over_hint() -> Result<()> {
+    let proto = make_stats_plan(42, None).await?;
+    let provider = Arc::new(TableWithStatistics {
+        schema: test_schema(),
+        row_count: 999,
+        total_byte_size: None,
+    });
+    let stats = consumer_statistics(&proto, provider)
+        .await?
+        .expect("stats present");
+    assert_eq!(stats.num_rows, Precision::Exact(999));
+    Ok(())
+}
+
+#[tokio::test]
+async fn consumer_injects_record_size_hint() -> Result<()> {
+    use datafusion::datasource::MemTable;
+    let schema = test_schema();
+    let proto = make_stats_plan(200, Some(2000)).await?; // record_size hint = 10.0
+    let batch =
+        datafusion::arrow::record_batch::RecordBatch::new_empty(Arc::clone(&schema));
+    let provider = Arc::new(MemTable::try_new(schema, vec![vec![batch]])?);
+    let stats = consumer_statistics(&proto, provider)
+        .await?
+        .expect("stats injected");
+    assert_eq!(stats.num_rows, Precision::Inexact(200));
+    assert_eq!(stats.total_byte_size, Precision::Inexact(2000));
+    Ok(())
+}
+
+#[tokio::test]
+async fn consumer_injects_hint_into_absent_statistics() -> Result<()> {
+    let proto = make_stats_plan(77, None).await?;
+    let provider = Arc::new(TableWithAbsentStatistics {
+        schema: test_schema(),
+    });
+    let stats = consumer_statistics(&proto, provider)
+        .await?
+        .expect("stats injected");
+    assert_eq!(stats.num_rows, Precision::Inexact(77));
+    Ok(())
+}
+
+#[tokio::test]
+async fn consumer_injects_byte_size_using_provider_row_count() -> Result<()> {
+    // Provider has its own row count (200); byte size must use that, not the hint's (100).
+    let proto = make_stats_plan(100, Some(1000)).await?; // record_size hint = 10.0
+    let provider = Arc::new(TableWithStatistics {
+        schema: test_schema(),
+        row_count: 200,
+        total_byte_size: None,
+    });
+    let stats = consumer_statistics(&proto, provider)
+        .await?
+        .expect("stats present");
+    assert_eq!(stats.num_rows, Precision::Exact(200));
+    assert_eq!(stats.total_byte_size, Precision::Inexact(2000)); // 200 * 10.0
+    Ok(())
+}
+
+/// Zeroes out `hint.stats.row_count` in the plan's ReadRel, making it appear
+/// absent to the consumer (proto3 encodes unset numeric fields as 0).
+fn clear_row_count_hint(proto: &mut Plan) {
+    fn visit(rel: &mut Rel) {
+        match rel.rel_type.as_mut() {
+            Some(RelType::Read(r)) => {
+                if let Some(s) = r
+                    .common
+                    .as_mut()
+                    .and_then(|c| c.hint.as_mut())
+                    .and_then(|h| h.stats.as_mut())
+                {
+                    s.row_count = 0.0;
+                }
+            }
+            Some(RelType::Project(p)) => {
+                if let Some(input) = p.input.as_mut() {
+                    visit(input);
+                }
+            }
+            _ => {}
+        }
+    }
+    for relation in &mut proto.relations {
+        if let Some(plan_rel::RelType::Root(root)) = relation.rel_type.as_mut() {
+            if let Some(input) = root.input.as_mut() {
+                visit(input);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn consumer_skips_byte_size_when_row_count_hint_absent() -> Result<()> {
+    // When the plan carries only record_size (no row_count), total_byte_size
+    // cannot be reconstructed and remains Absent even when the provider has
+    // its own num_rows. This can arise from non-DataFusion Substrait producers.
+    let mut proto = make_stats_plan(100, Some(1000)).await?; // record_size hint = 10.0
+    clear_row_count_hint(&mut proto); // row_count = 0.0 → treated as absent by consumer
+    let provider = Arc::new(TableWithStatistics {
+        schema: test_schema(),
+        row_count: 50,
+        total_byte_size: None,
+    });
+    let stats = consumer_statistics(&proto, provider)
+        .await?
+        .expect("stats present");
+    assert_eq!(stats.num_rows, Precision::Exact(50));
+    assert_eq!(stats.total_byte_size, Precision::Absent);
     Ok(())
 }
 

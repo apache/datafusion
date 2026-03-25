@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::SubstraitHints;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
@@ -40,12 +41,46 @@ pub async fn from_read_rel(
     consumer: &impl SubstraitConsumer,
     read: &ReadRel,
 ) -> datafusion::common::Result<LogicalPlan> {
+    // proto3 defaults numeric fields to 0, so treat 0.0/negative/non-finite
+    // and values that would overflow usize as "not provided".
+    // Zero-row tables will lose their stats — accepted proto3 limitation.
+    let hints = {
+        let stats = read
+            .common
+            .as_ref()
+            .and_then(|c| c.hint.as_ref())
+            .and_then(|h| h.stats.as_ref());
+        let max_hint: f64 = usize::MAX as f64;
+        let row_count = stats.and_then(|s| {
+            if s.row_count > 0.0 && s.row_count.is_finite() && s.row_count < max_hint {
+                Some(s.row_count)
+            } else {
+                None
+            }
+        });
+        let record_size = stats.and_then(|s| {
+            if s.record_size > 0.0
+                && s.record_size.is_finite()
+                && s.record_size < max_hint
+            {
+                Some(s.record_size)
+            } else {
+                None
+            }
+        });
+        SubstraitHints {
+            row_count,
+            record_size,
+        }
+    };
+
     async fn read_with_schema(
         consumer: &impl SubstraitConsumer,
         table_ref: TableReference,
         schema: DFSchema,
         projection: &Option<MaskExpression>,
         filter: &Option<Box<Expression>>,
+        hints: SubstraitHints,
     ) -> datafusion::common::Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
 
@@ -57,14 +92,14 @@ pub async fn from_read_rel(
         };
 
         let plan = {
-            let provider = match consumer.resolve_table_ref(&table_ref).await? {
-                Some(ref provider) => Arc::clone(provider),
+            let provider = match consumer.resolve_table_ref(&table_ref, hints).await? {
+                Some(provider) => provider,
                 _ => return plan_err!("No table named '{table_ref}'"),
             };
 
             LogicalPlanBuilder::scan_with_filters(
                 table_ref,
-                provider_as_source(Arc::clone(&provider)),
+                provider_as_source(provider),
                 None,
                 filters,
             )?
@@ -110,6 +145,7 @@ pub async fn from_read_rel(
                 substrait_schema,
                 &read.projection,
                 &read.filter,
+                hints,
             )
             .await
         }
@@ -213,6 +249,7 @@ pub async fn from_read_rel(
                 substrait_schema,
                 &read.projection,
                 &read.filter,
+                hints,
             )
             .await
         }

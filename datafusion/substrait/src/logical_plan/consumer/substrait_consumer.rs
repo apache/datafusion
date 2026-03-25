@@ -24,13 +24,16 @@ use super::{
 };
 use crate::extensions::Extensions;
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::DataType;
-use datafusion::catalog::TableProvider;
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::stats::Precision;
 use datafusion::common::{
-    DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
+    DFSchema, ScalarValue, Statistics, TableReference, not_impl_err, substrait_err,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
+use datafusion::logical_expr::TableType;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
+use datafusion::physical_plan::ExecutionPlan;
 use std::sync::{Arc, RwLock};
 use substrait::proto;
 use substrait::proto::expression as substrait_expression;
@@ -43,6 +46,26 @@ use substrait::proto::{
     Expression, ExtensionLeafRel, ExtensionMultiRel, ExtensionSingleRel, FetchRel,
     FilterRel, JoinRel, ProjectRel, ReadRel, Rel, SetRel, SortRel, r#type,
 };
+
+/// Advisory hints extracted from a Substrait `RelCommon.hint.stats` message,
+/// passed to [`SubstraitConsumer::resolve_table_ref`] so that implementors can
+/// incorporate them into the returned [`TableProvider`].
+///
+/// The struct is `#[non_exhaustive]` so that new fields can be added in future
+/// versions without breaking existing implementations.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default)]
+pub struct SubstraitHints {
+    /// Estimated number of rows, from `hint.stats.row_count`.
+    ///
+    /// `None` means the hint was absent or could not be reliably interpreted
+    /// (e.g. proto3 default-zero or a non-finite value).
+    pub row_count: Option<f64>,
+    /// Estimated average byte size per record, from `hint.stats.record_size`.
+    ///
+    /// `None` means the hint was absent or non-positive / non-finite.
+    pub record_size: Option<f64>,
+}
 
 #[async_trait]
 /// This trait is used to consume Substrait plans, converting them into DataFusion Logical Plans.
@@ -67,7 +90,7 @@ use substrait::proto::{
 /// # use datafusion::logical_expr::expr::ScalarFunction;
 /// # use datafusion_substrait::extensions::Extensions;
 /// # use datafusion_substrait::logical_plan::consumer::{
-/// #     from_project_rel, from_substrait_rel, from_substrait_rex, SubstraitConsumer
+/// #     from_project_rel, from_substrait_rel, from_substrait_rex, SubstraitConsumer, SubstraitHints
 /// # };
 ///
 /// struct CustomSubstraitConsumer {
@@ -80,6 +103,7 @@ use substrait::proto::{
 ///     async fn resolve_table_ref(
 ///         &self,
 ///         table_ref: &TableReference,
+///         _hints: SubstraitHints,
 ///     ) -> Result<Option<Arc<dyn TableProvider>>> {
 ///         let table = table_ref.table().to_string();
 ///         let schema = self.state.schema_for_ref(table_ref.clone())?;
@@ -162,6 +186,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     async fn resolve_table_ref(
         &self,
         table_ref: &TableReference,
+        hints: SubstraitHints,
     ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>>;
 
     // TODO: Remove these two methods
@@ -471,6 +496,94 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     }
 }
 
+/// Wraps an inner [`TableProvider`] and overrides its `statistics()` return value.
+///
+/// Used by [`DefaultSubstraitConsumer`] to inject a row-count hint carried in a
+/// Substrait `RelCommon.hint.stats` when the resolved provider has no statistics.
+///
+/// # Note on `as_any()` behaviour
+///
+/// `as_any()` intentionally delegates to the inner provider so that callers can
+/// still downcast to the concrete inner type (e.g. `MemTable`) through this
+/// wrapper.  As a consequence, downcasting to `StatisticsOverrideTableProvider`
+/// itself via `as_any()` will not work — but since this struct is private,
+/// external code should never need to do that.
+#[derive(Debug)]
+struct StatisticsOverrideTableProvider {
+    inner: Arc<dyn TableProvider>,
+    statistics: Statistics,
+}
+
+#[async_trait]
+impl TableProvider for StatisticsOverrideTableProvider {
+    fn as_any(&self) -> &dyn std::any::Any {
+        // Delegate to the inner provider so that downcasting to the concrete
+        // inner type works transparently through this wrapper.
+        self.inner.as_any()
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+
+    fn constraints(&self) -> Option<&datafusion::common::Constraints> {
+        self.inner.constraints()
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner.table_type()
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion::common::Result<
+        Vec<datafusion::logical_expr::TableProviderFilterPushDown>,
+    > {
+        self.inner.supports_filters_pushdown(filters)
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        Some(self.statistics.clone())
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        self.inner.scan(state, projection, filters, limit).await
+    }
+
+    async fn insert_into(
+        &self,
+        state: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: datafusion::logical_expr::dml::InsertOp,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        self.inner.insert_into(state, input, insert_op).await
+    }
+
+    async fn delete_from(
+        &self,
+        state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        self.inner.delete_from(state, filters).await
+    }
+
+    async fn update(
+        &self,
+        state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        self.inner.update(state, assignments, filters).await
+    }
+}
+
 /// Default SubstraitConsumer for converting standard Substrait without user-defined extensions.
 ///
 /// Used as the consumer in [crate::logical_plan::consumer::from_substrait_plan]
@@ -495,11 +608,72 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
     async fn resolve_table_ref(
         &self,
         table_ref: &TableReference,
+        hints: SubstraitHints,
     ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
         let table = table_ref.table().to_string();
         let schema = self.state.schema_for_ref(table_ref.clone())?;
-        let table_provider = schema.table(&table).await?;
-        Ok(table_provider)
+        let provider = schema.table(&table).await?;
+        // Wrap the provider to inject hint statistics only for fields the
+        // provider doesn't already have (checked individually, not as a whole).
+        let has_hints = hints.row_count.is_some() || hints.record_size.is_some();
+        let provider = match provider {
+            Some(provider) if has_hints => {
+                let existing = provider.statistics();
+                let row_count_absent = existing
+                    .as_ref()
+                    .is_none_or(|s| matches!(s.num_rows, Precision::Absent));
+                let byte_size_absent = existing
+                    .as_ref()
+                    .is_none_or(|s| matches!(s.total_byte_size, Precision::Absent));
+                let inject_row_count = hints.row_count.is_some() && row_count_absent;
+                // Both hints required: total_byte_size = row_count * record_size.
+                let inject_byte_size = hints.row_count.is_some()
+                    && hints.record_size.is_some()
+                    && byte_size_absent;
+                if inject_row_count || inject_byte_size {
+                    let num_rows = if inject_row_count {
+                        Precision::Inexact(hints.row_count.unwrap().round() as usize)
+                    } else {
+                        existing.as_ref().map_or(Precision::Absent, |s| s.num_rows)
+                    };
+                    let total_byte_size = if inject_byte_size {
+                        // Prefer the provider's own row count for consistency.
+                        let effective_rows = match &num_rows {
+                            Precision::Exact(n) | Precision::Inexact(n) => *n as f64,
+                            Precision::Absent => hints.row_count.unwrap(),
+                        };
+                        let byte_size = effective_rows * hints.record_size.unwrap();
+                        // The product of two sub-usize::MAX values can still overflow.
+                        if byte_size.is_finite() && byte_size < usize::MAX as f64 {
+                            Precision::Inexact(byte_size.round() as usize)
+                        } else {
+                            Precision::Absent
+                        }
+                    } else {
+                        existing
+                            .as_ref()
+                            .map_or(Precision::Absent, |s| s.total_byte_size)
+                    };
+                    let column_statistics =
+                        existing.map(|s| s.column_statistics).unwrap_or_else(|| {
+                            Statistics::unknown_column(&provider.schema())
+                        });
+                    let statistics = Statistics {
+                        num_rows,
+                        total_byte_size,
+                        column_statistics,
+                    };
+                    Some(Arc::new(StatisticsOverrideTableProvider {
+                        inner: provider,
+                        statistics,
+                    }) as Arc<dyn TableProvider>)
+                } else {
+                    Some(provider)
+                }
+            }
+            provider => provider,
+        };
+        Ok(provider)
     }
 
     fn get_extensions(&self) -> &Extensions {

@@ -18,7 +18,9 @@
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
+use datafusion::common::stats::Precision;
 use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
+use datafusion::datasource::source_as_provider;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
 use datafusion::scalar::ScalarValue;
@@ -29,7 +31,7 @@ use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
-use substrait::proto::{ReadRel, Rel};
+use substrait::proto::{ReadRel, Rel, RelCommon, rel_common};
 
 /// Converts rows of literal expressions into Substrait literal structs.
 ///
@@ -131,9 +133,46 @@ pub fn from_table_scan(
         Some(Box::new(filter_expr))
     };
 
+    // Statistics are serialised as f64 hints. Exact becomes Inexact after a
+    // round-trip since RelCommon.hint.stats is advisory. Zero-row tables lose
+    // their stats due to proto3 default-zero — both limitations are accepted.
+    let common = source_as_provider(&scan.source)
+        .ok()
+        .and_then(|provider| provider.statistics())
+        .and_then(|stats| {
+            let row_count = match stats.num_rows {
+                Precision::Exact(n) | Precision::Inexact(n) => Some(n as f64),
+                Precision::Absent => None,
+            };
+            // record_size = total_byte_size / num_rows (both must be present)
+            let record_size = match (stats.total_byte_size, row_count) {
+                (Precision::Exact(b) | Precision::Inexact(b), Some(rows))
+                    if rows > 0.0 =>
+                {
+                    Some(b as f64 / rows)
+                }
+                _ => None,
+            };
+            if row_count.is_none() && record_size.is_none() {
+                return None;
+            }
+            Some(RelCommon {
+                emit_kind: None,
+                hint: Some(rel_common::Hint {
+                    stats: Some(rel_common::hint::Stats {
+                        row_count: row_count.unwrap_or(0.0),
+                        record_size: record_size.unwrap_or(0.0),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                advanced_extension: None,
+            })
+        });
+
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
-            common: None,
+            common,
             base_schema: Some(base_schema),
             filter: filter_option,
             best_effort_filter: None,
