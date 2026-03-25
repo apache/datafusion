@@ -424,10 +424,26 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
                 .first()
                 .and_then(|a| a.as_any().downcast_ref::<Column>())
             {
+                // for Map columns, get_field performs a runtime key lookup rather than a
+                // schema-level field access so the entire Map column must be read,
+                // we skip the struct field optimization and defer to normal Column traversal
+                let is_map_column = self
+                    .file_schema
+                    .index_of(column.name())
+                    .ok()
+                    .map(|idx| {
+                        matches!(
+                            self.file_schema.field(idx).data_type(),
+                            DataType::Map(_, _)
+                        )
+                    })
+                    .unwrap_or(false);
+
                 let return_type = func.return_type();
 
-                if !DataType::is_nested(return_type)
-                    || self.is_nested_type_supported(return_type)
+                if !is_map_column
+                    && (!DataType::is_nested(return_type)
+                        || self.is_nested_type_supported(return_type))
                 {
                     // try to resolve all field name arguments to strinrg literals
                     // if any argument is not a string literal, we can not determine the exact

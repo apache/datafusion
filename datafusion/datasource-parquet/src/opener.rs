@@ -60,13 +60,13 @@ use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{Stream, StreamExt, ready};
 use log::debug;
 use parquet::DecodeResult;
+use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
-use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
 /// Implements [`FileOpener`] for a parquet file
