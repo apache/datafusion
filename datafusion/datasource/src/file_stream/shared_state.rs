@@ -435,9 +435,13 @@ impl IoState {
         }
 
         // Once a stream already has one outstanding I/O, it may only start a
-        // second if every other registered sibling stream has also reached at
-        // least one outstanding request.
-        self.streams.values().all(|state| state.outstanding_ios > 0)
+        // second if every other sibling that may still produce more work has
+        // also reached at least one outstanding request. Streams that are done
+        // producing and have no outstanding I/O no longer participate in the
+        // fairness gate.
+        self.streams.values().all(|state| {
+            state.outstanding_ios > 0 || (state.done_producing && state.outstanding_ios == 0)
+        })
     }
 
     fn can_issue_preserve_order(&self, stream_id: FileStreamId) -> bool {
@@ -450,7 +454,17 @@ impl IoState {
     }
 
     fn fair_share_for(&self, stream_id: FileStreamId) -> usize {
-        let active_streams = self.streams.keys().collect::<Vec<_>>();
+        let active_streams = self
+            .streams
+            .iter()
+            .filter_map(|(id, state)| {
+                if *id != stream_id && state.done_producing && state.outstanding_ios == 0 {
+                    None
+                } else {
+                    Some(*id)
+                }
+            })
+            .collect::<Vec<_>>();
 
         if active_streams.is_empty() {
             return 0;
@@ -462,7 +476,7 @@ impl IoState {
 
         let position = active_streams
             .iter()
-            .position(|id| **id == stream_id)
+            .position(|id| *id == stream_id)
             .expect("stream should be active");
 
         base_share + usize::from(position < remainder)
@@ -556,6 +570,61 @@ mod tests {
 
         state.mark_done_producing(stream2);
         assert!(state.all_streams_done_producing());
+    }
+
+    #[test]
+    /// A stream that is done producing and has no outstanding I/O must not
+    /// block a sibling from acquiring an extra unordered permit.
+    fn done_producing_stream_does_not_block_unordered_extra_permit() {
+        let state = SharedFileStreamState::new(2, SharedFileStreamMode::Unordered);
+        let stream1 = state.register_stream();
+        let stream2 = state.register_stream();
+
+        state.mark_done_producing(stream2);
+
+        let permit1 = state.try_acquire_io_permit(stream1).unwrap();
+        let permit2 = state.try_acquire_io_permit(stream1).unwrap();
+        assert!(state.try_acquire_io_permit(stream1).is_none());
+
+        drop(permit2);
+        drop(permit1);
+    }
+
+    #[test]
+    /// In preserve-order mode, a stream that is done producing and has no
+    /// outstanding I/O should not reduce the fair share available to active
+    /// siblings.
+    fn done_producing_stream_does_not_reduce_preserve_order_share() {
+        let state =
+            SharedFileStreamState::new(2, SharedFileStreamMode::PreserveOrder);
+        let stream1 = state.register_stream();
+        let stream2 = state.register_stream();
+
+        state.mark_done_producing(stream2);
+
+        let permit1 = state.try_acquire_io_permit(stream1).unwrap();
+        let permit2 = state.try_acquire_io_permit(stream1).unwrap();
+        assert!(state.try_acquire_io_permit(stream1).is_none());
+
+        drop(permit2);
+        drop(permit1);
+    }
+
+    #[test]
+    /// A done-producing stream may still issue I/O for stolen work, so it must
+    /// remain eligible for a preserve-order share calculation when it is the
+    /// requesting stream.
+    fn done_producing_requester_can_still_acquire_preserve_order_permit() {
+        let state =
+            SharedFileStreamState::new(2, SharedFileStreamMode::PreserveOrder);
+        let stream1 = state.register_stream();
+        let stream2 = state.register_stream();
+
+        state.mark_done_producing(stream1);
+        state.mark_done_producing(stream2);
+
+        let permit = state.try_acquire_io_permit(stream1).unwrap();
+        drop(permit);
     }
 
     #[test]

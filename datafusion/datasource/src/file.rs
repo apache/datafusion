@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
-use crate::file_stream::FileOpener;
+use crate::file_stream::{FileOpener, new_shared_file_stream_state};
 use crate::morsel::{FileOpenerMorselizer, Morselizer};
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
@@ -179,6 +179,10 @@ pub trait FileSource: Send + Sync {
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
             let mut source = config.clone();
             source.file_groups = repartitioned_file_groups;
+            source.shared_file_stream_state = new_shared_file_stream_state(
+                source.file_groups.len(),
+                source.preserve_order,
+            );
             return Ok(Some(source));
         }
         Ok(None)
