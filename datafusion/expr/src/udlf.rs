@@ -313,6 +313,12 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// lambdas are supported and some are optional, all should be returned,
     /// regardless of whether they are used on a particular invocation
     ///
+    /// Tip: If you have a [`LambdaFunction`] invocation, you can call the helper
+    /// [`LambdaFunction::lambdas_parameters`] instead of this method directly
+    ///
+    /// [`LambdaFunction`]: crate::expr::LambdaFunction
+    /// [`LambdaFunction::lambdas_parameters`]: crate::expr::LambdaFunction::lambdas_parameters
+    ///
     /// Example for array_transform:
     ///
     /// `array_transform([2.0, 8.0], v -> v > 4.0)`
