@@ -87,6 +87,7 @@ pub mod repartition;
 pub mod sort_pushdown;
 pub mod sorts;
 pub mod spill;
+pub mod operator_statistics;
 pub mod stream;
 pub mod streaming;
 pub mod tree_node;
