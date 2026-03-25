@@ -246,7 +246,8 @@ enum PendingBoundary {
 }
 
 pub(crate) struct SemiAntiSortMergeJoinStream {
-    /// true for semi (emit matched), false for anti (emit unmatched)
+    // Decomposed from JoinType to avoid matching on 4 variants in hot paths.
+    // true for semi (emit matched), false for anti (emit unmatched).
     is_semi: bool,
 
     // Input streams — in the nested-loop model that sort-merge join
@@ -257,11 +258,13 @@ pub(crate) struct SemiAntiSortMergeJoinStream {
     outer: SendableRecordBatchStream,
     inner: SendableRecordBatchStream,
 
-    // Current batches and cursor positions
+    // Current batches and cursor positions within them
     outer_batch: Option<RecordBatch>,
+    /// Row index into `outer_batch` — the next unprocessed outer row.
     outer_offset: usize,
     outer_key_arrays: Vec<ArrayRef>,
     inner_batch: Option<RecordBatch>,
+    /// Row index into `inner_batch` — the next unprocessed inner row.
     inner_offset: usize,
     inner_key_arrays: Vec<ArrayRef>,
 
@@ -288,14 +291,15 @@ pub(crate) struct SemiAntiSortMergeJoinStream {
     // Boundary re-entry state — see PendingBoundary doc comment.
     pending_boundary: Option<PendingBoundary>,
 
-    // Join condition
+    // Join ON expressions, evaluated against each new batch to produce
+    // the key arrays used for sorted key comparisons.
     on_outer: Vec<PhysicalExprRef>,
     on_inner: Vec<PhysicalExprRef>,
     filter: Option<JoinFilter>,
     sort_options: Vec<SortOptions>,
     null_equality: NullEquality,
-    // When join_type is RightSemi/RightAnti, outer=right, inner=left,
-    // so we need to swap sides when building the filter batch.
+    // Decomposed from JoinType: when RightSemi/RightAnti, outer=right,
+    // inner=left, so we swap sides when building the filter batch.
     outer_is_left: bool,
 
     // Output
