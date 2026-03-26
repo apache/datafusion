@@ -482,13 +482,19 @@ fn rescale_byte_size(stats: &mut Statistics, new_num_rows: Precision<usize>) {
     let old_rows = stats.num_rows;
     stats.num_rows = new_num_rows;
     stats.total_byte_size = match (old_rows, new_num_rows, stats.total_byte_size) {
-        (Precision::Exact(old), Precision::Exact(new), Precision::Exact(bytes)) if old > 0 => {
+        (Precision::Exact(old), Precision::Exact(new), Precision::Exact(bytes))
+            if old > 0 =>
+        {
             Precision::Exact((bytes as f64 * new as f64 / old as f64).round() as usize)
         }
-        _ => match (old_rows.get_value(), new_num_rows.get_value(), stats.total_byte_size.get_value()) {
-            (Some(&old), Some(&new), Some(&bytes)) if old > 0 => {
-                Precision::Inexact((bytes as f64 * new as f64 / old as f64).round() as usize)
-            }
+        _ => match (
+            old_rows.get_value(),
+            new_num_rows.get_value(),
+            stats.total_byte_size.get_value(),
+        ) {
+            (Some(&old), Some(&new), Some(&bytes)) if old > 0 => Precision::Inexact(
+                (bytes as f64 * new as f64 / old as f64).round() as usize,
+            ),
             _ => stats.total_byte_size,
         },
     };
@@ -536,14 +542,14 @@ impl StatisticsProvider for FilterStatisticsProvider {
         // ndv_after_selectivity to account for rows removed by the filter.
         if let (Some(&orig_rows), Some(&filtered_rows)) =
             (input_rows.get_value(), stats.num_rows.get_value())
+            && orig_rows > 0
+            && filtered_rows < orig_rows
         {
-            if orig_rows > 0 && filtered_rows < orig_rows {
-                let selectivity = filtered_rows as f64 / orig_rows as f64;
-                for col_stat in &mut stats.column_statistics {
-                    if let Some(&ndv) = col_stat.distinct_count.get_value() {
-                        let adjusted = ndv_after_selectivity(ndv, orig_rows, selectivity);
-                        col_stat.distinct_count = Precision::Inexact(adjusted);
-                    }
+            let selectivity = filtered_rows as f64 / orig_rows as f64;
+            for col_stat in &mut stats.column_statistics {
+                if let Some(&ndv) = col_stat.distinct_count.get_value() {
+                    let adjusted = ndv_after_selectivity(ndv, orig_rows, selectivity);
+                    col_stat.distinct_count = Precision::Inexact(adjusted);
                 }
             }
         }
@@ -751,7 +757,9 @@ impl StatisticsProvider for JoinStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::joins::{CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec};
+        use crate::joins::{
+            CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
+        };
         use datafusion_common::JoinType;
         use datafusion_physical_expr::expressions::Column;
 
@@ -809,27 +817,35 @@ impl StatisticsProvider for JoinStatisticsProvider {
             }
         }
 
-        let (inner_estimate, is_exact_cartesian, join_type) =
-            if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
-                let est = equi_join_estimate(hash_join.on(), left, right, left_rows, right_rows);
-                (est, false, *hash_join.join_type())
-            } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
-                let est = equi_join_estimate(smj.on(), left, right, left_rows, right_rows);
-                (est, false, smj.join_type())
-            } else if let Some(nl_join) =
-                plan.downcast_ref::<NestedLoopJoinExec>()
-            {
-                // Cartesian product is exact when both inputs are exact
-                let both_exact = left.num_rows.is_exact().unwrap_or(false)
-                    && right.num_rows.is_exact().unwrap_or(false);
-                (left_rows.saturating_mul(right_rows), both_exact, *nl_join.join_type())
-            } else if plan.downcast_ref::<CrossJoinExec>().is_some() {
-                let both_exact = left.num_rows.is_exact().unwrap_or(false)
-                    && right.num_rows.is_exact().unwrap_or(false);
-                (left_rows.saturating_mul(right_rows), both_exact, JoinType::Inner)
-            } else {
-                return Ok(StatisticsResult::Delegate);
-            };
+        let (inner_estimate, is_exact_cartesian, join_type) = if let Some(hash_join) =
+            plan.downcast_ref::<HashJoinExec>()
+        {
+            let est =
+                equi_join_estimate(hash_join.on(), left, right, left_rows, right_rows);
+            (est, false, *hash_join.join_type())
+        } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
+            let est = equi_join_estimate(smj.on(), left, right, left_rows, right_rows);
+            (est, false, smj.join_type())
+        } else if let Some(nl_join) = plan.downcast_ref::<NestedLoopJoinExec>() {
+            // Cartesian product is exact when both inputs are exact
+            let both_exact = left.num_rows.is_exact().unwrap_or(false)
+                && right.num_rows.is_exact().unwrap_or(false);
+            (
+                left_rows.saturating_mul(right_rows),
+                both_exact,
+                *nl_join.join_type(),
+            )
+        } else if plan.downcast_ref::<CrossJoinExec>().is_some() {
+            let both_exact = left.num_rows.is_exact().unwrap_or(false)
+                && right.num_rows.is_exact().unwrap_or(false);
+            (
+                left_rows.saturating_mul(right_rows),
+                both_exact,
+                JoinType::Inner,
+            )
+        } else {
+            return Ok(StatisticsResult::Delegate);
+        };
 
         // Apply join-type-aware cardinality bounds
         let estimated = match join_type {
@@ -838,14 +854,17 @@ impl StatisticsProvider for JoinStatisticsProvider {
             JoinType::Right => inner_estimate.max(right_rows),
             JoinType::Full => {
                 // At least left + right - matched, but never less than inner
-                let outer_bound = left_rows.saturating_add(right_rows)
+                let outer_bound = left_rows
+                    .saturating_add(right_rows)
                     .saturating_sub(inner_estimate);
                 inner_estimate.max(outer_bound)
             }
             JoinType::LeftSemi => inner_estimate.min(left_rows),
             JoinType::RightSemi => inner_estimate.min(right_rows),
             JoinType::LeftAnti => left_rows.saturating_sub(inner_estimate.min(left_rows)),
-            JoinType::RightAnti => right_rows.saturating_sub(inner_estimate.min(right_rows)),
+            JoinType::RightAnti => {
+                right_rows.saturating_sub(inner_estimate.min(right_rows))
+            }
             JoinType::LeftMark => left_rows,
             JoinType::RightMark => right_rows,
         };
@@ -858,8 +877,10 @@ impl StatisticsProvider for JoinStatisticsProvider {
             Precision::Inexact(estimated)
         };
 
-        // TODO: once #20184 lands, pass enhanced child_stats to partition_statistics
-        // so column-level stats (NDV, min/max) propagate through the registry walk.
+        // TODO: column-level stats (NDV, min/max) enriched by the registry walk
+        // are lost here because partition_statistics(None) re-fetches raw child
+        // stats internally. Once #20184 lands, pass enhanced child_stats so the
+        // operator's built-in column mapping uses them instead.
         let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
         rescale_byte_size(&mut base, num_rows);
         Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
@@ -886,13 +907,14 @@ impl StatisticsProvider for LimitStatisticsProvider {
             return Ok(StatisticsResult::Delegate);
         }
 
-        let (skip, fetch) = if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
-            (0usize, Some(limit.fetch()))
-        } else if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
-            (limit.skip(), limit.fetch())
-        } else {
-            return Ok(StatisticsResult::Delegate);
-        };
+        let (skip, fetch) =
+            if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
+                (0usize, Some(limit.fetch()))
+            } else if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
+                (limit.skip(), limit.fetch())
+            } else {
+                return Ok(StatisticsResult::Delegate);
+            };
 
         let num_rows = match child_stats[0].base.num_rows {
             Precision::Exact(rows) => {
@@ -912,8 +934,10 @@ impl StatisticsProvider for LimitStatisticsProvider {
             },
         };
 
-        // TODO: once #20184 lands, pass enhanced child_stats to partition_statistics
-        // so column-level stats (NDV, min/max) propagate through the registry walk.
+        // TODO: column-level stats (NDV, min/max) enriched by the registry walk
+        // are lost here because partition_statistics(None) re-fetches raw child
+        // stats internally. Once #20184 lands, pass enhanced child_stats so the
+        // operator's built-in column mapping uses them instead.
         let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
         rescale_byte_size(&mut base, num_rows);
         Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
@@ -955,8 +979,10 @@ impl StatisticsProvider for UnionStatisticsProvider {
             },
         )?;
 
-        // TODO: once #20184 lands, pass enhanced child_stats to partition_statistics
-        // so column-level stats (NDV, min/max) propagate through the registry walk.
+        // TODO: column-level stats (NDV, min/max) enriched by the registry walk
+        // are lost here because partition_statistics(None) re-fetches raw child
+        // stats internally. Once #20184 lands, pass enhanced child_stats so the
+        // operator's built-in column mapping uses them instead.
         let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
         rescale_byte_size(&mut base, total);
         Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
@@ -1144,7 +1170,10 @@ mod tests {
     }
 
     fn make_source(num_rows: usize) -> Arc<dyn ExecutionPlan> {
-        Arc::new(MockSourceExec::new(make_schema(), Precision::Exact(num_rows)))
+        Arc::new(MockSourceExec::new(
+            make_schema(),
+            Precision::Exact(num_rows),
+        ))
     }
 
     #[test]
@@ -1335,11 +1364,11 @@ mod tests {
 
     #[test]
     fn test_filter_adjusts_ndv_by_selectivity() -> Result<()> {
+        use datafusion_common::ScalarValue;
+        use datafusion_expr::Operator;
         use datafusion_physical_expr::expressions::{
             BinaryExpr, Column as PhysColumn, Literal,
         };
-        use datafusion_common::ScalarValue;
-        use datafusion_expr::Operator;
 
         // Source: 1000 rows, NDV(a)=1000 (unique), NDV(b)=800 (near-unique)
         // With NDV close to num_rows, each value has ~1.25 rows, so filtering
@@ -1362,17 +1391,17 @@ mod tests {
             },
         ];
         let source: Arc<dyn ExecutionPlan> = Arc::new(MockSourceExec::with_column_stats(
-            schema, Precision::Exact(1000), col_stats,
+            schema,
+            Precision::Exact(1000),
+            col_stats,
         ));
 
         // Filter: a > 900 (selectivity ~10%, keeps values 901-1000)
-        let predicate: Arc<dyn PhysicalExpr> = Arc::new(
-            BinaryExpr::new(
-                Arc::new(PhysColumn::new("a", 0)),
-                Operator::Gt,
-                Arc::new(Literal::new(ScalarValue::Int32(Some(900)))),
-            ),
-        );
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(PhysColumn::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(900)))),
+        ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, source)?);
 
@@ -1476,22 +1505,22 @@ mod tests {
         assert_eq!(num_distinct_vals(100, 200), 100);
 
         let ndv = num_distinct_vals(1000, 100);
-        assert!(ndv >= 90 && ndv <= 100, "Expected ~95, got {ndv}");
+        assert!((90..=100).contains(&ndv), "Expected ~95, got {ndv}");
 
         let ndv = num_distinct_vals(1000, 500);
-        assert!(ndv >= 350 && ndv <= 450, "Expected ~393, got {ndv}");
+        assert!((350..=450).contains(&ndv), "Expected ~393, got {ndv}");
 
         let ndv = num_distinct_vals(1_000_000, 10_000);
-        assert!(ndv >= 9900 && ndv <= 10000, "Expected ~9950, got {ndv}");
+        assert!((9900..=10000).contains(&ndv), "Expected ~9950, got {ndv}");
 
         let ndv = num_distinct_vals(1_000_000, 100);
-        assert!(ndv >= 99 && ndv <= 100, "Expected ~100, got {ndv}");
+        assert!((99..=100).contains(&ndv), "Expected ~100, got {ndv}");
     }
 
     #[test]
     fn test_num_distinct_vals_small_domain() {
         let ndv = num_distinct_vals(10, 5);
-        assert!(ndv >= 3 && ndv <= 5, "Expected ~4, got {ndv}");
+        assert!((3..=5).contains(&ndv), "Expected ~4, got {ndv}");
 
         assert_eq!(num_distinct_vals(10, 20), 10);
         assert_eq!(num_distinct_vals(10, 1), 1);
@@ -1500,10 +1529,10 @@ mod tests {
     #[test]
     fn test_ndv_after_selectivity() {
         let ndv = ndv_after_selectivity(1000, 10000, 0.1);
-        assert!(ndv >= 600 && ndv <= 700, "Expected ~632, got {ndv}");
+        assert!((600..=700).contains(&ndv), "Expected ~632, got {ndv}");
 
         let ndv = ndv_after_selectivity(1000, 10000, 0.01);
-        assert!(ndv >= 90 && ndv <= 100, "Expected ~95, got {ndv}");
+        assert!((90..=100).contains(&ndv), "Expected ~95, got {ndv}");
 
         assert_eq!(ndv_after_selectivity(1000, 10000, 0.0), 0);
         assert_eq!(ndv_after_selectivity(1000, 10000, 1.0), 1000);
@@ -1537,7 +1566,9 @@ mod tests {
             })
             .collect();
         Arc::new(MockSourceExec::with_column_stats(
-            schema, Precision::Exact(num_rows), col_stats,
+            schema,
+            Precision::Exact(num_rows),
+            col_stats,
         ))
     }
 
@@ -1550,7 +1581,7 @@ mod tests {
             group_by,
             vec![],
             vec![],
-            input.clone(),
+            Arc::clone(&input),
             input.schema(),
         )?))
     }
@@ -1713,7 +1744,7 @@ mod tests {
             group_by,
             vec![],
             vec![],
-            source.clone(),
+            Arc::clone(&source),
             source.schema(),
         )?);
 
@@ -1751,7 +1782,9 @@ mod tests {
             ColumnStatistics::new_unknown(),
         ];
         Arc::new(MockSourceExec::with_column_stats(
-            schema, Precision::Exact(num_rows), col_stats,
+            schema,
+            Precision::Exact(num_rows),
+            col_stats,
         ))
     }
 
@@ -1759,7 +1792,7 @@ mod tests {
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = make_schema();
+        let _schema = make_schema();
         let on: crate::joins::JoinOn = vec![(
             Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
             Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
@@ -1802,21 +1835,22 @@ mod tests {
         // left: 1000 rows, NDV(b)=50; right: 500 rows, NDV(b)=25
         // expected = 1000 * 500 / max(50, 25) = 10000
         let schema = make_schema(); // "a" Int32, "b" Int32
-        let make_source_ndv_b = |num_rows: usize, ndv_b: usize| -> Arc<dyn ExecutionPlan> {
-            let col_stats = vec![
-                ColumnStatistics::new_unknown(), // "a": no NDV
-                {
-                    let mut cs = ColumnStatistics::new_unknown();
-                    cs.distinct_count = Precision::Exact(ndv_b);
-                    cs
-                },
-            ];
-            Arc::new(MockSourceExec::with_column_stats(
-                Arc::clone(&schema),
-                Precision::Exact(num_rows),
-                col_stats,
-            ))
-        };
+        let make_source_ndv_b =
+            |num_rows: usize, ndv_b: usize| -> Arc<dyn ExecutionPlan> {
+                let col_stats = vec![
+                    ColumnStatistics::new_unknown(), // "a": no NDV
+                    {
+                        let mut cs = ColumnStatistics::new_unknown();
+                        cs.distinct_count = Precision::Exact(ndv_b);
+                        cs
+                    },
+                ];
+                Arc::new(MockSourceExec::with_column_stats(
+                    Arc::clone(&schema),
+                    Precision::Exact(num_rows),
+                    col_stats,
+                ))
+            };
 
         let left = make_source_ndv_b(1000, 50);
         let right = make_source_ndv_b(500, 25);
@@ -2151,8 +2185,7 @@ mod tests {
         // Inexact(1000) with fetch=100: result must stay Inexact, not Exact,
         // because the actual row count could be less than 100.
         let source = make_source_with_precision(Precision::Inexact(1000));
-        let limit: Arc<dyn ExecutionPlan> =
-            Arc::new(LocalLimitExec::new(source, 100));
+        let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(source, 100));
 
         let registry = StatisticsRegistry::with_providers(vec![
             Arc::new(LimitStatisticsProvider),
@@ -2206,7 +2239,10 @@ mod tests {
     #[test]
     fn test_union_provider_absent_propagates() -> Result<()> {
         // One input with unknown row count -> result must be Absent, not Inexact(300)
-        let union = UnionExec::try_new(vec![make_source(300), make_source_with_precision(Precision::Absent)])?;
+        let union = UnionExec::try_new(vec![
+            make_source(300),
+            make_source_with_precision(Precision::Absent),
+        ])?;
 
         let registry = StatisticsRegistry::with_providers(vec![
             Arc::new(UnionStatisticsProvider),
