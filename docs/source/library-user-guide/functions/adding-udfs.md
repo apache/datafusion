@@ -98,7 +98,6 @@ impl AddOne {
 
 /// Implement the ScalarUDFImpl trait for AddOne
 impl ScalarUDFImpl for AddOne {
-   fn as_any(&self) -> &dyn Any { self }
    fn name(&self) -> &str { "add_one" }
    fn signature(&self) -> &Signature { &self.signature }
    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -161,7 +160,6 @@ We now need to register the function with DataFusion so that it can be used in t
 #
 # /// Implement the ScalarUDFImpl trait for AddOne
 # impl ScalarUDFImpl for AddOne {
-#    fn as_any(&self) -> &dyn Any { self }
 #    fn name(&self) -> &str { "add_one" }
 #    fn signature(&self) -> &Signature { &self.signature }
 #    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -411,10 +409,6 @@ impl AsyncUpper {
 /// Implement the normal ScalarUDFImpl trait for AsyncUpper
 #[async_trait]
 impl ScalarUDFImpl for AsyncUpper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "async_upper"
     }
@@ -514,10 +508,6 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #
 # #[async_trait]
 # impl ScalarUDFImpl for AsyncUpper {
-#     fn as_any(&self) -> &dyn Any {
-#         self
-#     }
-#
 #     fn name(&self) -> &str {
 #         "async_upper"
 #     }
@@ -641,7 +631,6 @@ impl PowerFunction {
 }
 
 impl ScalarUDFImpl for PowerFunction {
-    fn as_any(&self) -> &dyn Any { self }
     fn name(&self) -> &str { "power" }
     fn signature(&self) -> &Signature { &self.signature }
 

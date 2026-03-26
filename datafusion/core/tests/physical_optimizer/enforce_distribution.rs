@@ -46,6 +46,8 @@ use datafusion_common::tree_node::{
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, binary, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
@@ -457,6 +459,71 @@ fn aggregate_exec_with_alias(
                 .unwrap(),
             ),
             schema,
+        )
+        .unwrap(),
+    )
+}
+
+fn partitioned_count_aggregate_exec(
+    input: Arc<dyn ExecutionPlan>,
+    group_alias_pairs: Vec<(String, String)>,
+    count_column: &str,
+) -> Arc<dyn ExecutionPlan> {
+    let input_schema = input.schema();
+    let group_by_expr = group_alias_pairs
+        .iter()
+        .map(|(column, alias)| {
+            (
+                col(column, &input_schema).unwrap() as Arc<dyn PhysicalExpr>,
+                alias.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let partial_group_by = PhysicalGroupBy::new_single(group_by_expr.clone());
+    let final_group_by = PhysicalGroupBy::new_single(
+        group_by_expr
+            .iter()
+            .enumerate()
+            .map(|(idx, (_expr, alias))| {
+                (
+                    Arc::new(Column::new(alias, idx)) as Arc<dyn PhysicalExpr>,
+                    alias.clone(),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    let aggr_expr = vec![Arc::new(
+        AggregateExprBuilder::new(
+            count_udaf(),
+            vec![col(count_column, &input_schema).unwrap()],
+        )
+        .schema(Arc::clone(&input_schema))
+        .alias(format!("COUNT({count_column})"))
+        .build()
+        .unwrap(),
+    )];
+
+    let partial = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Partial,
+            partial_group_by,
+            aggr_expr.clone(),
+            vec![None],
+            input,
+            Arc::clone(&input_schema),
+        )
+        .unwrap(),
+    );
+
+    Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            final_group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&partial) as _,
+            partial.schema(),
         )
         .unwrap(),
     )
@@ -3316,6 +3383,71 @@ fn preserve_ordering_through_repartition() -> Result<()> {
         RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=d@3 ASC
           DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet
     ");
+    let plan_sort = test_config.to_plan(physical_plan, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
+
+    Ok(())
+}
+
+#[test]
+fn preserve_ordering_for_streaming_sorted_aggregate() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let input = parquet_exec_multiple_sorted(vec![sort_key]);
+    let physical_plan = partitioned_count_aggregate_exec(
+        input,
+        vec![("a".to_string(), "a".to_string())],
+        "b",
+    );
+
+    let test_config = TestConfig::default().with_query_execution_partitions(2);
+
+    let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan_distrib, @r"
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
+      RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
+          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    ");
+
+    let plan_sort = test_config.to_plan(physical_plan, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
+
+    Ok(())
+}
+
+#[test]
+fn preserve_ordering_for_streaming_partially_sorted_aggregate() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let input = parquet_exec_multiple_sorted(vec![sort_key]);
+    let physical_plan = partitioned_count_aggregate_exec(
+        input,
+        vec![
+            ("a".to_string(), "a".to_string()),
+            ("b".to_string(), "b".to_string()),
+        ],
+        "c",
+    );
+
+    let test_config = TestConfig::default().with_query_execution_partitions(2);
+
+    let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan_distrib, @r"
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0])
+      RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
+        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0])
+          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    ");
+
     let plan_sort = test_config.to_plan(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 

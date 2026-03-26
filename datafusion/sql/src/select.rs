@@ -257,7 +257,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             select_exprs: mut select_exprs_post_aggr,
             having_expr: having_expr_post_aggr,
             qualify_expr: qualify_expr_post_aggr,
-            order_by_exprs: order_by_rex,
+            order_by_exprs: mut order_by_rex,
         } = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
             self.aggregate(
                 &base_plan,
@@ -293,14 +293,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        // The outer expressions we will search through for window functions.
-        // Window functions may be sourced from the SELECT list or from the QUALIFY expression.
-        let windows_expr_haystack = select_exprs_post_aggr
-            .iter()
-            .chain(qualify_expr_post_aggr.iter());
+        // The window expressions from SELECT and QUALIFY only, used to validate that
+        // QUALIFY is used with window functions (ORDER BY window functions don't count).
+        let qualify_window_func_exprs = find_window_exprs(
+            select_exprs_post_aggr
+                .iter()
+                .chain(qualify_expr_post_aggr.iter()),
+        );
+
         // All of the window expressions (deduplicated and rewritten to reference aggregates as
-        // columns from input).
-        let window_func_exprs = find_window_exprs(windows_expr_haystack);
+        // columns from input). Window functions may be sourced from the SELECT list, QUALIFY
+        // expression, or ORDER BY.
+        let window_func_exprs = find_window_exprs(
+            select_exprs_post_aggr
+                .iter()
+                .chain(qualify_expr_post_aggr.iter())
+                .chain(order_by_rex.iter().map(|s| &s.expr)),
+        );
 
         // Process window functions after aggregation as they can reference
         // aggregate functions in their body
@@ -315,14 +324,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
                 .collect::<Result<Vec<Expr>>>()?;
 
+            order_by_rex = order_by_rex
+                .into_iter()
+                .map(|sort_expr| {
+                    Ok(sort_expr.with_expr(rebase_expr(
+                        &sort_expr.expr,
+                        &window_func_exprs,
+                        &plan,
+                    )?))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
             plan
         };
 
         // Process QUALIFY clause after window functions
         // QUALIFY filters the results of window functions, similar to how HAVING filters aggregates
         let plan = if let Some(qualify_expr) = qualify_expr_post_aggr {
-            // Validate that QUALIFY is used with window functions
-            if window_func_exprs.is_empty() {
+            // Validate that QUALIFY is used with window functions in SELECT or QUALIFY
+            if qualify_window_func_exprs.is_empty() {
                 return plan_err!(
                     "QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
                 );

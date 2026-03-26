@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -66,10 +65,6 @@ impl SparkBitGet {
 }
 
 impl ScalarUDFImpl for SparkBitGet {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bit_get"
     }

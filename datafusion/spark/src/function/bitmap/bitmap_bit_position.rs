@@ -25,7 +25,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `bitmap_bit_position` expression
@@ -58,10 +57,6 @@ impl BitmapBitPosition {
 }
 
 impl ScalarUDFImpl for BitmapBitPosition {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bitmap_bit_position"
     }

@@ -5090,10 +5090,6 @@ mod tests {
         }
     }
     impl ScalarUDFImpl for VolatileUdf {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "VolatileUdf"
         }

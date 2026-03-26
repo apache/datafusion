@@ -829,7 +829,7 @@ fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
 
 #[cfg(test)]
 mod test {
-    use std::any::Any;
+
     use std::iter;
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1700,9 +1700,6 @@ mod test {
     }
 
     impl ScalarUDFImpl for TestUdf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "my_udf"
         }
@@ -1826,10 +1823,6 @@ mod test {
         }
     }
     impl ScalarUDFImpl for RandomStub {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "random"
         }

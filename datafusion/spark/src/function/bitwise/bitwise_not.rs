@@ -24,7 +24,7 @@ use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_functions::utils::make_scalar_function;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBitwiseNot {
@@ -54,10 +54,6 @@ impl SparkBitwiseNot {
 }
 
 impl ScalarUDFImpl for SparkBitwiseNot {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bitwise_not"
     }

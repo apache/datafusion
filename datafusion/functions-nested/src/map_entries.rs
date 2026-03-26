@@ -27,7 +27,6 @@ use datafusion_expr::{
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -79,10 +78,6 @@ impl MapEntriesFunc {
 }
 
 impl ScalarUDFImpl for MapEntriesFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_entries"
     }

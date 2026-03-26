@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::strings::make_and_append_view;
@@ -104,10 +103,6 @@ impl SubstrFunc {
 }
 
 impl ScalarUDFImpl for SubstrFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "substr"
     }

@@ -17,7 +17,6 @@
 
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
-use std::any::Any;
 use std::sync::Arc;
 use std::vec;
 
@@ -87,10 +86,6 @@ impl MakeArray {
 }
 
 impl ScalarUDFImpl for MakeArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "make_array"
     }
