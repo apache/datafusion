@@ -25,6 +25,8 @@
 #[cfg(test)]
 mod tests {
     use crate::utils::test::add_plan_schemas_to_ctx;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::arrow::util::pretty::pretty_format_batches;
     use datafusion::common::Result;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
@@ -32,6 +34,34 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
     use substrait::proto::Plan;
+
+    async fn execute_plan(name: &str) -> Result<Vec<RecordBatch>> {
+        let path = format!("tests/testdata/test_plans/{name}");
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+        let ctx = SessionContext::new();
+        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        ctx.execute_logical_plan(plan).await?.collect().await
+    }
+
+    /// Pretty-print batches as a table with header on top and data rows sorted.
+    fn pretty_sorted(batches: &[RecordBatch]) -> String {
+        let pretty = pretty_format_batches(batches).unwrap().to_string();
+        let all_lines: Vec<&str> = pretty.trim().lines().collect();
+        let header = &all_lines[..3];
+        let mut data: Vec<&str> = all_lines[3..all_lines.len() - 1].to_vec();
+        data.sort();
+        let footer = &all_lines[all_lines.len() - 1..];
+        header
+            .iter()
+            .copied()
+            .chain(data)
+            .chain(footer.iter().copied())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     async fn tpch_plan_to_string(query_id: i32) -> Result<String> {
         let path =
@@ -758,6 +788,82 @@ mod tests {
                           Filter: index_name = Utf8("aaa")
                             Values: (Utf8("aaa"), Utf8("host-a"), Int64(128)), (Utf8("bbb"), Utf8("host-b"), Int64(256))
         "#
+        );
+
+        Ok(())
+    }
+
+    /// Substrait join with both `equal` and `is_not_distinct_from` must demote
+    /// `IS NOT DISTINCT FROM` to the join filter.
+    #[tokio::test]
+    async fn test_mixed_join_equal_and_indistinct_inner_join() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("mixed_join_equal_and_indistinct.json").await?;
+        // Eq becomes the equijoin key; IS NOT DISTINCT FROM is demoted to filter.
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Projection: left.id, left.val, left.comment, right.id AS id0, right.val AS val0, right.comment AS comment0
+          Inner Join: left.id = right.id Filter: left.val IS NOT DISTINCT FROM right.val
+            SubqueryAlias: left
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+            SubqueryAlias: right
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+        "#
+        );
+
+        // Execute and verify actual rows, including NULL=NULL matches (ids 3,4).
+        let results = execute_plan("mixed_join_equal_and_indistinct.json").await?;
+        assert_snapshot!(pretty_sorted(&results),
+            @r"
+        +----+-----+---------+-----+------+----------+
+        | id | val | comment | id0 | val0 | comment0 |
+        +----+-----+---------+-----+------+----------+
+        | 1  | a   | c1      | 1   | a    | c1       |
+        | 2  | b   | c2      | 2   | b    | c2       |
+        | 3  |     | c3      | 3   |      | c3       |
+        | 4  |     | c4      | 4   |      | c4       |
+        | 5  | e   | c5      | 5   | e    | c5       |
+        | 6  | f   | c6      | 6   | f    | c6       |
+        +----+-----+---------+-----+------+----------+
+        "
+        );
+
+        Ok(())
+    }
+
+    /// Substrait join with both `equal` and `is_not_distinct_from` must demote
+    /// `IS NOT DISTINCT FROM` to the join filter.
+    #[tokio::test]
+    async fn test_mixed_join_equal_and_indistinct_left_join() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("mixed_join_equal_and_indistinct_left.json").await?;
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Projection: left.id, left.val, left.comment, right.id AS id0, right.val AS val0, right.comment AS comment0
+          Left Join: left.id = right.id Filter: left.val IS NOT DISTINCT FROM right.val
+            SubqueryAlias: left
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+            SubqueryAlias: right
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+        "#
+        );
+
+        let results = execute_plan("mixed_join_equal_and_indistinct_left.json").await?;
+        assert_snapshot!(pretty_sorted(&results),
+            @r"
+        +----+-----+---------+-----+------+----------+
+        | id | val | comment | id0 | val0 | comment0 |
+        +----+-----+---------+-----+------+----------+
+        | 1  | a   | c1      | 1   | a    | c1       |
+        | 2  | b   | c2      | 2   | b    | c2       |
+        | 3  |     | c3      | 3   |      | c3       |
+        | 4  |     | c4      | 4   |      | c4       |
+        | 5  | e   | c5      | 5   | e    | c5       |
+        | 6  | f   | c6      | 6   | f    | c6       |
+        +----+-----+---------+-----+------+----------+
+        "
         );
 
         Ok(())

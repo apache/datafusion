@@ -203,6 +203,24 @@ impl Precision<usize> {
 }
 
 impl Precision<ScalarValue> {
+    fn sum_data_type(data_type: &DataType) -> DataType {
+        match data_type {
+            DataType::Int8 | DataType::Int16 | DataType::Int32 => DataType::Int64,
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 => DataType::UInt64,
+            _ => data_type.clone(),
+        }
+    }
+
+    fn cast_scalar_to_sum_type(value: &ScalarValue) -> Result<ScalarValue> {
+        let source_type = value.data_type();
+        let target_type = Self::sum_data_type(&source_type);
+        if source_type == target_type {
+            Ok(value.clone())
+        } else {
+            value.cast_to(&target_type)
+        }
+    }
+
     /// Calculates the sum of two (possibly inexact) [`ScalarValue`] values,
     /// conservatively propagating exactness information. If one of the input
     /// values is [`Precision::Absent`], the result is `Absent` too.
@@ -226,6 +244,31 @@ impl Precision<ScalarValue> {
                 .unwrap_or(Precision::Absent),
             (_, _) => Precision::Absent,
         }
+    }
+
+    /// Casts integer values to the wider SQL `SUM` return type.
+    ///
+    /// This narrows overflow risk when `sum_value` statistics are merged:
+    /// `Int8/Int16/Int32 -> Int64` and `UInt8/UInt16/UInt32 -> UInt64`.
+    pub fn cast_to_sum_type(&self) -> Precision<ScalarValue> {
+        match (self.is_exact(), self.get_value()) {
+            (Some(true), Some(value)) => Self::cast_scalar_to_sum_type(value)
+                .map(Precision::Exact)
+                .unwrap_or(Precision::Absent),
+            (Some(false), Some(value)) => Self::cast_scalar_to_sum_type(value)
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
+            (_, _) => Precision::Absent,
+        }
+    }
+
+    /// SUM-style addition with integer widening to match SQL `SUM` return
+    /// types for smaller integral inputs.
+    pub fn add_for_sum(&self, other: &Precision<ScalarValue>) -> Precision<ScalarValue> {
+        let mut lhs = self.cast_to_sum_type();
+        let rhs = other.cast_to_sum_type();
+        precision_add(&mut lhs, &rhs);
+        lhs
     }
 
     /// Calculates the difference of two (possibly inexact) [`ScalarValue`] values,
@@ -620,7 +663,7 @@ impl Statistics {
     /// assert_eq!(merged.column_statistics[0].max_value,
     ///     Precision::Exact(ScalarValue::from(200)));
     /// assert_eq!(merged.column_statistics[0].sum_value,
-    ///     Precision::Exact(ScalarValue::from(1500)));
+    ///     Precision::Exact(ScalarValue::Int64(Some(1500))));
     /// ```
     pub fn try_merge_iter<'a, I>(items: I, schema: &Schema) -> Result<Statistics>
     where
@@ -664,7 +707,7 @@ impl Statistics {
                 null_count: cs.null_count,
                 max_value: cs.max_value.clone(),
                 min_value: cs.min_value.clone(),
-                sum_value: cs.sum_value.clone(),
+                sum_value: cs.sum_value.cast_to_sum_type(),
                 distinct_count: cs.distinct_count,
                 byte_size: cs.byte_size,
             })
@@ -693,7 +736,8 @@ impl Statistics {
                 };
                 col_stats.min_value = col_stats.min_value.min(&item_cs.min_value);
                 col_stats.max_value = col_stats.max_value.max(&item_cs.max_value);
-                precision_add(&mut col_stats.sum_value, &item_cs.sum_value);
+                let item_sum_value = item_cs.sum_value.cast_to_sum_type();
+                precision_add(&mut col_stats.sum_value, &item_sum_value);
                 col_stats.byte_size = col_stats.byte_size.add(&item_cs.byte_size);
             }
         }
@@ -877,7 +921,15 @@ pub struct ColumnStatistics {
     pub max_value: Precision<ScalarValue>,
     /// Minimum value of column
     pub min_value: Precision<ScalarValue>,
-    /// Sum value of a column
+    /// Sum value of a column.
+    ///
+    /// For integral columns, values should be kept in SUM-compatible widened
+    /// types (`Int8/Int16/Int32 -> Int64`, `UInt8/UInt16/UInt32 -> UInt64`) to
+    /// reduce overflow risk during statistics propagation.
+    ///
+    /// Callers should prefer [`ColumnStatistics::with_sum_value`] for setting
+    /// this field and [`Precision<ScalarValue>::add_for_sum`] /
+    /// [`Precision<ScalarValue>::cast_to_sum_type`] for sum arithmetic.
     pub sum_value: Precision<ScalarValue>,
     /// Number of distinct values
     pub distinct_count: Precision<usize>,
@@ -942,7 +994,19 @@ impl ColumnStatistics {
 
     /// Set the sum value
     pub fn with_sum_value(mut self, sum_value: Precision<ScalarValue>) -> Self {
-        self.sum_value = sum_value;
+        self.sum_value = match sum_value {
+            Precision::Exact(value) => {
+                Precision::<ScalarValue>::cast_scalar_to_sum_type(&value)
+                    .map(Precision::Exact)
+                    .unwrap_or(Precision::Absent)
+            }
+            Precision::Inexact(value) => {
+                Precision::<ScalarValue>::cast_scalar_to_sum_type(&value)
+                    .map(Precision::Inexact)
+                    .unwrap_or(Precision::Absent)
+            }
+            Precision::Absent => Precision::Absent,
+        };
         self
     }
 
@@ -1093,6 +1157,45 @@ mod tests {
             Precision::Exact(ScalarValue::Int32(None)),
         );
         assert_eq!(precision.add(&Precision::Absent), Precision::Absent);
+    }
+
+    #[test]
+    fn test_add_for_sum_scalar_integer_widening() {
+        let precision = Precision::Exact(ScalarValue::Int32(Some(42)));
+
+        assert_eq!(
+            precision.add_for_sum(&Precision::Exact(ScalarValue::Int32(Some(23)))),
+            Precision::Exact(ScalarValue::Int64(Some(65))),
+        );
+        assert_eq!(
+            precision.add_for_sum(&Precision::Inexact(ScalarValue::Int32(Some(23)))),
+            Precision::Inexact(ScalarValue::Int64(Some(65))),
+        );
+    }
+
+    #[test]
+    fn test_add_for_sum_prevents_int32_overflow() {
+        let lhs = Precision::Exact(ScalarValue::Int32(Some(i32::MAX)));
+        let rhs = Precision::Exact(ScalarValue::Int32(Some(1)));
+
+        assert_eq!(
+            lhs.add_for_sum(&rhs),
+            Precision::Exact(ScalarValue::Int64(Some(i64::from(i32::MAX) + 1))),
+        );
+    }
+
+    #[test]
+    fn test_add_for_sum_scalar_unsigned_integer_widening() {
+        let precision = Precision::Exact(ScalarValue::UInt32(Some(42)));
+
+        assert_eq!(
+            precision.add_for_sum(&Precision::Exact(ScalarValue::UInt32(Some(23)))),
+            Precision::Exact(ScalarValue::UInt64(Some(65))),
+        );
+        assert_eq!(
+            precision.add_for_sum(&Precision::Inexact(ScalarValue::UInt32(Some(23)))),
+            Precision::Inexact(ScalarValue::UInt64(Some(65))),
+        );
     }
 
     #[test]
@@ -1340,7 +1443,7 @@ mod tests {
         );
         assert_eq!(
             col1_stats.sum_value,
-            Precision::Exact(ScalarValue::Int32(Some(1100)))
+            Precision::Exact(ScalarValue::Int64(Some(1100)))
         ); // 500 + 600
 
         let col2_stats = &summary_stats.column_statistics[1];
@@ -1355,7 +1458,7 @@ mod tests {
         );
         assert_eq!(
             col2_stats.sum_value,
-            Precision::Exact(ScalarValue::Int32(Some(2200)))
+            Precision::Exact(ScalarValue::Int64(Some(2200)))
         ); // 1000 + 1200
     }
 
@@ -1998,6 +2101,16 @@ mod tests {
     }
 
     #[test]
+    fn test_with_sum_value_builder_widens_small_integers() {
+        let col_stats = ColumnStatistics::new_unknown()
+            .with_sum_value(Precision::Exact(ScalarValue::UInt32(Some(123))));
+        assert_eq!(
+            col_stats.sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(123)))
+        );
+    }
+
+    #[test]
     fn test_with_fetch_scales_byte_size() {
         // Test that byte_size is scaled by the row ratio in with_fetch
         let original_stats = Statistics {
@@ -2144,7 +2257,7 @@ mod tests {
         );
         assert_eq!(
             col1_stats.sum_value,
-            Precision::Exact(ScalarValue::Int32(Some(1100)))
+            Precision::Exact(ScalarValue::Int64(Some(1100)))
         );
 
         let col2_stats = &summary_stats.column_statistics[1];
@@ -2159,7 +2272,7 @@ mod tests {
         );
         assert_eq!(
             col2_stats.sum_value,
-            Precision::Exact(ScalarValue::Int32(Some(2200)))
+            Precision::Exact(ScalarValue::Int64(Some(2200)))
         );
     }
 
@@ -2508,7 +2621,7 @@ mod tests {
         );
         assert_eq!(
             col_stats.sum_value,
-            Precision::Inexact(ScalarValue::Int32(Some(1500)))
+            Precision::Inexact(ScalarValue::Int64(Some(1500)))
         );
     }
 }

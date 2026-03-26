@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -66,10 +65,6 @@ impl PowUdf {
 
 impl ScalarUDFImpl for PowUdf {
     /// We implement as_any so that we can downcast the ScalarUDFImpl trait object
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// Return the name of this function
     fn name(&self) -> &str {
         "pow"

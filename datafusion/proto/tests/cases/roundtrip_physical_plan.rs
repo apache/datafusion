@@ -1280,7 +1280,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        if let Some(udf) = binding.as_any().downcast_ref::<MyRegexUdf>() {
+        if let Some(udf) = (binding.as_ref() as &dyn Any).downcast_ref::<MyRegexUdf>() {
             let proto = MyRegexUdfNode {
                 pattern: udf.pattern.clone(),
             };
@@ -2436,10 +2436,6 @@ async fn roundtrip_async_func_exec() -> Result<()> {
     }
 
     impl ScalarUDFImpl for TestAsyncUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "test_async_udf"
         }

@@ -1261,7 +1261,7 @@ fn project_with_column_index(
 
 #[cfg(test)]
 mod test {
-    use std::any::Any;
+
     use std::sync::Arc;
 
     use arrow::datatypes::DataType::Utf8;
@@ -1719,10 +1719,6 @@ mod test {
     }
 
     impl ScalarUDFImpl for TestScalarUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "TestScalarUDF"
         }

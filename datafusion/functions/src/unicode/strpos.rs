@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::{make_scalar_function, utf8_to_int_type};
@@ -78,10 +77,6 @@ impl StrposFunc {
 }
 
 impl ScalarUDFImpl for StrposFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "strpos"
     }

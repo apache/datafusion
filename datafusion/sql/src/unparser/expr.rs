@@ -1833,7 +1833,7 @@ impl Unparser<'_> {
 #[cfg(test)]
 mod tests {
     use std::ops::{Add, Sub};
-    use std::{any::Any, sync::Arc, vec};
+    use std::{sync::Arc, vec};
 
     use crate::unparser::dialect::SqliteDialect;
     use arrow::array::{LargeListArray, ListArray};
@@ -1881,10 +1881,6 @@ mod tests {
     }
 
     impl ScalarUDFImpl for DummyUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "dummy_udf"
         }

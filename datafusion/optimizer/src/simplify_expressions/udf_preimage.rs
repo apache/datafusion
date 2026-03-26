@@ -68,7 +68,7 @@ pub(super) fn rewrite_with_preimage(
 
 #[cfg(test)]
 mod test {
-    use std::any::Any;
+
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field};
@@ -120,10 +120,6 @@ mod test {
     }
 
     impl ScalarUDFImpl for PreimageUdf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "preimage_func"
         }

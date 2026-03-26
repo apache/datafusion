@@ -24,7 +24,6 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, types::logical_string,
     utils::take_function_args,
 };
-use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
@@ -115,10 +114,6 @@ impl ArrowCastFunc {
 }
 
 impl ScalarUDFImpl for ArrowCastFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "arrow_cast"
     }
