@@ -249,12 +249,7 @@ enum PendingBoundary {
 }
 
 pub(crate) struct SemiAntiMarkSortMergeJoinStream {
-    // Decomposed from JoinType to avoid matching on 6 variants in hot paths.
-    // true for semi (emit matched), false for anti (emit unmatched).
-    // Ignored when is_mark is true.
-    is_semi: bool,
-    // true for mark joins (emit all rows with match boolean column).
-    is_mark: bool,
+    join_type: JoinType,
 
     // Input streams — in the nested-loop model that sort-merge join
     // implements, "outer" is the driving loop and "inner" is probed for
@@ -368,8 +363,6 @@ impl SemiAntiMarkSortMergeJoinStream {
             ),
             "SemiAntiMarkSortMergeJoinStream does not handle {join_type:?}"
         );
-        let is_semi = matches!(join_type, JoinType::LeftSemi | JoinType::RightSemi);
-        let is_mark = matches!(join_type, JoinType::LeftMark | JoinType::RightMark);
         let outer_is_left = matches!(
             join_type,
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
@@ -382,8 +375,7 @@ impl SemiAntiMarkSortMergeJoinStream {
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
 
         Ok(Self {
-            is_semi,
-            is_mark,
+            join_type,
             outer,
             inner,
             outer_batch: None,
@@ -517,31 +509,35 @@ impl SemiAntiMarkSortMergeJoinStream {
         // BooleanBuffer — no iteration or repacking needed.
         let matched_buf = self.matched.finish();
 
-        if self.is_mark {
-            // Mark joins emit ALL outer rows with a boolean match column appended.
-            debug_assert_eq!(
-                self.schema.fields().len(),
-                batch.num_columns() + 1,
-                "Mark join output schema should be outer schema + 1 mark column"
-            );
-            let mark_col = Arc::new(BooleanArray::new(matched_buf, None)) as ArrayRef;
-            let mut columns = batch.columns().to_vec();
-            columns.push(mark_col);
-            let output = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
-            self.coalescer.push_batch(output)?;
-        } else {
-            let selection = BooleanArray::new(matched_buf, None);
-
-            let selection = if self.is_semi {
-                selection
-            } else {
-                not(&selection)?
-            };
-
-            let filtered = filter_record_batch(batch, &selection)?;
-            if filtered.num_rows() > 0 {
-                self.coalescer.push_batch(filtered)?;
+        match self.join_type {
+            JoinType::LeftMark | JoinType::RightMark => {
+                // Mark joins emit ALL outer rows with a boolean match column appended.
+                debug_assert_eq!(
+                    self.schema.fields().len(),
+                    batch.num_columns() + 1,
+                    "Mark join output schema should be outer schema + 1 mark column"
+                );
+                let mark_col = Arc::new(BooleanArray::new(matched_buf, None)) as ArrayRef;
+                let mut columns = batch.columns().to_vec();
+                columns.push(mark_col);
+                let output = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+                self.coalescer.push_batch(output)?;
             }
+            JoinType::LeftSemi | JoinType::RightSemi => {
+                let selection = BooleanArray::new(matched_buf, None);
+                let filtered = filter_record_batch(batch, &selection)?;
+                if filtered.num_rows() > 0 {
+                    self.coalescer.push_batch(filtered)?;
+                }
+            }
+            JoinType::LeftAnti | JoinType::RightAnti => {
+                let selection = not(&BooleanArray::new(matched_buf, None))?;
+                let filtered = filter_record_batch(batch, &selection)?;
+                if filtered.num_rows() > 0 {
+                    self.coalescer.push_batch(filtered)?;
+                }
+            }
+            _ => unreachable!(),
         }
         Ok(())
     }
