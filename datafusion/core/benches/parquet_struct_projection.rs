@@ -20,8 +20,8 @@
 //! Measures the benefit of reading only the needed leaf columns from a
 //! struct column. Three dataset shapes are tested:
 //!
-//! 1. **Narrow struct** (2 leaves): one 8 KiB UTF-8 field + one INT field
-//! 2. **Wide struct** (5 leaves): four 8 KiB UTF-8 fields + one INT field
+//! 1. **Narrow struct** (2 leaves): one 128 KiB UTF-8 field + one INT field
+//! 2. **Wide struct** (5 leaves): four 128 KiB UTF-8 fields + one INT field
 //! 3. **Nested struct** (3 leaves): `STRUCT<inner: STRUCT<large_string, small_int>, extra_string>`
 //!
 //! In all cases, projecting just the small integer should skip decoding
@@ -45,7 +45,7 @@ const NUM_BATCHES: usize = 64;
 const WRITE_RECORD_BATCH_SIZE: usize = 4096;
 const ROW_GROUP_ROW_COUNT: usize = 65536;
 const EXPECTED_ROW_GROUPS: usize = 4;
-const LARGE_STRING_LEN: usize = 8 * 1024;
+const LARGE_STRING_LEN: usize = 128 * 1024;
 
 fn narrow_schema() -> SchemaRef {
     let struct_fields = Fields::from(vec![
