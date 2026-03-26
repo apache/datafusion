@@ -4025,10 +4025,15 @@ mod tests {
     async fn evaluate_partial_reduce(
         groups: PhysicalGroupBy,
         aggregates: Vec<Arc<AggregateFunctionExpr>>,
-        partition_1_and_2_batches: [Vec<RecordBatch>; 2]
+        partition_1_and_2_batches: [Vec<RecordBatch>; 2],
     ) -> Result<Vec<RecordBatch>> {
-        let schema = partition_1_and_2_batches.iter().flatten().next().expect("Must have at least 1 batch").schema();
-        
+        let schema = partition_1_and_2_batches
+            .iter()
+            .flatten()
+            .next()
+            .expect("Must have at least 1 batch")
+            .schema();
+
         let [partition_1, partition_2] = partition_1_and_2_batches;
 
         // Step 1: Partial aggregation on partition 1
@@ -4108,7 +4113,7 @@ mod tests {
         )?);
 
         let result = crate::collect(final_agg, Arc::clone(&task_ctx)).await?;
-        
+
         Ok(result)
     }
 
@@ -4150,15 +4155,10 @@ mod tests {
                 .alias("SUM(b)")
                 .build()?,
         )];
-        
-        let result = evaluate_partial_reduce(
-            groups,
-            aggregates,
-            [
-                vec![batch1],
-                vec![batch2]
-            ]
-        ).await?;
+
+        let result =
+            evaluate_partial_reduce(groups, aggregates, [vec![batch1], vec![batch2]])
+                .await?;
 
         // Expected: group 1 -> 10+40=50, group 2 -> 20+50=70, group 3 -> 30+60=90
         assert_snapshot!(batches_to_sort_string(&result), @r"
@@ -4213,15 +4213,10 @@ mod tests {
                 .alias("AVG(b)")
                 .build()?,
         )];
-        
-        let result = evaluate_partial_reduce(
-            groups,
-            aggregates,
-            [
-                vec![batch1],
-                vec![batch2]
-            ]
-        ).await?;
+
+        let result =
+            evaluate_partial_reduce(groups, aggregates, [vec![batch1], vec![batch2]])
+                .await?;
 
         assert_snapshot!(batches_to_sort_string(&result), @r"
                         +---+--------+
@@ -4244,7 +4239,8 @@ mod tests {
     /// This simulates a tree-reduce pattern:
     ///   Partial -> PartialReduce -> Final
     #[tokio::test]
-    async fn test_partial_reduce_mode_on_aggregate_that_have_more_than_state_fields_than_input_arguments() -> Result<()> {
+    async fn test_partial_reduce_mode_on_aggregate_that_have_more_than_state_fields_than_input_arguments()
+    -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
@@ -4270,7 +4266,6 @@ mod tests {
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
             AggregateExprBuilder::new(
-                
                 // TODO - this test is easily not testing what we want when the aggregate remove the assertion from the data_type function
                 approx_percentile_cont_udaf(),
                 vec![col("b", &schema)?, lit(0.75f32)],
@@ -4279,15 +4274,10 @@ mod tests {
             .alias("approx_percentile_cont(b, 0.75)")
             .build()?,
         )];
-        
-        let result = evaluate_partial_reduce(
-            groups,
-            aggregates,
-            [
-                vec![batch1],
-                vec![batch2]
-            ]
-        ).await?;
+
+        let result =
+            evaluate_partial_reduce(groups, aggregates, [vec![batch1], vec![batch2]])
+                .await?;
 
         // Expected: group 1 -> 10+40=50, group 2 -> 20+50=70, group 3 -> 30+60=90
         assert_snapshot!(batches_to_sort_string(&result), @r"
