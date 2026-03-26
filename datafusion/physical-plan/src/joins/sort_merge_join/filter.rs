@@ -288,10 +288,8 @@ pub fn get_corrected_filter_mask(
         | JoinType::RightSemi
         | JoinType::LeftAnti
         | JoinType::RightAnti => {
-            // Semi/anti/mark joins are handled by SemiAntiMarkSortMergeJoinStream
             unreachable!(
-                "Semi/anti/mark joins should not reach get_corrected_filter_mask; \
-                 they are handled by SemiAntiMarkSortMergeJoinStream"
+                "Semi/anti/mark joins are handled by SemiAntiMarkSortMergeJoinStream"
             )
         }
         JoinType::Inner => None,
