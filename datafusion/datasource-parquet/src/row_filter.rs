@@ -608,6 +608,40 @@ pub(crate) fn build_projection_read_plan(
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
 ) -> ParquetReadPlan {
+    // check if any column in the schema is a struct type
+    // if not, we can skip the PushdownChecker traversal entirely and use
+    // root-level projection which is significantly faster
+    let has_struct_columns = file_schema
+        .fields()
+        .iter()
+        .any(|f| matches!(f.data_type(), DataType::Struct(_)));
+
+    if !has_struct_columns {
+        let mut root_indices = exprs
+            .into_iter()
+            .flat_map(|e| {
+                datafusion_physical_expr::utils::collect_columns(&e)
+                    .into_iter()
+                    .map(|col| col.index())
+            })
+            .collect::<Vec<_>>();
+        root_indices.sort_unstable();
+        root_indices.dedup();
+
+        let projection_mask =
+            ProjectionMask::roots(schema_descr, root_indices.iter().copied());
+        let projected_schema = Arc::new(
+            file_schema
+                .project(&root_indices)
+                .expect("valid column indices"),
+        );
+
+        return ParquetReadPlan {
+            projection_mask,
+            projected_schema,
+        };
+    }
+
     let mut all_root_indices = Vec::new();
     let mut all_struct_accesses = Vec::new();
 
@@ -622,6 +656,23 @@ pub(crate) fn build_projection_read_plan(
 
     all_root_indices.sort_unstable();
     all_root_indices.dedup();
+
+    // when no struct field accesses were found, fall back to root-level projection
+    // to match the performance of the simple path
+    if all_struct_accesses.is_empty() {
+        let projection_mask =
+            ProjectionMask::roots(schema_descr, all_root_indices.iter().copied());
+        let projected_schema = Arc::new(
+            file_schema
+                .project(&all_root_indices)
+                .expect("valid column indices"),
+        );
+
+        return ParquetReadPlan {
+            projection_mask,
+            projected_schema,
+        };
+    }
 
     let leaf_indices = {
         let mut out =
@@ -775,7 +826,10 @@ fn build_filter_schema(
         })
         .collect::<Vec<_>>();
 
-    Arc::new(Schema::new_with_metadata(fields, file_schema.metadata().clone()))
+    Arc::new(Schema::new_with_metadata(
+        fields,
+        file_schema.metadata().clone(),
+    ))
 }
 
 fn prune_struct_type(dt: &DataType, paths: &[&[String]]) -> DataType {
