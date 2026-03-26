@@ -4266,7 +4266,6 @@ mod tests {
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
             AggregateExprBuilder::new(
-                // TODO - this test is easily not testing what we want when the aggregate remove the assertion from the data_type function
                 approx_percentile_cont_udaf(),
                 vec![col("b", &schema)?, lit(0.75f32)],
             )
