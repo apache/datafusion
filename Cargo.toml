@@ -88,19 +88,19 @@ version = "52.3.0"
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "58.0.0", features = [
+arrow = { version = "58.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "58.0.0", default-features = false }
-arrow-flight = { version = "58.0.0", features = [
+arrow-buffer = { version = "58.1.0", default-features = false }
+arrow-flight = { version = "58.1.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "58.0.0", default-features = false, features = [
+arrow-ipc = { version = "58.1.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "58.0.0", default-features = false }
-arrow-schema = { version = "58.0.0", default-features = false }
+arrow-ord = { version = "58.1.0", default-features = false }
+arrow-schema = { version = "58.1.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -165,7 +165,7 @@ memchr = "2.8.0"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.1", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "58.0.0", default-features = false, features = [
+parquet = { version = "58.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -239,6 +239,9 @@ unused_qualifications = "deny"
 # - ci: derived from `dev` but disables incremental builds and strips dependency
 #     symbols to keep CI artifacts small and reproducible.
 #     Run: cargo run --profile ci
+# - ci-optimized: derived from `release` but enables debug assertions, and uses
+#     lighter optimizations. Used for long-running CI tasks.
+#     Run: cargo run --profile ci-release
 #
 # If you want to optimize compilation, the `compile_profile` benchmark can be useful.
 # See `benchmarks/README.md` for more details.
@@ -260,6 +263,7 @@ strip = false            # Retain debug info for flamegraphs
 
 [profile.ci-optimized]
 inherits = "release"
+debug-assertions = true
 codegen-units = 16
 lto = "thin"
 strip = true
@@ -268,6 +272,7 @@ strip = true
 debug = false
 inherits = "dev"
 incremental = false
+debug-assertions = true
 
 # This rule applies to every package except workspace members (dependencies
 # such as `arrow` and `tokio`). It disables debug info and related features on

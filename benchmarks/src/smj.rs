@@ -277,6 +277,7 @@ const SMJ_QUERIES: &[&str] = &[
         WHERE EXISTS (
             SELECT 1 FROM t2_sorted
             WHERE t2_sorted.key = t1_sorted.key
+              AND t2_sorted.data <> t1_sorted.data
               AND t2_sorted.data % 10 <> 0
         )
     "#,

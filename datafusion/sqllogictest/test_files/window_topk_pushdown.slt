@@ -47,7 +47,10 @@ STORED AS CSV
 LOCATION '../../testing/data/csv/aggregate_test_100_with_dates.csv'
 OPTIONS ('format.has_header' 'true');
 
-# Use multiple partitions to trigger hash repartitioning for the window function
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
@@ -68,6 +71,9 @@ LIMIT 3;
 a 1
 a 2
 a 3
+
+statement ok
+RESET datafusion.optimizer.enable_topk_repartition;
 
 # Enabled: results must match baseline
 statement ok
@@ -139,3 +145,6 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1, maintains_sort_order=true
 07)------------SortExec: TopK(fetch=3), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno], file_type=csv, has_header=true
+
+statement ok
+RESET datafusion.optimizer.enable_topk_repartition;

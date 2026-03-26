@@ -2806,6 +2806,138 @@ fn over_order_by_with_window_frame_double_end() {
 }
 
 #[test]
+fn window_function_only_in_order_by() {
+    let sql = "SELECT order_id FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
+        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_select_and_order_by() {
+    let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id) FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
+      Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_nested_expr() {
+    let sql =
+        "SELECT order_id FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id) + 1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW + Int64(1) ASC NULLS LAST
+        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_desc() {
+    let sql =
+        "SELECT order_id FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id) DESC";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW DESC NULLS FIRST
+        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn multiple_window_functions_in_order_by() {
+    let sql = "SELECT order_id FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY order_id DESC)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
+        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+              TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_with_group_by() {
+    let sql = "SELECT order_id, SUM(qty) FROM orders GROUP BY order_id ORDER BY MAX(SUM(qty)) OVER (ORDER BY order_id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id, sum(orders.qty)
+      Sort: max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
+        Projection: orders.order_id, sum(orders.qty), max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            Aggregate: groupBy=[[orders.order_id]], aggr=[[sum(orders.qty)]]
+              TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_with_qualify() {
+    let sql = "SELECT person.id, ROW_NUMBER() OVER (PARTITION BY person.age ORDER BY person.id) as rn FROM person QUALIFY rn = 1 ORDER BY ROW_NUMBER() OVER (PARTITION BY person.age ORDER BY person.id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Sort: rn ASC NULLS LAST
+      Projection: person.id, row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+        Filter: row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1)
+          WindowAggr: windowExpr=[[row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: person
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_not_in_select() {
+    let sql =
+        "SELECT order_id FROM orders ORDER BY MIN(qty) OVER (PARTITION BY order_id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING ASC NULLS LAST
+        Projection: orders.order_id, min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+          WindowAggr: windowExpr=[[min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
 fn over_order_by_with_window_frame_single_end() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
     let plan = logical_plan(sql).unwrap();
@@ -4249,6 +4381,16 @@ fn test_select_qualify_aggregate_invalid_column_reference() {
 #[test]
 fn test_select_qualify_without_window_function() {
     let sql = "SELECT person.id FROM person QUALIFY person.id > 1";
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(
+        err.strip_backtrace(),
+        "Error during planning: QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
+    );
+}
+
+#[test]
+fn test_select_qualify_without_window_function_but_window_in_order_by() {
+    let sql = "SELECT person.id FROM person QUALIFY person.id > 1 ORDER BY ROW_NUMBER() OVER (ORDER BY person.id)";
     let err = logical_plan(sql).unwrap_err();
     assert_eq!(
         err.strip_backtrace(),

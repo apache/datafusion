@@ -940,3 +940,7 @@ FROM t2
 WHERE t2.a > 3 OR t2.a IN (SELECT t3.x FROM t3 WHERE t2.b < 150)
 ----
 4 101 1001
+
+# Config reset
+statement ok
+RESET datafusion.optimizer.prefer_hash_join;

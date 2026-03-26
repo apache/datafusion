@@ -146,3 +146,7 @@ physical_plan
 
 statement ok
 drop table d;
+
+# Config reset
+statement ok
+RESET datafusion.explain.physical_plan_only;

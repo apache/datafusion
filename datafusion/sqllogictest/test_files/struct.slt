@@ -1665,5 +1665,9 @@ order by id;
 2 1 300
 3 2 150
 
+# Config reset
+statement ok
+RESET datafusion.sql_parser.dialect;
+
 statement ok
 drop table t_agg_window;

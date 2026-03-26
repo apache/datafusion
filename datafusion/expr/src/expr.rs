@@ -512,17 +512,26 @@ pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
 pub fn intersect_metadata_for_union<'a>(
     metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
 ) -> SchemaFieldMetadata {
-    let mut metadatas = metadatas.into_iter();
-    let Some(mut intersected) = metadatas.next().cloned() else {
-        return Default::default();
-    };
+    let mut intersected: Option<SchemaFieldMetadata> = None;
 
     for metadata in metadatas {
-        // Only keep keys that exist in both with the same value
-        intersected.retain(|k, v| metadata.get(k) == Some(v));
+        // Skip empty metadata (e.g. from NULL literals or computed expressions)
+        // to avoid dropping metadata from branches that have it.
+        if metadata.is_empty() {
+            continue;
+        }
+        match &mut intersected {
+            None => {
+                intersected = Some(metadata.clone());
+            }
+            Some(current) => {
+                // Only keep keys that exist in both with the same value
+                current.retain(|k, v| metadata.get(k) == Some(v));
+            }
+        }
     }
 
-    intersected
+    intersected.unwrap_or_default()
 }
 
 /// UNNEST expression.
@@ -4125,6 +4134,69 @@ mod test {
             ) -> Result<ColumnarValue> {
                 unimplemented!()
             }
+        }
+    }
+
+    mod intersect_metadata_tests {
+        use super::super::intersect_metadata_for_union;
+        use std::collections::HashMap;
+
+        #[test]
+        fn all_branches_same_metadata() {
+            let m1 = HashMap::from([("key".into(), "val".into())]);
+            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+        }
+
+        #[test]
+        fn conflicting_metadata_dropped() {
+            let m1 = HashMap::from([("key".into(), "a".into())]);
+            let m2 = HashMap::from([("key".into(), "b".into())]);
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn empty_metadata_branch_skipped() {
+            let m1 = HashMap::from([("key".into(), "val".into())]);
+            let m2 = HashMap::new(); // e.g. NULL literal
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+        }
+
+        #[test]
+        fn empty_metadata_first_branch_skipped() {
+            let m1 = HashMap::new();
+            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+        }
+
+        #[test]
+        fn all_branches_empty_metadata() {
+            let m1: HashMap<String, String> = HashMap::new();
+            let m2: HashMap<String, String> = HashMap::new();
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn mixed_empty_and_conflicting() {
+            let m1 = HashMap::from([("key".into(), "a".into())]);
+            let m2 = HashMap::new();
+            let m3 = HashMap::from([("key".into(), "b".into())]);
+            let result = intersect_metadata_for_union([&m1, &m2, &m3]);
+            // m2 is skipped; m1 and m3 conflict → dropped
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn no_inputs() {
+            let result = intersect_metadata_for_union(std::iter::empty::<
+                &HashMap<String, String>,
+            >());
+            assert!(result.is_empty());
         }
     }
 }
