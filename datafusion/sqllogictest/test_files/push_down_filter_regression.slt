@@ -213,6 +213,10 @@ set datafusion.execution.target_partitions = 1;
 # Regression test for https://github.com/apache/datafusion/issues/21065
 # Ensure filter pushdown through AggregateExec still works when a ProjectionExec
 # reorders aggregate input columns.
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
 statement ok
 create external table agg_reordered_pushdown stored as parquet location '../../parquet-testing/data/alltypes_plain.parquet';
 
