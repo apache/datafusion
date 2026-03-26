@@ -46,17 +46,17 @@ pub struct FFI_PhysicalOptimizerRule {
 
     pub schema_check: unsafe extern "C" fn(&Self) -> bool,
 
-    /// Used to create a clone on the provider of the execution plan. This should
+    /// Used to create a clone on the rule. This should
     /// only need to be called by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
 
-    /// Return the major DataFusion version number of this provider.
+    /// Return the major DataFusion version number of this rule.
     pub version: unsafe extern "C" fn() -> u64,
 
-    /// Internal data. This is only to be accessed by the provider of the plan.
+    /// Internal data. This is only to be accessed by the provider of the rule.
     /// A [`ForeignPhysicalOptimizerRule`] should never attempt to access this data.
     pub private_data: *mut c_void,
 
@@ -108,10 +108,13 @@ unsafe extern "C" fn schema_check_fn_wrapper(rule: &FFI_PhysicalOptimizerRule) -
     rule.inner().schema_check()
 }
 
-unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_PhysicalOptimizerRule) {
-    let private_data =
-        unsafe { Box::from_raw(provider.private_data as *mut RulePrivateData) };
-    drop(private_data);
+unsafe extern "C" fn release_fn_wrapper(rule: &mut FFI_PhysicalOptimizerRule) {
+    unsafe {
+        debug_assert!(!rule.private_data.is_null());
+        let private_data = Box::from_raw(rule.private_data as *mut RulePrivateData);
+        drop(private_data);
+        rule.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
@@ -172,7 +175,7 @@ impl FFI_PhysicalOptimizerRule {
 /// This wrapper struct exists on the receiver side of the FFI interface, so it has
 /// no guarantees about being able to access the data in `private_data`. Any functions
 /// defined on this struct must only use the stable functions provided in
-/// FFI_PhysicalOptimizerRule to interact with the foreign table provider.
+/// FFI_PhysicalOptimizerRule to interact with the foreign rule.
 #[derive(Debug)]
 pub struct ForeignPhysicalOptimizerRule(pub FFI_PhysicalOptimizerRule);
 
@@ -180,12 +183,12 @@ unsafe impl Send for ForeignPhysicalOptimizerRule {}
 unsafe impl Sync for ForeignPhysicalOptimizerRule {}
 
 impl From<&FFI_PhysicalOptimizerRule> for Arc<dyn PhysicalOptimizerRule + Send + Sync> {
-    fn from(provider: &FFI_PhysicalOptimizerRule) -> Self {
-        if (provider.library_marker_id)() == crate::get_library_marker_id() {
-            return Arc::clone(provider.inner());
+    fn from(rule: &FFI_PhysicalOptimizerRule) -> Self {
+        if (rule.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(rule.inner());
         }
 
-        Arc::new(ForeignPhysicalOptimizerRule(provider.clone()))
+        Arc::new(ForeignPhysicalOptimizerRule(rule.clone()))
             as Arc<dyn PhysicalOptimizerRule + Send + Sync>
     }
 }
@@ -230,9 +233,8 @@ mod tests {
     use datafusion_physical_optimizer::PhysicalOptimizerRule;
     use datafusion_physical_plan::ExecutionPlan;
 
-    use crate::execution_plan::tests::EmptyExec;
-
     use super::*;
+    use crate::execution_plan::tests::EmptyExec;
 
     #[derive(Debug)]
     struct NoOpRule {
