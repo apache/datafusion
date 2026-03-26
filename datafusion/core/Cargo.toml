@@ -249,6 +249,11 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "parquet_struct_projection"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
 name = "range_and_generate_series"
 
 [[bench]]
