@@ -3915,6 +3915,85 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     Ok(())
 }
 
+/// When `LimitPushdown` merges a `GlobalLimitExec` into `CoalescePartitionsExec`
+/// as `fetch`, `remove_dist_changing_operators` must preserve that fetch value.
+/// Otherwise, queries with LIMIT over multi-partition sources silently lose
+/// the limit and return duplicate/extra rows.
+///
+/// Regression test for: https://github.com/apache/datafusion/issues/21169
+#[test]
+fn coalesce_partitions_fetch_preserved_by_enforce_distribution() -> Result<()> {
+    // Simulate what LimitPushdown produces:
+    // CoalescePartitionsExec(fetch=1)
+    //   DataSourceExec (2 partitions)
+    let parquet = parquet_exec_multiple();
+    let coalesce_with_fetch: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(parquet).with_fetch(Some(1)));
+
+    let result = ensure_distribution_helper(coalesce_with_fetch, 10, false)?;
+
+    // The fetch=1 must survive. It can appear either as:
+    // - CoalescePartitionsExec: fetch=1  (re-inserted with fetch), or
+    // - GlobalLimitExec: skip=0, fetch=1 (fallback when merge wasn't re-added)
+    let plan_str = displayable(result.as_ref()).indent(true).to_string();
+    assert!(
+        plan_str.contains("fetch=1"),
+        "fetch=1 was lost after EnforceDistribution!\nPlan:\n{plan_str}"
+    );
+    Ok(())
+}
+
+/// Same as above, but with a sorted multi-partition source.
+/// The fetch should be preserved on `SortPreservingMergeExec`.
+#[test]
+fn coalesce_partitions_fetch_preserved_sorted() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    // CoalescePartitionsExec(fetch=5) over sorted multi-partition source
+    let parquet = parquet_exec_multiple_sorted(vec![sort_key]);
+    let coalesce_with_fetch: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(parquet).with_fetch(Some(5)));
+
+    let result = ensure_distribution_helper(coalesce_with_fetch, 10, false)?;
+
+    let plan_str = displayable(result.as_ref()).indent(true).to_string();
+    assert!(
+        plan_str.contains("fetch=5"),
+        "fetch=5 was lost after EnforceDistribution!\nPlan:\n{plan_str}"
+    );
+    Ok(())
+}
+
+/// SortPreservingMergeExec with fetch should also be preserved.
+#[test]
+fn spm_fetch_preserved_by_enforce_distribution() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    // SortPreservingMergeExec(fetch=3) over sorted multi-partition source
+    let parquet = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+    let spm_with_fetch: Arc<dyn ExecutionPlan> =
+        Arc::new(SortPreservingMergeExec::new(sort_key, parquet).with_fetch(Some(3)));
+
+    let result = ensure_distribution_helper(spm_with_fetch, 10, false)?;
+
+    let plan_str = displayable(result.as_ref()).indent(true).to_string();
+    assert!(
+        plan_str.contains("fetch=3"),
+        "fetch=3 was lost after EnforceDistribution!\nPlan:\n{plan_str}"
+    );
+    Ok(())
+}
+
 /// When a parent requires SinglePartition and maintains input order, order-preserving
 /// variants (e.g. SortPreservingMergeExec) should be kept so that ordering can
 /// propagate to ancestors. Replacing them with CoalescePartitionsExec would destroy
