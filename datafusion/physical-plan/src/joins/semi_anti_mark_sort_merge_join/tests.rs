@@ -150,7 +150,9 @@ impl RecordBatchStream for PendingStream {
 }
 
 /// Helper: collect all output from a SemiAntiMarkSortMergeJoinStream.
-async fn collect_stream(stream: SemiAntiMarkSortMergeJoinStream) -> Result<Vec<RecordBatch>> {
+async fn collect_stream(
+    stream: SemiAntiMarkSortMergeJoinStream,
+) -> Result<Vec<RecordBatch>> {
     common::collect(Box::pin(stream)).await
 }
 

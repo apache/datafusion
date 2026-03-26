@@ -524,8 +524,7 @@ impl SemiAntiMarkSortMergeJoinStream {
                 batch.num_columns() + 1,
                 "Mark join output schema should be outer schema + 1 mark column"
             );
-            let mark_col =
-                Arc::new(BooleanArray::new(matched_buf, None)) as ArrayRef;
+            let mark_col = Arc::new(BooleanArray::new(matched_buf, None)) as ArrayRef;
             let mut columns = batch.columns().to_vec();
             columns.push(mark_col);
             let output = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;

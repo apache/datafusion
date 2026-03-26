@@ -96,23 +96,10 @@ impl FilterMetadata {
             "row_indices and filter_mask must have same length"
         );
 
-        for i in 0..row_indices.len() {
-            if filter_mask.is_null(i) {
-                self.filter_mask.append_null();
-            } else if filter_mask.value(i) {
-                self.filter_mask.append_value(true);
-            } else {
-                self.filter_mask.append_value(false);
-            }
-
-            if row_indices.is_null(i) {
-                self.row_indices.append_null();
-            } else {
-                self.row_indices.append_value(row_indices.value(i));
-            }
-
-            self.batch_ids.push(batch_id);
-        }
+        self.filter_mask.extend(filter_mask);
+        self.row_indices.extend(row_indices);
+        self.batch_ids
+            .resize(self.batch_ids.len() + row_indices.len(), batch_id);
     }
 
     /// Verify that metadata arrays are aligned (same length)
@@ -154,10 +141,7 @@ pub fn needs_deferred_filtering(
     join_type: JoinType,
 ) -> bool {
     filter.is_some()
-        && matches!(
-            join_type,
-            JoinType::Left | JoinType::Right | JoinType::Full
-        )
+        && matches!(join_type, JoinType::Left | JoinType::Right | JoinType::Full)
 }
 
 /// Gets the arrays which join filters are applied on
@@ -294,9 +278,12 @@ pub fn get_corrected_filter_mask(
             corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
-        JoinType::LeftMark | JoinType::RightMark
-        | JoinType::LeftSemi | JoinType::RightSemi
-        | JoinType::LeftAnti | JoinType::RightAnti => {
+        JoinType::LeftMark
+        | JoinType::RightMark
+        | JoinType::LeftSemi
+        | JoinType::RightSemi
+        | JoinType::LeftAnti
+        | JoinType::RightAnti => {
             // Semi/anti/mark joins are handled by SemiAntiMarkSortMergeJoinStream
             unreachable!(
                 "Semi/anti/mark joins should not reach get_corrected_filter_mask; \
@@ -374,9 +361,12 @@ pub fn filter_record_batch_by_join_type(
                 &[filtered_record_batch, null_joined_streamed_batch],
             )?)
         }
-        JoinType::LeftSemi | JoinType::LeftAnti
-        | JoinType::RightSemi | JoinType::RightAnti
-        | JoinType::LeftMark | JoinType::RightMark => unreachable!(
+        JoinType::LeftSemi
+        | JoinType::LeftAnti
+        | JoinType::RightSemi
+        | JoinType::RightAnti
+        | JoinType::LeftMark
+        | JoinType::RightMark => unreachable!(
             "Semi/anti/mark joins are handled by SemiAntiMarkSortMergeJoinStream"
         ),
         JoinType::Right => {

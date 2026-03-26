@@ -39,7 +39,7 @@ use futures::StreamExt;
 #[derive(Debug, Args, Clone)]
 #[command(verbatim_doc_comment)]
 pub struct RunOpt {
-    /// Query number (between 1 and 20). If not specified, runs all queries
+    /// Query number (between 1 and 23). If not specified, runs all queries
     #[arg(short, long)]
     query: Option<usize>,
 
@@ -409,6 +409,56 @@ const SMJ_QUERIES: &[&str] = &[
         SELECT t1_sorted.key, count(*) as cnt
         FROM t1_sorted JOIN t2_sorted ON t1_sorted.key = t2_sorted.key
         GROUP BY t1_sorted.key
+    "#,
+    // Q21: INNER 100K x 100K | unique keys (1:1) | 50% join filter
+    // Near-unique keys: each BufferedBatch has 1 row, so each chunk has 1 pair.
+    // Stresses per-chunk filter evaluation overhead.
+    r#"
+        WITH t1_sorted AS (
+            SELECT value as key, value as data
+            FROM range(100000) ORDER BY value
+        ),
+        t2_sorted AS (
+            SELECT value as key, value as data
+            FROM range(100000) ORDER BY value
+        )
+        SELECT t1_sorted.key, t1_sorted.data as d1, t2_sorted.data as d2
+        FROM t1_sorted JOIN t2_sorted
+          ON t1_sorted.key = t2_sorted.key
+         AND t1_sorted.data + t2_sorted.data < 100000
+    "#,
+    // Q22: LEFT 100K x 100K | unique keys (1:1) | 50% join filter
+    // Same near-unique stress test with deferred filtering metadata.
+    r#"
+        WITH t1_sorted AS (
+            SELECT value as key, value as data
+            FROM range(100000) ORDER BY value
+        ),
+        t2_sorted AS (
+            SELECT value as key, value as data
+            FROM range(100000) ORDER BY value
+        )
+        SELECT t1_sorted.key, t1_sorted.data as d1, t2_sorted.data as d2
+        FROM t1_sorted LEFT JOIN t2_sorted
+          ON t1_sorted.key = t2_sorted.key
+         AND t1_sorted.data + t2_sorted.data < 100000
+    "#,
+    // Q23: FULL 100K x 100K | unique keys (1:1) | 50% join filter
+    // Same near-unique stress test with full join filter tracking.
+    r#"
+        WITH t1_sorted AS (
+            SELECT value as key, value as data
+            FROM range(100000) ORDER BY value
+        ),
+        t2_sorted AS (
+            SELECT value as key, value as data
+            FROM range(100000) ORDER BY value
+        )
+        SELECT t1_sorted.key as k1, t1_sorted.data as d1,
+               t2_sorted.key as k2, t2_sorted.data as d2
+        FROM t1_sorted FULL JOIN t2_sorted
+          ON t1_sorted.key = t2_sorted.key
+         AND t1_sorted.data + t2_sorted.data < 100000
     "#,
 ];
 

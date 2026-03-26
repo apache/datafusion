@@ -45,11 +45,12 @@ use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
 use arrow::compute::{
-    self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, take,
-    take_arrays,
+    self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, interleave,
+    take, take_arrays,
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::ipc::reader::StreamReader;
+use datafusion_common::cast::as_uint64_array;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{
     JoinType, NullEquality, Result, exec_err, internal_err, not_impl_err,
@@ -462,12 +463,7 @@ impl JoinedRecordBatches {
         join_type: JoinType,
     ) {
         debug_assert!(
-            matches!(
-                join_type,
-                JoinType::Left
-                    | JoinType::Right
-                    | JoinType::Full
-            ),
+            matches!(join_type, JoinType::Left | JoinType::Right | JoinType::Full),
             "push_batch_with_filter_metadata should only be called for outer joins that need deferred filtering"
         );
 
@@ -752,10 +748,7 @@ impl SortMergeJoinStream {
         debug_assert!(
             matches!(
                 join_type,
-                JoinType::Inner
-                    | JoinType::Left
-                    | JoinType::Right
-                    | JoinType::Full
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full
             ),
             "SortMergeJoinStream does not handle {join_type:?}; \
              semi/anti/mark joins use SemiAntiMarkSortMergeJoinStream"
@@ -1058,9 +1051,7 @@ impl SortMergeJoinStream {
             Ordering::Less => {
                 if matches!(
                     self.join_type,
-                    JoinType::Left
-                        | JoinType::Right
-                        | JoinType::Full
+                    JoinType::Left | JoinType::Right | JoinType::Full
                 ) {
                     join_streamed = !self.streamed_joined;
                 }
@@ -1218,158 +1209,264 @@ impl SortMergeJoinStream {
     // Produces and stages record batch for all output indices found
     // for current streamed batch and clears staged output indices.
     fn freeze_streamed(&mut self) -> Result<()> {
-        for chunk in self.streamed_batch.output_indices.iter_mut() {
-            // The row indices of joined streamed batch
-            let left_indices = chunk.streamed_indices.finish();
+        let mut matched_chunks: Vec<(usize, UInt64Array, UInt64Array)> = Vec::new();
+        let mut total_matched_rows: usize = 0;
 
+        // Step 1: Classify chunks — null-joined go out immediately,
+        // matched are collected for batched materialization + filter.
+        for chunk in self.streamed_batch.output_indices.iter_mut() {
+            let left_indices = chunk.streamed_indices.finish();
             if left_indices.is_empty() {
                 continue;
             }
-
-            let mut left_columns = if let Some(range) = is_contiguous_range(&left_indices)
-            {
-                // When indices form a contiguous range (common for the streamed
-                // side which advances sequentially), use zero-copy slice instead
-                // of the O(n) take kernel.
-                self.streamed_batch
-                    .batch
-                    .slice(range.start, range.len())
-                    .columns()
-                    .to_vec()
-            } else {
-                take_arrays(self.streamed_batch.batch.columns(), &left_indices, None)?
-            };
-
-            // The row indices of joined buffered batch
             let right_indices: UInt64Array = chunk.buffered_indices.finish();
-            let mut right_columns =
-                if let Some(buffered_idx) = chunk.buffered_batch_idx {
-                    fetch_right_columns_by_idxs(
-                        &self.buffered_data,
-                        buffered_idx,
-                        &right_indices,
-                    )?
+
+            if chunk.buffered_batch_idx.is_none() {
+                // Null-joined: no filter needed, push immediately.
+                let left_columns =
+                    materialize_left_columns(&self.streamed_batch.batch, &left_indices)?;
+                let right_columns =
+                    create_unmatched_columns(&self.buffered_schema, left_indices.len());
+
+                let columns = if self.join_type != JoinType::Right {
+                    [left_columns, right_columns].concat()
                 } else {
-                    // If buffered batch none, meaning it is null joined batch.
-                    // We need to create null arrays for buffered columns to join with streamed rows.
-                    create_unmatched_columns(
-                        &self.buffered_schema,
-                        right_indices.len(),
-                    )
+                    [right_columns, left_columns].concat()
+                };
+                let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+                self.joined_record_batches
+                    .push_batch_without_metadata(batch);
+                continue;
+            }
+
+            total_matched_rows += left_indices.len();
+            matched_chunks.push((
+                chunk.buffered_batch_idx.unwrap(),
+                left_indices,
+                right_indices,
+            ));
+        }
+
+        if !matched_chunks.is_empty() {
+            self.freeze_streamed_matched(&matched_chunks, total_matched_rows)?;
+        }
+
+        self.streamed_batch.output_indices.clear();
+        self.streamed_batch.num_output_rows = 0;
+        Ok(())
+    }
+
+    /// Materializes, filters, and pushes all matched chunks in one batch.
+    fn freeze_streamed_matched(
+        &mut self,
+        matched_chunks: &[(usize, UInt64Array, UInt64Array)],
+        total_matched_rows: usize,
+    ) -> Result<()> {
+        // Step 2: Combine left indices across all chunks.
+        let combined_left_indices = if matched_chunks.len() == 1 {
+            matched_chunks[0].1.clone()
+        } else {
+            let refs: Vec<&dyn Array> =
+                matched_chunks.iter().map(|c| &c.1 as &dyn Array).collect();
+            as_uint64_array(&compute::concat(&refs)?)?.clone()
+        };
+
+        // Step 3: Materialize left columns (single source batch).
+        let left_columns =
+            materialize_left_columns(&self.streamed_batch.batch, &combined_left_indices)?;
+
+        // Step 4: Materialize right columns.
+        let right_columns =
+            self.materialize_right_columns(matched_chunks, total_matched_rows)?;
+
+        // Step 5: Build filter columns and evaluate filter.
+        let filter_columns = if self.join_type == JoinType::Right {
+            get_filter_columns(&self.filter, &right_columns, &left_columns)
+        } else {
+            get_filter_columns(&self.filter, &left_columns, &right_columns)
+        };
+
+        let columns = if self.join_type != JoinType::Right {
+            [left_columns, right_columns].concat()
+        } else {
+            [right_columns, left_columns].concat()
+        };
+        let output_batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+
+        if !filter_columns.is_empty() {
+            if let Some(f) = &self.filter {
+                let filter_batch =
+                    RecordBatch::try_new(Arc::clone(f.schema()), filter_columns)?;
+                let filter_result = f
+                    .expression()
+                    .evaluate(&filter_batch)?
+                    .into_array(filter_batch.num_rows())?;
+
+                let pre_mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+
+                let mask = if pre_mask.null_count() > 0 {
+                    compute::prep_null_mask_filter(pre_mask)
+                } else {
+                    pre_mask.clone()
                 };
 
-            // Prepare the columns we apply join filter on later.
-            // Only for joined rows between streamed and buffered.
-            let filter_columns = if chunk.buffered_batch_idx.is_some() {
-                if self.join_type == JoinType::Right {
-                    get_filter_columns(&self.filter, &right_columns, &left_columns)
-                } else {
-                    get_filter_columns(&self.filter, &left_columns, &right_columns)
-                }
-            } else {
-                // This chunk is totally for null joined rows (outer join), we don't need to apply join filter.
-                // Any join filter applied only on either streamed or buffered side will be pushed already.
-                vec![]
-            };
-
-            let columns = if self.join_type != JoinType::Right {
-                left_columns.extend(right_columns);
-                left_columns
-            } else {
-                right_columns.extend(left_columns);
-                right_columns
-            };
-
-            let output_batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
-            // Apply join filter if any
-            if !filter_columns.is_empty() {
-                if let Some(f) = &self.filter {
-                    // Construct batch with only filter columns
-                    let filter_batch =
-                        RecordBatch::try_new(Arc::clone(f.schema()), filter_columns)?;
-
-                    let filter_result = f
-                        .expression()
-                        .evaluate(&filter_batch)?
-                        .into_array(filter_batch.num_rows())?;
-
-                    // The boolean selection mask of the join filter result
-                    let pre_mask =
-                        datafusion_common::cast::as_boolean_array(&filter_result)?;
-
-                    // If there are nulls in join filter result, exclude them from selecting
-                    // the rows to output.
-                    let mask = if pre_mask.null_count() > 0 {
-                        compute::prep_null_mask_filter(
-                            datafusion_common::cast::as_boolean_array(&filter_result)?,
-                        )
+                // Step 6: Push results.
+                if needs_deferred_filtering(&self.filter, self.join_type) {
+                    let mask_to_use = if self.join_type != JoinType::Full {
+                        &mask
                     } else {
-                        pre_mask.clone()
+                        pre_mask
                     };
 
-                    // Push the filtered batch which contains rows passing join filter to the output
-                    // For outer joins with deferred filtering, push the unfiltered batch with metadata
-                    // For INNER joins, filter immediately and push without metadata
-                    if needs_deferred_filtering(&self.filter, self.join_type) {
-                        // Outer joins: push unfiltered batch with metadata for deferred filtering
-                        let mask_to_use = if self.join_type != JoinType::Full {
-                            &mask
-                        } else {
-                            pre_mask
-                        };
+                    self.joined_record_batches.push_batch_with_filter_metadata(
+                        output_batch,
+                        &combined_left_indices,
+                        mask_to_use,
+                        self.streamed_batch_counter.load(Relaxed),
+                        self.join_type,
+                    );
+                } else {
+                    // Inner join: filter immediately.
+                    let filtered_batch = filter_record_batch(&output_batch, &mask)?;
+                    self.joined_record_batches
+                        .push_batch_without_metadata(filtered_batch);
+                }
 
-                        self.joined_record_batches.push_batch_with_filter_metadata(
-                            output_batch,
-                            &left_indices,
-                            mask_to_use,
-                            self.streamed_batch_counter.load(Relaxed),
-                            self.join_type,
-                        );
-                    } else {
-                        // INNER joins: filter immediately and push without metadata
-                        let filtered_batch = filter_record_batch(&output_batch, &mask)?;
-                        self.joined_record_batches
-                            .push_batch_without_metadata(filtered_batch);
-                    }
+                // Step 7: Full join — update join_filter_not_matched_map
+                // using chunk boundaries over the combined pre_mask.
+                if self.join_type == JoinType::Full {
+                    let mut offset = 0usize;
+                    for (batch_idx, _left, right) in matched_chunks {
+                        let chunk_len = right.len();
+                        let buffered_batch = &mut self.buffered_data.batches[*batch_idx];
 
-                    // For outer joins, we need to push the null joined rows to the output if
-                    // all joined rows are failed on the join filter.
-                    // I.e., if all rows joined from a streamed row are failed with the join filter,
-                    // we need to join it with nulls as buffered side.
-                    if self.join_type == JoinType::Full {
-                        let buffered_batch = &mut self.buffered_data.batches
-                            [chunk.buffered_batch_idx.unwrap()];
-
-                        for i in 0..pre_mask.len() {
-                            // If the buffered row is not joined with streamed side,
-                            // skip it.
-                            if right_indices.is_null(i) {
+                        for i in 0..chunk_len {
+                            if right.is_null(i) {
                                 continue;
                             }
-
-                            let buffered_index = right_indices.value(i);
-
+                            let buffered_index = right.value(i);
                             buffered_batch.join_filter_not_matched_map.insert(
                                 buffered_index,
                                 *buffered_batch
                                     .join_filter_not_matched_map
                                     .get(&buffered_index)
                                     .unwrap_or(&true)
-                                    && !pre_mask.value(i),
+                                    && !pre_mask.value(offset + i),
                             );
                         }
+                        offset += chunk_len;
                     }
                 }
+            }
+        } else {
+            self.joined_record_batches
+                .push_batch_without_metadata(output_batch);
+        }
+
+        Ok(())
+    }
+
+    /// Materializes right-side columns from buffered batches for all matched chunks.
+    ///
+    /// Single source batch: uses `fetch_right_columns_by_idxs` (slice or take).
+    /// Multiple source batches: uses `interleave` per column with a null-row
+    /// sentinel for null indices.
+    fn materialize_right_columns(
+        &self,
+        matched_chunks: &[(usize, UInt64Array, UInt64Array)],
+        total_matched_rows: usize,
+    ) -> Result<Vec<ArrayRef>> {
+        // Fast path: single source batch — concat indices, single fetch.
+        let first_batch_idx = matched_chunks[0].0;
+        let single_source = matched_chunks.iter().all(|c| c.0 == first_batch_idx);
+
+        if single_source {
+            let combined_right_indices = if matched_chunks.len() == 1 {
+                matched_chunks[0].2.clone()
             } else {
-                self.joined_record_batches
-                    .push_batch_without_metadata(output_batch);
+                let refs: Vec<&dyn Array> =
+                    matched_chunks.iter().map(|c| &c.2 as &dyn Array).collect();
+                as_uint64_array(&compute::concat(&refs)?)?.clone()
+            };
+            return fetch_right_columns_by_idxs(
+                &self.buffered_data,
+                first_batch_idx,
+                &combined_right_indices,
+            );
+        }
+
+        // Multiple source batches: use interleave per column.
+        // Build a mapping from buffered_batch_idx to a contiguous source index.
+        // Source 0 is a null-row sentinel for handling null right indices.
+        let mut batch_idx_to_source: HashMap<usize, usize> = HashMap::new();
+        let mut source_batches: Vec<usize> = Vec::new(); // buffered_batch_idx per source
+        for (batch_idx, _, _) in matched_chunks {
+            batch_idx_to_source.entry(*batch_idx).or_insert_with(|| {
+                let idx = source_batches.len() + 1; // +1: source 0 is null sentinel
+                source_batches.push(*batch_idx);
+                idx
+            });
+        }
+
+        // Build interleave indices: (source_index, row_index).
+        let mut interleave_indices: Vec<(usize, usize)> =
+            Vec::with_capacity(total_matched_rows);
+        for (batch_idx, _, right) in matched_chunks {
+            let source = batch_idx_to_source[batch_idx];
+            for i in 0..right.len() {
+                if right.is_null(i) {
+                    interleave_indices.push((0, 0)); // null sentinel
+                } else {
+                    interleave_indices.push((source, right.value(i) as usize));
+                }
             }
         }
 
-        self.streamed_batch.output_indices.clear();
-        self.streamed_batch.num_output_rows = 0;
+        // Materialize per column using interleave.
+        let num_right_cols = self.buffered_schema.fields().len();
+        let mut right_columns = Vec::with_capacity(num_right_cols);
 
-        Ok(())
+        // Get the RecordBatch data for each source. For spilled batches, we need
+        // to read once and reuse across columns.
+        let source_data: Vec<Option<RecordBatch>> = source_batches
+            .iter()
+            .map(|&idx| {
+                let bb = &self.buffered_data.batches[idx];
+                match &bb.batch {
+                    BufferedBatchState::InMemory(batch) => Some(batch.clone()),
+                    BufferedBatchState::Spilled(spill_file) => {
+                        let file = BufReader::new(File::open(spill_file.path()).ok()?);
+                        let reader = StreamReader::try_new(file, None).ok()?;
+                        reader.into_iter().next()?.ok()
+                    }
+                }
+            })
+            .collect();
+
+        for col_idx in 0..num_right_cols {
+            let dtype = self.buffered_schema.field(col_idx).data_type();
+            let null_array = new_null_array(dtype, 1);
+
+            // Build source arrays: [null_sentinel, source_1, source_2, ...]
+            let mut source_arrays: Vec<&dyn Array> =
+                Vec::with_capacity(source_batches.len() + 1);
+            source_arrays.push(null_array.as_ref());
+
+            for data in &source_data {
+                match data {
+                    Some(batch) => source_arrays.push(batch.column(col_idx).as_ref()),
+                    None => {
+                        return internal_err!(
+                            "Failed to read spilled buffered batch during interleave"
+                        );
+                    }
+                }
+            }
+
+            right_columns.push(interleave(&source_arrays, &interleave_indices)?);
+        }
+
+        Ok(right_columns)
     }
 
     fn filter_joined_batch(&mut self) -> Result<RecordBatch> {
@@ -1466,10 +1563,19 @@ impl SortMergeJoinStream {
     }
 }
 
-fn create_unmatched_columns(
-    schema: &SchemaRef,
-    size: usize,
-) -> Vec<ArrayRef> {
+/// Materialize left (streamed) columns using slice or take.
+fn materialize_left_columns(
+    batch: &RecordBatch,
+    indices: &UInt64Array,
+) -> Result<Vec<ArrayRef>> {
+    if let Some(range) = is_contiguous_range(indices) {
+        Ok(batch.slice(range.start, range.len()).columns().to_vec())
+    } else {
+        Ok(take_arrays(batch.columns(), indices, None)?)
+    }
+}
+
+fn create_unmatched_columns(schema: &SchemaRef, size: usize) -> Vec<ArrayRef> {
     schema
         .fields()
         .iter()
