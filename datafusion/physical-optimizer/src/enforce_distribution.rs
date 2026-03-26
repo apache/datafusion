@@ -1036,9 +1036,7 @@ fn remove_dist_changing_operators(
         // `LimitPushdown`. Without this, the limit would be lost when
         // the operator is stripped.
         if let Some(child_fetch) = distribution_context.plan.fetch() {
-            if is_sort_preserving_merge(&distribution_context.plan)
-                && fetch.is_none()
-            {
+            if is_sort_preserving_merge(&distribution_context.plan) && fetch.is_none() {
                 spm = Some(Arc::clone(&distribution_context.plan));
             }
             fetch = Some(fetch.map_or(child_fetch, |f: usize| f.min(child_fetch)));
