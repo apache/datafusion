@@ -2377,6 +2377,321 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
     Ok(())
 }
 
+/// Build a c1 < c2 filter on the third column of each side.
+fn build_c1_lt_c2_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFilter {
+    JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            left_schema
+                .field_with_name("c1")
+                .unwrap()
+                .clone()
+                .with_nullable(true),
+            right_schema
+                .field_with_name("c2")
+                .unwrap()
+                .clone()
+                .with_nullable(true),
+        ])),
+    )
+}
+
+#[tokio::test]
+async fn spill_with_filter_deferred() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![0, 1, 2, 3, 4, 5]),
+        ("b1", &vec![1, 2, 3, 4, 5, 6]),
+        ("c1", &vec![4, 5, 6, 7, 8, 9]),
+    );
+    let right = build_table(
+        ("a2", &vec![0, 10, 20, 30, 40]),
+        ("b2", &vec![1, 3, 4, 6, 8]),
+        ("c2", &vec![50, 60, 70, 80, 90]),
+    );
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let filter = build_c1_lt_c2_filter(&left.schema(), &right.schema());
+
+    // Deferred filtering join types handled by the main SortMergeJoinStream
+    let join_types = [Left, Right, Full];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        for join_type in &join_types {
+            // Run with spilling
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(session_config.clone())
+                    .with_runtime(Arc::clone(&runtime)),
+            );
+            let join = join_with_filter(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                filter.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx)?;
+            let spilled_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert!(
+                join.metrics().unwrap().spill_count().unwrap() > 0,
+                "Expected spilling for {join_type:?} batch_size={batch_size}"
+            );
+
+            // Run without spilling
+            let task_ctx_no_spill = Arc::new(
+                TaskContext::default().with_session_config(session_config.clone()),
+            );
+            let join_no_spill = join_with_filter(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                filter.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
+            let no_spill_result = common::collect(stream).await.unwrap();
+
+            let spilled_str = batches_to_sort_string(&spilled_result);
+            let no_spill_str = batches_to_sort_string(&no_spill_result);
+            assert_eq!(
+                spilled_str, no_spill_str,
+                "Spill vs no-spill mismatch for {join_type:?} batch_size={batch_size}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn spill_with_filter_multi_batch() -> Result<()> {
+    let left_batch_1 = build_table_i32(
+        ("a1", &vec![0, 1]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![4, 5]),
+    );
+    let left_batch_2 = build_table_i32(
+        ("a1", &vec![2, 3]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![6, 7]),
+    );
+    let left_batch_3 = build_table_i32(
+        ("a1", &vec![4, 5]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![8, 9]),
+    );
+    let right_batch_1 = build_table_i32(
+        ("a2", &vec![0, 10]),
+        ("b2", &vec![1, 1]),
+        ("c2", &vec![50, 60]),
+    );
+    let right_batch_2 = build_table_i32(
+        ("a2", &vec![20, 30]),
+        ("b2", &vec![1, 1]),
+        ("c2", &vec![70, 80]),
+    );
+    let right_batch_3 =
+        build_table_i32(("a2", &vec![40]), ("b2", &vec![1]), ("c2", &vec![90]));
+    let left = build_table_from_batches(vec![left_batch_1, left_batch_2, left_batch_3]);
+    let right =
+        build_table_from_batches(vec![right_batch_1, right_batch_2, right_batch_3]);
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let filter = build_c1_lt_c2_filter(&left.schema(), &right.schema());
+
+    let join_types = [Left, Right, Full];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(500, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        for join_type in &join_types {
+            // Run with spilling
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(session_config.clone())
+                    .with_runtime(Arc::clone(&runtime)),
+            );
+            let join = join_with_filter(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                filter.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx)?;
+            let spilled_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert!(
+                join.metrics().unwrap().spill_count().unwrap() > 0,
+                "Expected spilling for {join_type:?} batch_size={batch_size}"
+            );
+
+            // Run without spilling
+            let task_ctx_no_spill = Arc::new(
+                TaskContext::default().with_session_config(session_config.clone()),
+            );
+            let join_no_spill = join_with_filter(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                filter.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
+            let no_spill_result = common::collect(stream).await.unwrap();
+
+            let spilled_str = batches_to_sort_string(&spilled_result);
+            let no_spill_str = batches_to_sort_string(&no_spill_result);
+            assert_eq!(
+                spilled_str, no_spill_str,
+                "Spill vs no-spill mismatch for {join_type:?} batch_size={batch_size}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// FULL join where all buffered rows match on key but fail the filter.
+/// Verifies produce_buffered_not_matched emits null-joined rows under spill.
+#[tokio::test]
+async fn spill_full_join_filter_not_matched() -> Result<()> {
+    // c1 values (100..105) are always > c2 values (1..5), so c1 < c2 always fails
+    let left = build_table(
+        ("a1", &vec![0, 1, 2, 3, 4]),
+        ("b1", &vec![1, 1, 1, 1, 1]),
+        ("c1", &vec![100, 101, 102, 103, 104]),
+    );
+    let right = build_table(
+        ("a2", &vec![10, 20, 30, 40, 50]),
+        ("b2", &vec![1, 1, 1, 1, 1]),
+        ("c2", &vec![1, 2, 3, 4, 5]),
+    );
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let filter = build_c1_lt_c2_filter(&left.schema(), &right.schema());
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        // Run with spilling
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config.clone())
+                .with_runtime(Arc::clone(&runtime)),
+        );
+        let join = join_with_filter(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            filter.clone(),
+            Full,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join.execute(0, task_ctx)?;
+        let spilled_result = common::collect(stream).await.unwrap();
+
+        assert!(
+            join.metrics().unwrap().spill_count().unwrap() > 0,
+            "Expected spilling for FULL batch_size={batch_size}"
+        );
+
+        // Run without spilling
+        let task_ctx_no_spill =
+            Arc::new(TaskContext::default().with_session_config(session_config.clone()));
+        let join_no_spill = join_with_filter(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            filter.clone(),
+            Full,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
+        let no_spill_result = common::collect(stream).await.unwrap();
+
+        // All filter evaluations fail, so FULL join should produce:
+        // - 5 rows with left columns + null right columns (unmatched left)
+        // - 5 rows with null left columns + right columns (unmatched right)
+        let total_rows: usize = no_spill_result.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows, 10,
+            "FULL join with all-failing filter should produce 10 rows, got {total_rows}"
+        );
+
+        let spilled_str = batches_to_sort_string(&spilled_result);
+        let no_spill_str = batches_to_sort_string(&no_spill_result);
+        assert_eq!(
+            spilled_str, no_spill_str,
+            "Spill vs no-spill mismatch for FULL join batch_size={batch_size}"
+        );
+    }
+
+    Ok(())
+}
+
 fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
