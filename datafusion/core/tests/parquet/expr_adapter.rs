@@ -330,6 +330,7 @@ async fn setup_nested_list_test(
 }
 
 async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Result<()> {
+    // old.parquet shape: messages item struct has only (id, name), no `chain`.
     let old_batch = nested_messages_batch(
         kind,
         1,
@@ -349,6 +350,8 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         ],
         &message_fields(DataType::Utf8, true, false, false),
     );
+
+    // new.parquet shape: messages item struct adds nullable `chain` and extra `ignored`.
     let new_batch = nested_messages_batch(
         kind,
         2,
@@ -361,6 +364,8 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         &message_fields(DataType::Utf8, true, true, true),
     );
 
+    // Logical table schema expects evolved shape (id, name, nullable `chain`) and
+    // should ignore source-only `ignored` during reads.
     let table_schema =
         nested_list_table_schema(kind, target_message_fields(DataType::Utf8, true));
 
