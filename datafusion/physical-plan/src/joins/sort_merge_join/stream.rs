@@ -1299,16 +1299,24 @@ impl SortMergeJoinStream {
         matched_chunks: &[(usize, UInt64Array, UInt64Array)],
         total_matched_rows: usize,
     ) -> Result<()> {
-        debug_assert!(!matched_chunks.is_empty());
-        debug_assert!(matched_chunks.iter().all(|(idx, left, right)| {
-            left.len() == right.len() && *idx < self.buffered_data.batches.len()
-        }));
+        debug_assert!(
+            !matched_chunks.is_empty(),
+            "caller guards this with an is_empty check before calling"
+        );
+        debug_assert!(
+            matched_chunks.iter().all(|(idx, left, right)| {
+                left.len() == right.len() && *idx < self.buffered_data.batches.len()
+            }),
+            "left/right indices are built in pairs from the same streamed×buffered cross, \
+             and batch_idx comes from iterating buffered_data.batches"
+        );
         debug_assert_eq!(
             matched_chunks
                 .iter()
                 .map(|(_, l, _)| l.len())
                 .sum::<usize>(),
             total_matched_rows,
+            "total_matched_rows is accumulated from the same chunks in freeze_streamed"
         );
 
         let combined_left_indices = if matched_chunks.len() == 1 {
@@ -1401,7 +1409,10 @@ impl SortMergeJoinStream {
                         }
                         offset += chunk_len;
                     }
-                    debug_assert_eq!(offset, total_matched_rows);
+                    debug_assert_eq!(
+                        offset, total_matched_rows,
+                        "offset must advance through every chunk exactly once"
+                    );
                 }
             }
         } else {
