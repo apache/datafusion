@@ -35,19 +35,21 @@
 //!    - `Inexact`: Keep Sort but use optimized input (enables early termination for TopK)
 //!    - `Unsupported`: No change
 //!
-//! ## Current capabilities (Phase 1)
+//! ## Capabilities
 //!
-//! - Reverse scan optimization: when required sort is the reverse of the data source's
+//! - **Sort elimination**: when data source's natural ordering already satisfies the
+//!   request (e.g., Parquet files with matching `WITH ORDER`), return `Exact` and
+//!   remove the `SortExec` entirely
+//! - **Reverse scan optimization**: when required sort is the reverse of the data source's
 //!   natural ordering, enable reverse scanning (reading row groups in reverse order)
-//! - Supports prefix matching: if data has ordering [A DESC, B ASC] and query needs
-//!   [A ASC], reversing gives [A ASC, B DESC] which satisfies the requirement
+//! - **Statistics-based file reordering**: sort files within each group by their min/max
+//!   statistics to approximate the requested order, improving TopK and limit performance
+//! - **Non-overlapping detection**: when files have non-overlapping ranges and matching
+//!   within-file ordering, the combined scan is `Exact` (sort eliminated)
+//! - **Prefix matching**: if data has ordering [A DESC, B ASC] and query needs
+//!   [A DESC], the existing ordering satisfies the requirement
 //!
-//! TODO Issue: <https://github.com/apache/datafusion/issues/19329>
-//! ## Future enhancements (Phase 2),
-//!
-//! - File reordering based on statistics
-//! - Return `Exact` when files are known to be perfectly sorted
-//! - Complete Sort elimination when ordering is guaranteed
+//! Related issue: <https://github.com/apache/datafusion/issues/17348>
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
