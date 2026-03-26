@@ -58,6 +58,7 @@ use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
 use arrow_ord::cmp::not_distinct;
+use arrow_ord::ord::{DynComparator, make_comparator};
 use arrow_schema::{ArrowError, DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
@@ -1827,6 +1828,101 @@ fn eq_dyn_null(
     }
 }
 
+/// Pre-built comparator for join key columns that eliminates per-row type
+/// dispatch. Wraps `arrow_ord::ord::DynComparator` closures built once per
+/// batch pair, used for all row comparisons within those batches.
+pub struct JoinKeyComparator {
+    comparators: Vec<DynComparator>,
+    /// Only populated when null_equality == NullEqualsNothing
+    left_nulls: Vec<Option<NullBuffer>>,
+    right_nulls: Vec<Option<NullBuffer>>,
+    null_equality: NullEquality,
+}
+
+impl JoinKeyComparator {
+    /// Build comparators for each join key column pair. The `sort_options`
+    /// slice must have the same length as the array slices.
+    pub fn new(
+        left_arrays: &[ArrayRef],
+        right_arrays: &[ArrayRef],
+        sort_options: &[SortOptions],
+        null_equality: NullEquality,
+    ) -> Result<Self> {
+        let comparators = left_arrays
+            .iter()
+            .zip(right_arrays.iter())
+            .zip(sort_options.iter())
+            .map(|((l, r), opts)| Ok(make_comparator(l.as_ref(), r.as_ref(), *opts)?))
+            .collect::<Result<Vec<_>>>()?;
+
+        let (left_nulls, right_nulls) =
+            if null_equality == NullEquality::NullEqualsNothing {
+                let ln = left_arrays
+                    .iter()
+                    .map(|a| a.logical_nulls().filter(|n| n.null_count() > 0))
+                    .collect();
+                let rn = right_arrays
+                    .iter()
+                    .map(|a| a.logical_nulls().filter(|n| n.null_count() > 0))
+                    .collect();
+                (ln, rn)
+            } else {
+                (vec![], vec![])
+            };
+
+        Ok(Self {
+            comparators,
+            left_nulls,
+            right_nulls,
+            null_equality,
+        })
+    }
+
+    /// Compare row `left` (in the left arrays) with row `right` (in the right
+    /// arrays). Returns the lexicographic ordering across all key columns.
+    #[inline]
+    pub fn compare(&self, left: usize, right: usize) -> Ordering {
+        if self.null_equality == NullEquality::NullEqualsNothing {
+            for (idx, cmp_fn) in self.comparators.iter().enumerate() {
+                // Override both-null: make_comparator returns Equal but
+                // NullEqualsNothing semantics require Less.
+                if let (Some(ln), Some(rn)) =
+                    (&self.left_nulls[idx], &self.right_nulls[idx])
+                    && ln.is_null(left)
+                    && rn.is_null(right)
+                {
+                    return Ordering::Less;
+                }
+                let ord = cmp_fn(left, right);
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+        } else {
+            for cmp_fn in &self.comparators {
+                let ord = cmp_fn(left, right);
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+        }
+        Ordering::Equal
+    }
+
+    /// Check equality of row `left` (in the left arrays) with row `right`
+    /// (in the right arrays). Both-null is treated as equal regardless of
+    /// `null_equality` — this matches `is_join_arrays_equal` semantics.
+    #[inline]
+    pub fn is_equal(&self, left: usize, right: usize) -> bool {
+        for cmp_fn in &self.comparators {
+            if cmp_fn(left, right) != Ordering::Equal {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Get comparison result of two rows of join arrays
 pub fn compare_join_arrays(
     left_arrays: &[ArrayRef],
@@ -2953,5 +3049,124 @@ mod tests {
         };
         let result = max_distinct_count(&num_rows, &stats);
         assert_eq!(result, Exact(0));
+    }
+
+    #[test]
+    fn test_join_key_comparator_multi_column() {
+        let left_a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 2, 3]));
+        let left_b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+        let right_a: ArrayRef = Arc::new(Int32Array::from(vec![2, 2, 3, 4]));
+        let right_b: ArrayRef = Arc::new(StringArray::from(vec!["b", "d", "a", "a"]));
+
+        let opts = vec![SortOptions::default(), SortOptions::default()];
+        let cmp = JoinKeyComparator::new(
+            &[left_a, left_b],
+            &[right_a, right_b],
+            &opts,
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+
+        // left[0]=(1,"a") vs right[0]=(2,"b") → Less (first column)
+        assert_eq!(cmp.compare(0, 0), Ordering::Less);
+        // left[1]=(2,"b") vs right[0]=(2,"b") → Equal
+        assert_eq!(cmp.compare(1, 0), Ordering::Equal);
+        assert!(cmp.is_equal(1, 0));
+        // left[2]=(2,"c") vs right[1]=(2,"d") → Less (second column)
+        assert_eq!(cmp.compare(2, 1), Ordering::Less);
+        // left[3]=(3,"d") vs right[0]=(2,"b") → Greater
+        assert_eq!(cmp.compare(3, 0), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_join_key_comparator_null_equals_null() {
+        let left: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), None, None, Some(2)]));
+        let right: ArrayRef =
+            Arc::new(Int32Array::from(vec![None, None, Some(1), Some(2)]));
+
+        let opts = vec![SortOptions {
+            descending: false,
+            nulls_first: true,
+        }];
+        let cmp = JoinKeyComparator::new(
+            &[left],
+            &[right],
+            &opts,
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+
+        // left[1]=NULL vs right[1]=NULL → Equal (NullEqualsNull)
+        assert_eq!(cmp.compare(1, 1), Ordering::Equal);
+        assert!(cmp.is_equal(1, 1));
+        // left[0]=1 vs right[0]=NULL → Greater (nulls_first, non-null > null)
+        assert_eq!(cmp.compare(0, 0), Ordering::Greater);
+        // left[3]=2 vs right[3]=2 → Equal
+        assert_eq!(cmp.compare(3, 3), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_join_key_comparator_null_equals_nothing() {
+        let left: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), None, None, Some(2)]));
+        let right: ArrayRef =
+            Arc::new(Int32Array::from(vec![None, None, Some(1), Some(2)]));
+
+        let opts = vec![SortOptions {
+            descending: false,
+            nulls_first: true,
+        }];
+        let cmp = JoinKeyComparator::new(
+            &[left],
+            &[right],
+            &opts,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+
+        // left[1]=NULL vs right[1]=NULL → Less (NullEqualsNothing)
+        assert_eq!(cmp.compare(1, 1), Ordering::Less);
+        // left[0]=1 vs right[0]=NULL → Greater (nulls_first)
+        assert_eq!(cmp.compare(0, 0), Ordering::Greater);
+        // left[3]=2 vs right[3]=2 → Equal
+        assert_eq!(cmp.compare(3, 3), Ordering::Equal);
+
+        // is_equal always treats both-null as equal
+        assert!(cmp.is_equal(1, 1));
+    }
+
+    #[test]
+    fn test_join_key_comparator_nulls_first_ordering() {
+        let left: ArrayRef = Arc::new(Int32Array::from(vec![None, Some(1)]));
+        let right: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
+
+        // nulls_first = true: null < non-null
+        let cmp_nf = JoinKeyComparator::new(
+            &[Arc::clone(&left)],
+            &[Arc::clone(&right)],
+            &[SortOptions {
+                descending: false,
+                nulls_first: true,
+            }],
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+        assert_eq!(cmp_nf.compare(0, 0), Ordering::Less);
+        assert_eq!(cmp_nf.compare(1, 1), Ordering::Greater);
+
+        // nulls_first = false: null > non-null
+        let cmp_nl = JoinKeyComparator::new(
+            &[left],
+            &[right],
+            &[SortOptions {
+                descending: false,
+                nulls_first: false,
+            }],
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+        assert_eq!(cmp_nl.compare(0, 0), Ordering::Greater);
+        assert_eq!(cmp_nl.compare(1, 1), Ordering::Less);
     }
 }

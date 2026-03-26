@@ -38,7 +38,7 @@ use crate::joins::sort_merge_join::filter::{
     get_filter_columns, needs_deferred_filtering,
 };
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
-use crate::joins::utils::{JoinFilter, compare_join_arrays};
+use crate::joins::utils::{JoinFilter, JoinKeyComparator};
 use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
@@ -48,11 +48,11 @@ use arrow::compute::{
     self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, is_not_null,
     take, take_arrays,
 };
-use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::StreamReader;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{
-    HashSet, JoinType, NullEquality, Result, exec_err, internal_err, not_impl_err,
+    HashSet, JoinType, NullEquality, Result, exec_err, internal_err,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -353,6 +353,15 @@ pub(super) struct SortMergeJoinStream {
     pub current_ordering: Ordering,
     /// Manages the process of spilling and reading back intermediate data
     pub spill_manager: SpillManager,
+
+    // ========================================================================
+    // CACHED COMPARATORS:
+    // Pre-built comparators to avoid per-row type dispatch in hot loops.
+    // ========================================================================
+    /// Comparator for streamed vs buffered head batch key comparison
+    pub streamed_buffered_cmp: Option<JoinKeyComparator>,
+    /// Comparator for buffered head vs tail batch equality check
+    pub buffered_equality_cmp: Option<JoinKeyComparator>,
 
     // ========================================================================
     // EXECUTION RESOURCES:
@@ -793,8 +802,43 @@ impl SortMergeJoinStream {
             reservation,
             runtime_env,
             spill_manager,
+            streamed_buffered_cmp: None,
+            buffered_equality_cmp: None,
             streamed_batch_counter: AtomicUsize::new(0),
         })
+    }
+
+    /// Build a comparator for streamed vs buffered head batch keys.
+    fn rebuild_streamed_buffered_cmp(&mut self) -> Result<()> {
+        if self.streamed_batch.join_arrays.is_empty()
+            || !self.buffered_data.has_buffered_rows()
+        {
+            self.streamed_buffered_cmp = None;
+            return Ok(());
+        }
+        self.streamed_buffered_cmp = Some(JoinKeyComparator::new(
+            &self.streamed_batch.join_arrays,
+            &self.buffered_data.head_batch().join_arrays,
+            &self.sort_options,
+            self.null_equality,
+        )?);
+        Ok(())
+    }
+
+    /// Build a comparator for buffered head vs tail batch equality.
+    fn rebuild_buffered_equality_cmp(&mut self) -> Result<()> {
+        if self.buffered_data.batches.is_empty() {
+            self.buffered_equality_cmp = None;
+            return Ok(());
+        }
+        self.buffered_equality_cmp = Some(JoinKeyComparator::new(
+            &self.buffered_data.head_batch().join_arrays,
+            &self.buffered_data.tail_batch().join_arrays,
+            &self.sort_options,
+            // is_join_arrays_equal treats both-null as equal
+            NullEquality::NullEqualsNull,
+        )?);
+        Ok(())
     }
 
     /// Number of unfrozen output pairs (used to decide when to freeze + output)
@@ -860,6 +904,7 @@ impl SortMergeJoinStream {
                             self.join_metrics.input_rows().add(batch.num_rows());
                             self.streamed_batch =
                                 StreamedBatch::new(batch, &self.on_streamed);
+                            self.rebuild_streamed_buffered_cmp()?;
                             // Every incoming streaming batch should have its unique id
                             // Check `JoinedRecordBatches.self.streamed_batch_counter` documentation
                             self.streamed_batch_counter
@@ -927,6 +972,7 @@ impl SortMergeJoinStream {
             match &self.buffered_state {
                 BufferedState::Init => {
                     // pop previous buffered batches
+                    let mut head_changed = false;
                     while !self.buffered_data.batches.is_empty() {
                         let head_batch = self.buffered_data.head_batch();
                         // If the head batch is fully processed, dequeue it and produce output of it.
@@ -937,12 +983,17 @@ impl SortMergeJoinStream {
                             {
                                 self.produce_buffered_not_matched(&mut buffered_batch)?;
                                 self.free_reservation(&buffered_batch)?;
+                                head_changed = true;
                             }
                         } else {
                             // If the head batch is not fully processed, break the loop.
                             // Streamed batch will be joined with the head batch in the next step.
                             break;
                         }
+                    }
+                    if head_changed {
+                        self.streamed_buffered_cmp = None;
+                        self.buffered_equality_cmp = None;
                     }
                     if self.buffered_data.batches.is_empty() {
                         self.buffered_state = BufferedState::PollingFirst;
@@ -970,6 +1021,7 @@ impl SortMergeJoinStream {
                                 BufferedBatch::new(batch, 0..1, &self.on_buffered);
 
                             self.allocate_reservation(buffered_batch)?;
+                            self.streamed_buffered_cmp = None;
                             self.buffered_state = BufferedState::PollingRest;
                         }
                     }
@@ -978,15 +1030,16 @@ impl SortMergeJoinStream {
                     if self.buffered_data.tail_batch().range.end
                         < self.buffered_data.tail_batch().num_rows
                     {
+                        if self.buffered_equality_cmp.is_none() {
+                            self.rebuild_buffered_equality_cmp()?;
+                        }
                         while self.buffered_data.tail_batch().range.end
                             < self.buffered_data.tail_batch().num_rows
                         {
-                            if is_join_arrays_equal(
-                                &self.buffered_data.head_batch().join_arrays,
+                            if self.buffered_equality_cmp.as_ref().unwrap().is_equal(
                                 self.buffered_data.head_batch().range.start,
-                                &self.buffered_data.tail_batch().join_arrays,
                                 self.buffered_data.tail_batch().range.end,
-                            )? {
+                            ) {
                                 self.buffered_data.tail_batch_mut().range.end += 1;
                             } else {
                                 self.buffered_state = BufferedState::Ready;
@@ -1012,6 +1065,7 @@ impl SortMergeJoinStream {
                                         &self.on_buffered,
                                     );
                                     self.allocate_reservation(buffered_batch)?;
+                                    self.buffered_equality_cmp = None;
                                 }
                             }
                         }
@@ -1028,7 +1082,7 @@ impl SortMergeJoinStream {
     }
 
     /// Get comparison result of streamed row and buffered batches
-    fn compare_streamed_buffered(&self) -> Result<Ordering> {
+    fn compare_streamed_buffered(&mut self) -> Result<Ordering> {
         if self.streamed_state == StreamedState::Exhausted {
             return Ok(Ordering::Greater);
         }
@@ -1036,14 +1090,13 @@ impl SortMergeJoinStream {
             return Ok(Ordering::Less);
         }
 
-        compare_join_arrays(
-            &self.streamed_batch.join_arrays,
+        if self.streamed_buffered_cmp.is_none() {
+            self.rebuild_streamed_buffered_cmp()?;
+        }
+        Ok(self.streamed_buffered_cmp.as_ref().unwrap().compare(
             self.streamed_batch.idx,
-            &self.buffered_data.head_batch().join_arrays,
             self.buffered_data.head_batch().range.start,
-            &self.sort_options,
-            self.null_equality,
-        )
+        ))
     }
 
     /// Produce join and fill output buffer until reaching target batch size
@@ -1762,79 +1815,4 @@ fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayR
             c.into_array(num_rows).unwrap()
         })
         .collect()
-}
-
-/// A faster version of compare_join_arrays() that only output whether
-/// the given two rows are equal
-fn is_join_arrays_equal(
-    left_arrays: &[ArrayRef],
-    left: usize,
-    right_arrays: &[ArrayRef],
-    right: usize,
-) -> Result<bool> {
-    let mut is_equal = true;
-    for (left_array, right_array) in left_arrays.iter().zip(right_arrays) {
-        macro_rules! compare_value {
-            ($T:ty) => {{
-                match (left_array.is_null(left), right_array.is_null(right)) {
-                    (false, false) => {
-                        let left_array =
-                            left_array.as_any().downcast_ref::<$T>().unwrap();
-                        let right_array =
-                            right_array.as_any().downcast_ref::<$T>().unwrap();
-                        if left_array.value(left) != right_array.value(right) {
-                            is_equal = false;
-                        }
-                    }
-                    (true, false) => is_equal = false,
-                    (false, true) => is_equal = false,
-                    _ => {}
-                }
-            }};
-        }
-
-        match left_array.data_type() {
-            DataType::Null => {}
-            DataType::Boolean => compare_value!(BooleanArray),
-            DataType::Int8 => compare_value!(Int8Array),
-            DataType::Int16 => compare_value!(Int16Array),
-            DataType::Int32 => compare_value!(Int32Array),
-            DataType::Int64 => compare_value!(Int64Array),
-            DataType::UInt8 => compare_value!(UInt8Array),
-            DataType::UInt16 => compare_value!(UInt16Array),
-            DataType::UInt32 => compare_value!(UInt32Array),
-            DataType::UInt64 => compare_value!(UInt64Array),
-            DataType::Float32 => compare_value!(Float32Array),
-            DataType::Float64 => compare_value!(Float64Array),
-            DataType::Utf8 => compare_value!(StringArray),
-            DataType::Utf8View => compare_value!(StringViewArray),
-            DataType::LargeUtf8 => compare_value!(LargeStringArray),
-            DataType::Binary => compare_value!(BinaryArray),
-            DataType::BinaryView => compare_value!(BinaryViewArray),
-            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
-            DataType::LargeBinary => compare_value!(LargeBinaryArray),
-            DataType::Decimal32(..) => compare_value!(Decimal32Array),
-            DataType::Decimal64(..) => compare_value!(Decimal64Array),
-            DataType::Decimal128(..) => compare_value!(Decimal128Array),
-            DataType::Decimal256(..) => compare_value!(Decimal256Array),
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => compare_value!(TimestampSecondArray),
-                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
-                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
-                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
-            },
-            DataType::Date32 => compare_value!(Date32Array),
-            DataType::Date64 => compare_value!(Date64Array),
-            dt => {
-                return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator: {}",
-                    dt
-                );
-            }
-        }
-        if !is_equal {
-            return Ok(false);
-        }
-    }
-    Ok(true)
 }
