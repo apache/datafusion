@@ -348,8 +348,10 @@ pub fn filter_record_batch_by_join_type(
                     (0, buffered_schema.fields().len())
                 }
                 JoinType::Full => {
-                    // Full join: null out right (buffered) columns for
-                    // streamed-side unmatched rows
+                    // Full join: null out buffered columns for streamed rows
+                    // that matched but failed the filter. Unmatched buffered
+                    // rows are null-joined on the streamed side separately
+                    // when the buffered batch is drained.
                     let left_cols =
                         schema.fields().len() - buffered_schema.fields().len();
                     (left_cols, buffered_schema.fields().len())
