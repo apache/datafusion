@@ -411,8 +411,6 @@ const SMJ_QUERIES: &[&str] = &[
         GROUP BY t1_sorted.key
     "#,
     // Q21: INNER 100K x 100K | unique keys (1:1) | 50% join filter
-    // Near-unique keys: each BufferedBatch has 1 row, so each chunk has 1 pair.
-    // Stresses per-chunk filter evaluation overhead.
     r#"
         WITH t1_sorted AS (
             SELECT value as key, value as data
@@ -428,7 +426,6 @@ const SMJ_QUERIES: &[&str] = &[
          AND t1_sorted.data + t2_sorted.data < 100000
     "#,
     // Q22: LEFT 100K x 100K | unique keys (1:1) | 50% join filter
-    // Same near-unique stress test with deferred filtering metadata.
     r#"
         WITH t1_sorted AS (
             SELECT value as key, value as data
@@ -444,7 +441,6 @@ const SMJ_QUERIES: &[&str] = &[
          AND t1_sorted.data + t2_sorted.data < 100000
     "#,
     // Q23: FULL 100K x 100K | unique keys (1:1) | 50% join filter
-    // Same near-unique stress test with full join filter tracking.
     r#"
         WITH t1_sorted AS (
             SELECT value as key, value as data

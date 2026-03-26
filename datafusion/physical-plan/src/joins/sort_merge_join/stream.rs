@@ -1208,12 +1208,14 @@ impl SortMergeJoinStream {
 
     // Produces and stages record batch for all output indices found
     // for current streamed batch and clears staged output indices.
+    //
+    // Null-joined chunks (no buffered match) are pushed immediately.
+    // Matched chunks are collected and processed together in
+    // freeze_streamed_matched() to amortize filter evaluation overhead.
     fn freeze_streamed(&mut self) -> Result<()> {
         let mut matched_chunks: Vec<(usize, UInt64Array, UInt64Array)> = Vec::new();
         let mut total_matched_rows: usize = 0;
 
-        // Step 1: Classify chunks — null-joined go out immediately,
-        // matched are collected for batched materialization + filter.
         for chunk in self.streamed_batch.output_indices.iter_mut() {
             let left_indices = chunk.streamed_indices.finish();
             if left_indices.is_empty() {
@@ -1222,7 +1224,6 @@ impl SortMergeJoinStream {
             let right_indices: UInt64Array = chunk.buffered_indices.finish();
 
             if chunk.buffered_batch_idx.is_none() {
-                // Null-joined: no filter needed, push immediately.
                 let left_columns =
                     materialize_left_columns(&self.streamed_batch.batch, &left_indices)?;
                 let right_columns =
@@ -1256,13 +1257,27 @@ impl SortMergeJoinStream {
         Ok(())
     }
 
-    /// Materializes, filters, and pushes all matched chunks in one batch.
+    /// Materializes columns, evaluates the join filter, and pushes output
+    /// for all matched chunks in a single batch. This avoids per-chunk
+    /// RecordBatch construction and filter evaluation, which dominates
+    /// cost when keys are near-unique (1 row per chunk).
     fn freeze_streamed_matched(
         &mut self,
         matched_chunks: &[(usize, UInt64Array, UInt64Array)],
         total_matched_rows: usize,
     ) -> Result<()> {
-        // Step 2: Combine left indices across all chunks.
+        debug_assert!(!matched_chunks.is_empty());
+        debug_assert!(matched_chunks.iter().all(|(idx, left, right)| {
+            left.len() == right.len() && *idx < self.buffered_data.batches.len()
+        }));
+        debug_assert_eq!(
+            matched_chunks
+                .iter()
+                .map(|(_, l, _)| l.len())
+                .sum::<usize>(),
+            total_matched_rows,
+        );
+
         let combined_left_indices = if matched_chunks.len() == 1 {
             matched_chunks[0].1.clone()
         } else {
@@ -1271,15 +1286,12 @@ impl SortMergeJoinStream {
             as_uint64_array(&compute::concat(&refs)?)?.clone()
         };
 
-        // Step 3: Materialize left columns (single source batch).
         let left_columns =
             materialize_left_columns(&self.streamed_batch.batch, &combined_left_indices)?;
 
-        // Step 4: Materialize right columns.
         let right_columns =
             self.materialize_right_columns(matched_chunks, total_matched_rows)?;
 
-        // Step 5: Build filter columns and evaluate filter.
         let filter_columns = if self.join_type == JoinType::Right {
             get_filter_columns(&self.filter, &right_columns, &left_columns)
         } else {
@@ -1310,8 +1322,9 @@ impl SortMergeJoinStream {
                     pre_mask.clone()
                 };
 
-                // Step 6: Push results.
                 if needs_deferred_filtering(&self.filter, self.join_type) {
+                    // Full join uses pre_mask (preserving nulls) for
+                    // get_corrected_filter_mask; other outer joins use mask.
                     let mask_to_use = if self.join_type != JoinType::Full {
                         &mask
                     } else {
@@ -1326,14 +1339,13 @@ impl SortMergeJoinStream {
                         self.join_type,
                     );
                 } else {
-                    // Inner join: filter immediately.
                     let filtered_batch = filter_record_batch(&output_batch, &mask)?;
                     self.joined_record_batches
                         .push_batch_without_metadata(filtered_batch);
                 }
 
-                // Step 7: Full join — update join_filter_not_matched_map
-                // using chunk boundaries over the combined pre_mask.
+                // Track which buffered rows had all filter matches fail,
+                // so full join can emit them as null-joined later.
                 if self.join_type == JoinType::Full {
                     let mut offset = 0usize;
                     for (batch_idx, _left, right) in matched_chunks {
@@ -1356,6 +1368,7 @@ impl SortMergeJoinStream {
                         }
                         offset += chunk_len;
                     }
+                    debug_assert_eq!(offset, total_matched_rows);
                 }
             }
         } else {
@@ -1366,17 +1379,17 @@ impl SortMergeJoinStream {
         Ok(())
     }
 
-    /// Materializes right-side columns from buffered batches for all matched chunks.
+    /// Materializes right-side columns across all matched chunks.
     ///
-    /// Single source batch: uses `fetch_right_columns_by_idxs` (slice or take).
-    /// Multiple source batches: uses `interleave` per column with a null-row
-    /// sentinel for null indices.
+    /// When chunks reference a single buffered batch, indices are concatenated
+    /// for a single fetch. When multiple batches are involved, `interleave`
+    /// gathers columns across sources. A null-row sentinel at source index 0
+    /// handles null right indices (unmatched streamed rows).
     fn materialize_right_columns(
         &self,
         matched_chunks: &[(usize, UInt64Array, UInt64Array)],
         total_matched_rows: usize,
     ) -> Result<Vec<ArrayRef>> {
-        // Fast path: single source batch — concat indices, single fetch.
         let first_batch_idx = matched_chunks[0].0;
         let single_source = matched_chunks.iter().all(|c| c.0 == first_batch_idx);
 
@@ -1395,39 +1408,35 @@ impl SortMergeJoinStream {
             );
         }
 
-        // Multiple source batches: use interleave per column.
-        // Build a mapping from buffered_batch_idx to a contiguous source index.
-        // Source 0 is a null-row sentinel for handling null right indices.
+        // Multiple source batches: map each buffered_batch_idx to a
+        // contiguous source index, reserving source 0 for a null sentinel.
         let mut batch_idx_to_source: HashMap<usize, usize> = HashMap::new();
-        let mut source_batches: Vec<usize> = Vec::new(); // buffered_batch_idx per source
+        let mut source_batches: Vec<usize> = Vec::new();
         for (batch_idx, _, _) in matched_chunks {
             batch_idx_to_source.entry(*batch_idx).or_insert_with(|| {
-                let idx = source_batches.len() + 1; // +1: source 0 is null sentinel
+                let idx = source_batches.len() + 1;
                 source_batches.push(*batch_idx);
                 idx
             });
         }
 
-        // Build interleave indices: (source_index, row_index).
         let mut interleave_indices: Vec<(usize, usize)> =
             Vec::with_capacity(total_matched_rows);
         for (batch_idx, _, right) in matched_chunks {
             let source = batch_idx_to_source[batch_idx];
             for i in 0..right.len() {
                 if right.is_null(i) {
-                    interleave_indices.push((0, 0)); // null sentinel
+                    interleave_indices.push((0, 0));
                 } else {
                     interleave_indices.push((source, right.value(i) as usize));
                 }
             }
         }
 
-        // Materialize per column using interleave.
         let num_right_cols = self.buffered_schema.fields().len();
         let mut right_columns = Vec::with_capacity(num_right_cols);
 
-        // Get the RecordBatch data for each source. For spilled batches, we need
-        // to read once and reuse across columns.
+        // Read each source batch once (spilled batches require disk I/O).
         let source_data: Vec<Option<RecordBatch>> = source_batches
             .iter()
             .map(|&idx| {
@@ -1447,7 +1456,6 @@ impl SortMergeJoinStream {
             let dtype = self.buffered_schema.field(col_idx).data_type();
             let null_array = new_null_array(dtype, 1);
 
-            // Build source arrays: [null_sentinel, source_1, source_2, ...]
             let mut source_arrays: Vec<&dyn Array> =
                 Vec::with_capacity(source_batches.len() + 1);
             source_arrays.push(null_array.as_ref());
