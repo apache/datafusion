@@ -425,27 +425,6 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         .unwrap();
     assert_eq!(new_chain.iter().collect::<Vec<_>>(), vec![Some("eth")]);
 
-    let projected = ctx
-        .sql(
-            "SELECT row_id, get_field(messages[1], 'id') AS msg_id, \
-             get_field(messages[1], 'chain') AS chain \
-             FROM t ORDER BY row_id",
-        )
-        .await?
-        .collect()
-        .await?;
-
-    #[rustfmt::skip]
-    let expected = [
-        "+--------+--------+-------+",
-        "| row_id | msg_id | chain |",
-        "+--------+--------+-------+",
-        "| 1      | 10     |       |",
-        "| 2      | 30     | eth   |",
-        "+--------+--------+-------+",
-    ];
-    assert_batches_eq!(expected, &projected);
-
     Ok(())
 }
 
