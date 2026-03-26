@@ -58,7 +58,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use futures::StreamExt;
-use insta::{allow_duplicates, assert_snapshot};
+use insta::assert_snapshot;
 use itertools::Itertools;
 use std::sync::Arc;
 use std::task::Poll;
