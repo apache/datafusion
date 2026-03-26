@@ -101,7 +101,8 @@ impl NestedListKind {
 }
 
 #[derive(Debug)]
-struct MessageValue<'a> {
+// Fixture row for one nested struct element inside the `messages` list column.
+struct NestedMessageRow<'a> {
     id: i32,
     name: &'a str,
     chain: Option<&'a str>,
@@ -179,7 +180,7 @@ fn build_message_columns(
 fn nested_messages_batch(
     kind: NestedListKind,
     row_id: i32,
-    messages: &[MessageValue<'_>],
+    messages: &[NestedMessageRow<'_>],
     fields: &Fields,
 ) -> RecordBatch {
     let item_field = Arc::new(Field::new("item", DataType::Struct(fields.clone()), true));
@@ -333,13 +334,13 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         kind,
         1,
         &[
-            MessageValue {
+            NestedMessageRow {
                 id: 10,
                 name: "alpha",
                 chain: None,
                 ignored: None,
             },
-            MessageValue {
+            NestedMessageRow {
                 id: 20,
                 name: "beta",
                 chain: None,
@@ -351,7 +352,7 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
     let new_batch = nested_messages_batch(
         kind,
         2,
-        &[MessageValue {
+        &[NestedMessageRow {
             id: 30,
             name: "gamma",
             chain: Some("eth"),
@@ -424,6 +425,27 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         .downcast_ref::<StringArray>()
         .unwrap();
     assert_eq!(new_chain.iter().collect::<Vec<_>>(), vec![Some("eth")]);
+
+    let projected = ctx
+        .sql(
+            "SELECT row_id, get_field(messages[1], 'id') AS msg_id, \
+             get_field(messages[1], 'chain') AS chain \
+             FROM t ORDER BY row_id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    #[rustfmt::skip]
+    let expected = [
+        "+--------+--------+-------+",
+        "| row_id | msg_id | chain |",
+        "+--------+--------+-------+",
+        "| 1      | 10     |       |",
+        "| 2      | 30     | eth   |",
+        "+--------+--------+-------+",
+    ];
+    assert_batches_eq!(expected, &projected);
 
     Ok(())
 }
@@ -886,7 +908,7 @@ async fn assert_nested_list_struct_schema_evolution_errors(
     let batch = nested_messages_batch(
         kind,
         1,
-        &[MessageValue {
+        &[NestedMessageRow {
             id: 10,
             name: "alpha",
             chain: Some("eth"),
