@@ -3209,6 +3209,156 @@ async fn consume_stream_until_finish_barrier_reached(
     Ok((output_batched, after_finish_barrier_reached))
 }
 
+/// Exercises the multi-source interleave path in `materialize_right_columns`.
+///
+/// When the right (buffered) side is split into many small batches with unique
+/// keys, a single `freeze_streamed()` call references multiple `BufferedBatch`es.
+/// This forces the `interleave` kernel instead of the single-source `take` path.
+/// Without this test, the interleave path has zero coverage from unit tests
+/// (fuzz tests use ~100 unique keys across 1000 rows, so all keys fit in one
+/// buffered batch).
+#[tokio::test]
+async fn join_filtered_with_multiple_buffered_batches() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_l", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_r", DataType::Int32, false),
+    ]));
+
+    // Left: single batch, keys 1..=6
+    let left_batch = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
+        ],
+    )?;
+    let left = build_table_from_batches(vec![left_batch]);
+
+    // Right: one row per batch so each key lives in a separate BufferedBatch
+    let right_batches: Vec<RecordBatch> = (1..=6)
+        .map(|k| {
+            RecordBatch::try_new(
+                Arc::clone(&right_schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![k])),
+                    Arc::new(Int32Array::from(vec![k * 100])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("key", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("key", &right.schema())?) as _,
+    )];
+
+    // Filter: val_l + val_r < 350 — passes for keys 1-3, fails for 4-6
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("val_l", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("val_r", 1)),
+            )),
+            Operator::Lt,
+            Arc::new(datafusion_physical_expr::expressions::Literal::new(
+                datafusion_common::ScalarValue::Int32(Some(350)),
+            )),
+        )),
+        vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("val_l", DataType::Int32, true),
+            Field::new("val_r", DataType::Int32, true),
+        ])),
+    );
+
+    // Inner: only rows passing the filter
+    let (_, batches) = join_collect_with_filter(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        filter.clone(),
+        Inner,
+    )
+    .await?;
+    let result = batches_to_sort_string(&batches);
+    assert_snapshot!(result, @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    | 1   | 10    | 1   | 100   |
+    | 2   | 20    | 2   | 200   |
+    | 3   | 30    | 3   | 300   |
+    +-----+-------+-----+-------+
+    ");
+
+    // Left: unmatched left rows get null right columns
+    let (_, batches) = join_collect_with_filter(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        filter.clone(),
+        Left,
+    )
+    .await?;
+    let result = batches_to_sort_string(&batches);
+    assert_snapshot!(result, @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    | 1   | 10    | 1   | 100   |
+    | 2   | 20    | 2   | 200   |
+    | 3   | 30    | 3   | 300   |
+    | 4   | 40    |     |       |
+    | 5   | 50    |     |       |
+    | 6   | 60    |     |       |
+    +-----+-------+-----+-------+
+    ");
+
+    // Full: unmatched rows on both sides get null columns
+    let (_, batches) = join_collect_with_filter(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        filter.clone(),
+        Full,
+    )
+    .await?;
+    let result = batches_to_sort_string(&batches);
+    assert_snapshot!(result, @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    |     |       | 4   | 400   |
+    |     |       | 5   | 500   |
+    |     |       | 6   | 600   |
+    | 1   | 10    | 1   | 100   |
+    | 2   | 20    | 2   | 200   |
+    | 3   | 30    | 3   | 300   |
+    | 4   | 40    |     |       |
+    | 5   | 50    |     |       |
+    | 6   | 60    |     |       |
+    +-----+-------+-----+-------+
+    ");
+
+    Ok(())
+}
+
 /// Returns the column names on the schema
 fn columns(schema: &Schema) -> Vec<String> {
     schema.fields().iter().map(|f| f.name().clone()).collect()
