@@ -2624,6 +2624,10 @@ logical_plan
 02)--TableScan: multi_in_left projection=[a, b, value]
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: multi_in_right projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(x@0, a@0), (y@1, b@1)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 #############
 ## Test 7: Multi-column IN with empty subquery
