@@ -481,14 +481,14 @@ to the main branch and are awaiting release in this version.</p>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">tnr</span><span class="p">)</span>
 <span class="p">}</span>
-
-<span class="p">###</span><span class="w"> </span><span class="err">`</span><span class="n">ExecutionPlan</span><span class="p">::</span><span class="n">partition_statistics</span><span class="err">`</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="n">returns</span><span class="w"> </span><span class="err">`</span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="err">`</span>
-
-<span class="err">`</span><span class="n">ExecutionPlan</span><span class="p">::</span><span class="n">partition_statistics</span><span class="err">`</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="n">returns</span><span class="w"> </span><span class="err">`</span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;&gt;</span><span class="err">`</span><span class="w"> </span><span class="n">instead</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="err">`</span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="err">`</span><span class="p">.</span><span class="w"> </span><span class="n">This</span><span class="w"> </span><span class="n">avoids</span><span class="w"> </span><span class="n">cloning</span><span class="w"> </span><span class="err">`</span><span class="n">Statistics</span><span class="err">`</span><span class="w"> </span><span class="n">when</span><span class="w"> </span><span class="n">it</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">shared</span><span class="w"> </span><span class="n">across</span><span class="w"> </span><span class="n">multiple</span><span class="w"> </span><span class="n">consumers</span><span class="p">.</span>
-
-<span class="o">**</span><span class="n">Before</span><span class="p">:</span><span class="o">**</span>
-<span class="err">```</span><span class="n">rust</span><span class="p">,</span><span class="n">ignore</span>
-<span class="k">fn</span><span class="w"> </span><span class="nf">partition_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">partition</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+</pre></div>
+</div>
+</section>
+<section id="executionplan-partition-statistics-now-returns-arc-statistics">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Arc&lt;Statistics&gt;</span></code><a class="headerlink" href="#executionplan-partition-statistics-now-returns-arc-statistics" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;Statistics&gt;&gt;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">Result&lt;Statistics&gt;</span></code>. This avoids cloning <code class="docutils literal notranslate"><span class="pre">Statistics</span></code> when it is shared across multiple consumers.</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">partition_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">partition</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Statistics</span><span class="p">::</span><span class="n">new_unknown</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">schema</span><span class="p">()))</span>
 <span class="p">}</span>
 </pre></div>
@@ -548,6 +548,44 @@ the call to <code class="docutils literal notranslate"><span class="pre">.as_any
 </pre></div>
 </div>
 </section>
+<section id="avro-api-and-timestamp-decoding-changes">
+<h3>Avro API and timestamp decoding changes<a class="headerlink" href="#avro-api-and-timestamp-decoding-changes" title="Link to this heading">#</a></h3>
+<p>DataFusion has switched to use <code class="docutils literal notranslate"><span class="pre">arrow-avro</span></code> (see <a class="reference external" href="https://github.com/apache/datafusion/pull/17861">#17861</a>) when reading avro files
+which results in a few changes:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">DataFusionError::AvroError</span></code> has been removed.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">From&lt;apache_avro::Error&gt;</span> <span class="pre">for</span> <span class="pre">DataFusionError</span></code> has been removed.</p></li>
+<li><p>Avro crate re-export changed:</p>
+<ul>
+<li><p>Before: <code class="docutils literal notranslate"><span class="pre">datafusion::apache_avro</span></code></p></li>
+<li><p>After: <code class="docutils literal notranslate"><span class="pre">datafusion::arrow_avro</span></code></p></li>
+</ul>
+</li>
+<li><p><strong>Avro timestamp logical type interpretation changed.</strong> Notable effects:</p>
+<ul>
+<li><p>Avro <code class="docutils literal notranslate"><span class="pre">timestamp-*</span></code> logical types are read as UTC timezone-aware Arrow
+timestamps (<code class="docutils literal notranslate"><span class="pre">Timestamp(...,</span> <span class="pre">Some(&quot;+00:00&quot;))</span></code>)</p></li>
+<li><p>Avro <code class="docutils literal notranslate"><span class="pre">local-timestamp-*</span></code> logical types remain timezone-naive
+(<code class="docutils literal notranslate"><span class="pre">Timestamp(...,</span> <span class="pre">None)</span></code>)</p></li>
+</ul>
+</li>
+</ul>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users matching on <code class="docutils literal notranslate"><span class="pre">DataFusionError::AvroError</span></code></p></li>
+<li><p>Users importing <code class="docutils literal notranslate"><span class="pre">datafusion::apache_avro</span></code></p></li>
+<li><p>Users relying on previous Avro timestamp logical type behavior</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<ul class="simple">
+<li><p>Replace <code class="docutils literal notranslate"><span class="pre">datafusion::apache_avro</span></code> imports with <code class="docutils literal notranslate"><span class="pre">datafusion::arrow_avro</span></code>.</p></li>
+<li><p>Update error handling code that matches on <code class="docutils literal notranslate"><span class="pre">DataFusionError::AvroError</span></code> to use
+the current error surface.</p></li>
+<li><p>Validate timestamp handling where timezone semantics matter:
+<code class="docutils literal notranslate"><span class="pre">timestamp-*</span></code> is UTC timezone-aware, while <code class="docutils literal notranslate"><span class="pre">local-timestamp-*</span></code> is
+timezone-naive.</p></li>
+</ul>
+</section>
 </section>
 </section>
 
@@ -600,7 +638,9 @@ the call to <code class="docutils literal notranslate"><span class="pre">.as_any
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-54-0-0">DataFusion 54.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-apply-expressions-is-now-a-required-method"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::apply_expressions</span></code> is now a required method</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-partition-statistics-now-returns-arc-statistics"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Arc&lt;Statistics&gt;</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remove-as-any-from-scalarudfimpl">Remove <code class="docutils literal notranslate"><span class="pre">as_any</span></code> from <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#avro-api-and-timestamp-decoding-changes">Avro API and timestamp decoding changes</a></li>
 </ul>
 </li>
 </ul>
