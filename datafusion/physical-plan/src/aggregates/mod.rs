@@ -2028,6 +2028,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
@@ -4021,41 +4022,18 @@ mod tests {
     ///
     /// This simulates a tree-reduce pattern:
     ///   Partial -> PartialReduce -> Final
-    #[tokio::test]
-    async fn test_partial_reduce_mode() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::UInt32, false),
-            Field::new("b", DataType::Float64, false),
-        ]));
-
-        // Produce two partitions of input data
-        let batch1 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(UInt32Array::from(vec![1, 2, 3])),
-                Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
-            ],
-        )?;
-        let batch2 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(UInt32Array::from(vec![1, 2, 3])),
-                Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
-            ],
-        )?;
-
-        let groups =
-            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
-        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
-            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("SUM(b)")
-                .build()?,
-        )];
+    async fn evaluate_partial_reduce(
+        groups: PhysicalGroupBy,
+        aggregates: Vec<Arc<AggregateFunctionExpr>>,
+        partition_1_and_2_batches: [Vec<RecordBatch>; 2]
+    ) -> Result<Vec<RecordBatch>> {
+        let schema = partition_1_and_2_batches.iter().flatten().next().expect("Must have at least 1 batch").schema();
+        
+        let [partition_1, partition_2] = partition_1_and_2_batches;
 
         // Step 1: Partial aggregation on partition 1
         let input1 =
-            TestMemoryExec::try_new_exec(&[vec![batch1]], Arc::clone(&schema), None)?;
+            TestMemoryExec::try_new_exec(&[partition_1], Arc::clone(&schema), None)?;
         let partial1 = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
@@ -4067,7 +4045,7 @@ mod tests {
 
         // Step 2: Partial aggregation on partition 2
         let input2 =
-            TestMemoryExec::try_new_exec(&[vec![batch2]], Arc::clone(&schema), None)?;
+            TestMemoryExec::try_new_exec(&[partition_2], Arc::clone(&schema), None)?;
         let partial2 = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
@@ -4130,17 +4108,197 @@ mod tests {
         )?);
 
         let result = crate::collect(final_agg, Arc::clone(&task_ctx)).await?;
+        
+        Ok(result)
+    }
+
+    /// Tests that PartialReduce mode:
+    /// 1. Accepts state as input (like Final)
+    /// 2. Produces state as output (like Partial)
+    /// 3. Can be followed by a Final stage to get the correct result
+    ///
+    /// This simulates a tree-reduce pattern:
+    ///   Partial -> PartialReduce -> Final
+    #[tokio::test]
+    async fn test_partial_reduce_mode() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        // Produce two partitions of input data
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
+            ],
+        )?;
+
+        let groups =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(b)")
+                .build()?,
+        )];
+        
+        let result = evaluate_partial_reduce(
+            groups,
+            aggregates,
+            [
+                vec![batch1],
+                vec![batch2]
+            ]
+        ).await?;
 
         // Expected: group 1 -> 10+40=50, group 2 -> 20+50=70, group 3 -> 30+60=90
         assert_snapshot!(batches_to_sort_string(&result), @r"
-            +---+--------+
-            | a | SUM(b) |
-            +---+--------+
-            | 1 | 50.0   |
-            | 2 | 70.0   |
-            | 3 | 90.0   |
-            +---+--------+
-        ");
+                        +---+--------+
+                        | a | SUM(b) |
+                        +---+--------+
+                        | 1 | 50.0   |
+                        | 2 | 70.0   |
+                        | 3 | 90.0   |
+                        +---+--------+
+                    ");
+
+        Ok(())
+    }
+
+    /// Tests that PartialReduce mode:
+    /// 1. Accepts state as input (like Final)
+    /// 2. Produces state as output (like Partial)
+    /// 3. Can be followed by a Final stage to get the correct result
+    ///
+    /// This simulates a tree-reduce pattern:
+    ///   Partial -> PartialReduce -> Final
+    #[tokio::test]
+    async fn test_partial_reduce_mode_on_aggregate_that_have_more_than_1_state_fields_and_input_argument()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        // Produce two partitions of input data
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
+            ],
+        )?;
+
+        let groups =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("AVG(b)")
+                .build()?,
+        )];
+        
+        let result = evaluate_partial_reduce(
+            groups,
+            aggregates,
+            [
+                vec![batch1],
+                vec![batch2]
+            ]
+        ).await?;
+
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+                        +---+--------+
+                        | a | AVG(b) |
+                        +---+--------+
+                        | 1 | 25.0   |
+                        | 2 | 35.0   |
+                        | 3 | 45.0   |
+                        +---+--------+
+                    ");
+
+        Ok(())
+    }
+
+    /// Tests that PartialReduce mode:
+    /// 1. Accepts state as input (like Final)
+    /// 2. Produces state as output (like Partial)
+    /// 3. Can be followed by a Final stage to get the correct result
+    ///
+    /// This simulates a tree-reduce pattern:
+    ///   Partial -> PartialReduce -> Final
+    #[tokio::test]
+    async fn test_partial_reduce_mode_on_aggregate_that_have_more_than_state_fields_than_input_arguments() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        // Produce two partitions of input data
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
+            ],
+        )?;
+
+        let groups =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(
+                
+                // TODO - this test is easily not testing what we want when the aggregate remove the assertion from the data_type function
+                approx_percentile_cont_udaf(),
+                vec![col("b", &schema)?, lit(0.75f32)],
+            )
+            .schema(Arc::clone(&schema))
+            .alias("approx_percentile_cont(b, 0.75)")
+            .build()?,
+        )];
+        
+        let result = evaluate_partial_reduce(
+            groups,
+            aggregates,
+            [
+                vec![batch1],
+                vec![batch2]
+            ]
+        ).await?;
+
+        // Expected: group 1 -> 10+40=50, group 2 -> 20+50=70, group 3 -> 30+60=90
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+                            +---+---------------------------------+
+                            | a | approx_percentile_cont(b, 0.75) |
+                            +---+---------------------------------+
+                            | 1 | 40.0                            |
+                            | 2 | 50.0                            |
+                            | 3 | 60.0                            |
+                            +---+---------------------------------+
+                        ");
 
         Ok(())
     }
