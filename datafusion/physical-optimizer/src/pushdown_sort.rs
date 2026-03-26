@@ -47,7 +47,9 @@
 //! - **Non-overlapping detection**: when files have non-overlapping ranges and matching
 //!   within-file ordering, the combined scan is `Exact` (sort eliminated)
 //! - **Prefix matching**: if data has ordering [A DESC, B ASC] and query needs
-//!   [A DESC], the existing ordering satisfies the requirement
+//!   [A DESC], the existing ordering satisfies the requirement (`Exact`).
+//!   If the query needs [A ASC] (reverse of the prefix), a reverse scan is
+//!   used (`Inexact`, `SortExec` retained)
 //!
 //! Related issue: <https://github.com/apache/datafusion/issues/17348>
 

@@ -1409,24 +1409,11 @@ impl FileScanConfig {
                 false
             }
         } else {
-            // When reversing, check if reversed groups are non-overlapping
-            if let Some(sort_order) = LexOrdering::new(order.iter().cloned()) {
-                let projected_schema = new_config.projected_schema()?;
-                let projection_indices = new_config
-                    .file_source
-                    .projection()
-                    .as_ref()
-                    .and_then(|p| ordered_column_indices_from_projection(p));
-                let result = Self::sort_files_within_groups_by_statistics(
-                    &new_config.file_groups,
-                    &sort_order,
-                    &projected_schema,
-                    projection_indices.as_deref(),
-                );
-                result.all_non_overlapping
-            } else {
-                false
-            }
+            // When reversing, files are already reversed above. We skip
+            // statistics-based sorting here because it would undo the reversal.
+            // Note: reverse path is always Inexact, so all_non_overlapping
+            // is not used (is_exact is false).
+            false
         };
 
         if is_exact && all_non_overlapping {
