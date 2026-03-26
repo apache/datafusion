@@ -3456,4 +3456,51 @@ mod tests {
         assert_eq!(files1[1].object_meta.location.as_ref(), "f5");
         Ok(())
     }
+
+    #[test]
+    fn sort_pushdown_reverse_preserves_file_order_with_stats() -> Result<()> {
+        // Reverse scan should reverse file order but NOT apply statistics-based
+        // sorting (which would undo the reversal). The result is Inexact.
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        // Files with stats, in ASC order. Output ordering is [a ASC].
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+            make_file_with_stats("file3", 20.0, 30.0),
+        ])];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        // Request DESC → reverse path
+        let result = config.try_pushdown_sort(&[sort_expr.reverse()])?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact for reverse scan, got {result:?}");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+
+        // Files should be reversed (not re-sorted by stats)
+        let files = pushed_config.file_groups[0].files();
+        assert_eq!(files[0].object_meta.location.as_ref(), "file3");
+        assert_eq!(files[1].object_meta.location.as_ref(), "file2");
+        assert_eq!(files[2].object_meta.location.as_ref(), "file1");
+
+        // output_ordering cleared (Inexact)
+        assert!(pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
 }
