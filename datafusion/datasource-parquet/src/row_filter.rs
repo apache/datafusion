@@ -775,7 +775,7 @@ fn build_filter_schema(
         })
         .collect::<Vec<_>>();
 
-    Arc::new(Schema::new(fields))
+    Arc::new(Schema::new_with_metadata(fields, file_schema.metadata().clone()))
 }
 
 fn prune_struct_type(dt: &DataType, paths: &[&[String]]) -> DataType {
