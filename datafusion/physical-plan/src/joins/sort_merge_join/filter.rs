@@ -27,9 +27,10 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayBuilder, ArrayRef, BooleanArray, BooleanBuilder, RecordBatch,
-    UInt64Array, UInt64Builder,
+    RecordBatchOptions, UInt64Array, UInt64Builder, new_null_array,
 };
-use arrow::compute::{self, concat_batches, filter_record_batch};
+use arrow::compute::kernels::zip::zip;
+use arrow::compute::{self, filter_record_batch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{JoinSide, JoinType, Result};
 
@@ -254,19 +255,23 @@ pub fn get_corrected_filter_mask(
     let mut seen_true = false;
 
     match join_type {
-        JoinType::Left | JoinType::Right => {
-            // For outer joins: Keep first matching row per input row,
-            // convert rest to nulls, add null-joined rows for unmatched
+        JoinType::Left | JoinType::Right | JoinType::Full => {
+            // For each input row group: keep first filter-passing row,
+            // discard (null) remaining matches, null-join if none passed.
+            // Null metadata entries are already-null-joined rows that
+            // flow through unchanged to preserve output ordering.
             for i in 0..row_indices_length {
                 let last_index =
                     last_index_for_row(i, row_indices, batch_ids, row_indices_length);
-                if filter_mask.value(i) {
+                if filter_mask.is_null(i) {
+                    corrected_mask.append_value(true);
+                } else if filter_mask.value(i) {
                     seen_true = true;
                     corrected_mask.append_value(true);
                 } else if seen_true || !filter_mask.value(i) && !last_index {
-                    corrected_mask.append_null(); // to be ignored and not set to output
+                    corrected_mask.append_null();
                 } else {
-                    corrected_mask.append_value(false); // to be converted to null joined row
+                    corrected_mask.append_value(false);
                 }
 
                 if last_index {
@@ -274,7 +279,6 @@ pub fn get_corrected_filter_mask(
                 }
             }
 
-            // Generate null joined rows for records which have no matching join key
             corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
@@ -290,44 +294,19 @@ pub fn get_corrected_filter_mask(
                  they are handled by SemiAntiMarkSortMergeJoinStream"
             )
         }
-        JoinType::Full => {
-            // For full joins: Similar to outer but handle both sides
-            for i in 0..row_indices_length {
-                let last_index =
-                    last_index_for_row(i, row_indices, batch_ids, row_indices_length);
-
-                if filter_mask.is_null(i) {
-                    // null joined
-                    corrected_mask.append_value(true);
-                } else if filter_mask.value(i) {
-                    seen_true = true;
-                    corrected_mask.append_value(true);
-                } else if seen_true || !filter_mask.value(i) && !last_index {
-                    corrected_mask.append_null(); // to be ignored and not set to output
-                } else {
-                    corrected_mask.append_value(false); // to be converted to null joined row
-                }
-
-                if last_index {
-                    seen_true = false;
-                }
-            }
-            // Generate null joined rows for records which have no matching join key
-            corrected_mask.append_n(expected_size - corrected_mask.len(), false);
-            Some(corrected_mask.finish())
-        }
-        JoinType::Inner => {
-            // Inner joins don't need deferred filtering
-            None
-        }
+        JoinType::Inner => None,
     }
 }
 
 /// Applies corrected filter mask to record batch based on join type
 ///
-/// Different join types require different handling of filtered results:
-/// - Outer joins: Add null-joined rows for false mask values
-/// - Full joins: Add null-joined rows for both sides
+/// The corrected mask has three possible values per row:
+/// - `true`: Keep the row as-is (matched and passed filter)
+/// - `false`: Convert to null-joined row (all filter matches failed for this input row)
+/// - `null`: Discard the row entirely (duplicate match for an already-output input row)
+///
+/// This function preserves input row ordering by processing each row in place
+/// rather than separating matched/unmatched rows.
 pub fn filter_record_batch_by_join_type(
     record_batch: &RecordBatch,
     corrected_mask: &BooleanArray,
@@ -335,30 +314,62 @@ pub fn filter_record_batch_by_join_type(
     schema: &SchemaRef,
     buffered_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
-    let filtered_record_batch = filter_record_batch(record_batch, corrected_mask)?;
-
     match join_type {
-        JoinType::Left => {
-            // For left joins, add null-joined rows where mask is false
-            let null_mask = compute::not(corrected_mask)?;
-            let null_joined_batch = filter_record_batch(record_batch, &null_mask)?;
+        JoinType::Left | JoinType::Right | JoinType::Full => {
+            // Discard null-masked rows (keep true + false only)
+            let keep_mask = compute::is_not_null(corrected_mask)?;
+            let kept_batch = filter_record_batch(record_batch, &keep_mask)?;
+            let kept_corrected = compute::filter(corrected_mask, &keep_mask)?;
+            let kept_corrected = kept_corrected
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap();
 
-            if null_joined_batch.num_rows() == 0 {
-                return Ok(filtered_record_batch);
+            if kept_batch.num_rows() == 0 {
+                return Ok(kept_batch);
             }
 
-            // Create null columns for right side
-            let null_joined_streamed_batch = create_null_joined_batch(
-                &null_joined_batch,
-                buffered_schema,
-                JoinSide::Left,
-                join_type,
-                schema,
-            )?;
+            // All rows passed the filter — no null-joining needed
+            if kept_corrected.true_count() == kept_corrected.len() {
+                return Ok(kept_batch);
+            }
 
-            Ok(concat_batches(
-                schema,
-                &[filtered_record_batch, null_joined_streamed_batch],
+            // For false entries: replace the non-preserved side with nulls.
+            // This preserves row ordering unlike filter+concat.
+            let (null_side_start, null_side_len) = match join_type {
+                JoinType::Left => {
+                    // Left join: null out right (buffered) columns
+                    let left_cols =
+                        schema.fields().len() - buffered_schema.fields().len();
+                    (left_cols, buffered_schema.fields().len())
+                }
+                JoinType::Right => {
+                    // Right join: null out left (buffered) columns
+                    (0, buffered_schema.fields().len())
+                }
+                JoinType::Full => {
+                    // Full join: null out right (buffered) columns for
+                    // streamed-side unmatched rows
+                    let left_cols =
+                        schema.fields().len() - buffered_schema.fields().len();
+                    (left_cols, buffered_schema.fields().len())
+                }
+                _ => unreachable!(),
+            };
+
+            let num_rows = kept_batch.num_rows();
+            let mut columns: Vec<ArrayRef> = kept_batch.columns().to_vec();
+
+            for col in columns.iter_mut().skip(null_side_start).take(null_side_len) {
+                let null_array = new_null_array(col.data_type(), num_rows);
+                *col = zip(kept_corrected, &*col, &null_array)?;
+            }
+
+            let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
+            Ok(RecordBatch::try_new_with_options(
+                Arc::clone(schema),
+                columns,
+                &options,
             )?)
         }
         JoinType::LeftSemi
@@ -369,118 +380,6 @@ pub fn filter_record_batch_by_join_type(
         | JoinType::RightMark => unreachable!(
             "Semi/anti/mark joins are handled by SemiAntiMarkSortMergeJoinStream"
         ),
-        JoinType::Right => {
-            // For right joins, add null-joined rows where mask is false
-            let null_mask = compute::not(corrected_mask)?;
-            let null_joined_batch = filter_record_batch(record_batch, &null_mask)?;
-
-            if null_joined_batch.num_rows() == 0 {
-                return Ok(filtered_record_batch);
-            }
-
-            // Create null columns for left side (buffered side for RIGHT join)
-            let null_joined_buffered_batch = create_null_joined_batch(
-                &null_joined_batch,
-                buffered_schema, // Pass buffered (left) schema to create nulls for it
-                JoinSide::Right,
-                join_type,
-                schema,
-            )?;
-
-            Ok(concat_batches(
-                schema,
-                &[filtered_record_batch, null_joined_buffered_batch],
-            )?)
-        }
-        JoinType::Full => {
-            // For full joins, add null-joined rows for both sides
-            let joined_filter_not_matched_mask = compute::not(corrected_mask)?;
-            let joined_filter_not_matched_batch =
-                filter_record_batch(record_batch, &joined_filter_not_matched_mask)?;
-
-            if joined_filter_not_matched_batch.num_rows() == 0 {
-                return Ok(filtered_record_batch);
-            }
-
-            // Create null-joined batches for both sides
-            let left_null_joined_batch = create_null_joined_batch(
-                &joined_filter_not_matched_batch,
-                buffered_schema,
-                JoinSide::Left,
-                join_type,
-                schema,
-            )?;
-
-            Ok(concat_batches(
-                schema,
-                &[filtered_record_batch, left_null_joined_batch],
-            )?)
-        }
-        JoinType::Inner => Ok(filtered_record_batch),
+        JoinType::Inner => Ok(filter_record_batch(record_batch, corrected_mask)?),
     }
-}
-
-/// Creates a batch with null columns for the non-joined side
-///
-/// Note: The input `batch` is assumed to be a fully-joined batch that already contains
-/// columns from both sides. We need to extract the data side columns and replace the
-/// null side columns with actual nulls.
-fn create_null_joined_batch(
-    batch: &RecordBatch,
-    null_schema: &SchemaRef,
-    join_side: JoinSide,
-    _join_type: JoinType,
-    output_schema: &SchemaRef,
-) -> Result<RecordBatch> {
-    let num_rows = batch.num_rows();
-
-    // The input batch is a fully-joined batch [left_cols..., right_cols...]
-    // We need to extract the appropriate side and replace the other with nulls
-    let columns = match join_side {
-        JoinSide::Left => {
-            // For LEFT join: output is [left_cols..., right_cols...]
-            // Extract left columns, then add null right columns
-            let null_columns: Vec<ArrayRef> = null_schema
-                .fields()
-                .iter()
-                .map(|field| arrow::array::new_null_array(field.data_type(), num_rows))
-                .collect();
-            let left_col_count = output_schema.fields().len() - null_columns.len();
-            let mut result: Vec<ArrayRef> = batch.columns()[..left_col_count].to_vec();
-            result.extend(null_columns);
-            result
-        }
-        JoinSide::Right => {
-            // For RIGHT join: batch is [left_cols..., right_cols...] (same as schema)
-            // We want: [null_left..., actual_right...]
-            // Extract left columns from beginning, replace with nulls, keep right columns
-            let null_columns: Vec<ArrayRef> = null_schema
-                .fields()
-                .iter()
-                .map(|field| arrow::array::new_null_array(field.data_type(), num_rows))
-                .collect();
-            let left_col_count = null_columns.len();
-            let mut result = null_columns;
-            // Extract right columns starting after left columns
-            result.extend_from_slice(&batch.columns()[left_col_count..]);
-            result
-        }
-        JoinSide::None => {
-            // This should not happen in normal join operations
-            unreachable!(
-                "JoinSide::None should not be used in null-joined batch creation"
-            )
-        }
-    };
-
-    // Create the batch - don't validate nullability since outer joins can have
-    // null values in columns that were originally non-nullable
-    use arrow::array::RecordBatchOptions;
-    let mut options = RecordBatchOptions::new();
-    options = options.with_row_count(Some(num_rows));
-    Ok(RecordBatch::try_new_with_options(
-        Arc::clone(output_schema),
-        columns,
-        &options,
-    )?)
 }

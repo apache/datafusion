@@ -423,16 +423,19 @@ impl JoinedRecordBatches {
         }
     }
 
-    /// Pushes a batch with null metadata (Full join null-joined rows only)
+    /// Pushes a batch with null metadata (rows that need no filter correction)
     ///
-    /// These buffered rows had NO matching streamed rows. Since we can't group
-    /// by input row (no input row exists), we use null metadata as a sentinel.
+    /// Used for: (1) Full join buffered rows with no streamed match, and
+    /// (2) outer join streamed rows with no buffered match. These rows are
+    /// already in final form but must flow through the deferred filtering
+    /// pipeline to preserve output ordering. Null metadata causes
+    /// get_corrected_filter_mask() to pass them through unchanged.
     ///
     /// Maintains invariant: N rows → N metadata entries (nulls)
     fn push_batch_with_null_metadata(&mut self, batch: RecordBatch, join_type: JoinType) {
         debug_assert!(
-            join_type == JoinType::Full,
-            "push_batch_with_null_metadata should only be called for Full joins"
+            matches!(join_type, JoinType::Left | JoinType::Right | JoinType::Full),
+            "push_batch_with_null_metadata should only be called for deferred-filtered joins"
         );
 
         let num_rows = batch.num_rows();
@@ -531,15 +534,32 @@ impl Stream for SortMergeJoinStream {
                         match self.current_ordering {
                             Ordering::Less | Ordering::Equal => {
                                 if !streamed_exhausted {
+                                    // Batch deferred filtering: process_filtered_batches()
+                                    // only when >= batch_size rows have accumulated.
+                                    // Without this gate, unique keys cause per-row pipeline
+                                    // execution (concat + correct_mask + filter_by_type),
+                                    // which dominates runtime.
+                                    //
+                                    // Bounded to ~2*batch_size rows, so this does not
+                                    // reintroduce the unbounded buffering fixed by PR #20482.
+                                    // Exhausted state flushes any remainder.
                                     if needs_deferred_filtering(
                                         &self.filter,
                                         self.join_type,
                                     ) {
-                                        match self.process_filtered_batches()? {
-                                            Poll::Ready(Some(batch)) => {
-                                                return Poll::Ready(Some(Ok(batch)));
+                                        let accumulated = self.num_unfrozen_pairs()
+                                            + self
+                                                .joined_record_batches
+                                                .filter_metadata
+                                                .filter_mask
+                                                .len();
+                                        if accumulated >= self.batch_size {
+                                            match self.process_filtered_batches()? {
+                                                Poll::Ready(Some(batch)) => {
+                                                    return Poll::Ready(Some(Ok(batch)));
+                                                }
+                                                Poll::Ready(None) | Poll::Pending => {}
                                             }
-                                            Poll::Ready(None) | Poll::Pending => {}
                                         }
                                     }
 
@@ -1235,8 +1255,18 @@ impl SortMergeJoinStream {
                     [right_columns, left_columns].concat()
                 };
                 let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
-                self.joined_record_batches
-                    .push_batch_without_metadata(batch);
+
+                // Null-joined rows (no buffered match) need no filter correction,
+                // but must flow through the same pipeline as matched rows to
+                // preserve output ordering. Use null metadata as a sentinel so
+                // get_corrected_filter_mask() passes them through unchanged.
+                if needs_deferred_filtering(&self.filter, self.join_type) {
+                    self.joined_record_batches
+                        .push_batch_with_null_metadata(batch, self.join_type);
+                } else {
+                    self.joined_record_batches
+                        .push_batch_without_metadata(batch);
+                }
                 continue;
             }
 
