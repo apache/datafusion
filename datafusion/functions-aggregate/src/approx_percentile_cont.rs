@@ -298,7 +298,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() > 3 {
-            return plan_err!("approx_percentile_cont requires at ost 3 arguments");
+            return plan_err!("approx_percentile_cont requires at most 3 arguments");
         }
         if !arg_types[0].is_numeric() {
             return plan_err!("approx_percentile_cont requires numeric input types");
