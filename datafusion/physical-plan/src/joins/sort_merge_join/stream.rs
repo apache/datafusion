@@ -540,9 +540,12 @@ impl Stream for SortMergeJoinStream {
                                     // execution (concat + correct_mask + filter_by_type),
                                     // which dominates runtime.
                                     //
-                                    // Bounded to ~2*batch_size rows, so this does not
-                                    // reintroduce the unbounded buffering fixed by PR #20482.
-                                    // Exhausted state flushes any remainder.
+                                    // Accumulated rows are bounded to ~2*batch_size:
+                                    // one batch_size worth from freeze_dequeuing_buffered()
+                                    // (when an input batch is fully consumed), plus up to
+                                    // batch_size pairs accumulating toward the next freeze.
+                                    // This does not reintroduce the unbounded buffering
+                                    // fixed by PR #20482. Exhausted state flushes remainder.
                                     if needs_deferred_filtering(
                                         &self.filter,
                                         self.join_type,
