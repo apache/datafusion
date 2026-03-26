@@ -358,17 +358,27 @@ impl FileOpener for ParquetOpener {
             // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
             // Additionally, if any casts were inserted we can move casts from the column to the literal side:
             // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
-            let rewriter = expr_adapter_factory.create(
-                Arc::clone(&logical_file_schema),
-                Arc::clone(&physical_file_schema),
-            )?;
-            let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
-            predicate = predicate
-                .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
-                .transpose()?;
-            // Adapt projections to the physical file schema as well
-            projection = projection
-                .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
+            //
+            // When the schemas are identical and there is no predicate, the
+            // rewriter is a no-op: column indices already match (partition
+            // columns are appended after file columns in the table schema),
+            // types are the same, and there are no missing columns. Skip the
+            // tree walk entirely in that case.
+            let needs_rewrite =
+                predicate.is_some() || logical_file_schema != physical_file_schema;
+            if needs_rewrite {
+                let rewriter = expr_adapter_factory.create(
+                    Arc::clone(&logical_file_schema),
+                    Arc::clone(&physical_file_schema),
+                )?;
+                let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
+                predicate = predicate
+                    .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
+                    .transpose()?;
+                // Adapt projections to the physical file schema as well
+                projection = projection
+                    .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
+            }
 
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(

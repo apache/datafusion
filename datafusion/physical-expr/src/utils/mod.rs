@@ -267,7 +267,7 @@ pub fn reassign_expr_columns(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::any::Any;
+
     use std::fmt::{Display, Formatter};
 
     use super::*;
@@ -302,9 +302,6 @@ pub(crate) mod tests {
     }
 
     impl ScalarUDFImpl for TestScalarUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "test-scalar-udf"
         }

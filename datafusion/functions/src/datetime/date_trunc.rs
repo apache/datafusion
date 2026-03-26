@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
@@ -211,10 +210,6 @@ impl DateTruncFunc {
 }
 
 impl ScalarUDFImpl for DateTruncFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "date_trunc"
     }

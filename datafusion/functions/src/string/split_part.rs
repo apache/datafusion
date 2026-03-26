@@ -31,7 +31,6 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
@@ -84,10 +83,6 @@ impl SplitPartFunc {
 }
 
 impl ScalarUDFImpl for SplitPartFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "split_part"
     }
