@@ -410,51 +410,51 @@ const SMJ_QUERIES: &[&str] = &[
         FROM t1_sorted JOIN t2_sorted ON t1_sorted.key = t2_sorted.key
         GROUP BY t1_sorted.key
     "#,
-    // Q21: INNER 100K x 100K | unique keys (1:1) | 50% join filter
+    // Q21: INNER 10M x 10M | unique keys (1:1) | 50% join filter
     r#"
         WITH t1_sorted AS (
             SELECT value as key, value as data
-            FROM range(100000) ORDER BY value
+            FROM range(10000000) ORDER BY value
         ),
         t2_sorted AS (
             SELECT value as key, value as data
-            FROM range(100000) ORDER BY value
+            FROM range(10000000) ORDER BY value
         )
         SELECT t1_sorted.key, t1_sorted.data as d1, t2_sorted.data as d2
         FROM t1_sorted JOIN t2_sorted
           ON t1_sorted.key = t2_sorted.key
-         AND t1_sorted.data + t2_sorted.data < 100000
+         AND t1_sorted.data + t2_sorted.data < 10000000
     "#,
-    // Q22: LEFT 100K x 100K | unique keys (1:1) | 50% join filter
+    // Q22: LEFT 10M x 10M | unique keys (1:1) | 50% join filter
     r#"
         WITH t1_sorted AS (
             SELECT value as key, value as data
-            FROM range(100000) ORDER BY value
+            FROM range(10000000) ORDER BY value
         ),
         t2_sorted AS (
             SELECT value as key, value as data
-            FROM range(100000) ORDER BY value
+            FROM range(10000000) ORDER BY value
         )
         SELECT t1_sorted.key, t1_sorted.data as d1, t2_sorted.data as d2
         FROM t1_sorted LEFT JOIN t2_sorted
           ON t1_sorted.key = t2_sorted.key
-         AND t1_sorted.data + t2_sorted.data < 100000
+         AND t1_sorted.data + t2_sorted.data < 10000000
     "#,
-    // Q23: FULL 100K x 100K | unique keys (1:1) | 50% join filter
+    // Q23: FULL 10M x 10M | unique keys (1:1) | 50% join filter
     r#"
         WITH t1_sorted AS (
             SELECT value as key, value as data
-            FROM range(100000) ORDER BY value
+            FROM range(10000000) ORDER BY value
         ),
         t2_sorted AS (
             SELECT value as key, value as data
-            FROM range(100000) ORDER BY value
+            FROM range(10000000) ORDER BY value
         )
         SELECT t1_sorted.key as k1, t1_sorted.data as d1,
                t2_sorted.key as k2, t2_sorted.data as d2
         FROM t1_sorted FULL JOIN t2_sorted
           ON t1_sorted.key = t2_sorted.key
-         AND t1_sorted.data + t2_sorted.data < 100000
+         AND t1_sorted.data + t2_sorted.data < 10000000
     "#,
 ];
 
