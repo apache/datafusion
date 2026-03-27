@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{LambdaFunctionExpr, ScalarFunctionExpr};
@@ -27,7 +28,8 @@ use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
-    DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err, plan_err,
+    DFSchema, Result, ScalarValue, ToDFSchema, exec_err, internal_datafusion_err,
+    not_impl_err, plan_err,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
@@ -415,9 +417,49 @@ pub fn create_physical_expr(
         Expr::Placeholder(Placeholder { id, .. }) => {
             exec_err!("Placeholder '{id}' was not provided a value for execution.")
         }
-        Expr::LambdaFunction(LambdaFunction { func, args }) => {
-            let physical_args =
-                create_physical_exprs(args, input_dfschema, execution_props)?;
+        Expr::LambdaFunction(invocation @ LambdaFunction { func, args }) => {
+            let num_lambdas = args
+                .iter()
+                .filter(|arg| matches!(arg, Expr::Lambda(_)))
+                .count();
+
+            let mut lambdas_parameters =
+                invocation.lambdas_parameters(input_dfschema)?.into_iter();
+
+            if num_lambdas > lambdas_parameters.len() {
+                return plan_err!(
+                    "{} lambdas_parameters returned only {} values for {num_lambdas} lambdas",
+                    func.name(),
+                    lambdas_parameters.len()
+                );
+            }
+
+            let physical_args = args
+                .iter()
+                .map(|arg| match arg {
+                    Expr::Lambda(lambda) => {
+                        let lambda_parameters = lambdas_parameters
+                            .next()
+                            .ok_or_else(|| {
+                                internal_datafusion_err!(
+                                    "lambdas_parameters len should have been checked above"
+                                )
+                            })?
+                            .into_iter()
+                            .zip(&lambda.params)
+                            .map(|(field, name)| field.with_name(name))
+                            .collect();
+
+                        let lambda_schema = DFSchema::from_unqualified_fields(
+                            lambda_parameters,
+                            HashMap::new(),
+                        )?;
+
+                        create_physical_expr(arg, &lambda_schema, execution_props)
+                    }
+                    _ => create_physical_expr(arg, input_dfschema, execution_props),
+                })
+                .collect::<Result<_>>()?;
 
             let config_options = match execution_props.config_options.as_ref() {
                 Some(config_options) => Arc::clone(config_options),
@@ -431,15 +473,25 @@ pub fn create_physical_expr(
                 config_options,
             )?))
         }
-        Expr::Lambda(Lambda { params, body }) => expressions::lambda(
-            params,
-            create_physical_expr(body, input_dfschema, execution_props)?,
-        ),
+        Expr::Lambda(Lambda { params, body }) => {
+            if body.any_column_refs() {
+                return plan_err!("lambda doesn't support column capture");
+            }
+
+            expressions::lambda(
+                params,
+                create_physical_expr(body, input_dfschema, execution_props)?,
+            )
+        }
         Expr::LambdaVariable(LambdaVariable {
             name,
             field,
             spans: _,
-        }) => expressions::lambda_variable(name, Arc::clone(field)),
+        }) => expressions::lambda_variable(
+            name,
+            Arc::clone(field),
+            input_dfschema.as_arrow(),
+        ),
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }

@@ -28,13 +28,14 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
 
 /// Represents the lambda variable with a given name and field
 #[derive(Debug, Clone)]
 pub struct LambdaVariable {
     name: String,
+    index: usize,
     field: FieldRef,
 }
 
@@ -55,8 +56,8 @@ impl Hash for LambdaVariable {
 
 impl LambdaVariable {
     /// Create a new lambda variable expression
-    pub fn new(name: String, field: FieldRef) -> Self {
-        Self { name, field }
+    pub fn new(name: String, index: usize, field: FieldRef) -> Self {
+        Self { name, index, field }
     }
 
     /// Get the variable's name
@@ -90,10 +91,22 @@ impl PhysicalExpr for LambdaVariable {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        match batch.column_by_name(&self.name) {
-            Some(array) => Ok(ColumnarValue::Array(Arc::clone(array))),
-            None => exec_err!("LambdaVariable {} not present in batch", self.name),
+        if self.index >= batch.num_columns() {
+            return internal_err!(
+                "PhysicalExpr LambdaVariable references column '{}' at index {} (zero-based) but batch only has {} columns: {:?}",
+                self.name,
+                self.index,
+                batch.num_columns(),
+                batch
+                    .schema_ref()
+                    .fields()
+                    .iter()
+                    .map(|f| f.name())
+                    .collect::<Vec<_>>()
+            );
         }
+
+        Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
     fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
@@ -120,6 +133,18 @@ impl PhysicalExpr for LambdaVariable {
 pub fn lambda_variable(
     name: impl Into<String>,
     field: FieldRef,
+    schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(LambdaVariable::new(name.into(), field)))
+    let name = name.into();
+    let index = schema.index_of(&name)?;
+
+    let schema_field = schema.field(index);
+
+    if field.as_ref() != schema_field {
+        return plan_err!(
+            "LambdaVariable owned field differ from schema field {field} != {schema_field}"
+        );
+    }
+
+    Ok(Arc::new(LambdaVariable::new(name, index, field)))
 }
