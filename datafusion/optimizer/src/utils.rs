@@ -492,29 +492,19 @@ mod tests {
     }
 
     #[test]
-    fn mixed_reference_predicate_remains_fast_pathed_in_authoritative_mode(
-    ) -> Result<()> {
+    fn mixed_reference_predicate_remains_fast_pathed_in_authoritative_mode() -> Result<()>
+    {
         let predicate = binary_expr(col("a"), Operator::Gt, col("b"));
         let column_a = Column::from_name("a");
 
         let auto_result = with_null_restriction_eval_mode_for_test(
             NullRestrictionEvalMode::Auto,
-            || {
-                is_restrict_null_predicate(
-                    predicate.clone(),
-                    std::iter::once(&column_a),
-                )
-            },
+            || is_restrict_null_predicate(predicate.clone(), std::iter::once(&column_a)),
         )?;
 
         let authoritative_only_result = with_null_restriction_eval_mode_for_test(
             NullRestrictionEvalMode::AuthoritativeOnly,
-            || {
-                is_restrict_null_predicate(
-                    predicate.clone(),
-                    std::iter::once(&column_a),
-                )
-            },
+            || is_restrict_null_predicate(predicate.clone(), std::iter::once(&column_a)),
         )?;
 
         assert!(!auto_result, "{predicate}");

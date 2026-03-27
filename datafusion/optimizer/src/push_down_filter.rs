@@ -308,7 +308,12 @@ fn is_derived_relation(plan: &LogicalPlan) -> bool {
     matches!(plan, LogicalPlan::SubqueryAlias(_))
 }
 
-fn should_keep_filter_above_cross_join(join: &Join, predicate: &Expr) -> bool {
+// Keep post-join filters above certain scalar-subquery cross joins to preserve
+// behavior for the window-over-scalar-subquery regression shape.
+fn should_keep_filter_above_scalar_subquery_cross_join(
+    join: &Join,
+    predicate: &Expr,
+) -> bool {
     if !join.on.is_empty() || join.filter.is_some() {
         return false;
     }
@@ -471,7 +476,7 @@ fn push_down_all_join(
         } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
         } else if is_inner_join
-            && !should_keep_filter_above_cross_join(&join, &predicate)
+            && !should_keep_filter_above_scalar_subquery_cross_join(&join, &predicate)
             && can_evaluate_as_join_condition(&predicate)?
         {
             // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
