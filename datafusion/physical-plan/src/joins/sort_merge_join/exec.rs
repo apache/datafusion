@@ -23,17 +23,17 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use super::bitwise_stream::BitwiseSortMergeJoinStream;
+use super::materializing_stream::MaterializingSortMergeJoinStream;
+use super::metrics::SortMergeJoinMetrics;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
-use crate::joins::semi_anti_mark_sort_merge_join::stream::SemiAntiMarkSortMergeJoinStream;
-use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
-use crate::joins::sort_merge_join::stream::SortMergeJoinStream;
 use crate::joins::utils::{
     JoinFilter, JoinOn, JoinOnRef, build_join_schema, check_join_is_valid,
     estimate_join_statistics, reorder_output_after_swap,
     symmetric_join_output_partitioning,
 };
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
 use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on,
@@ -529,6 +529,12 @@ impl ExecutionPlan for SortMergeJoinExec {
         let batch_size = context.session_config().batch_size();
         let reservation = MemoryConsumer::new(format!("SMJStream[{partition}]"))
             .register(context.memory_pool());
+        let spill_manager = SpillManager::new(
+            context.runtime_env(),
+            SpillMetrics::new(&self.metrics, partition),
+            buffered.schema(),
+        )
+        .with_compression_type(context.session_config().spill_compression());
 
         if matches!(
             self.join_type,
@@ -539,16 +545,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 | JoinType::LeftMark
                 | JoinType::RightMark
         ) {
-            let peak_mem_used =
-                MetricBuilder::new(&self.metrics).gauge("peak_mem_used", partition);
-            let spill_manager = SpillManager::new(
-                context.runtime_env(),
-                SpillMetrics::new(&self.metrics, partition),
-                buffered.schema(),
-            )
-            .with_compression_type(context.session_config().spill_compression());
-
-            Ok(Box::pin(SemiAntiMarkSortMergeJoinStream::try_new(
+            Ok(Box::pin(BitwiseSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
@@ -562,13 +559,11 @@ impl ExecutionPlan for SortMergeJoinExec {
                 partition,
                 &self.metrics,
                 reservation,
-                peak_mem_used,
                 spill_manager,
                 context.runtime_env(),
             )?))
         } else {
-            Ok(Box::pin(SortMergeJoinStream::try_new(
-                context.session_config().spill_compression(),
+            Ok(Box::pin(MaterializingSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
@@ -581,6 +576,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 batch_size,
                 SortMergeJoinMetrics::new(partition, &self.metrics),
                 reservation,
+                spill_manager,
                 context.runtime_env(),
             )?))
         }

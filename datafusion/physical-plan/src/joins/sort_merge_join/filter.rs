@@ -288,9 +288,7 @@ pub fn get_corrected_filter_mask(
         | JoinType::RightSemi
         | JoinType::LeftAnti
         | JoinType::RightAnti => {
-            unreachable!(
-                "Semi/anti/mark joins are handled by SemiAntiMarkSortMergeJoinStream"
-            )
+            unreachable!("Semi/anti/mark joins are handled by BitwiseSortMergeJoinStream")
         }
         JoinType::Inner => None,
     }
@@ -314,18 +312,23 @@ pub fn filter_record_batch_by_join_type(
 ) -> Result<RecordBatch> {
     match join_type {
         JoinType::Left | JoinType::Right | JoinType::Full => {
+            if record_batch.num_rows() == 0 {
+                return Ok(record_batch.clone());
+            }
+
             // Discard null-masked rows (keep true + false only)
             let keep_mask = compute::is_not_null(corrected_mask)?;
             let kept_batch = filter_record_batch(record_batch, &keep_mask)?;
+
+            if kept_batch.num_rows() == 0 {
+                return Ok(kept_batch);
+            }
+
             let kept_corrected = compute::filter(corrected_mask, &keep_mask)?;
             let kept_corrected = kept_corrected
                 .as_any()
                 .downcast_ref::<BooleanArray>()
                 .unwrap();
-
-            if kept_batch.num_rows() == 0 {
-                return Ok(kept_batch);
-            }
 
             // All rows passed the filter — no null-joining needed
             if kept_corrected.true_count() == kept_corrected.len() {

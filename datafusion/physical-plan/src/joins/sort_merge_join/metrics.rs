@@ -18,8 +18,7 @@
 //! Module for tracking Sort Merge Join metrics
 
 use crate::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, SpillMetrics,
-    Time,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
 };
 
 /// Metrics for SortMergeJoinExec
@@ -35,8 +34,6 @@ pub(super) struct SortMergeJoinMetrics {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: Gauge,
-    /// Metrics related to spilling
-    spill_metrics: SpillMetrics,
 }
 
 impl SortMergeJoinMetrics {
@@ -46,7 +43,6 @@ impl SortMergeJoinMetrics {
             MetricBuilder::new(metrics).counter("input_batches", partition);
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
         let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
-        let spill_metrics = SpillMetrics::new(metrics, partition);
 
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
 
@@ -56,7 +52,6 @@ impl SortMergeJoinMetrics {
             input_rows,
             baseline_metrics,
             peak_mem_used,
-            spill_metrics,
         }
     }
 
@@ -78,9 +73,5 @@ impl SortMergeJoinMetrics {
 
     pub fn peak_mem_used(&self) -> Gauge {
         self.peak_mem_used.clone()
-    }
-
-    pub fn spill_metrics(&self) -> SpillMetrics {
-        self.spill_metrics.clone()
     }
 }
