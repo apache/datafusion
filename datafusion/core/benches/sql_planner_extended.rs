@@ -24,8 +24,10 @@ use criterion::{
 };
 use datafusion::prelude::{DataFrame, SessionContext};
 use datafusion_catalog::MemTable;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::Expr::Literal;
+use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::{cast, col, lit, not, try_cast, when};
 use datafusion_functions::expr_fn::{
     btrim, length, regexp_like, regexp_replace, to_timestamp, upper,
@@ -226,7 +228,9 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
 fn build_case_heavy_left_join_df(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
     register_string_table(ctx, 100, 1000);
     let query = build_case_heavy_left_join_query(30, 1);
-    rt.block_on(async { ctx.sql(&query).await.unwrap() })
+    let df = rt.block_on(async { ctx.sql(&query).await.unwrap() });
+    assert_case_heavy_left_join_inference_candidates(&df, 30);
+    df
 }
 
 fn build_case_heavy_left_join_query(predicate_count: usize, case_depth: usize) -> String {
@@ -324,13 +328,15 @@ fn build_case_heavy_left_join_df_with_push_down_filter(
     case_depth: usize,
     push_down_filter_enabled: bool,
 ) -> DataFrame {
-    build_left_join_df_with_push_down_filter(
+    let df = build_left_join_df_with_push_down_filter(
         rt,
         build_case_heavy_left_join_query,
         predicate_count,
         case_depth,
         push_down_filter_enabled,
-    )
+    );
+    assert_case_heavy_left_join_inference_candidates(&df, predicate_count);
+    df
 }
 
 fn build_non_case_left_join_df_with_push_down_filter(
@@ -346,6 +352,39 @@ fn build_non_case_left_join_df_with_push_down_filter(
         nesting_depth,
         push_down_filter_enabled,
     )
+}
+
+fn find_filter_predicates(plan: &LogicalPlan) -> Vec<datafusion_expr::Expr> {
+    match plan {
+        LogicalPlan::Filter(filter) => split_conjunction_owned(filter.predicate.clone()),
+        LogicalPlan::Projection(projection) => find_filter_predicates(projection.input.as_ref()),
+        other => panic!("expected benchmark query plan to contain a Filter, found {other:?}"),
+    }
+}
+
+fn assert_case_heavy_left_join_inference_candidates(
+    df: &DataFrame,
+    expected_predicate_count: usize,
+) {
+    let predicates = find_filter_predicates(df.logical_plan());
+    assert_eq!(predicates.len(), expected_predicate_count);
+
+    let left_join_key = Column::from_qualified_name("l.c0");
+    let right_join_key = Column::from_qualified_name("r.c0");
+
+    for predicate in predicates {
+        let column_refs = predicate.column_refs();
+        assert!(
+            column_refs.contains(&&left_join_key) || column_refs.contains(&&right_join_key),
+            "benchmark predicate should reference a join key: {predicate}"
+        );
+        assert!(
+            column_refs
+                .iter()
+                .any(|col| **col != left_join_key && **col != right_join_key),
+            "benchmark predicate should reference a non-join column: {predicate}"
+        );
+    }
 }
 
 fn include_full_push_down_filter_sweep() -> bool {
