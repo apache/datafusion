@@ -32,21 +32,13 @@ enum NullSubstitutionValue {
     Boolean(bool),
 }
 
-impl NullSubstitutionValue {
-    fn is_null(self) -> bool {
-        matches!(self, Self::Null)
-    }
-}
-
 pub(super) fn syntactic_restrict_null_predicate(
     predicate: &Expr,
     join_cols: &HashSet<&Column>,
 ) -> Option<bool> {
     match syntactic_null_substitution_value(predicate, join_cols) {
-        Some(NullSubstitutionValue::Boolean(true)) => Some(false),
-        Some(NullSubstitutionValue::Boolean(false) | NullSubstitutionValue::Null) => {
-            Some(true)
-        }
+        Some(NullSubstitutionValue::Boolean(value)) => Some(!value),
+        Some(NullSubstitutionValue::Null) => Some(true),
         Some(NullSubstitutionValue::NonNull) | None => None,
     }
 }
@@ -117,7 +109,7 @@ fn null_if_contains_null(
 fn strict_null_only(
     value: Option<NullSubstitutionValue>,
 ) -> Option<NullSubstitutionValue> {
-    value.filter(|value| value.is_null())
+    value.filter(|value| matches!(value, NullSubstitutionValue::Null))
 }
 
 fn syntactic_null_substitution_value(

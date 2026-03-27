@@ -46,7 +46,9 @@ use self::test_eval_mode::{
 
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
-    column_refs_all_in(&expr.column_refs(), |column| schema_cols.contains(column))
+    expr.column_refs()
+        .iter()
+        .all(|column| schema_cols.contains(*column))
 }
 
 pub(crate) fn replace_qualified_name(
@@ -70,13 +72,6 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
     trace!("{description}::\n{}\n", plan.display_indent_schema());
 }
 
-pub(super) fn column_refs_all_in<'a>(
-    column_refs: &HashSet<&'a Column>,
-    mut contains: impl FnMut(&Column) -> bool,
-) -> bool {
-    column_refs.iter().all(|column| contains(column))
-}
-
 /// Determine whether a predicate can restrict NULLs. e.g.
 /// `c0 > 8` return true;
 /// `c0 IS NULL` return false.
@@ -98,7 +93,7 @@ pub fn is_restrict_null_predicate<'a>(
     // contains a placeholder for the join key columns. Callers treat such errors as
     // non-restricting (false) via `matches!(_, Ok(true))`, so we return false early
     // and avoid the expensive physical-expression compilation pipeline entirely.
-    if !column_refs_all_in(&column_refs, |column| join_cols.contains(&column)) {
+    if !column_refs.iter().all(|column| join_cols.contains(*column)) {
         return Ok(false);
     }
 
@@ -181,29 +176,26 @@ fn authoritative_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
-    evaluate_expr_with_null_column(predicate, join_cols_of_predicate)
-        .and_then(is_false_or_null_boolean_result)
+    Ok(
+        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
+            ColumnarValue::Array(array) if array.len() == 1 => {
+                let boolean_array = as_boolean_array(&array)?;
+                boolean_array.is_null(0) || !boolean_array.value(0)
+            }
+            ColumnarValue::Array(_) => false,
+            ColumnarValue::Scalar(scalar) => matches!(
+                scalar,
+                ScalarValue::Boolean(None)
+                    | ScalarValue::Boolean(Some(false))
+                    | ScalarValue::Null
+            ),
+        },
+    )
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let mut expr_rewrite = TypeCoercionRewriter { schema };
     expr.rewrite(&mut expr_rewrite).data()
-}
-
-fn is_false_or_null_boolean_result(result: ColumnarValue) -> Result<bool> {
-    Ok(match result {
-        ColumnarValue::Array(array) if array.len() == 1 => {
-            let boolean_array = as_boolean_array(&array)?;
-            boolean_array.is_null(0) || !boolean_array.value(0)
-        }
-        ColumnarValue::Array(_) => false,
-        ColumnarValue::Scalar(scalar) => matches!(
-            scalar,
-            ScalarValue::Boolean(None)
-                | ScalarValue::Boolean(Some(false))
-                | ScalarValue::Null
-        ),
-    })
 }
 
 #[cfg(test)]
