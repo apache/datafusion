@@ -181,10 +181,12 @@ pub fn evaluates_to_null<'a>(
         return Ok(true);
     }
 
-    Ok(authoritative_null_result(evaluate_expr_with_null_column(
-        predicate,
-        null_columns,
-    )?)? == AuthoritativeNullResult::AlwaysNull)
+    Ok(
+        match evaluate_expr_with_null_column(predicate, null_columns)? {
+            ColumnarValue::Array(_) => false,
+            ColumnarValue::Scalar(scalar) => scalar.is_null(),
+        },
+    )
 }
 
 fn evaluate_expr_with_null_column<'a>(
@@ -218,41 +220,24 @@ fn authoritative_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
-    Ok(authoritative_null_result(evaluate_expr_with_null_column(
-        predicate,
-        join_cols_of_predicate,
-    )?)? == AuthoritativeNullResult::NullRestricting)
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum AuthoritativeNullResult {
-    AlwaysNull,
-    NullRestricting,
-    Other,
-}
-
-fn authoritative_null_result(value: ColumnarValue) -> Result<AuthoritativeNullResult> {
-    Ok(match value {
-        ColumnarValue::Array(array) => {
-            if array.len() != 1 {
-                return Ok(AuthoritativeNullResult::Other);
+    Ok(
+        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
+            ColumnarValue::Array(array) => {
+                if array.len() == 1 {
+                    let boolean_array = as_boolean_array(&array)?;
+                    boolean_array.is_null(0) || !boolean_array.value(0)
+                } else {
+                    false
+                }
             }
-
-            let boolean_array = as_boolean_array(&array)?;
-            if boolean_array.is_null(0) || !boolean_array.value(0) {
-                AuthoritativeNullResult::NullRestricting
-            } else {
-                AuthoritativeNullResult::Other
-            }
-        }
-        ColumnarValue::Scalar(scalar) if scalar.is_null() => {
-            AuthoritativeNullResult::AlwaysNull
-        }
-        ColumnarValue::Scalar(
-            ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false)),
-        ) => AuthoritativeNullResult::NullRestricting,
-        ColumnarValue::Scalar(_) => AuthoritativeNullResult::Other,
-    })
+            ColumnarValue::Scalar(scalar) => matches!(
+                scalar,
+                ScalarValue::Boolean(None)
+                    | ScalarValue::Boolean(Some(false))
+                    | ScalarValue::Null
+            ),
+        },
+    )
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
