@@ -60,13 +60,13 @@ pub struct RunOpt {
 ///   - Key cardinality (rows per key)
 ///   - Filter selectivity (if applicable)
 const SMJ_QUERIES: &[&str] = &[
-    // Q1: INNER 100K x 100K | 1:1
+    // Q1: INNER 1M x 1M | 1:1
     r#"
         WITH t1_sorted AS (
-            SELECT value as key FROM range(100000) ORDER BY value
+            SELECT value as key FROM range(1000000) ORDER BY value
         ),
         t2_sorted AS (
-            SELECT value as key FROM range(100000) ORDER BY value
+            SELECT value as key FROM range(1000000) ORDER BY value
         )
         SELECT t1_sorted.key as k1, t2_sorted.key as k2
         FROM t1_sorted JOIN t2_sorted ON t1_sorted.key = t2_sorted.key
@@ -164,16 +164,16 @@ const SMJ_QUERIES: &[&str] = &[
         FROM t1_sorted LEFT JOIN t2_sorted ON t1_sorted.key = t2_sorted.key
         WHERE t2_sorted.data IS NULL OR t2_sorted.data % 2 = 0
     "#,
-    // Q8: FULL 100K x 100K | 1:10
+    // Q8: FULL 1M x 1M | 1:10
     r#"
         WITH t1_sorted AS (
-            SELECT value % 10000 as key, value as data
-            FROM range(100000)
+            SELECT value % 100000 as key, value as data
+            FROM range(1000000)
             ORDER BY key, data
         ),
         t2_sorted AS (
-            SELECT value % 12500 as key, value as data
-            FROM range(100000)
+            SELECT value % 125000 as key, value as data
+            FROM range(1000000)
             ORDER BY key, data
         )
         SELECT t1_sorted.key as k1, t1_sorted.data as d1,
@@ -199,16 +199,16 @@ const SMJ_QUERIES: &[&str] = &[
                OR t1_sorted.data <> t2_sorted.data)
           AND (t1_sorted.data IS NULL OR t1_sorted.data % 10 = 0)
     "#,
-    // Q10: LEFT SEMI 100K x 1M | 1:10
+    // Q10: LEFT SEMI 1M x 10M | 1:10
     r#"
         WITH t1_sorted AS (
-            SELECT value % 10000 as key, value as data
-            FROM range(100000)
+            SELECT value % 100000 as key, value as data
+            FROM range(1000000)
             ORDER BY key, data
         ),
         t2_sorted AS (
-            SELECT value % 10000 as key
-            FROM range(1000000)
+            SELECT value % 100000 as key
+            FROM range(10000000)
             ORDER BY key
         )
         SELECT t1_sorted.key, t1_sorted.data
@@ -281,16 +281,16 @@ const SMJ_QUERIES: &[&str] = &[
               AND t2_sorted.data % 10 <> 0
         )
     "#,
-    // Q14: LEFT ANTI 100K x 1M | 1:10
+    // Q14: LEFT ANTI 1M x 10M | 1:10
     r#"
         WITH t1_sorted AS (
-            SELECT value % 10500 as key, value as data
-            FROM range(100000)
+            SELECT value % 105000 as key, value as data
+            FROM range(1000000)
             ORDER BY key, data
         ),
         t2_sorted AS (
-            SELECT value % 10000 as key
-            FROM range(1000000)
+            SELECT value % 100000 as key
+            FROM range(10000000)
             ORDER BY key
         )
         SELECT t1_sorted.key, t1_sorted.data
@@ -300,16 +300,16 @@ const SMJ_QUERIES: &[&str] = &[
             WHERE t2_sorted.key = t1_sorted.key
         )
     "#,
-    // Q15: LEFT ANTI 100K x 1M | 1:10 | partial match
+    // Q15: LEFT ANTI 1M x 10M | 1:10 | partial match
     r#"
         WITH t1_sorted AS (
-            SELECT value % 12000 as key, value as data
-            FROM range(100000)
+            SELECT value % 120000 as key, value as data
+            FROM range(1000000)
             ORDER BY key, data
         ),
         t2_sorted AS (
-            SELECT value % 10000 as key
-            FROM range(1000000)
+            SELECT value % 100000 as key
+            FROM range(10000000)
             ORDER BY key
         )
         SELECT t1_sorted.key, t1_sorted.data
@@ -319,16 +319,16 @@ const SMJ_QUERIES: &[&str] = &[
             WHERE t2_sorted.key = t1_sorted.key
         )
     "#,
-    // Q16: LEFT ANTI 100K x 100K | 1:1 | stress
+    // Q16: LEFT ANTI 1M x 1M | 1:1 | stress
     r#"
         WITH t1_sorted AS (
-            SELECT value % 11000 as key, value as data
-            FROM range(100000)
+            SELECT value % 110000 as key, value as data
+            FROM range(1000000)
             ORDER BY key, data
         ),
         t2_sorted AS (
-            SELECT value % 10000 as key
-            FROM range(100000)
+            SELECT value % 100000 as key
+            FROM range(1000000)
             ORDER BY key
         )
         SELECT t1_sorted.key, t1_sorted.data
