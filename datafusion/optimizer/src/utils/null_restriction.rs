@@ -45,22 +45,13 @@ pub(super) fn syntactic_restrict_null_predicate(
     }
 }
 
-pub(super) fn predicate_uses_only_columns(
-    predicate: &Expr,
+pub(super) fn all_columns_allowed(
+    column_refs: &HashSet<&Column>,
     allowed_columns: &HashSet<&Column>,
 ) -> bool {
-    predicate
-        .column_refs()
+    column_refs
         .iter()
         .all(|column| allowed_columns.contains(*column))
-}
-
-fn contains_null(
-    values: impl IntoIterator<Item = Option<NullSubstitutionValue>>,
-) -> bool {
-    values
-        .into_iter()
-        .any(|value| matches!(value, Some(NullSubstitutionValue::Null)))
 }
 
 fn not(value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
@@ -120,7 +111,10 @@ fn null_check_value(
 fn null_if_contains_null(
     values: impl IntoIterator<Item = Option<NullSubstitutionValue>>,
 ) -> Option<NullSubstitutionValue> {
-    contains_null(values).then_some(NullSubstitutionValue::Null)
+    values
+        .into_iter()
+        .any(|value| matches!(value, Some(NullSubstitutionValue::Null)))
+        .then_some(NullSubstitutionValue::Null)
 }
 
 fn syntactic_null_substitution_value(
@@ -161,11 +155,18 @@ fn syntactic_null_substitution_value(
             syntactic_null_substitution_value(between.low.as_ref(), join_cols),
             syntactic_null_substitution_value(between.high.as_ref(), join_cols),
         ]),
-        Expr::Cast(cast) => strict_null_passthrough(cast.expr.as_ref(), join_cols),
-        Expr::TryCast(try_cast) => {
-            strict_null_passthrough(try_cast.expr.as_ref(), join_cols)
+        Expr::Cast(cast) => {
+            syntactic_null_substitution_value(cast.expr.as_ref(), join_cols)
+                .filter(|value| matches!(value, NullSubstitutionValue::Null))
         }
-        Expr::Negative(expr) => strict_null_passthrough(expr.as_ref(), join_cols),
+        Expr::TryCast(try_cast) => {
+            syntactic_null_substitution_value(try_cast.expr.as_ref(), join_cols)
+                .filter(|value| matches!(value, NullSubstitutionValue::Null))
+        }
+        Expr::Negative(expr) => {
+            syntactic_null_substitution_value(expr.as_ref(), join_cols)
+                .filter(|value| matches!(value, NullSubstitutionValue::Null))
+        }
         Expr::Like(like) | Expr::SimilarTo(like) => null_if_contains_null([
             syntactic_null_substitution_value(like.expr.as_ref(), join_cols),
             syntactic_null_substitution_value(like.pattern.as_ref(), join_cols),
@@ -204,15 +205,49 @@ fn scalar_to_null_substitution_value(value: &ScalarValue) -> NullSubstitutionVal
     }
 }
 
-fn strict_null_passthrough(
-    expr: &Expr,
-    join_cols: &HashSet<&Column>,
-) -> Option<NullSubstitutionValue> {
+fn is_strict_null_binary_op(op: Operator) -> bool {
     matches!(
-        syntactic_null_substitution_value(expr, join_cols),
-        Some(NullSubstitutionValue::Null)
+        op,
+        Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq
+            | Operator::Plus
+            | Operator::Minus
+            | Operator::Multiply
+            | Operator::Divide
+            | Operator::Modulo
+            | Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+            | Operator::LikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotLikeMatch
+            | Operator::NotILikeMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseXor
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseShiftLeft
+            | Operator::StringConcat
+            | Operator::AtArrow
+            | Operator::ArrowAt
+            | Operator::Arrow
+            | Operator::LongArrow
+            | Operator::HashArrow
+            | Operator::HashLongArrow
+            | Operator::AtAt
+            | Operator::IntegerDivide
+            | Operator::HashMinus
+            | Operator::AtQuestion
+            | Operator::Question
+            | Operator::QuestionAnd
+            | Operator::QuestionPipe
+            | Operator::Colon
     )
-    .then_some(NullSubstitutionValue::Null)
 }
 
 fn syntactic_binary_value(
@@ -225,45 +260,9 @@ fn syntactic_binary_value(
     match binary_expr.op {
         Operator::And => binary_boolean_value(left, right, false),
         Operator::Or => binary_boolean_value(left, right, true),
-        Operator::Eq
-        | Operator::NotEq
-        | Operator::Lt
-        | Operator::LtEq
-        | Operator::Gt
-        | Operator::GtEq
-        | Operator::Plus
-        | Operator::Minus
-        | Operator::Multiply
-        | Operator::Divide
-        | Operator::Modulo
-        | Operator::RegexMatch
-        | Operator::RegexIMatch
-        | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch
-        | Operator::LikeMatch
-        | Operator::ILikeMatch
-        | Operator::NotLikeMatch
-        | Operator::NotILikeMatch
-        | Operator::BitwiseAnd
-        | Operator::BitwiseOr
-        | Operator::BitwiseXor
-        | Operator::BitwiseShiftRight
-        | Operator::BitwiseShiftLeft
-        | Operator::StringConcat
-        | Operator::AtArrow
-        | Operator::ArrowAt
-        | Operator::Arrow
-        | Operator::LongArrow
-        | Operator::HashArrow
-        | Operator::HashLongArrow
-        | Operator::AtAt
-        | Operator::IntegerDivide
-        | Operator::HashMinus
-        | Operator::AtQuestion
-        | Operator::Question
-        | Operator::QuestionAnd
-        | Operator::QuestionPipe
-        | Operator::Colon => null_if_contains_null([left, right]),
         Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => None,
+        op => is_strict_null_binary_op(op)
+            .then(|| null_if_contains_null([left, right]))
+            .flatten(),
     }
 }

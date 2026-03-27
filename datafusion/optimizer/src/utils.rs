@@ -130,13 +130,14 @@ pub fn is_restrict_null_predicate<'a>(
     // Collect join columns so they can be used in both the fast-path check and the
     // fallback evaluation path below.
     let join_cols: HashSet<&Column> = join_cols_of_predicate.into_iter().collect();
+    let column_refs = predicate.column_refs();
 
     // Fast path: if the predicate references columns outside the join key set,
     // `evaluate_expr_with_null_column` would fail because the null schema only
     // contains a placeholder for the join key columns. Callers treat such errors as
     // non-restricting (false) via `matches!(_, Ok(true))`, so we return false early
     // and avoid the expensive physical-expression compilation pipeline entirely.
-    if !null_restriction::predicate_uses_only_columns(&predicate, &join_cols) {
+    if !null_restriction::all_columns_allowed(&column_refs, &join_cols) {
         return Ok(false);
     }
 
@@ -180,12 +181,10 @@ pub fn evaluates_to_null<'a>(
         return Ok(true);
     }
 
-    Ok(
-        match evaluate_expr_with_null_column(predicate, null_columns)? {
-            ColumnarValue::Array(_) => false,
-            ColumnarValue::Scalar(scalar) => scalar.is_null(),
-        },
-    )
+    Ok(authoritative_null_result(evaluate_expr_with_null_column(
+        predicate,
+        null_columns,
+    )?)? == AuthoritativeNullResult::AlwaysNull)
 }
 
 fn evaluate_expr_with_null_column<'a>(
@@ -219,22 +218,41 @@ fn authoritative_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
-    Ok(
-        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
-            ColumnarValue::Array(array) => {
-                if array.len() == 1 {
-                    let boolean_array = as_boolean_array(&array)?;
-                    boolean_array.is_null(0) || !boolean_array.value(0)
-                } else {
-                    false
-                }
+    Ok(authoritative_null_result(evaluate_expr_with_null_column(
+        predicate,
+        join_cols_of_predicate,
+    )?)? == AuthoritativeNullResult::NullRestricting)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AuthoritativeNullResult {
+    AlwaysNull,
+    NullRestricting,
+    Other,
+}
+
+fn authoritative_null_result(value: ColumnarValue) -> Result<AuthoritativeNullResult> {
+    Ok(match value {
+        ColumnarValue::Array(array) => {
+            if array.len() != 1 {
+                return Ok(AuthoritativeNullResult::Other);
             }
-            ColumnarValue::Scalar(scalar) => matches!(
-                scalar,
-                ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
-            ),
-        },
-    )
+
+            let boolean_array = as_boolean_array(&array)?;
+            if boolean_array.is_null(0) || !boolean_array.value(0) {
+                AuthoritativeNullResult::NullRestricting
+            } else {
+                AuthoritativeNullResult::Other
+            }
+        }
+        ColumnarValue::Scalar(scalar) if scalar.is_null() => {
+            AuthoritativeNullResult::AlwaysNull
+        }
+        ColumnarValue::Scalar(
+            ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false)),
+        ) => AuthoritativeNullResult::NullRestricting,
+        ColumnarValue::Scalar(_) => AuthoritativeNullResult::Other,
+    })
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {

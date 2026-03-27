@@ -285,33 +285,39 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     Ok(is_evaluate)
 }
 
-fn strip_aliases_and_projections(plan: &LogicalPlan) -> &LogicalPlan {
+fn strip_plan_wrappers(plan: &LogicalPlan) -> (&LogicalPlan, bool) {
     match plan {
         LogicalPlan::SubqueryAlias(subquery_alias) => {
-            strip_aliases_and_projections(subquery_alias.input.as_ref())
+            let (plan, _) = strip_plan_wrappers(subquery_alias.input.as_ref());
+            (plan, true)
         }
         LogicalPlan::Projection(projection) => {
-            strip_aliases_and_projections(projection.input.as_ref())
+            let (plan, is_derived_relation) =
+                strip_plan_wrappers(projection.input.as_ref());
+            (plan, is_derived_relation)
         }
-        _ => plan,
+        _ => (plan, false),
     }
 }
 
 fn is_scalar_aggregate_subquery(plan: &LogicalPlan) -> bool {
     matches!(
-        strip_aliases_and_projections(plan),
+        strip_plan_wrappers(plan).0,
         LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()
     )
 }
 
 fn is_derived_relation(plan: &LogicalPlan) -> bool {
-    match plan {
-        LogicalPlan::SubqueryAlias(_) => true,
-        LogicalPlan::Projection(projection) => {
-            is_derived_relation(projection.input.as_ref())
-        }
-        _ => false,
-    }
+    strip_plan_wrappers(plan).1
+}
+
+fn is_scalar_subquery_cross_join(join: &Join) -> bool {
+    join.on.is_empty()
+        && join.filter.is_none()
+        && ((is_scalar_aggregate_subquery(join.left.as_ref())
+            && is_derived_relation(join.right.as_ref()))
+            || (is_scalar_aggregate_subquery(join.right.as_ref())
+                && is_derived_relation(join.left.as_ref())))
 }
 
 // Keep post-join filters above certain scalar-subquery cross joins to preserve
@@ -320,19 +326,12 @@ fn should_keep_filter_above_scalar_subquery_cross_join(
     join: &Join,
     predicate: &Expr,
 ) -> bool {
-    if !join.on.is_empty() || join.filter.is_some() {
+    if !is_scalar_subquery_cross_join(join) {
         return false;
     }
 
     let mut checker = ColumnChecker::new(join.left.schema(), join.right.schema());
-    let references_both_sides =
-        !checker.is_left_only(predicate) && !checker.is_right_only(predicate);
-
-    references_both_sides
-        && ((is_scalar_aggregate_subquery(join.left.as_ref())
-            && is_derived_relation(join.right.as_ref()))
-            || (is_scalar_aggregate_subquery(join.right.as_ref())
-                && is_derived_relation(join.left.as_ref())))
+    !checker.is_left_only(predicate) && !checker.is_right_only(predicate)
 }
 
 /// examine OR clause to see if any useful clauses can be extracted and push down.
@@ -777,29 +776,21 @@ fn infer_join_predicates_impl<
 ) -> Result<()> {
     for predicate in input_predicates {
         let column_refs = predicate.column_refs();
-        let mut join_col_replacements = Vec::new();
-        let mut has_non_replaceable_refs = false;
+        let join_col_replacements: Vec<_> = column_refs
+            .iter()
+            .filter_map(|&col| {
+                join_col_keys.iter().find_map(|(l, r)| {
+                    if ENABLE_LEFT_TO_RIGHT && col == *l {
+                        Some((col, *r))
+                    } else if ENABLE_RIGHT_TO_LEFT && col == *r {
+                        Some((col, *l))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
 
-        for &col in &column_refs {
-            let mut replacement = None;
-
-            for (l, r) in join_col_keys.iter() {
-                if ENABLE_LEFT_TO_RIGHT && col == *l {
-                    replacement = Some((col, *r));
-                    break;
-                }
-                if ENABLE_RIGHT_TO_LEFT && col == *r {
-                    replacement = Some((col, *l));
-                    break;
-                }
-            }
-
-            if let Some(replacement) = replacement {
-                join_col_replacements.push(replacement);
-            } else {
-                has_non_replaceable_refs = true;
-            }
-        }
         if join_col_replacements.is_empty() {
             continue;
         }
@@ -807,7 +798,9 @@ fn infer_join_predicates_impl<
         // For non-inner joins, predicates that reference any non-replaceable
         // columns cannot be inferred on the other side. Skip the null-restriction
         // helper entirely in that common mixed-reference case.
-        if !inferred_predicates.is_inner_join && has_non_replaceable_refs {
+        if !inferred_predicates.is_inner_join
+            && join_col_replacements.len() != column_refs.len()
+        {
             continue;
         }
 
