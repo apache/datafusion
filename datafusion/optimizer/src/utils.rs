@@ -23,7 +23,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 #[cfg(test)]
-use std::sync::Mutex;
+use std::cell::Cell;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 
@@ -36,17 +36,38 @@ pub(crate) enum NullRestrictionEvalMode {
 }
 
 #[cfg(test)]
-static NULL_RESTRICTION_EVAL_MODE: Mutex<NullRestrictionEvalMode> =
-    Mutex::new(NullRestrictionEvalMode::Auto);
+thread_local! {
+    static NULL_RESTRICTION_EVAL_MODE: Cell<NullRestrictionEvalMode> =
+        const { Cell::new(NullRestrictionEvalMode::Auto) };
+}
 
 #[cfg(test)]
 pub(crate) fn set_null_restriction_eval_mode_for_test(mode: NullRestrictionEvalMode) {
-    *NULL_RESTRICTION_EVAL_MODE.lock().unwrap() = mode;
+    NULL_RESTRICTION_EVAL_MODE.with(|eval_mode| eval_mode.set(mode));
 }
 
 #[cfg(test)]
 fn null_restriction_eval_mode() -> NullRestrictionEvalMode {
-    *NULL_RESTRICTION_EVAL_MODE.lock().unwrap()
+    NULL_RESTRICTION_EVAL_MODE.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn with_null_restriction_eval_mode_for_test<T>(
+    mode: NullRestrictionEvalMode,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct NullRestrictionEvalModeReset(NullRestrictionEvalMode);
+
+    impl Drop for NullRestrictionEvalModeReset {
+        fn drop(&mut self) {
+            set_null_restriction_eval_mode_for_test(self.0);
+        }
+    }
+
+    let previous_mode = null_restriction_eval_mode();
+    set_null_restriction_eval_mode_for_test(mode);
+    let _reset = NullRestrictionEvalModeReset(previous_mode);
+    f()
 }
 use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -445,18 +466,24 @@ mod tests {
         let predicate = binary_expr(col("a"), Operator::Gt, lit(8i64));
         let join_cols_of_predicate = predicate.column_refs();
 
-        set_null_restriction_eval_mode_for_test(NullRestrictionEvalMode::Auto);
-        let auto_result = is_restrict_null_predicate(
-            predicate.clone(),
-            join_cols_of_predicate.iter().copied(),
+        let auto_result = with_null_restriction_eval_mode_for_test(
+            NullRestrictionEvalMode::Auto,
+            || {
+                is_restrict_null_predicate(
+                    predicate.clone(),
+                    join_cols_of_predicate.iter().copied(),
+                )
+            },
         )?;
 
-        set_null_restriction_eval_mode_for_test(
+        let authoritative_result = with_null_restriction_eval_mode_for_test(
             NullRestrictionEvalMode::AuthoritativeOnly,
-        );
-        let authoritative_result = is_restrict_null_predicate(
-            predicate.clone(),
-            join_cols_of_predicate.iter().copied(),
+            || {
+                is_restrict_null_predicate(
+                    predicate.clone(),
+                    join_cols_of_predicate.iter().copied(),
+                )
+            },
         )?;
 
         assert_eq!(auto_result, authoritative_result);
@@ -470,17 +497,25 @@ mod tests {
         let predicate = binary_expr(col("a"), Operator::Gt, col("b"));
         let column_a = Column::from_name("a");
 
-        set_null_restriction_eval_mode_for_test(NullRestrictionEvalMode::Auto);
-        let auto_result =
-            is_restrict_null_predicate(predicate.clone(), std::iter::once(&column_a))?;
+        let auto_result = with_null_restriction_eval_mode_for_test(
+            NullRestrictionEvalMode::Auto,
+            || {
+                is_restrict_null_predicate(
+                    predicate.clone(),
+                    std::iter::once(&column_a),
+                )
+            },
+        )?;
 
-        set_null_restriction_eval_mode_for_test(
+        let authoritative_only_result = with_null_restriction_eval_mode_for_test(
             NullRestrictionEvalMode::AuthoritativeOnly,
-        );
-        let authoritative_only_result =
-            is_restrict_null_predicate(predicate.clone(), std::iter::once(&column_a))?;
-
-        set_null_restriction_eval_mode_for_test(NullRestrictionEvalMode::Auto);
+            || {
+                is_restrict_null_predicate(
+                    predicate.clone(),
+                    std::iter::once(&column_a),
+                )
+            },
+        )?;
 
         assert!(!auto_result, "{predicate}");
         assert!(!authoritative_only_result, "{predicate}");
