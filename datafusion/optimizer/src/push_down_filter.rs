@@ -285,26 +285,22 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     Ok(is_evaluate)
 }
 
-fn classify_join_input(plan: &LogicalPlan) -> (bool, bool) {
-    match plan {
-        LogicalPlan::SubqueryAlias(subquery_alias) => {
-            let (is_scalar_aggregate, _) =
-                classify_join_input(subquery_alias.input.as_ref());
-            (is_scalar_aggregate, true)
-        }
-        LogicalPlan::Projection(projection) => {
-            classify_join_input(projection.input.as_ref())
-        }
-        LogicalPlan::Aggregate(aggregate) => (aggregate.group_expr.is_empty(), false),
-        _ => (false, false),
-    }
-}
-
 fn is_scalar_subquery_cross_join(join: &Join) -> bool {
-    let (left_scalar_aggregate, left_is_derived_relation) =
-        classify_join_input(join.left.as_ref());
+    fn classify(plan: &LogicalPlan) -> (bool, bool) {
+        match plan {
+            LogicalPlan::SubqueryAlias(subquery_alias) => {
+                let (is_scalar_aggregate, _) = classify(subquery_alias.input.as_ref());
+                (is_scalar_aggregate, true)
+            }
+            LogicalPlan::Projection(projection) => classify(projection.input.as_ref()),
+            LogicalPlan::Aggregate(aggregate) => (aggregate.group_expr.is_empty(), false),
+            _ => (false, false),
+        }
+    }
+
+    let (left_scalar_aggregate, left_is_derived_relation) = classify(join.left.as_ref());
     let (right_scalar_aggregate, right_is_derived_relation) =
-        classify_join_input(join.right.as_ref());
+        classify(join.right.as_ref());
     join.on.is_empty()
         && join.filter.is_none()
         && ((left_scalar_aggregate && right_is_derived_relation)
@@ -754,10 +750,11 @@ fn infer_join_predicates_impl<
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
     for predicate in input_predicates {
+        let column_refs = predicate.column_refs();
         let mut join_cols_to_replace = HashMap::new();
         let mut saw_non_replaceable_ref = false;
 
-        for &col in &predicate.column_refs() {
+        for &col in &column_refs {
             let replacement = join_col_keys.iter().find_map(|(l, r)| {
                 if ENABLE_LEFT_TO_RIGHT && col == *l {
                     Some((col, *r))

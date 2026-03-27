@@ -39,10 +39,7 @@ use log::{debug, trace};
 pub use datafusion_expr::expr_rewriter::NamePreserver;
 
 #[cfg(test)]
-use self::test_eval_mode::{
-    NullRestrictionEvalMode, null_restriction_eval_mode,
-    set_null_restriction_eval_mode_for_test, with_null_restriction_eval_mode_for_test,
-};
+use self::test_eval_mode::*;
 
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {

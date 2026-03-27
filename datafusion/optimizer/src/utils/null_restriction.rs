@@ -36,11 +36,13 @@ pub(super) fn syntactic_restrict_null_predicate(
     predicate: &Expr,
     join_cols: &HashSet<&Column>,
 ) -> Option<bool> {
-    match syntactic_null_substitution_value(predicate, join_cols) {
-        Some(NullSubstitutionValue::Boolean(value)) => Some(!value),
-        Some(NullSubstitutionValue::Null) => Some(true),
-        Some(NullSubstitutionValue::NonNull) | None => None,
-    }
+    syntactic_null_substitution_value(predicate, join_cols).and_then(
+        |value| match value {
+            NullSubstitutionValue::Boolean(value) => Some(!value),
+            NullSubstitutionValue::Null => Some(true),
+            NullSubstitutionValue::NonNull => None,
+        },
+    )
 }
 
 fn not(value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
@@ -49,7 +51,7 @@ fn not(value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
             Some(NullSubstitutionValue::Boolean(!value))
         }
         Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Null),
-        Some(NullSubstitutionValue::NonNull) | None => None,
+        _ => None,
     }
 }
 
@@ -90,9 +92,7 @@ fn null_check_value(
         Some(NullSubstitutionValue::Null) => {
             Some(NullSubstitutionValue::Boolean(!is_not_null))
         }
-        Some(NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_)) => {
-            Some(NullSubstitutionValue::Boolean(is_not_null))
-        }
+        Some(_) => Some(NullSubstitutionValue::Boolean(is_not_null)),
         None => None,
     }
 }
