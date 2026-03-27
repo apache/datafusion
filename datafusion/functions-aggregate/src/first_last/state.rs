@@ -36,7 +36,6 @@ pub(crate) trait ValueState: Send + Sync {
     /// Note: While this is not a batch interface, it is not a performance bottleneck.
     /// In heavy aggregation benchmarks, the overhead of this method is typically less than 1%.
     ///
-    /// Benchmarked queries with < 1% `update` overhead:
     /// ```sql
     /// -- TPC-H SF10
     /// select l_shipmode, last_value(l_partkey order by l_orderkey, l_linenumber, l_comment, l_suppkey, l_tax)
@@ -151,6 +150,10 @@ impl ValueState for BytesValueState {
     }
 
     fn update(&mut self, group_idx: usize, array: &ArrayRef, idx: usize) -> Result<()> {
+        if let Some(v) = &self.vals[group_idx] {
+            self.total_capacity -= v.capacity();
+        }
+
         if array.is_null(idx) {
             self.vals[group_idx] = None;
         } else {
@@ -170,16 +173,16 @@ impl ValueState for BytesValueState {
             };
 
             if let Some(v) = &mut self.vals[group_idx] {
-                self.total_capacity -= v.capacity();
                 v.clear();
                 v.extend_from_slice(val);
-
-                self.total_capacity += v.capacity();
             } else {
                 let v = val.to_vec();
-                self.total_capacity += v.capacity();
                 self.vals[group_idx] = Some(v);
             }
+
+            self.vals[group_idx]
+                .as_ref()
+                .inspect(|x| self.total_capacity += x.capacity());
         }
         Ok(())
     }
@@ -433,6 +436,30 @@ mod tests {
         let result = result.as_string::<i32>();
         assert_eq!(result.len(), 1);
         assert_eq!(result.value(0), "c");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_bytes_value_state_update_null() -> Result<()> {
+        let mut state = BytesValueState::try_new(DataType::Utf8)?;
+        state.resize(1);
+
+        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("hello"), None]));
+
+        // group 0 = "hello"
+        state.update(0, &array, 0)?;
+        assert_eq!(state.total_capacity, state.total_capacity_calculated());
+        assert!(state.total_capacity > 0);
+
+        // group 0 = NULL
+        state.update(0, &array, 1)?;
+        assert_eq!(
+            state.total_capacity,
+            state.total_capacity_calculated(),
+            "total_capacity should match calculated capacity after update(NULL)"
+        );
+        assert_eq!(state.total_capacity, 0);
 
         Ok(())
     }
