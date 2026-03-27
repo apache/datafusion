@@ -92,6 +92,13 @@ arrow = { version = "58.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
+arrow-avro = { version = "58.1.0", default-features = false, features = [
+    "deflate",
+    "snappy",
+    "zstd",
+    "bzip2",
+    "xz",
+] }
 arrow-buffer = { version = "58.1.0", default-features = false }
 arrow-flight = { version = "58.1.0", features = [
     "flight-sql-experimental",
