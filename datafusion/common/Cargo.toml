@@ -41,7 +41,6 @@ workspace = true
 name = "datafusion_common"
 
 [features]
-avro = ["apache-avro"]
 backtrace = []
 parquet_encryption = [
     "parquet",
@@ -66,12 +65,6 @@ harness = false
 name = "stats_merge"
 
 [dependencies]
-apache-avro = { workspace = true, features = [
-    "bzip",
-    "snappy",
-    "xz",
-    "zstandard",
-], optional = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
 chrono = { workspace = true }
