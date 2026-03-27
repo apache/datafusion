@@ -37,7 +37,7 @@ use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use std::hint::black_box;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::runtime::Runtime;
@@ -47,10 +47,6 @@ const WRITE_RECORD_BATCH_SIZE: usize = 256;
 const ROW_GROUP_ROW_COUNT: usize = 256;
 const EXPECTED_ROW_GROUPS: usize = 2;
 const LARGE_STRING_LEN: usize = 16 * 1024;
-
-static NARROW_FILE: OnceLock<NamedTempFile> = OnceLock::new();
-static WIDE_FILE: OnceLock<NamedTempFile> = OnceLock::new();
-static NESTED_FILE: OnceLock<NamedTempFile> = OnceLock::new();
 
 fn narrow_schema() -> SchemaRef {
     let struct_fields = Fields::from(vec![
@@ -206,8 +202,7 @@ fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
 }
 
 fn narrow_benchmarks(c: &mut Criterion) {
-    let temp_file = NARROW_FILE
-        .get_or_init(|| generate_file(narrow_schema(), narrow_batch, "narrow_struct"));
+    let temp_file = generate_file(narrow_schema(), narrow_batch, "narrow_struct");
     let file_path = temp_file.path().display().to_string();
     assert!(Path::new(&file_path).exists(), "path not found");
 
@@ -216,6 +211,7 @@ fn narrow_benchmarks(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("narrow_struct");
     group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(2));
 
     // baseline: full struct, must decode both leaves
@@ -249,11 +245,11 @@ fn narrow_benchmarks(c: &mut Criterion) {
     });
 
     group.finish();
+    drop(temp_file);
 }
 
 fn wide_benchmarks(c: &mut Criterion) {
-    let temp_file =
-        WIDE_FILE.get_or_init(|| generate_file(wide_schema(), wide_batch, "wide_struct"));
+    let temp_file = generate_file(wide_schema(), wide_batch, "wide_struct");
     let file_path = temp_file.path().display().to_string();
     assert!(Path::new(&file_path).exists(), "path not found");
 
@@ -262,6 +258,7 @@ fn wide_benchmarks(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("wide_struct");
     group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(2));
 
     // baseline: full struct, must decode all 5 leaves
@@ -295,6 +292,7 @@ fn wide_benchmarks(c: &mut Criterion) {
     });
 
     group.finish();
+    drop(temp_file);
 }
 
 fn nested_schema() -> SchemaRef {
@@ -360,8 +358,7 @@ fn nested_batch(batch_id: usize) -> RecordBatch {
 }
 
 fn nested_benchmarks(c: &mut Criterion) {
-    let temp_file = NESTED_FILE
-        .get_or_init(|| generate_file(nested_schema(), nested_batch, "nested_struct"));
+    let temp_file = generate_file(nested_schema(), nested_batch, "nested_struct");
     let file_path = temp_file.path().display().to_string();
     assert!(Path::new(&file_path).exists(), "path not found");
 
@@ -370,6 +367,7 @@ fn nested_benchmarks(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("nested_struct");
     group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(2));
 
     // baseline: full outer struct, decode all 3 leaves
@@ -403,6 +401,7 @@ fn nested_benchmarks(c: &mut Criterion) {
     });
 
     group.finish();
+    drop(temp_file);
 }
 
 criterion_group!(
