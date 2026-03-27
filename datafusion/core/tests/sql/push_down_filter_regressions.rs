@@ -33,6 +33,9 @@ const WINDOW_SCALAR_SUBQUERY_SQL: &str = r#"
     )
 "#;
 
+const WINDOW_SCALAR_SUBQUERY_EXPECTED: &[&str] =
+    &["+----+", "| rn |", "+----+", "| 1  |", "+----+"];
+
 fn sqllogictest_style_ctx(push_down_filter_enabled: bool) -> SessionContext {
     let ctx =
         SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
@@ -56,30 +59,20 @@ async fn capture_window_scalar_subquery_plans(
     ))
 }
 
-#[tokio::test]
-async fn window_scalar_subquery_regression() -> Result<()> {
-    let ctx = SessionContext::new();
+async fn assert_window_scalar_subquery(ctx: SessionContext) -> Result<()> {
     let results = ctx.sql(WINDOW_SCALAR_SUBQUERY_SQL).await?.collect().await?;
-
-    assert_batches_eq!(
-        &["+----+", "| rn |", "+----+", "| 1  |", "+----+",],
-        &results
-    );
-
+    assert_batches_eq!(WINDOW_SCALAR_SUBQUERY_EXPECTED, &results);
     Ok(())
 }
 
 #[tokio::test]
+async fn window_scalar_subquery_regression() -> Result<()> {
+    assert_window_scalar_subquery(SessionContext::new()).await
+}
+
+#[tokio::test]
 async fn window_scalar_subquery_sqllogictest_style_regression() -> Result<()> {
-    let ctx = sqllogictest_style_ctx(true);
-    let results = ctx.sql(WINDOW_SCALAR_SUBQUERY_SQL).await?.collect().await?;
-
-    assert_batches_eq!(
-        &["+----+", "| rn |", "+----+", "| 1  |", "+----+",],
-        &results
-    );
-
-    Ok(())
+    assert_window_scalar_subquery(sqllogictest_style_ctx(true)).await
 }
 
 #[tokio::test]
@@ -212,28 +205,18 @@ async fn window_scalar_subquery_optimizer_delta() -> Result<()> {
     let (disabled_optimized, disabled_physical) =
         capture_window_scalar_subquery_plans(false).await?;
 
+    assert_eq!(enabled_optimized, disabled_optimized);
+    assert_eq!(enabled_physical, disabled_physical);
+
     assert!(
         enabled_optimized
             .contains("Filter: s.acctbal > __scalar_sq_1.avg(suppliers.acctbal)")
     );
     assert!(enabled_optimized.contains("Cross Join:"));
     assert!(
-        disabled_optimized
-            .contains("Filter: s.acctbal > __scalar_sq_1.avg(suppliers.acctbal)")
-    );
-    assert!(disabled_optimized.contains("Cross Join:"));
-
-    assert!(
         enabled_physical.contains("FilterExec: acctbal@1 > avg(suppliers.acctbal)@2")
     );
     assert!(enabled_physical.contains("CrossJoinExec"));
-    assert!(
-        disabled_physical.contains("FilterExec: acctbal@1 > avg(suppliers.acctbal)@2")
-    );
-    assert!(disabled_physical.contains("CrossJoinExec"));
-
-    assert_eq!(enabled_optimized, disabled_optimized);
-    assert_eq!(enabled_physical, disabled_physical);
 
     Ok(())
 }

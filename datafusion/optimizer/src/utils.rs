@@ -250,6 +250,23 @@ mod tests {
         Operator, binary_expr, case, col, in_list, is_null, lit, when,
     };
 
+    fn restrict_null_predicate_in_modes(
+        predicate: Expr,
+        join_cols: &[Column],
+    ) -> Result<(bool, bool)> {
+        let auto_result = with_null_restriction_eval_mode_for_test(
+            NullRestrictionEvalMode::Auto,
+            || is_restrict_null_predicate(predicate.clone(), join_cols.iter()),
+        )?;
+
+        let authoritative_result = with_null_restriction_eval_mode_for_test(
+            NullRestrictionEvalMode::AuthoritativeOnly,
+            || is_restrict_null_predicate(predicate.clone(), join_cols.iter()),
+        )?;
+
+        Ok((auto_result, authoritative_result))
+    }
+
     #[test]
     fn expr_is_restrict_null_predicate() -> Result<()> {
         let test_cases = vec![
@@ -465,27 +482,13 @@ mod tests {
     #[test]
     fn null_restriction_eval_mode_auto_vs_authoritative_only() -> Result<()> {
         let predicate = binary_expr(col("a"), Operator::Gt, lit(8i64));
-        let join_cols_of_predicate = predicate.column_refs();
-
-        let auto_result = with_null_restriction_eval_mode_for_test(
-            NullRestrictionEvalMode::Auto,
-            || {
-                is_restrict_null_predicate(
-                    predicate.clone(),
-                    join_cols_of_predicate.iter().copied(),
-                )
-            },
-        )?;
-
-        let authoritative_result = with_null_restriction_eval_mode_for_test(
-            NullRestrictionEvalMode::AuthoritativeOnly,
-            || {
-                is_restrict_null_predicate(
-                    predicate.clone(),
-                    join_cols_of_predicate.iter().copied(),
-                )
-            },
-        )?;
+        let join_cols_of_predicate = predicate
+            .column_refs()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let (auto_result, authoritative_result) =
+            restrict_null_predicate_in_modes(predicate, &join_cols_of_predicate)?;
 
         assert_eq!(auto_result, authoritative_result);
 
@@ -496,17 +499,9 @@ mod tests {
     fn mixed_reference_predicate_remains_fast_pathed_in_authoritative_mode() -> Result<()>
     {
         let predicate = binary_expr(col("a"), Operator::Gt, col("b"));
-        let column_a = Column::from_name("a");
-
-        let auto_result = with_null_restriction_eval_mode_for_test(
-            NullRestrictionEvalMode::Auto,
-            || is_restrict_null_predicate(predicate.clone(), std::iter::once(&column_a)),
-        )?;
-
-        let authoritative_only_result = with_null_restriction_eval_mode_for_test(
-            NullRestrictionEvalMode::AuthoritativeOnly,
-            || is_restrict_null_predicate(predicate.clone(), std::iter::once(&column_a)),
-        )?;
+        let join_cols = vec![Column::from_name("a")];
+        let (auto_result, authoritative_only_result) =
+            restrict_null_predicate_in_modes(predicate.clone(), &join_cols)?;
 
         assert!(!auto_result, "{predicate}");
         assert!(!authoritative_only_result, "{predicate}");

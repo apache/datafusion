@@ -1522,6 +1522,53 @@ mod tests {
 
     use super::*;
 
+    fn scalar_subquery_right_plan() -> Result<LogicalPlan> {
+        LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .project(vec![col("a").alias("acctbal")])?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![avg(col("acctbal")).alias("avg_acctbal")],
+            )?
+            .alias("__scalar_sq_1")?
+            .build()
+    }
+
+    fn row_number_window_expr() -> Expr {
+        Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::row_number::row_number_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("s.nation")])
+        .order_by(vec![col("s.acctbal").sort(false, true)])
+        .build()
+        .unwrap()
+    }
+
+    fn window_over_scalar_subquery_cross_join_plan(
+        with_project_wrapper: bool,
+    ) -> Result<LogicalPlan> {
+        let left = {
+            let builder = LogicalPlanBuilder::from(test_table_scan()?)
+                .project(vec![col("a").alias("nation"), col("b").alias("acctbal")])?
+                .alias("s")?;
+            let builder = if with_project_wrapper {
+                builder.project(vec![col("s.nation"), col("s.acctbal")])?
+            } else {
+                builder
+            };
+            builder.build()?
+        };
+
+        LogicalPlanBuilder::from(left)
+            .cross_join(scalar_subquery_right_plan()?)?
+            .filter(col("s.acctbal").gt(col("__scalar_sq_1.avg_acctbal")))?
+            .project(vec![col("s.nation"), col("s.acctbal")])?
+            .window(vec![row_number_window_expr()])?
+            .build()
+    }
+
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
     macro_rules! assert_optimized_plan_equal {
@@ -2443,36 +2490,7 @@ mod tests {
 
     #[test]
     fn window_over_scalar_subquery_cross_join_keeps_filter_above_join() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan()?)
-            .project(vec![col("a").alias("nation"), col("b").alias("acctbal")])?
-            .alias("s")?
-            .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
-            .project(vec![col("a").alias("acctbal")])?
-            .aggregate(
-                Vec::<Expr>::new(),
-                vec![avg(col("acctbal")).alias("avg_acctbal")],
-            )?
-            .alias("__scalar_sq_1")?
-            .build()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::row_number::row_number_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("s.nation")])
-        .order_by(vec![col("s.acctbal").sort(false, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(left)
-            .cross_join(right)?
-            .filter(col("s.acctbal").gt(col("__scalar_sq_1.avg_acctbal")))?
-            .project(vec![col("s.nation"), col("s.acctbal")])?
-            .window(vec![window])?
-            .build()?;
+        let plan = window_over_scalar_subquery_cross_join_plan(false)?;
 
         assert_optimized_plan_equal!(
             plan,
@@ -2495,37 +2513,7 @@ mod tests {
     #[test]
     fn window_over_scalar_subquery_cross_join_with_project_wrapper_keeps_filter_above_join()
     -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan()?)
-            .project(vec![col("a").alias("nation"), col("b").alias("acctbal")])?
-            .alias("s")?
-            .project(vec![col("s.nation"), col("s.acctbal")])?
-            .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
-            .project(vec![col("a").alias("acctbal")])?
-            .aggregate(
-                Vec::<Expr>::new(),
-                vec![avg(col("acctbal")).alias("avg_acctbal")],
-            )?
-            .alias("__scalar_sq_1")?
-            .build()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::row_number::row_number_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("s.nation")])
-        .order_by(vec![col("s.acctbal").sort(false, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(left)
-            .cross_join(right)?
-            .filter(col("s.acctbal").gt(col("__scalar_sq_1.avg_acctbal")))?
-            .project(vec![col("s.nation"), col("s.acctbal")])?
-            .window(vec![window])?
-            .build()?;
+        let plan = window_over_scalar_subquery_cross_join_plan(true)?;
 
         assert_optimized_plan_equal!(
             plan,
