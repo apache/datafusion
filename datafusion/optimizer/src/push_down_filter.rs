@@ -285,53 +285,81 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     Ok(is_evaluate)
 }
 
-fn strip_plan_wrappers(plan: &LogicalPlan) -> (&LogicalPlan, bool) {
+#[derive(Clone, Copy)]
+struct JoinInputShape<'a> {
+    base_plan: &'a LogicalPlan,
+    is_derived_relation: bool,
+}
+
+fn classify_join_input(plan: &LogicalPlan) -> JoinInputShape<'_> {
     match plan {
         LogicalPlan::SubqueryAlias(subquery_alias) => {
-            let (plan, _) = strip_plan_wrappers(subquery_alias.input.as_ref());
-            (plan, true)
+            let JoinInputShape { base_plan, .. } =
+                classify_join_input(subquery_alias.input.as_ref());
+            JoinInputShape {
+                base_plan,
+                is_derived_relation: true,
+            }
         }
         LogicalPlan::Projection(projection) => {
-            let (plan, is_derived_relation) =
-                strip_plan_wrappers(projection.input.as_ref());
-            (plan, is_derived_relation)
+            let shape = classify_join_input(projection.input.as_ref());
+            JoinInputShape {
+                is_derived_relation: shape.is_derived_relation,
+                ..shape
+            }
         }
-        _ => (plan, false),
+        _ => JoinInputShape {
+            base_plan: plan,
+            is_derived_relation: false,
+        },
     }
 }
 
-fn is_scalar_aggregate_subquery(plan: &LogicalPlan) -> bool {
+fn is_scalar_aggregate_subquery(shape: JoinInputShape<'_>) -> bool {
     matches!(
-        strip_plan_wrappers(plan).0,
+        shape.base_plan,
         LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()
     )
 }
 
-fn is_derived_relation(plan: &LogicalPlan) -> bool {
-    strip_plan_wrappers(plan).1
-}
-
 fn is_scalar_subquery_cross_join(join: &Join) -> bool {
+    let left_shape = classify_join_input(join.left.as_ref());
+    let right_shape = classify_join_input(join.right.as_ref());
     join.on.is_empty()
         && join.filter.is_none()
-        && ((is_scalar_aggregate_subquery(join.left.as_ref())
-            && is_derived_relation(join.right.as_ref()))
-            || (is_scalar_aggregate_subquery(join.right.as_ref())
-                && is_derived_relation(join.left.as_ref())))
+        && ((is_scalar_aggregate_subquery(left_shape) && right_shape.is_derived_relation)
+            || (is_scalar_aggregate_subquery(right_shape)
+                && left_shape.is_derived_relation))
 }
 
 // Keep post-join filters above certain scalar-subquery cross joins to preserve
 // behavior for the window-over-scalar-subquery regression shape.
 fn should_keep_filter_above_scalar_subquery_cross_join(
-    join: &Join,
+    mut checker: ColumnChecker<'_>,
     predicate: &Expr,
 ) -> bool {
-    if !is_scalar_subquery_cross_join(join) {
-        return false;
-    }
-
-    let mut checker = ColumnChecker::new(join.left.schema(), join.right.schema());
     !checker.is_left_only(predicate) && !checker.is_right_only(predicate)
+}
+
+enum PredicateDestination {
+    Left,
+    Right,
+    Keep,
+}
+
+fn classify_predicate_destination(
+    checker: &mut ColumnChecker<'_>,
+    predicate: &Expr,
+    allow_left: bool,
+    allow_right: bool,
+) -> PredicateDestination {
+    if allow_left && checker.is_left_only(predicate) {
+        PredicateDestination::Left
+    } else if allow_right && checker.is_right_only(predicate) {
+        PredicateDestination::Right
+    } else {
+        PredicateDestination::Keep
+    }
 }
 
 /// examine OR clause to see if any useful clauses can be extracted and push down.
@@ -475,29 +503,44 @@ fn push_down_all_join(
     let mut keep_predicates = vec![];
     let mut join_conditions = vec![];
     let mut checker = ColumnChecker::new(left_schema, right_schema);
+    let keep_mixed_scalar_subquery_filters =
+        is_inner_join && is_scalar_subquery_cross_join(&join);
     for predicate in predicates {
-        if left_preserved && checker.is_left_only(&predicate) {
-            left_push.push(predicate);
-        } else if right_preserved && checker.is_right_only(&predicate) {
-            right_push.push(predicate);
-        } else if is_inner_join
-            && !should_keep_filter_above_scalar_subquery_cross_join(&join, &predicate)
-            && can_evaluate_as_join_condition(&predicate)?
-        {
-            // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
-            // and convert to the join on condition
-            join_conditions.push(predicate);
-        } else {
-            keep_predicates.push(predicate);
+        match classify_predicate_destination(
+            &mut checker,
+            &predicate,
+            left_preserved,
+            right_preserved,
+        ) {
+            PredicateDestination::Left => left_push.push(predicate),
+            PredicateDestination::Right => right_push.push(predicate),
+            PredicateDestination::Keep => {
+                let should_keep_above_join = keep_mixed_scalar_subquery_filters
+                    && should_keep_filter_above_scalar_subquery_cross_join(
+                        ColumnChecker::new(left_schema, right_schema),
+                        &predicate,
+                    );
+
+                if is_inner_join
+                    && !should_keep_above_join
+                    && can_evaluate_as_join_condition(&predicate)?
+                {
+                    // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
+                    // and convert to the join on condition
+                    join_conditions.push(predicate);
+                } else {
+                    keep_predicates.push(predicate);
+                }
+            }
         }
     }
 
     // Push predicates inferred from the join expression
     for predicate in inferred_join_predicates {
-        if checker.is_left_only(&predicate) {
-            left_push.push(predicate);
-        } else if checker.is_right_only(&predicate) {
-            right_push.push(predicate);
+        match classify_predicate_destination(&mut checker, &predicate, true, true) {
+            PredicateDestination::Left => left_push.push(predicate),
+            PredicateDestination::Right => right_push.push(predicate),
+            PredicateDestination::Keep => {}
         }
     }
 
@@ -506,12 +549,15 @@ fn push_down_all_join(
 
     if !on_filter.is_empty() {
         for on in on_filter {
-            if on_left_preserved && checker.is_left_only(&on) {
-                left_push.push(on)
-            } else if on_right_preserved && checker.is_right_only(&on) {
-                right_push.push(on)
-            } else {
-                on_filter_join_conditions.push(on)
+            match classify_predicate_destination(
+                &mut checker,
+                &on,
+                on_left_preserved,
+                on_right_preserved,
+            ) {
+                PredicateDestination::Left => left_push.push(on),
+                PredicateDestination::Right => right_push.push(on),
+                PredicateDestination::Keep => on_filter_join_conditions.push(on),
             }
         }
     }
@@ -776,10 +822,11 @@ fn infer_join_predicates_impl<
 ) -> Result<()> {
     for predicate in input_predicates {
         let column_refs = predicate.column_refs();
-        let join_col_replacements: Vec<_> = column_refs
+        let mut saw_non_replaceable_ref = false;
+        let join_cols_to_replace = column_refs
             .iter()
             .filter_map(|&col| {
-                join_col_keys.iter().find_map(|(l, r)| {
+                let replacement = join_col_keys.iter().find_map(|(l, r)| {
                     if ENABLE_LEFT_TO_RIGHT && col == *l {
                         Some((col, *r))
                     } else if ENABLE_RIGHT_TO_LEFT && col == *r {
@@ -787,24 +834,18 @@ fn infer_join_predicates_impl<
                     } else {
                         None
                     }
-                })
+                });
+                saw_non_replaceable_ref |= replacement.is_none();
+                replacement
             })
-            .collect();
+            .collect::<HashMap<_, _>>();
 
-        if join_col_replacements.is_empty() {
-            continue;
-        }
-
-        // For non-inner joins, predicates that reference any non-replaceable
-        // columns cannot be inferred on the other side. Skip the null-restriction
-        // helper entirely in that common mixed-reference case.
-        if !inferred_predicates.is_inner_join
-            && join_col_replacements.len() != column_refs.len()
+        if join_cols_to_replace.is_empty()
+            || (!inferred_predicates.is_inner_join && saw_non_replaceable_ref)
         {
             continue;
         }
 
-        let join_cols_to_replace = join_col_replacements.into_iter().collect();
         inferred_predicates
             .try_build_predicate(predicate.clone(), &join_cols_to_replace)?;
     }

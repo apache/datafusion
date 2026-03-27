@@ -22,53 +22,7 @@ mod null_restriction;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-#[cfg(test)]
-use std::cell::Cell;
-
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
-
-/// Null restriction evaluation mode for optimizer tests.
-#[cfg(test)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum NullRestrictionEvalMode {
-    Auto,
-    AuthoritativeOnly,
-}
-
-#[cfg(test)]
-thread_local! {
-    static NULL_RESTRICTION_EVAL_MODE: Cell<NullRestrictionEvalMode> =
-        const { Cell::new(NullRestrictionEvalMode::Auto) };
-}
-
-#[cfg(test)]
-pub(crate) fn set_null_restriction_eval_mode_for_test(mode: NullRestrictionEvalMode) {
-    NULL_RESTRICTION_EVAL_MODE.with(|eval_mode| eval_mode.set(mode));
-}
-
-#[cfg(test)]
-fn null_restriction_eval_mode() -> NullRestrictionEvalMode {
-    NULL_RESTRICTION_EVAL_MODE.with(Cell::get)
-}
-
-#[cfg(test)]
-pub(crate) fn with_null_restriction_eval_mode_for_test<T>(
-    mode: NullRestrictionEvalMode,
-    f: impl FnOnce() -> T,
-) -> T {
-    struct NullRestrictionEvalModeReset(NullRestrictionEvalMode);
-
-    impl Drop for NullRestrictionEvalModeReset {
-        fn drop(&mut self) {
-            set_null_restriction_eval_mode_for_test(self.0);
-        }
-    }
-
-    let previous_mode = null_restriction_eval_mode();
-    set_null_restriction_eval_mode_for_test(mode);
-    let _reset = NullRestrictionEvalModeReset(previous_mode);
-    f()
-}
 use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::cast::as_boolean_array;
@@ -84,15 +38,15 @@ use log::{debug, trace};
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
 
+#[cfg(test)]
+use self::test_eval_mode::{
+    NullRestrictionEvalMode, null_restriction_eval_mode,
+    set_null_restriction_eval_mode_for_test, with_null_restriction_eval_mode_for_test,
+};
+
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
-    let column_refs = expr.column_refs();
-    // note can't use HashSet::intersect because of different types (owned vs References)
-    schema_cols
-        .iter()
-        .filter(|c| column_refs.contains(c))
-        .count()
-        == column_refs.len()
+    column_refs_all_in(&expr.column_refs(), |column| schema_cols.contains(column))
 }
 
 pub(crate) fn replace_qualified_name(
@@ -116,6 +70,13 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
     trace!("{description}::\n{}\n", plan.display_indent_schema());
 }
 
+pub(super) fn column_refs_all_in<'a>(
+    column_refs: &HashSet<&'a Column>,
+    mut contains: impl FnMut(&Column) -> bool,
+) -> bool {
+    column_refs.iter().all(|column| contains(column))
+}
+
 /// Determine whether a predicate can restrict NULLs. e.g.
 /// `c0 > 8` return true;
 /// `c0 IS NULL` return false.
@@ -137,7 +98,7 @@ pub fn is_restrict_null_predicate<'a>(
     // contains a placeholder for the join key columns. Callers treat such errors as
     // non-restricting (false) via `matches!(_, Ok(true))`, so we return false early
     // and avoid the expensive physical-expression compilation pipeline entirely.
-    if !null_restriction::all_columns_allowed(&column_refs, &join_cols) {
+    if !column_refs_all_in(&column_refs, |column| join_cols.contains(&column)) {
         return Ok(false);
     }
 
@@ -220,29 +181,72 @@ fn authoritative_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
-    Ok(
-        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
-            ColumnarValue::Array(array) => {
-                if array.len() == 1 {
-                    let boolean_array = as_boolean_array(&array)?;
-                    boolean_array.is_null(0) || !boolean_array.value(0)
-                } else {
-                    false
-                }
-            }
-            ColumnarValue::Scalar(scalar) => matches!(
-                scalar,
-                ScalarValue::Boolean(None)
-                    | ScalarValue::Boolean(Some(false))
-                    | ScalarValue::Null
-            ),
-        },
-    )
+    evaluate_expr_with_null_column(predicate, join_cols_of_predicate)
+        .and_then(is_false_or_null_boolean_result)
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let mut expr_rewrite = TypeCoercionRewriter { schema };
     expr.rewrite(&mut expr_rewrite).data()
+}
+
+fn is_false_or_null_boolean_result(result: ColumnarValue) -> Result<bool> {
+    Ok(match result {
+        ColumnarValue::Array(array) if array.len() == 1 => {
+            let boolean_array = as_boolean_array(&array)?;
+            boolean_array.is_null(0) || !boolean_array.value(0)
+        }
+        ColumnarValue::Array(_) => false,
+        ColumnarValue::Scalar(scalar) => matches!(
+            scalar,
+            ScalarValue::Boolean(None)
+                | ScalarValue::Boolean(Some(false))
+                | ScalarValue::Null
+        ),
+    })
+}
+
+#[cfg(test)]
+mod test_eval_mode {
+    use std::cell::Cell;
+
+    /// Null restriction evaluation mode for optimizer tests.
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    pub(crate) enum NullRestrictionEvalMode {
+        Auto,
+        AuthoritativeOnly,
+    }
+
+    thread_local! {
+        static NULL_RESTRICTION_EVAL_MODE: Cell<NullRestrictionEvalMode> =
+            const { Cell::new(NullRestrictionEvalMode::Auto) };
+    }
+
+    pub(crate) fn set_null_restriction_eval_mode_for_test(mode: NullRestrictionEvalMode) {
+        NULL_RESTRICTION_EVAL_MODE.with(|eval_mode| eval_mode.set(mode));
+    }
+
+    pub(crate) fn null_restriction_eval_mode() -> NullRestrictionEvalMode {
+        NULL_RESTRICTION_EVAL_MODE.with(Cell::get)
+    }
+
+    pub(crate) fn with_null_restriction_eval_mode_for_test<T>(
+        mode: NullRestrictionEvalMode,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        struct NullRestrictionEvalModeReset(NullRestrictionEvalMode);
+
+        impl Drop for NullRestrictionEvalModeReset {
+            fn drop(&mut self) {
+                set_null_restriction_eval_mode_for_test(self.0);
+            }
+        }
+
+        let previous_mode = null_restriction_eval_mode();
+        set_null_restriction_eval_mode_for_test(mode);
+        let _reset = NullRestrictionEvalModeReset(previous_mode);
+        f()
+    }
 }
 
 #[cfg(test)]
