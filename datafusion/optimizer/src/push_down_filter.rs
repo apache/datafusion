@@ -285,6 +285,45 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     Ok(is_evaluate)
 }
 
+fn strip_aliases_and_projections(plan: &LogicalPlan) -> &LogicalPlan {
+    match plan {
+        LogicalPlan::SubqueryAlias(subquery_alias) => {
+            strip_aliases_and_projections(subquery_alias.input.as_ref())
+        }
+        LogicalPlan::Projection(projection) => {
+            strip_aliases_and_projections(projection.input.as_ref())
+        }
+        _ => plan,
+    }
+}
+
+fn is_scalar_aggregate_subquery(plan: &LogicalPlan) -> bool {
+    matches!(
+        strip_aliases_and_projections(plan),
+        LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()
+    )
+}
+
+fn is_derived_relation(plan: &LogicalPlan) -> bool {
+    matches!(plan, LogicalPlan::SubqueryAlias(_))
+}
+
+fn should_keep_filter_above_cross_join(join: &Join, predicate: &Expr) -> bool {
+    if !join.on.is_empty() || join.filter.is_some() {
+        return false;
+    }
+
+    let mut checker = ColumnChecker::new(join.left.schema(), join.right.schema());
+    let references_both_sides =
+        !checker.is_left_only(predicate) && !checker.is_right_only(predicate);
+
+    references_both_sides
+        && ((is_scalar_aggregate_subquery(join.left.as_ref())
+            && is_derived_relation(join.right.as_ref()))
+            || (is_scalar_aggregate_subquery(join.right.as_ref())
+                && is_derived_relation(join.left.as_ref())))
+}
+
 /// examine OR clause to see if any useful clauses can be extracted and push down.
 /// extract at least one qual from each sub clauses of OR clause, then form the quals
 /// to new OR clause as predicate.
@@ -431,7 +470,10 @@ fn push_down_all_join(
             left_push.push(predicate);
         } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
-        } else if is_inner_join && can_evaluate_as_join_condition(&predicate)? {
+        } else if is_inner_join
+            && !should_keep_filter_above_cross_join(&join, &predicate)
+            && can_evaluate_as_join_condition(&predicate)?
+        {
             // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
             // and convert to the join on condition
             join_conditions.push(predicate);
@@ -2420,7 +2462,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "FIX_06 step(1): reproduces current scalar-subquery cross-join promotion regression"]
     fn window_over_scalar_subquery_cross_join_keeps_filter_above_join() -> Result<()> {
         let left = LogicalPlanBuilder::from(test_table_scan()?)
             .project(vec![col("a").alias("nation"), col("b").alias("acctbal")])?
@@ -2464,7 +2505,7 @@ mod tests {
                   Projection: test.a AS nation, test.b AS acctbal
                     TableScan: test
                 SubqueryAlias: __scalar_sq_1
-                  Aggregate: groupBy=[[]], aggr=[[avg(test1.a) AS avg_acctbal]]
+                  Aggregate: groupBy=[[]], aggr=[[avg(acctbal) AS avg_acctbal]]
                     Projection: test1.a AS acctbal
                       TableScan: test1
         "
