@@ -3934,7 +3934,7 @@ fn coalesce_partitions_fetch_preserved_by_enforce_distribution() -> Result<()> {
 
     // The fetch=1 must survive. It can appear either as:
     // - CoalescePartitionsExec: fetch=1  (re-inserted with fetch), or
-    // - GlobalLimitExec: skip=0, fetch=1 (fallback when merge wasn't re-added)
+    // - SortPreservingMergeExec: fetch=1 (when a merge is re-added with fetch)
     let plan_str = displayable(result.as_ref()).indent(true).to_string();
     assert!(
         plan_str.contains("fetch=1"),
@@ -3990,6 +3990,50 @@ fn spm_fetch_preserved_by_enforce_distribution() -> Result<()> {
     assert!(
         plan_str.contains("fetch=3"),
         "fetch=3 was lost after EnforceDistribution!\nPlan:\n{plan_str}"
+    );
+    Ok(())
+}
+
+/// When both a `CoalescePartitionsExec(fetch=N)` and an inner
+/// `SortPreservingMergeExec(fetch=M)` are stripped, the SPM ordering must
+/// still be captured even though fetch was already set when the SPM is
+/// encountered. The reconstructed fallback should use a
+/// `SortPreservingMergeExec` (not a plain `CoalescePartitionsExec`) to
+/// preserve sort semantics, and must wrap the *rewritten* child plan.
+///
+/// Regression test for: the `spm` capture was gated on `fetch.is_none()`,
+/// causing it to be skipped when an outer operator already set `fetch`.
+#[test]
+fn nested_coalesce_over_spm_preserves_spm_ordering() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    // Build: CoalescePartitionsExec(fetch=5)
+    //          -> SortPreservingMergeExec(fetch=3, [c ASC])
+    //               -> sorted multi-partition parquet
+    let parquet = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+    let spm: Arc<dyn ExecutionPlan> =
+        Arc::new(SortPreservingMergeExec::new(sort_key, parquet).with_fetch(Some(3)));
+    let coalesce_over_spm: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(spm).with_fetch(Some(5)));
+
+    let result = ensure_distribution_helper(coalesce_over_spm, 10, false)?;
+
+    let plan_str = displayable(result.as_ref()).indent(true).to_string();
+    // The minimum fetch (min(5,3)=3) must survive.
+    assert!(
+        plan_str.contains("fetch=3"),
+        "fetch=3 was lost after EnforceDistribution!\nPlan:\n{plan_str}"
+    );
+    // The result should use SortPreservingMergeExec (not CoalescePartitionsExec)
+    // to preserve the ordering semantics.
+    assert!(
+        plan_str.contains("SortPreservingMergeExec"),
+        "Expected SortPreservingMergeExec to preserve ordering, but got:\n{plan_str}"
     );
     Ok(())
 }

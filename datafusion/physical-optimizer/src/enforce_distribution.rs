@@ -40,7 +40,8 @@ use datafusion_expr::logical_plan::{Aggregate, JoinType};
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, PhysicalExprRef, physical_exprs_equal,
+    EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalExprRef,
+    physical_exprs_equal,
 };
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
@@ -1017,28 +1018,32 @@ fn add_merge_on_top(
 /// ```text
 /// "DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
-#[expect(clippy::type_complexity)]
 fn remove_dist_changing_operators(
     mut distribution_context: DistributionContext,
-) -> Result<(
-    DistributionContext,
-    Option<usize>,
-    Option<Arc<dyn ExecutionPlan>>,
-)> {
+) -> Result<(DistributionContext, Option<usize>, Option<LexOrdering>)> {
     let mut fetch = None;
-    let mut spm: Option<Arc<dyn ExecutionPlan>> = None;
+    let mut spm_ordering: Option<LexOrdering> = None;
     while is_repartition(&distribution_context.plan)
         || is_coalesce_partitions(&distribution_context.plan)
         || is_sort_preserving_merge(&distribution_context.plan)
     {
+        // Track whether the stripped operator was a SortPreservingMergeExec,
+        // independently of whether it carries a fetch. We only need the
+        // ordering so we can reconstruct a fresh SPM later if needed.
+        if is_sort_preserving_merge(&distribution_context.plan)
+            && spm_ordering.is_none()
+            && let Some(spm) = distribution_context
+                .plan
+                .as_any()
+                .downcast_ref::<SortPreservingMergeExec>()
+        {
+            spm_ordering = Some(spm.expr().clone());
+        }
         // Preserve any `fetch` (limit) that was pushed into a
         // `SortPreservingMergeExec` or `CoalescePartitionsExec` by
         // `LimitPushdown`. Without this, the limit would be lost when
         // the operator is stripped.
         if let Some(child_fetch) = distribution_context.plan.fetch() {
-            if is_sort_preserving_merge(&distribution_context.plan) && fetch.is_none() {
-                spm = Some(Arc::clone(&distribution_context.plan));
-            }
             fetch = Some(fetch.map_or(child_fetch, |f: usize| f.min(child_fetch)));
         }
         // All of above operators have a single child. First child is only child.
@@ -1047,7 +1052,7 @@ fn remove_dist_changing_operators(
         // Note that they will be re-inserted later on if necessary or helpful.
     }
 
-    Ok((distribution_context, fetch, spm))
+    Ok((distribution_context, fetch, spm_ordering))
 }
 
 /// Updates the [`DistributionContext`] if preserving ordering while changing partitioning is not helpful or desirable.
@@ -1250,7 +1255,7 @@ pub fn ensure_distribution(
             children,
         },
         mut fetch,
-        spm,
+        spm_ordering,
     ) = remove_dist_changing_operators(dist_context)?;
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
@@ -1518,9 +1523,15 @@ pub fn ensure_distribution(
     // changing operator would be silently lost. Re-introduce it so the
     // query still returns the correct number of rows.
     if let Some(fetch_val) = fetch.take() {
-        let limit_plan: Arc<dyn ExecutionPlan> = if let Some(spm) = spm {
-            // Re-insert the original SortPreservingMergeExec with fetch.
-            spm.with_fetch(Some(fetch_val)).unwrap()
+        let limit_plan: Arc<dyn ExecutionPlan> = if let Some(ordering) = spm_ordering {
+            // Reconstruct a fresh SortPreservingMergeExec using the
+            // captured ordering and the *current* (possibly rewritten)
+            // child plan, rather than reusing the stale pre-optimization
+            // SPM which may reference an outdated subtree.
+            Arc::new(
+                SortPreservingMergeExec::new(ordering, Arc::clone(&dist_context.plan))
+                    .with_fetch(Some(fetch_val)),
+            )
         } else {
             // The fetch came from a CoalescePartitionsExec. Re-introduce
             // it as a CoalescePartitionsExec(fetch=N) wrapping the output.
