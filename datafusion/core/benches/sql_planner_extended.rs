@@ -245,12 +245,17 @@ fn build_case_heavy_left_join_query(predicate_count: usize, case_depth: usize) -
             query.push_str(" AND ");
         }
 
-        let mut expr = format!("length(l.c{})", i % 20);
+        let left_payload_col = (i % 19) + 1;
+        let right_payload_col = ((i + 7) % 19) + 1;
+        let mut expr = format!(
+            "CASE WHEN l.c0 IS NOT NULL THEN length(l.c{left_payload_col}) ELSE length(r.c{right_payload_col}) END"
+        );
         for depth in 0..case_depth {
-            let left_col = (i + depth + 1) % 20;
-            let right_col = (i + depth + 2) % 20;
+            let left_col = ((i + depth + 3) % 19) + 1;
+            let right_col = ((i + depth + 11) % 19) + 1;
+            let join_key_ref = if (i + depth) % 2 == 0 { "l.c0" } else { "r.c0" };
             expr = format!(
-                "CASE WHEN l.c{left_col} IS NOT NULL THEN {expr} ELSE length(r.c{right_col}) END"
+                "CASE WHEN {join_key_ref} IS NOT NULL THEN {expr} ELSE CASE WHEN l.c{left_col} IS NOT NULL THEN length(l.c{left_col}) ELSE length(r.c{right_col}) END END"
             );
         }
 
