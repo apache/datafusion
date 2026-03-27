@@ -3724,6 +3724,37 @@ mod tests {
     }
 
     #[test]
+    fn returns_exactly_one_row_for_global_aggregate() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .aggregate(Vec::<Expr>::new(), vec![avg(col("a"))])?
+            .build()?;
+
+        assert!(returns_exactly_one_row(&plan));
+        Ok(())
+    }
+
+    #[test]
+    fn returns_exactly_one_row_is_false_for_filtered_global_aggregate() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .aggregate(Vec::<Expr>::new(), vec![avg(col("a"))])?
+            .filter(col("avg(test.a)").gt(lit(0i64)))?
+            .build()?;
+
+        assert!(!returns_exactly_one_row(&plan));
+        Ok(())
+    }
+
+    #[test]
+    fn returns_exactly_one_row_is_false_for_limit_fetch_one() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .limit(0, Some(1))?
+            .build()?;
+
+        assert!(!returns_exactly_one_row(&plan));
+        Ok(())
+    }
+
+    #[test]
     fn left_semi_join() -> Result<()> {
         let left = test_table_scan_with_name("test1")?;
         let right_table_scan = test_table_scan_with_name("test2")?;
