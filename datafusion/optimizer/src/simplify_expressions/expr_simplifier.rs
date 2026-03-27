@@ -5038,10 +5038,6 @@ mod tests {
     }
 
     impl WindowUDFImpl for SimplifyMockUdwf {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "mock_simplify"
         }

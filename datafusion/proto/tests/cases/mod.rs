@@ -144,10 +144,6 @@ impl CustomUDWF {
 }
 
 impl WindowUDFImpl for CustomUDWF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "custom_udwf"
     }

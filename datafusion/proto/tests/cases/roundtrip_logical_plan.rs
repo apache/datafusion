@@ -2781,10 +2781,6 @@ fn roundtrip_window() {
     }
 
     impl WindowUDFImpl for SimpleWindowUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "dummy_udwf"
         }
