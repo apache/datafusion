@@ -408,14 +408,16 @@ impl ScalarUDFImpl for GetFieldFunc {
                             plan_datafusion_err!("Field {field_name} not found in struct")
                         })?;
 
-                    let nullable =
-                        current_field.is_nullable() || child_field.is_nullable();
                     let dict_type = DataType::Dictionary(
                         key_type.clone(),
                         Box::new(child_field.data_type().clone()),
                     );
-                    current_field =
-                        Arc::new(Field::new(child_field.name(), dict_type, nullable));
+                    let mut new_field =
+                        child_field.as_ref().clone().with_data_type(dict_type);
+                    if current_field.is_nullable() {
+                        new_field = new_field.with_nullable(true);
+                    }
+                    current_field = Arc::new(new_field);
                 }
                 DataType::Struct(fields) => {
                     let field_name = sv
