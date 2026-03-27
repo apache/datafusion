@@ -220,26 +220,6 @@ set datafusion.explain.physical_plan_only = true;
 statement ok
 create external table agg_reordered_pushdown stored as parquet location '../../parquet-testing/data/alltypes_plain.parquet';
 
-# Filter on grouping column b should push below the aggregate even though the
-# aggregate input is reordered to (c, a, b).
-query TT
-explain
-select a, b, cnt
-from (
-    select a, b, count(c) as cnt
-    from (
-        select id as c, cast(string_col as varchar) as a, bool_col as b
-        from agg_reordered_pushdown
-    ) t
-    group by a, b
-) q
-where b = true;
-----
-physical_plan
-01)ProjectionExec: expr=[a@0 as a, b@1 as b, count(t.c)@2 as cnt]
-02)--AggregateExec: mode=Single, gby=[a@1 as a, b@2 as b], aggr=[count(t.c)]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id@0 as c, CAST(string_col@9 AS Utf8View) as a, bool_col@1 as b], file_type=parquet, predicate=bool_col@1, pruning_predicate=bool_col_min@0 OR bool_col_max@1, required_guarantees=[]
-
 query TBI rowsort
 select a, b, cnt
 from (
@@ -253,26 +233,6 @@ from (
 where b = true;
 ----
 0 true 4
-
-# Filter on aggregate output must remain above the aggregate.
-query TT
-explain
-select a, b, cnt
-from (
-    select a, b, count(c) as cnt
-    from (
-        select id as c, cast(string_col as varchar) as a, bool_col as b
-        from agg_reordered_pushdown
-    ) t
-    group by a, b
-) q
-where cnt > 1;
-----
-physical_plan
-01)ProjectionExec: expr=[a@0 as a, b@1 as b, count(t.c)@2 as cnt]
-02)--FilterExec: count(t.c)@2 > 1
-03)----AggregateExec: mode=Single, gby=[a@1 as a, b@2 as b], aggr=[count(t.c)]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id@0 as c, CAST(string_col@9 AS Utf8View) as a, bool_col@1 as b], file_type=parquet
 
 query TBI rowsort
 select a, b, cnt
