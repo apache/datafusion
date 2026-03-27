@@ -45,7 +45,9 @@ use datafusion_expr::{
 
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
-use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
+use crate::utils::{
+    ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
+};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::ExpressionPlacement;
 
@@ -190,11 +192,11 @@ struct ColumnChecker<'a> {
     /// schema of left join input
     left_schema: &'a DFSchema,
     /// columns in left_schema, computed on demand
-    left_columns: Option<HashSet<Column>>,
+    left_columns: Option<HashSet<ColumnReference<'a>>>,
     /// schema of right join input
     right_schema: &'a DFSchema,
     /// columns in left_schema, computed on demand
-    right_columns: Option<HashSet<Column>>,
+    right_columns: Option<HashSet<ColumnReference<'a>>>,
 }
 
 impl<'a> ColumnChecker<'a> {
@@ -222,20 +224,6 @@ impl<'a> ColumnChecker<'a> {
         }
         has_all_column_refs(predicate, self.right_columns.as_ref().unwrap())
     }
-}
-
-/// Returns all columns in the schema
-fn schema_columns(schema: &DFSchema) -> HashSet<Column> {
-    schema
-        .iter()
-        .flat_map(|(qualifier, field)| {
-            [
-                Column::new(qualifier.cloned(), field.name()),
-                // we need to push down filter using unqualified column as well
-                Column::new_unqualified(field.name()),
-            ]
-        })
-        .collect::<HashSet<_>>()
 }
 
 /// Determine whether the predicate can evaluate as the join conditions
@@ -320,7 +308,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
 /// * do nothing.
 fn extract_or_clauses_for_join<'a>(
     filters: &'a [Expr],
-    schema_cols: &'a HashSet<Column>,
+    schema_cols: &'a HashSet<ColumnReference>,
 ) -> impl Iterator<Item = Expr> + 'a {
     // new formed OR clauses and their column references
     filters.iter().filter_map(move |expr| {
@@ -353,7 +341,10 @@ fn extract_or_clauses_for_join<'a>(
 /// Otherwise, return None.
 ///
 /// For other clause, apply the rule above to extract clause.
-fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Expr> {
+fn extract_or_clause(
+    expr: &Expr,
+    schema_columns: &HashSet<ColumnReference>,
+) -> Option<Expr> {
     let mut predicate = None;
 
     match expr {
