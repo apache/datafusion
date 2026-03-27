@@ -38,14 +38,15 @@ use parquet::file::properties::{WriterProperties, WriterVersion};
 use std::hint::black_box;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::runtime::Runtime;
 
-const NUM_BATCHES: usize = 64;
-const WRITE_RECORD_BATCH_SIZE: usize = 4096;
-const ROW_GROUP_ROW_COUNT: usize = 65536;
-const EXPECTED_ROW_GROUPS: usize = 4;
-const LARGE_STRING_LEN: usize = 128 * 1024;
+const NUM_BATCHES: usize = 2;
+const WRITE_RECORD_BATCH_SIZE: usize = 256;
+const ROW_GROUP_ROW_COUNT: usize = 256;
+const EXPECTED_ROW_GROUPS: usize = 2;
+const LARGE_STRING_LEN: usize = 16 * 1024;
 
 fn narrow_schema() -> SchemaRef {
     let struct_fields = Fields::from(vec![
@@ -209,6 +210,9 @@ fn narrow_benchmarks(c: &mut Criterion) {
     let ctx = create_context(&rt, &file_path, "t");
 
     let mut group = c.benchmark_group("narrow_struct");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
 
     // baseline: full struct, must decode both leaves
     group.bench_function("select_struct", |b| {
@@ -253,6 +257,9 @@ fn wide_benchmarks(c: &mut Criterion) {
     let ctx = create_context(&rt, &file_path, "t");
 
     let mut group = c.benchmark_group("wide_struct");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
 
     // baseline: full struct, must decode all 5 leaves
     group.bench_function("select_struct", |b| {
@@ -359,6 +366,9 @@ fn nested_benchmarks(c: &mut Criterion) {
     let ctx = create_context(&rt, &file_path, "t");
 
     let mut group = c.benchmark_group("nested_struct");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
 
     // baseline: full outer struct, decode all 3 leaves
     group.bench_function("select_struct", |b| {
