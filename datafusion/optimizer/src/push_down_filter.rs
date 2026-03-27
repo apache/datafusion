@@ -2535,8 +2535,8 @@ mod tests {
     }
 
     #[test]
-    fn scalar_subquery_cross_join_filter_is_treated_as_join_condition_candidate(
-    ) -> Result<()> {
+    fn scalar_subquery_cross_join_filter_is_treated_as_join_condition_candidate()
+    -> Result<()> {
         let predicate = col("s.acctbal").gt(col("__scalar_sq_1.avg_acctbal"));
 
         assert!(can_evaluate_as_join_condition(&predicate)?);

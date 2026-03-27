@@ -127,6 +127,15 @@ fn syntactic_null_substitution_value(
     expr: &Expr,
     join_cols: &HashSet<&Column>,
 ) -> Option<NullSubstitutionValue> {
+    // This evaluator intentionally supports a strict subset of expressions:
+    // aliases/columns/literals, boolean combinators (NOT/AND/OR), null checks
+    // (IS [NOT] NULL), BETWEEN, strict-null-preserving unary operators
+    // (CAST/TRY_CAST/NEGATIVE), LIKE/SIMILAR TO, and binary operators handled in
+    // `syntactic_binary_value`.
+    //
+    // Returning `None` means "defer to the authoritative evaluator" rather than
+    // "not null-restricting". Any unsupported expression variant must return
+    // `None` so callers can safely fall back to full expression evaluation.
     match expr {
         Expr::Alias(alias) => {
             syntactic_null_substitution_value(alias.expr.as_ref(), join_cols)
