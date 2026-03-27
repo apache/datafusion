@@ -35,7 +35,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
+use datafusion_expr::logical_plan::{Aggregate, Join, JoinType, LogicalPlan, TableScan, Union};
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
@@ -518,15 +518,61 @@ fn push_down_all_join(
 /// Returns true when post-join filters are allowed to be promoted to join conditions.
 ///
 /// Protection is necessary for scalar-side joins and cross joins to avoid incorrectly
-/// rewriting a post-join filter into the join condition when one side is empty or
-/// limited to at most one row (`max_rows() == Some(1)`).
+/// rewriting a post-join filter into the join condition when one side may disappear
+/// entirely, even though `max_rows() == Some(1)`.
 ///
 /// - `join.on` non-empty means existing join predicates already exist; promotion is safe.
-/// - if neither side is scalar (`max_rows() == Some(1)`), promotion is safe.
+/// - if a scalar side is a scalar-subquery-shaped input that is provably exactly one
+///   row, promotion is safe.
+/// - otherwise, keep the filter above the join.
 fn can_promote_post_join_filter_to_join_condition(join: &Join) -> bool {
     !join.on.is_empty()
-        || !(matches!(join.left.max_rows(), Some(1))
-            || matches!(join.right.max_rows(), Some(1)))
+        || !join_side_may_disappear(join.left.as_ref())
+            && !join_side_may_disappear(join.right.as_ref())
+}
+
+/// Returns true when a plan can produce at most one row but is not guaranteed
+/// to produce exactly one row.
+fn join_side_may_disappear(plan: &LogicalPlan) -> bool {
+    matches!(plan.max_rows(), Some(1)) && !is_safe_scalar_subquery_side(plan)
+}
+
+/// Returns true for the scalar-subquery-shaped inputs where post-join filter
+/// promotion should remain legal.
+fn is_safe_scalar_subquery_side(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Projection(projection) => {
+            is_safe_scalar_subquery_side(projection.input.as_ref())
+        }
+        LogicalPlan::Repartition(repartition) => {
+            is_safe_scalar_subquery_side(repartition.input.as_ref())
+        }
+        LogicalPlan::Sort(sort) => is_safe_scalar_subquery_side(sort.input.as_ref()),
+        LogicalPlan::SubqueryAlias(subquery_alias) => {
+            returns_exactly_one_row(subquery_alias.input.as_ref())
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when the plan is guaranteed to produce exactly one row.
+fn returns_exactly_one_row(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Projection(projection) => returns_exactly_one_row(projection.input.as_ref()),
+        LogicalPlan::SubqueryAlias(subquery_alias) => {
+            returns_exactly_one_row(subquery_alias.input.as_ref())
+        }
+        LogicalPlan::Repartition(repartition) => {
+            returns_exactly_one_row(repartition.input.as_ref())
+        }
+        LogicalPlan::Sort(sort) => returns_exactly_one_row(sort.input.as_ref()),
+        LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
+            group_expr
+                .iter()
+                .all(|expr| matches!(expr, Expr::Literal(_, _)))
+        }
+        _ => false,
+    }
 }
 
 fn push_down_join(
