@@ -1823,6 +1823,22 @@ fn validate_orderings(
 ///
 ///              DataSourceExec
 /// ```
+///
+/// **Exception**: When files within a partition are **non-overlapping** (verified
+/// via min/max statistics) and each file is internally sorted, the combined
+/// output is still correctly sorted. Sort pushdown
+/// ([`FileScanConfig::try_pushdown_sort`]) detects this case and preserves
+/// `output_ordering`, allowing `SortExec` to be eliminated entirely.
+///
+/// ```text
+///   Partition 1 (files sorted by stats, non-overlapping):
+///   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+///   │   1.parquet      │  │   2.parquet      │  │   3.parquet      │
+///   │ A: [1..100]      │  │ A: [101..200]    │  │ A: [201..300]    │
+///   │ Sort: A, B, C    │  │ Sort: A, B, C    │  │ Sort: A, B, C    │
+///   └──────────────────┘  └──────────────────┘  └──────────────────┘
+///   max(1) <= min(2) ✓    max(2) <= min(3) ✓   → output_ordering preserved
+/// ```
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
