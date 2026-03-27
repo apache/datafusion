@@ -740,9 +740,10 @@ fn infer_join_predicates_impl<
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
     for predicate in input_predicates {
+        let column_refs = predicate.column_refs();
         let mut join_cols_to_replace = HashMap::new();
 
-        for &col in &predicate.column_refs() {
+        for &col in &column_refs {
             for (l, r) in join_col_keys.iter() {
                 if ENABLE_LEFT_TO_RIGHT && col == *l {
                     join_cols_to_replace.insert(col, *r);
@@ -755,6 +756,15 @@ fn infer_join_predicates_impl<
             }
         }
         if join_cols_to_replace.is_empty() {
+            continue;
+        }
+
+        // For non-inner joins, predicates that reference any non-replaceable
+        // columns cannot be inferred on the other side. Skip the null-restriction
+        // helper entirely in that common mixed-reference case.
+        if !inferred_predicates.is_inner_join
+            && join_cols_to_replace.len() != column_refs.len()
+        {
             continue;
         }
 
@@ -2804,6 +2814,41 @@ mod tests {
           TableScan: test, full_filters=[test.a <= Int64(1)]
           Projection: test2.a
             TableScan: test2, full_filters=[test2.a <= Int64(1)]
+        "
+        )
+    }
+
+    /// mixed post-left-join predicates that reference a join key plus a
+    /// non-join column should not be inferred to the preserved side
+    #[test]
+    fn filter_using_left_join_with_mixed_join_key_and_non_join_refs() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("c")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(add(col("test2.a"), col("test.b")).gt(lit(1i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test2.a + test.b > Int64(1)
+          Left Join: test.a = test2.a
+            Projection: test.a, test.b
+              TableScan: test
+            Projection: test2.a, test2.c
+              TableScan: test2
         "
         )
     }
