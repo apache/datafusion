@@ -18,16 +18,20 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, BooleanArray, Capacities, MutableArrayData, Scalar, make_array,
-    make_comparator,
+    Array, BooleanArray, Capacities, DictionaryArray, MutableArrayData, Scalar,
+    make_array, make_comparator,
 };
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{
+    DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
+};
 use arrow_buffer::NullBuffer;
 
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_err, plan_datafusion_err,
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
+    internal_err, plan_datafusion_err,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
@@ -210,22 +214,21 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
                 ($key_ty:ty) => {{
                     let dict = array
                         .as_any()
-                        .downcast_ref::<arrow::array::DictionaryArray<$key_ty>>()
+                        .downcast_ref::<DictionaryArray<$key_ty>>()
                         .ok_or_else(|| {
-                            datafusion_common::DataFusionError::Internal(format!(
-                                "Failed to downcast dictionary with key type {}",
-                                key_type
-                            ))
+                            internal_datafusion_err!(
+                                "Failed to downcast dictionary with key type {key_type}"
+                            )
                         })?;
                     let values_struct = as_struct_array(dict.values())?;
                     let field_col =
                         values_struct.column_by_name(&field_name).ok_or_else(|| {
-                            datafusion_common::DataFusionError::Execution(format!(
+                            exec_datafusion_err!(
                                 "Field {field_name} not found in dictionary struct"
-                            ))
+                            )
                         })?;
                     // Rebuild dictionary: same keys, extracted field as values.
-                    let new_dict = arrow::array::DictionaryArray::<$key_ty>::try_new(
+                    let new_dict = DictionaryArray::<$key_ty>::try_new(
                         dict.keys().clone(),
                         Arc::clone(field_col),
                     )?;
@@ -234,14 +237,14 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
             }
 
             match key_type.as_ref() {
-                DataType::Int8 => extract_dict_field!(arrow::datatypes::Int8Type),
-                DataType::Int16 => extract_dict_field!(arrow::datatypes::Int16Type),
-                DataType::Int32 => extract_dict_field!(arrow::datatypes::Int32Type),
-                DataType::Int64 => extract_dict_field!(arrow::datatypes::Int64Type),
-                DataType::UInt8 => extract_dict_field!(arrow::datatypes::UInt8Type),
-                DataType::UInt16 => extract_dict_field!(arrow::datatypes::UInt16Type),
-                DataType::UInt32 => extract_dict_field!(arrow::datatypes::UInt32Type),
-                DataType::UInt64 => extract_dict_field!(arrow::datatypes::UInt64Type),
+                DataType::Int8 => extract_dict_field!(Int8Type),
+                DataType::Int16 => extract_dict_field!(Int16Type),
+                DataType::Int32 => extract_dict_field!(Int32Type),
+                DataType::Int64 => extract_dict_field!(Int64Type),
+                DataType::UInt8 => extract_dict_field!(UInt8Type),
+                DataType::UInt16 => extract_dict_field!(UInt16Type),
+                DataType::UInt32 => extract_dict_field!(UInt32Type),
+                DataType::UInt64 => extract_dict_field!(UInt64Type),
                 other => exec_err!("Unsupported dictionary key type: {other}"),
             }
         }
@@ -395,9 +398,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                             sv.try_as_str().flatten().filter(|s| !s.is_empty())
                         })
                         .ok_or_else(|| {
-                            datafusion_common::DataFusionError::Execution(
-                                "Field name must be a non-empty string".to_string(),
-                            )
+                            exec_datafusion_err!("Field name must be a non-empty string")
                         })?;
 
                     let child_field = fields
