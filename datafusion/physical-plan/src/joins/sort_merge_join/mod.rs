@@ -26,6 +26,4 @@ pub(crate) mod materializing_stream;
 mod metrics;
 
 #[cfg(test)]
-mod bitwise_tests;
-#[cfg(test)]
-mod materializing_tests;
+mod tests;
