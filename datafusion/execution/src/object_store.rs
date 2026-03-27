@@ -40,6 +40,7 @@ pub struct ObjectStoreUrl {
     url: Url,
 }
 
+// new code goes here
 impl ObjectStoreUrl {
     /// Parse an [`ObjectStoreUrl`] from a string
     ///
