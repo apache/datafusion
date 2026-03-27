@@ -1495,7 +1495,7 @@ mod tests {
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
-    use datafusion_expr::test::function_stub::sum;
+    use datafusion_expr::test::function_stub::{avg, sum};
     use insta::assert_snapshot;
 
     use super::*;
@@ -2415,6 +2415,58 @@ mod tests {
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.a, test1.b, test1.c
               TableScan: test1, full_filters=[test1.a > Int32(2)]
+        "
+        )
+    }
+
+    #[test]
+    #[ignore = "FIX_06 step(1): reproduces current scalar-subquery cross-join promotion regression"]
+    fn window_over_scalar_subquery_cross_join_keeps_filter_above_join() -> Result<()> {
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("nation"), col("b").alias("acctbal")])?
+            .alias("s")?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .project(vec![col("a").alias("acctbal")])?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![avg(col("acctbal")).alias("avg_acctbal")],
+            )?
+            .alias("__scalar_sq_1")?
+            .build()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::row_number::row_number_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("s.nation")])
+        .order_by(vec![col("s.acctbal").sort(false, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(right)?
+            .filter(col("s.acctbal").gt(col("__scalar_sq_1.avg_acctbal")))?
+            .project(vec![col("s.nation"), col("s.acctbal")])?
+            .window(vec![window])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [s.nation] ORDER BY [s.acctbal DESC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          Projection: s.nation, s.acctbal
+            Filter: s.acctbal > __scalar_sq_1.avg_acctbal
+              Cross Join:
+                SubqueryAlias: s
+                  Projection: test.a AS nation, test.b AS acctbal
+                    TableScan: test
+                SubqueryAlias: __scalar_sq_1
+                  Aggregate: groupBy=[[]], aggr=[[avg(test1.a) AS avg_acctbal]]
+                    Projection: test1.a AS acctbal
+                      TableScan: test1
         "
         )
     }
