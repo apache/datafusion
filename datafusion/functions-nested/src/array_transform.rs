@@ -398,17 +398,20 @@ fn truncate_nulls<O: OffsetSizeTrait>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use arrow::{
-        array::{Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, ListArray},
+        array::{
+            Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, ListArray,
+            RecordBatch,
+        },
         buffer::{NullBuffer, OffsetBuffer},
-        datatypes::{DataType, Field, FieldRef},
+        datatypes::{DataType, Field},
     };
-    use datafusion_common::{DFSchema, Result, config::ConfigOptions};
+    use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
-        LambdaArgument, LambdaFunctionArgs, ValueOrLambda,
-        execution_props::ExecutionProps, lambda_var, lit,
+        Expr, col, execution_props::ExecutionProps, expr::LambdaFunction, lambda,
+        lambda_var, lit,
     };
     use datafusion_physical_expr::create_physical_expr;
 
@@ -437,47 +440,42 @@ mod tests {
         )
     }
 
-    fn int32_field() -> FieldRef {
-        Arc::new(Field::new("", DataType::Int32, true))
-    }
-
     fn divide_100_by(list: impl Array + Clone + 'static) -> Result<ArrayRef> {
         let array_transform = array_transform_udlf();
 
-        let lambda = create_physical_expr(
-            &(lit(100i32) / lambda_var("v", int32_field())),
-            &DFSchema::empty(),
-            &ExecutionProps::new(),
+        let schema = DFSchema::from_unqualified_fields(
+            vec![Field::new(
+                "list",
+                list.data_type().clone(),
+                list.is_nullable(),
+            )]
+            .into(),
+            HashMap::new(),
         )?;
 
-        array_transform
-            .invoke_with_args(LambdaFunctionArgs {
-                args: vec![
-                    ValueOrLambda::Value(datafusion_expr::ColumnarValue::Array(
-                        Arc::new(list.clone()),
-                    )),
-                    ValueOrLambda::Lambda(LambdaArgument::new(
-                        vec![Arc::new(Field::new("v", DataType::Int32, true))],
-                        lambda,
-                    )),
+        create_physical_expr(
+            &Expr::LambdaFunction(LambdaFunction::new(
+                array_transform,
+                vec![
+                    col("list"),
+                    lambda(
+                        ["v"],
+                        lit(100i32)
+                            / lambda_var(
+                                "v",
+                                Arc::new(Field::new("v", DataType::Int32, true)),
+                            ),
+                    ),
                 ],
-                arg_fields: vec![
-                    ValueOrLambda::Value(Arc::new(Field::new(
-                        "",
-                        list.data_type().clone(),
-                        list.is_nullable(),
-                    ))),
-                    ValueOrLambda::Lambda(int32_field()),
-                ],
-                number_rows: list.len(),
-                return_field: Arc::new(Field::new_list(
-                    "",
-                    Field::new_list_field(DataType::Int32, true),
-                    list.is_nullable(),
-                )),
-                config_options: Arc::new(ConfigOptions::new()),
-            })?
-            .into_array(list.len())
+            )),
+            &schema,
+            &ExecutionProps::new(),
+        )?
+        .evaluate(&RecordBatch::try_new(
+            Arc::clone(schema.inner()),
+            vec![Arc::new(list.clone())],
+        )?)?
+        .into_array(list.len())
     }
 
     #[test]
