@@ -527,14 +527,18 @@ fn push_down_all_join(
 /// - otherwise, keep the filter above the join.
 fn can_promote_post_join_filter_to_join_condition(join: &Join) -> bool {
     !join.on.is_empty()
-        || !join_side_may_disappear(join.left.as_ref())
-            && !join_side_may_disappear(join.right.as_ref())
+        || scalar_side_can_promote_post_join_filter(join.left.as_ref())
+            && scalar_side_can_promote_post_join_filter(join.right.as_ref())
 }
 
-/// Returns true when a plan can produce at most one row but is not guaranteed
-/// to produce exactly one row.
-fn join_side_may_disappear(plan: &LogicalPlan) -> bool {
-    matches!(plan.max_rows(), Some(1)) && !is_safe_scalar_subquery_side(plan)
+/// Returns true when a non-scalar side is unrestricted, or when a scalar side is
+/// a safe exact-one-row scalar-subquery shape.
+fn scalar_side_can_promote_post_join_filter(plan: &LogicalPlan) -> bool {
+    !is_scalar_side(plan) || is_safe_scalar_subquery_side(plan)
+}
+
+fn is_scalar_side(plan: &LogicalPlan) -> bool {
+    matches!(plan.max_rows(), Some(1))
 }
 
 /// Returns true for the scalar-subquery-shaped inputs where post-join filter
