@@ -245,6 +245,8 @@ fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
     use datafusion_expr::{
         Operator, binary_expr, case, col, in_list, is_null, lit, when,
     };
@@ -511,5 +513,23 @@ mod tests {
         assert!(!authoritative_only_result, "{predicate}");
 
         Ok(())
+    }
+
+    #[test]
+    fn null_restriction_eval_mode_guard_restores_on_panic() {
+        set_null_restriction_eval_mode_for_test(NullRestrictionEvalMode::Auto);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            with_null_restriction_eval_mode_for_test(
+                NullRestrictionEvalMode::AuthoritativeOnly,
+                || panic!("intentional panic to verify test mode reset"),
+            )
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(
+            null_restriction_eval_mode(),
+            NullRestrictionEvalMode::Auto
+        );
     }
 }
