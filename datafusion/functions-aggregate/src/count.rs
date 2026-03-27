@@ -271,10 +271,6 @@ fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
 }
 
 impl AggregateUDFImpl for Count {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "count"
     }

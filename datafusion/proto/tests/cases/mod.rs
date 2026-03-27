@@ -102,10 +102,6 @@ impl MyAggregateUDF {
 }
 
 impl AggregateUDFImpl for MyAggregateUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "aggregate_udf"
     }

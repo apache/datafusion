@@ -4961,10 +4961,6 @@ mod tests {
     }
 
     impl AggregateUDFImpl for SimplifyMockUdaf {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "mock_simplify"
         }

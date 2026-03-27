@@ -520,7 +520,7 @@ pub(crate) mod tests {
             buf.push(Self::MAGIC_NUMBER);
 
             let udf = node.inner();
-            let Some(_udf) = udf.as_any().downcast_ref::<Sum>() else {
+            let Some(_udf) = (udf.as_ref() as &dyn Any).downcast_ref::<Sum>() else {
                 return exec_err!("TestExtensionCodec only expects Sum UDAF");
             };
 
@@ -630,7 +630,7 @@ pub(crate) mod tests {
 
         let returned_udf = foreign_codec.try_decode_udaf(udf.name(), &bytes)?;
 
-        assert!(returned_udf.inner().as_any().is::<Sum>());
+        assert!((returned_udf.inner().as_ref() as &dyn Any).is::<Sum>());
 
         Ok(())
     }
