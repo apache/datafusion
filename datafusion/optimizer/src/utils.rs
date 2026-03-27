@@ -38,9 +38,6 @@ use log::{debug, trace};
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
 
-#[cfg(test)]
-use self::test_eval_mode::*;
-
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
     expr.column_refs()
@@ -76,7 +73,7 @@ pub fn is_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
-    if matches!(predicate, Expr::Column(_)) {
+    if is_column_expr(&predicate) {
         return Ok(true);
     }
 
@@ -96,8 +93,8 @@ pub fn is_restrict_null_predicate<'a>(
 
     #[cfg(test)]
     if matches!(
-        null_restriction_eval_mode(),
-        NullRestrictionEvalMode::AuthoritativeOnly
+        test_eval_mode::null_restriction_eval_mode(),
+        test_eval_mode::NullRestrictionEvalMode::AuthoritativeOnly
     ) {
         return authoritative_restrict_null_predicate(predicate, join_cols);
     }
@@ -130,16 +127,16 @@ pub fn evaluates_to_null<'a>(
     predicate: Expr,
     null_columns: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
-    if matches!(predicate, Expr::Column(_)) {
+    if is_column_expr(&predicate) {
         return Ok(true);
     }
 
-    Ok(
-        match evaluate_expr_with_null_column(predicate, null_columns)? {
+    evaluate_with_null_columns(predicate, null_columns, |result| {
+        Ok(match result {
             ColumnarValue::Array(_) => false,
             ColumnarValue::Scalar(scalar) => scalar.is_null(),
-        },
-    )
+        })
+    })
 }
 
 fn evaluate_expr_with_null_column<'a>(
@@ -173,8 +170,8 @@ fn authoritative_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
-    Ok(
-        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
+    evaluate_with_null_columns(predicate, join_cols_of_predicate, |result| {
+        Ok(match result {
             ColumnarValue::Array(array) if array.len() == 1 => {
                 let boolean_array = as_boolean_array(&array)?;
                 boolean_array.is_null(0) || !boolean_array.value(0)
@@ -186,13 +183,25 @@ fn authoritative_restrict_null_predicate<'a>(
                     | ScalarValue::Boolean(Some(false))
                     | ScalarValue::Null
             ),
-        },
-    )
+        })
+    })
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let mut expr_rewrite = TypeCoercionRewriter { schema };
     expr.rewrite(&mut expr_rewrite).data()
+}
+
+fn is_column_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::Column(_))
+}
+
+fn evaluate_with_null_columns<'a, T>(
+    predicate: Expr,
+    null_columns: impl IntoIterator<Item = &'a Column>,
+    f: impl FnOnce(ColumnarValue) -> Result<T>,
+) -> Result<T> {
+    f(evaluate_expr_with_null_column(predicate, null_columns)?)
 }
 
 #[cfg(test)]
@@ -243,6 +252,11 @@ mod tests {
     use super::*;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
+    use crate::utils::test_eval_mode::{
+        NullRestrictionEvalMode, null_restriction_eval_mode,
+        set_null_restriction_eval_mode_for_test,
+        with_null_restriction_eval_mode_for_test,
+    };
     use datafusion_expr::{
         Operator, binary_expr, case, col, in_list, is_null, lit, when,
     };
