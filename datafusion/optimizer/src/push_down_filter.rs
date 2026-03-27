@@ -3728,6 +3728,35 @@ mod tests {
     }
 
     #[test]
+    fn cross_join_with_exact_one_row_subquery_promotes_post_join_filter() -> Result<()> {
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .project(vec![col("a")])?
+            .aggregate(Vec::<Expr>::new(), vec![avg(col("a")).alias("avg_a")])?
+            .alias("sq")?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(right)?
+            .filter(col("test.b").gt(col("sq.avg_a")))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join:  Filter: test.b > sq.avg_a
+          Projection: test.a, test.b
+            TableScan: test
+          SubqueryAlias: sq
+            Aggregate: groupBy=[[]], aggr=[[avg(test1.a) AS avg_a]]
+              Projection: test1.a
+                TableScan: test1
+        "
+        )
+    }
+
+    #[test]
     fn cross_join_with_at_most_one_row_side_keeps_post_join_filter() -> Result<()> {
         let left = LogicalPlanBuilder::from(test_table_scan()?)
             .project(vec![col("a"), col("b")])?
