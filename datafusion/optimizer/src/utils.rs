@@ -530,9 +530,6 @@ mod tests {
         }));
 
         assert!(result.is_err());
-        assert_eq!(
-            null_restriction_eval_mode(),
-            NullRestrictionEvalMode::Auto
-        );
+        assert_eq!(null_restriction_eval_mode(), NullRestrictionEvalMode::Auto);
     }
 }

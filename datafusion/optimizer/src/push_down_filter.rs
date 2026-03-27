@@ -2517,8 +2517,8 @@ mod tests {
     }
 
     #[test]
-    fn window_over_scalar_subquery_cross_join_with_project_wrapper_keeps_filter_above_join(
-    ) -> Result<()> {
+    fn window_over_scalar_subquery_cross_join_with_project_wrapper_keeps_filter_above_join()
+    -> Result<()> {
         let left = LogicalPlanBuilder::from(test_table_scan()?)
             .project(vec![col("a").alias("nation"), col("b").alias("acctbal")])?
             .alias("s")?
