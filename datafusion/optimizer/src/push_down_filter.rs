@@ -35,7 +35,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::{Aggregate, Join, JoinType, LogicalPlan, TableScan, Union};
+use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
@@ -431,10 +431,7 @@ fn push_down_all_join(
             left_push.push(predicate);
         } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
-        } else if is_inner_join
-            && can_promote_post_join_filter_to_join_condition(&join)
-            && can_evaluate_as_join_condition(&predicate)?
-        {
+        } else if is_inner_join && can_evaluate_as_join_condition(&predicate)? {
             // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
             // and convert to the join on condition
             join_conditions.push(predicate);
@@ -513,70 +510,6 @@ fn push_down_all_join(
         plan
     };
     Ok(Transformed::yes(plan))
-}
-
-/// Returns true when post-join filters are allowed to be promoted to join conditions.
-///
-/// Protection is necessary for scalar-side joins and cross joins to avoid incorrectly
-/// rewriting a post-join filter into the join condition when one side may disappear
-/// entirely, even though `max_rows() == Some(1)`.
-///
-/// - `join.on` non-empty means existing join predicates already exist; promotion is safe.
-/// - if a scalar side is a scalar-subquery-shaped input that is provably exactly one
-///   row, promotion is safe.
-/// - otherwise, keep the filter above the join.
-fn can_promote_post_join_filter_to_join_condition(join: &Join) -> bool {
-    !join.on.is_empty()
-        || scalar_side_can_promote_post_join_filter(join.left.as_ref())
-            && scalar_side_can_promote_post_join_filter(join.right.as_ref())
-}
-
-/// Returns true when a non-scalar side is unrestricted, or when a scalar side is
-/// a safe exact-one-row scalar-subquery shape.
-fn scalar_side_can_promote_post_join_filter(plan: &LogicalPlan) -> bool {
-    !is_scalar_side(plan) || is_safe_scalar_subquery_side(plan)
-}
-
-fn is_scalar_side(plan: &LogicalPlan) -> bool {
-    matches!(plan.max_rows(), Some(1))
-}
-
-/// Returns true for the scalar-subquery-shaped inputs where post-join filter
-/// promotion should remain legal.
-fn is_safe_scalar_subquery_side(plan: &LogicalPlan) -> bool {
-    match plan {
-        LogicalPlan::Projection(projection) => {
-            is_safe_scalar_subquery_side(projection.input.as_ref())
-        }
-        LogicalPlan::Repartition(repartition) => {
-            is_safe_scalar_subquery_side(repartition.input.as_ref())
-        }
-        LogicalPlan::Sort(sort) => is_safe_scalar_subquery_side(sort.input.as_ref()),
-        LogicalPlan::SubqueryAlias(subquery_alias) => {
-            returns_exactly_one_row(subquery_alias.input.as_ref())
-        }
-        _ => false,
-    }
-}
-
-/// Returns true when the plan is guaranteed to produce exactly one row.
-fn returns_exactly_one_row(plan: &LogicalPlan) -> bool {
-    match plan {
-        LogicalPlan::Projection(projection) => returns_exactly_one_row(projection.input.as_ref()),
-        LogicalPlan::SubqueryAlias(subquery_alias) => {
-            returns_exactly_one_row(subquery_alias.input.as_ref())
-        }
-        LogicalPlan::Repartition(repartition) => {
-            returns_exactly_one_row(repartition.input.as_ref())
-        }
-        LogicalPlan::Sort(sort) => returns_exactly_one_row(sort.input.as_ref()),
-        LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
-            group_expr
-                .iter()
-                .all(|expr| matches!(expr, Expr::Literal(_, _)))
-        }
-        _ => false,
-    }
 }
 
 fn push_down_join(
@@ -1562,7 +1495,7 @@ mod tests {
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
-    use datafusion_expr::test::function_stub::{avg, sum};
+    use datafusion_expr::test::function_stub::sum;
     use insta::assert_snapshot;
 
     use super::*;
@@ -3697,124 +3630,6 @@ mod tests {
             TableScan: test1
         "
         )
-    }
-
-    #[test]
-    fn cross_join_with_scalar_side_keeps_post_join_filter() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan()?)
-            .project(vec![col("a"), col("b")])?
-            .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
-            .project(vec![col("a")])?
-            .aggregate(Vec::<Expr>::new(), vec![avg(col("a")).alias("avg_a")])?
-            .build()?;
-        let plan = LogicalPlanBuilder::from(left)
-            .cross_join(right)?
-            .filter(col("test.b").gt(col("avg_a")))?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.b > avg_a
-          Cross Join:
-            Projection: test.a, test.b
-              TableScan: test
-            Aggregate: groupBy=[[]], aggr=[[avg(test1.a) AS avg_a]]
-              Projection: test1.a
-                TableScan: test1
-        "
-        )
-    }
-
-    #[test]
-    fn cross_join_with_exact_one_row_subquery_promotes_post_join_filter() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan()?)
-            .project(vec![col("a"), col("b")])?
-            .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
-            .project(vec![col("a")])?
-            .aggregate(Vec::<Expr>::new(), vec![avg(col("a")).alias("avg_a")])?
-            .alias("sq")?
-            .build()?;
-        let plan = LogicalPlanBuilder::from(left)
-            .cross_join(right)?
-            .filter(col("test.b").gt(col("sq.avg_a")))?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Inner Join:  Filter: test.b > sq.avg_a
-          Projection: test.a, test.b
-            TableScan: test
-          SubqueryAlias: sq
-            Aggregate: groupBy=[[]], aggr=[[avg(test1.a) AS avg_a]]
-              Projection: test1.a
-                TableScan: test1
-        "
-        )
-    }
-
-    #[test]
-    fn cross_join_with_at_most_one_row_side_keeps_post_join_filter() -> Result<()> {
-        let left = LogicalPlanBuilder::from(test_table_scan()?)
-            .project(vec![col("a"), col("b")])?
-            .build()?;
-        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
-            .project(vec![col("a")])?
-            .limit(0, Some(1))?
-            .alias("sq")?
-            .build()?;
-        let plan = LogicalPlanBuilder::from(left)
-            .cross_join(right)?
-            .filter(col("test.b").gt(col("sq.a")))?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.b > sq.a
-          Cross Join:
-            Projection: test.a, test.b
-              TableScan: test
-            SubqueryAlias: sq
-              Limit: skip=0, fetch=1
-                Projection: test1.a
-                  TableScan: test1
-        "
-        )
-    }
-
-    #[test]
-    fn returns_exactly_one_row_for_global_aggregate() -> Result<()> {
-        let plan = LogicalPlanBuilder::from(test_table_scan()?)
-            .aggregate(Vec::<Expr>::new(), vec![avg(col("a"))])?
-            .build()?;
-
-        assert!(returns_exactly_one_row(&plan));
-        Ok(())
-    }
-
-    #[test]
-    fn returns_exactly_one_row_is_false_for_filtered_global_aggregate() -> Result<()> {
-        let plan = LogicalPlanBuilder::from(test_table_scan()?)
-            .aggregate(Vec::<Expr>::new(), vec![avg(col("a"))])?
-            .filter(col("avg(test.a)").gt(lit(0i64)))?
-            .build()?;
-
-        assert!(!returns_exactly_one_row(&plan));
-        Ok(())
-    }
-
-    #[test]
-    fn returns_exactly_one_row_is_false_for_limit_fetch_one() -> Result<()> {
-        let plan = LogicalPlanBuilder::from(test_table_scan()?)
-            .limit(0, Some(1))?
-            .build()?;
-
-        assert!(!returns_exactly_one_row(&plan));
-        Ok(())
     }
 
     #[test]
