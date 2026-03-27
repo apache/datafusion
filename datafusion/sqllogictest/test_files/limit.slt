@@ -927,3 +927,46 @@ DROP TABLE t;
 # Tear down src_table table:
 statement ok
 DROP TABLE src_table;
+
+# LIMIT must work when SELECT projects columns in different order than table schema
+
+statement ok
+CREATE TABLE t21176 (col_a TEXT, col_b DOUBLE, col_c TEXT) AS VALUES
+  ('a-0', 0, 'c-0'), ('a-1', 1, 'c-1'), ('a-2', 2, 'c-2'), ('a-3', 3, 'c-3'),
+  ('a-4', 4, 'c-4'), ('a-5', 5, 'c-5'), ('a-6', 6, 'c-6'), ('a-7', 7, 'c-7'),
+  ('a-8', 8, 'c-8'), ('a-9', 9, 'c-9'), ('a-10', 10, 'c-10'), ('a-11', 11, 'c-11'),
+  ('a-12', 12, 'c-12'), ('a-13', 13, 'c-13'), ('a-14', 14, 'c-14'), ('a-15', 15, 'c-15'),
+  ('a-16', 16, 'c-16'), ('a-17', 17, 'c-17'), ('a-18', 18, 'c-18'), ('a-19', 19, 'c-19');
+
+# Schema-order SELECT with LIMIT should return 5 rows
+query RT rowsort
+SELECT col_b, col_c FROM t21176 LIMIT 5;
+----
+0 c-0
+1 c-1
+2 c-2
+3 c-3
+4 c-4
+
+# Reverse-order SELECT with LIMIT should also return 5 rows (not 20)
+query TR rowsort
+SELECT col_c, col_b FROM t21176 LIMIT 5;
+----
+c-0 0
+c-1 1
+c-2 2
+c-3 3
+c-4 4
+
+# Single column reverse SELECT with LIMIT
+query T rowsort
+SELECT col_c FROM t21176 LIMIT 5;
+----
+c-0
+c-1
+c-2
+c-3
+c-4
+
+statement ok
+DROP TABLE t21176;
