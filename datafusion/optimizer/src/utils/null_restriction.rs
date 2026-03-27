@@ -39,7 +39,7 @@ pub(super) fn syntactic_restrict_null_predicate(
     match syntactic_null_substitution_value(predicate, join_cols) {
         Some(NullSubstitutionValue::Boolean(value)) => Some(!value),
         Some(NullSubstitutionValue::Null) => Some(true),
-        _ => None,
+        Some(NullSubstitutionValue::NonNull) | None => None,
     }
 }
 
@@ -49,7 +49,7 @@ fn not(value: Option<NullSubstitutionValue>) -> Option<NullSubstitutionValue> {
             Some(NullSubstitutionValue::Boolean(!value))
         }
         Some(NullSubstitutionValue::Null) => Some(NullSubstitutionValue::Null),
-        _ => None,
+        Some(NullSubstitutionValue::NonNull) | None => None,
     }
 }
 
@@ -86,10 +86,15 @@ fn null_check_value(
     value: Option<NullSubstitutionValue>,
     is_not_null: bool,
 ) -> Option<NullSubstitutionValue> {
-    value.map(|value| match value {
-        NullSubstitutionValue::Null => NullSubstitutionValue::Boolean(!is_not_null),
-        _ => NullSubstitutionValue::Boolean(is_not_null),
-    })
+    match value {
+        Some(NullSubstitutionValue::Null) => {
+            Some(NullSubstitutionValue::Boolean(!is_not_null))
+        }
+        Some(NullSubstitutionValue::NonNull | NullSubstitutionValue::Boolean(_)) => {
+            Some(NullSubstitutionValue::Boolean(is_not_null))
+        }
+        None => None,
+    }
 }
 
 fn null_if_contains_null(
@@ -99,6 +104,12 @@ fn null_if_contains_null(
         .into_iter()
         .any(|value| matches!(value, Some(NullSubstitutionValue::Null)))
         .then_some(NullSubstitutionValue::Null)
+}
+
+fn strict_null_only(
+    value: Option<NullSubstitutionValue>,
+) -> Option<NullSubstitutionValue> {
+    value.filter(|value| matches!(value, NullSubstitutionValue::Null))
 }
 
 fn syntactic_null_substitution_value(
@@ -139,17 +150,16 @@ fn syntactic_null_substitution_value(
             syntactic_null_substitution_value(between.low.as_ref(), join_cols),
             syntactic_null_substitution_value(between.high.as_ref(), join_cols),
         ]),
-        Expr::Cast(cast) => {
-            syntactic_null_substitution_value(cast.expr.as_ref(), join_cols)
-                .filter(|value| matches!(value, NullSubstitutionValue::Null))
-        }
-        Expr::TryCast(try_cast) => {
-            syntactic_null_substitution_value(try_cast.expr.as_ref(), join_cols)
-                .filter(|value| matches!(value, NullSubstitutionValue::Null))
-        }
+        Expr::Cast(cast) => strict_null_only(syntactic_null_substitution_value(
+            cast.expr.as_ref(),
+            join_cols,
+        )),
+        Expr::TryCast(try_cast) => strict_null_only(syntactic_null_substitution_value(
+            try_cast.expr.as_ref(),
+            join_cols,
+        )),
         Expr::Negative(expr) => {
-            syntactic_null_substitution_value(expr.as_ref(), join_cols)
-                .filter(|value| matches!(value, NullSubstitutionValue::Null))
+            strict_null_only(syntactic_null_substitution_value(expr.as_ref(), join_cols))
         }
         Expr::Like(like) | Expr::SimilarTo(like) => null_if_contains_null([
             syntactic_null_substitution_value(like.expr.as_ref(), join_cols),

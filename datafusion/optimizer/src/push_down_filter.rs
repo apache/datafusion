@@ -285,27 +285,26 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     Ok(is_evaluate)
 }
 
-fn is_scalar_subquery_cross_join(join: &Join) -> bool {
-    fn is_scalar_aggregate_or_derived_relation(plan: &LogicalPlan) -> (bool, bool) {
-        match plan {
-            LogicalPlan::SubqueryAlias(subquery_alias) => {
-                let (is_scalar_aggregate, _) = is_scalar_aggregate_or_derived_relation(
-                    subquery_alias.input.as_ref(),
-                );
-                (is_scalar_aggregate, true)
-            }
-            LogicalPlan::Projection(projection) => {
-                is_scalar_aggregate_or_derived_relation(projection.input.as_ref())
-            }
-            LogicalPlan::Aggregate(aggregate) => (aggregate.group_expr.is_empty(), false),
-            _ => (false, false),
+fn classify_join_input(plan: &LogicalPlan) -> (bool, bool) {
+    match plan {
+        LogicalPlan::SubqueryAlias(subquery_alias) => {
+            let (is_scalar_aggregate, _) =
+                classify_join_input(subquery_alias.input.as_ref());
+            (is_scalar_aggregate, true)
         }
+        LogicalPlan::Projection(projection) => {
+            classify_join_input(projection.input.as_ref())
+        }
+        LogicalPlan::Aggregate(aggregate) => (aggregate.group_expr.is_empty(), false),
+        _ => (false, false),
     }
+}
 
+fn is_scalar_subquery_cross_join(join: &Join) -> bool {
     let (left_scalar_aggregate, left_is_derived_relation) =
-        is_scalar_aggregate_or_derived_relation(join.left.as_ref());
+        classify_join_input(join.left.as_ref());
     let (right_scalar_aggregate, right_is_derived_relation) =
-        is_scalar_aggregate_or_derived_relation(join.right.as_ref());
+        classify_join_input(join.right.as_ref());
     join.on.is_empty()
         && join.filter.is_none()
         && ((left_scalar_aggregate && right_is_derived_relation)
@@ -456,12 +455,9 @@ fn push_down_all_join(
     let keep_mixed_scalar_subquery_filters =
         is_inner_join && is_scalar_subquery_cross_join(&join);
     for predicate in predicates {
-        let left_only = left_preserved && checker.is_left_only(&predicate);
-        let right_only =
-            !left_only && right_preserved && checker.is_right_only(&predicate);
-        if left_only {
+        if left_preserved && checker.is_left_only(&predicate) {
             left_push.push(predicate);
-        } else if right_only {
+        } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
         } else if is_inner_join
             && !keep_mixed_scalar_subquery_filters
@@ -487,63 +483,43 @@ fn push_down_all_join(
     let mut on_filter_join_conditions = vec![];
     let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type);
 
-    for on in on_filter {
-        if on_left_preserved && checker.is_left_only(&on) {
-            left_push.push(on)
-        } else if on_right_preserved && checker.is_right_only(&on) {
-            right_push.push(on)
-        } else {
-            on_filter_join_conditions.push(on)
+    if !on_filter.is_empty() {
+        for on in on_filter {
+            if on_left_preserved && checker.is_left_only(&on) {
+                left_push.push(on)
+            } else if on_right_preserved && checker.is_right_only(&on) {
+                right_push.push(on)
+            } else {
+                on_filter_join_conditions.push(on)
+            }
         }
     }
 
     // Extract from OR clause, generate new predicates for both side of join if possible.
     // We only track the unpushable predicates above.
-    let extend_or_clauses =
-        |target: &mut Vec<Expr>, filters: &[Expr], schema: &DFSchema, preserved| {
-            if preserved {
-                target.extend(extract_or_clauses_for_join(filters, schema));
-            }
-        };
-    extend_or_clauses(
-        &mut left_push,
-        &keep_predicates,
-        left_schema,
-        left_preserved,
-    );
-    extend_or_clauses(
-        &mut left_push,
-        &join_conditions,
-        left_schema,
-        left_preserved,
-    );
-    extend_or_clauses(
-        &mut right_push,
-        &keep_predicates,
-        right_schema,
-        right_preserved,
-    );
-    extend_or_clauses(
-        &mut right_push,
-        &join_conditions,
-        right_schema,
-        right_preserved,
-    );
+    if left_preserved {
+        left_push.extend(extract_or_clauses_for_join(&keep_predicates, left_schema));
+        left_push.extend(extract_or_clauses_for_join(&join_conditions, left_schema));
+    }
+    if right_preserved {
+        right_push.extend(extract_or_clauses_for_join(&keep_predicates, right_schema));
+        right_push.extend(extract_or_clauses_for_join(&join_conditions, right_schema));
+    }
 
     // For predicates from join filter, we should check with if a join side is preserved
     // in term of join filtering.
-    extend_or_clauses(
-        &mut left_push,
-        &on_filter_join_conditions,
-        left_schema,
-        on_left_preserved,
-    );
-    extend_or_clauses(
-        &mut right_push,
-        &on_filter_join_conditions,
-        right_schema,
-        on_right_preserved,
-    );
+    if on_left_preserved {
+        left_push.extend(extract_or_clauses_for_join(
+            &on_filter_join_conditions,
+            left_schema,
+        ));
+    }
+    if on_right_preserved {
+        right_push.extend(extract_or_clauses_for_join(
+            &on_filter_join_conditions,
+            right_schema,
+        ));
+    }
 
     if let Some(predicate) = conjunction(left_push) {
         join.left = Arc::new(LogicalPlan::Filter(Filter::try_new(predicate, join.left)?));
@@ -778,11 +754,10 @@ fn infer_join_predicates_impl<
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
     for predicate in input_predicates {
-        let column_refs = predicate.column_refs();
         let mut join_cols_to_replace = HashMap::new();
         let mut saw_non_replaceable_ref = false;
 
-        for &col in &column_refs {
+        for &col in &predicate.column_refs() {
             let replacement = join_col_keys.iter().find_map(|(l, r)| {
                 if ENABLE_LEFT_TO_RIGHT && col == *l {
                     Some((col, *r))
