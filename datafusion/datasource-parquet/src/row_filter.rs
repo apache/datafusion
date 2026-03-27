@@ -83,7 +83,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
@@ -608,9 +608,37 @@ pub(crate) fn build_projection_read_plan(
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
 ) -> ParquetReadPlan {
-    // check if any column in the schema is a struct type
-    // if not, we can skip the PushdownChecker traversal entirely and use
-    // root-level projection which is significantly faster
+    // fast path: if every expression is a plain Column reference, skip all
+    // struct analysis and use root-level projection directly
+    let exprs = exprs.into_iter().collect::<Vec<_>>();
+    let all_plain_columns = exprs
+        .iter()
+        .all(|e| e.as_any().downcast_ref::<Column>().is_some());
+
+    if all_plain_columns {
+        let mut root_indices: Vec<usize> = exprs
+            .iter()
+            .map(|e| e.as_any().downcast_ref::<Column>().unwrap().index())
+            .collect();
+        root_indices.sort_unstable();
+        root_indices.dedup();
+
+        let projection_mask =
+            ProjectionMask::roots(schema_descr, root_indices.iter().copied());
+        let projected_schema = Arc::new(
+            file_schema
+                .project(&root_indices)
+                .expect("valid column indices"),
+        );
+
+        return ParquetReadPlan {
+            projection_mask,
+            projected_schema,
+        };
+    }
+
+    // secondary fast path: if the schema has no struct columns, we can skip
+    // PushdownChecker traversal and use root-level projection
     let has_struct_columns = file_schema
         .fields()
         .iter()
@@ -619,17 +647,15 @@ pub(crate) fn build_projection_read_plan(
     if !has_struct_columns {
         let mut root_indices = exprs
             .into_iter()
-            .flat_map(|e| {
-                datafusion_physical_expr::utils::collect_columns(&e)
-                    .into_iter()
-                    .map(|col| col.index())
-            })
+            .flat_map(|e| collect_columns(&e).into_iter().map(|col| col.index()))
             .collect::<Vec<_>>();
+
         root_indices.sort_unstable();
         root_indices.dedup();
 
         let projection_mask =
             ProjectionMask::roots(schema_descr, root_indices.iter().copied());
+
         let projected_schema = Arc::new(
             file_schema
                 .project(&root_indices)
