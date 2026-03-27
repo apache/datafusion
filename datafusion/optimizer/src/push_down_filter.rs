@@ -741,33 +741,41 @@ fn infer_join_predicates_impl<
 ) -> Result<()> {
     for predicate in input_predicates {
         let column_refs = predicate.column_refs();
-        let mut join_cols_to_replace = HashMap::new();
+        let mut join_col_replacements = Vec::new();
+        let mut has_non_replaceable_refs = false;
 
         for &col in &column_refs {
+            let mut replacement = None;
+
             for (l, r) in join_col_keys.iter() {
                 if ENABLE_LEFT_TO_RIGHT && col == *l {
-                    join_cols_to_replace.insert(col, *r);
+                    replacement = Some((col, *r));
                     break;
                 }
                 if ENABLE_RIGHT_TO_LEFT && col == *r {
-                    join_cols_to_replace.insert(col, *l);
+                    replacement = Some((col, *l));
                     break;
                 }
             }
+
+            if let Some(replacement) = replacement {
+                join_col_replacements.push(replacement);
+            } else {
+                has_non_replaceable_refs = true;
+            }
         }
-        if join_cols_to_replace.is_empty() {
+        if join_col_replacements.is_empty() {
             continue;
         }
 
         // For non-inner joins, predicates that reference any non-replaceable
         // columns cannot be inferred on the other side. Skip the null-restriction
         // helper entirely in that common mixed-reference case.
-        if !inferred_predicates.is_inner_join
-            && join_cols_to_replace.len() != column_refs.len()
-        {
+        if !inferred_predicates.is_inner_join && has_non_replaceable_refs {
             continue;
         }
 
+        let join_cols_to_replace = join_col_replacements.into_iter().collect();
         inferred_predicates
             .try_build_predicate(predicate.clone(), &join_cols_to_replace)?;
     }
