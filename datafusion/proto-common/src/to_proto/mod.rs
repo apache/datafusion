@@ -908,7 +908,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
                 protobuf::CdcOptions {
                     min_chunk_size: cdc.min_chunk_size as u64,
                     max_chunk_size: cdc.max_chunk_size as u64,
-                    norm_level: cdc.norm_level as i32,
+                    norm_level: cdc.norm_level,
                 }
             ),
         })

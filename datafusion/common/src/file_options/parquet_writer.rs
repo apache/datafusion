@@ -249,11 +249,22 @@ impl ParquetOptions {
             builder = builder.set_encoding(parse_encoding_string(encoding)?);
         }
         if let Some(cdc) = use_content_defined_chunking {
+            if cdc.min_chunk_size == 0 {
+                return Err(DataFusionError::Configuration(
+                    "CDC min_chunk_size must be greater than 0".to_string(),
+                ));
+            }
+            if cdc.max_chunk_size <= cdc.min_chunk_size {
+                return Err(DataFusionError::Configuration(format!(
+                    "CDC max_chunk_size ({}) must be greater than min_chunk_size ({})",
+                    cdc.max_chunk_size, cdc.min_chunk_size
+                )));
+            }
             builder = builder.set_content_defined_chunking(Some(
                 parquet::file::properties::CdcOptions {
                     min_chunk_size: cdc.min_chunk_size,
                     max_chunk_size: cdc.max_chunk_size,
-                    norm_level: cdc.norm_level as i32,
+                    norm_level: cdc.norm_level,
                 },
             ));
         }
@@ -593,7 +604,7 @@ mod tests {
                     CdcOptions {
                         min_chunk_size: c.min_chunk_size,
                         max_chunk_size: c.max_chunk_size,
-                        norm_level: c.norm_level as i64,
+                        norm_level: c.norm_level,
                     }
                 }),
             },
@@ -849,6 +860,29 @@ mod tests {
         assert_eq!(cdc.min_chunk_size, 64 * 1024);
         assert_eq!(cdc.max_chunk_size, 2 * 1024 * 1024);
         assert_eq!(cdc.norm_level, -1);
+    }
+
+    #[test]
+    fn test_cdc_validation_zero_min_chunk_size() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.use_content_defined_chunking = Some(CdcOptions {
+            min_chunk_size: 0,
+            ..CdcOptions::default()
+        });
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+        assert!(WriterPropertiesBuilder::try_from(&opts).is_err());
+    }
+
+    #[test]
+    fn test_cdc_validation_max_not_greater_than_min() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.use_content_defined_chunking = Some(CdcOptions {
+            min_chunk_size: 512 * 1024,
+            max_chunk_size: 256 * 1024,
+            ..CdcOptions::default()
+        });
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+        assert!(WriterPropertiesBuilder::try_from(&opts).is_err());
     }
 
     #[test]

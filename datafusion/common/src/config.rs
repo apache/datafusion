@@ -701,7 +701,7 @@ config_namespace! {
 
         /// Normalization level. Increasing this improves deduplication ratio
         /// but increases fragmentation. Recommended range is [-3, 3], default is 0.
-        pub norm_level: i64, default = 0
+        pub norm_level: i32, default = 0
     }
 }
 
@@ -862,7 +862,6 @@ config_namespace! {
         /// (writing) Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
-
 
         /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
@@ -1851,7 +1850,7 @@ config_field!(usize);
 config_field!(f64);
 config_field!(u64);
 config_field!(u32);
-config_field!(i64);
+config_field!(i32);
 
 impl ConfigField for u8 {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {

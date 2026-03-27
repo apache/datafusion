@@ -430,7 +430,7 @@ mod parquet {
                     CdcOptionsProto {
                         min_chunk_size: cdc.min_chunk_size as u64,
                         max_chunk_size: cdc.max_chunk_size as u64,
-                        norm_level: cdc.norm_level as i32,
+                        norm_level: cdc.norm_level,
                     }
                 }),
             }),
@@ -535,9 +535,12 @@ mod parquet {
             use_content_defined_chunking: proto.content_defined_chunking.map(|cdc| {
                 let defaults = CdcOptions::default();
                 CdcOptions {
+                    // proto3 uses 0 as the wire default for uint64; a zero chunk size is
+                    // invalid, so treat it as "field not set" and fall back to the default.
                     min_chunk_size: if cdc.min_chunk_size != 0 { cdc.min_chunk_size as usize } else { defaults.min_chunk_size },
                     max_chunk_size: if cdc.max_chunk_size != 0 { cdc.max_chunk_size as usize } else { defaults.max_chunk_size },
-                    norm_level: cdc.norm_level as i64,
+                    // norm_level = 0 is a valid value (and the default), so pass it through directly.
+                    norm_level: cdc.norm_level,
                 }
             }),
         }
