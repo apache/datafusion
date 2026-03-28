@@ -78,14 +78,13 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 pub struct LimitPushdown {}
 
 /// This is a "data class" we use within the [`LimitPushdown`] rule to push
-/// down [`LimitExec`] in the plan. GlobalRequirements are hold as a rule-wide state
+/// down limits in the plan. GlobalRequirements are hold as a rule-wide state
 /// and holds the fetch and skip information. The struct also has a field named
 /// satisfied which means if the "current" plan is valid in terms of limits or not.
 ///
 /// For example: If the plan is satisfied with current fetch info, we decide to not add a LocalLimit
 ///
 /// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
-/// [`LimitExec`]: crate::limit_pushdown::LimitExec
 #[derive(Default, Clone, Debug)]
 pub struct GlobalRequirements {
     fetch: Option<usize>,
@@ -125,51 +124,11 @@ impl PhysicalOptimizerRule for LimitPushdown {
     }
 }
 
-/// This enumeration makes `skip` and `fetch` calculations easier by providing
-/// a single API for both local and global limit operators.
-#[derive(Debug)]
-pub enum LimitExec {
-    Global(GlobalLimitExec),
-    Local(LocalLimitExec),
-}
-
-impl LimitExec {
-    fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        match self {
-            Self::Global(global) => global.input(),
-            Self::Local(local) => local.input(),
-        }
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        match self {
-            Self::Global(global) => global.fetch(),
-            Self::Local(local) => Some(local.fetch()),
-        }
-    }
-
-    fn skip(&self) -> usize {
-        match self {
-            Self::Global(global) => global.skip(),
-            Self::Local(_) => 0,
-        }
-    }
-
-    fn preserve_order(&self) -> bool {
-        match self {
-            Self::Global(global) => global.required_ordering().is_some(),
-            Self::Local(local) => local.required_ordering().is_some(),
-        }
-    }
-}
-
-impl From<LimitExec> for Arc<dyn ExecutionPlan> {
-    fn from(limit_exec: LimitExec) -> Self {
-        match limit_exec {
-            LimitExec::Global(global) => Arc::new(global),
-            LimitExec::Local(local) => Arc::new(local),
-        }
-    }
+struct LimitInfo {
+    input: Arc<dyn ExecutionPlan>,
+    fetch: Option<usize>,
+    skip: usize,
+    preserve_order: bool,
 }
 
 /// This function is the main helper function of the `LimitPushDown` rule.
@@ -184,18 +143,18 @@ pub fn pushdown_limit_helper(
     mut global_state: GlobalRequirements,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
     // Extract limit, if exist, and return child inputs.
-    if let Some(limit_exec) = extract_limit(&pushdown_plan) {
+    if let Some(limit_info) = extract_limit(&pushdown_plan) {
         // If we have fetch/skip info in the global state already, we need to
         // decide which one to continue with:
         let (skip, fetch) = combine_limit(
             global_state.skip,
             global_state.fetch,
-            limit_exec.skip(),
-            limit_exec.fetch(),
+            limit_info.skip,
+            limit_info.fetch,
         );
         global_state.skip = skip;
         global_state.fetch = fetch;
-        global_state.preserve_order = limit_exec.preserve_order();
+        global_state.preserve_order = limit_info.preserve_order;
         global_state.satisfied = false;
 
         // Now the global state has the most recent information, we can remove
@@ -203,7 +162,7 @@ pub fn pushdown_limit_helper(
         // or not.
         return Ok((
             Transformed {
-                data: Arc::clone(limit_exec.input()),
+                data: limit_info.input,
                 transformed: true,
                 tnr: TreeNodeRecursion::Stop,
             },
@@ -341,32 +300,45 @@ pub(crate) fn pushdown_limits(
 
     // Apply pushdown limits in children
     let children = new_node.data.children();
+    let mut changed = false;
     let new_children = children
         .into_iter()
-        .map(|child| {
-            pushdown_limits(Arc::<dyn ExecutionPlan>::clone(child), global_state.clone())
+        .map(|child: &Arc<dyn ExecutionPlan>| {
+            let new_child = pushdown_limits(
+                Arc::<dyn ExecutionPlan>::clone(child),
+                global_state.clone(),
+            )?;
+            // Tracking if any of the children changed
+            changed |= !Arc::ptr_eq(child, &new_child);
+            Ok(new_child)
         })
         .collect::<Result<_>>()?;
-    new_node.data.with_new_children(new_children)
+
+    if changed {
+        new_node.data.with_new_children(new_children)
+    } else {
+        Ok(new_node.data)
+    }
 }
 
 /// Transforms the [`ExecutionPlan`] into a [`LimitExec`] if it is a
 /// [`GlobalLimitExec`] or a [`LocalLimitExec`].
-fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
+fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
-        Some(LimitExec::Global(GlobalLimitExec::new(
-            Arc::clone(global_limit.input()),
-            global_limit.skip(),
-            global_limit.fetch(),
-        )))
+        Some(LimitInfo {
+            input: Arc::clone(global_limit.input()),
+            fetch: global_limit.fetch(),
+            skip: global_limit.skip(),
+            preserve_order: global_limit.required_ordering().is_some(),
+        })
     } else {
         plan.as_any()
             .downcast_ref::<LocalLimitExec>()
-            .map(|local_limit| {
-                LimitExec::Local(LocalLimitExec::new(
-                    Arc::clone(local_limit.input()),
-                    local_limit.fetch(),
-                ))
+            .map(|local_limit| LimitInfo {
+                input: Arc::clone(local_limit.input()),
+                fetch: Some(local_limit.fetch()),
+                skip: 0,
+                preserve_order: local_limit.required_ordering().is_some(),
             })
     }
 }
