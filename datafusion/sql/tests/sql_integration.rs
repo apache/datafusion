@@ -4725,6 +4725,26 @@ fn plan_create_index() {
     }
 }
 
+#[test]
+fn test_table_function_with_unsupported_arg_propagates_error() {
+    let sql = "SELECT * FROM my_func(('a', 'b', 'c'))";
+    let dialect = &GenericDialect {};
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new(&context);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect);
+    let mut ast = result.unwrap();
+    let err = planner
+        .statement_to_plan(ast.pop_front().unwrap())
+        .expect_err("query should have failed");
+    let msg = err.strip_backtrace();
+    assert!(
+        !msg.contains("Table Functions are not supported"),
+        "tuple argument error should be propagated before reaching get_table_function_source, got: {msg}"
+    );
+    assert_contains!(msg, "Struct not supported");
+}
+
 fn assert_field_not_found(mut err: DataFusionError, name: &str) {
     let err = loop {
         match err {
