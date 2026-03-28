@@ -18,6 +18,7 @@
 //! CombinePartialFinalAggregate optimizer rule checks the adjacent Partial and Final AggregateExecs
 //! and try to combine them if necessary
 
+use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
@@ -54,7 +55,9 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(|plan| {
             // Check if the plan is AggregateExec
-            let Some(agg_exec) = plan.as_any().downcast_ref::<AggregateExec>() else {
+            let Some(agg_exec) =
+                (plan.as_ref() as &dyn Any).downcast_ref::<AggregateExec>()
+            else {
                 return Ok(Transformed::no(plan));
             };
 
@@ -67,7 +70,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
 
             // Check if the input is AggregateExec
             let Some(input_agg_exec) =
-                agg_exec.input().as_any().downcast_ref::<AggregateExec>()
+                (agg_exec.input().as_ref() as &dyn Any).downcast_ref::<AggregateExec>()
             else {
                 return Ok(Transformed::no(plan));
             };

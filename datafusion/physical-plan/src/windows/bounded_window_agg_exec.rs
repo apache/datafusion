@@ -20,7 +20,6 @@
 //! the input data seen so far), which makes it appropriate when processing
 //! infinite inputs.
 
-use std::any::Any;
 use std::cmp::{Ordering, min};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -313,10 +312,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -1266,6 +1261,7 @@ pub(crate) fn get_last_row_batch(batch: &RecordBatch) -> Result<RecordBatch> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
@@ -1864,8 +1860,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
         let plan = bounded_window_exec_pb_latent_range(input, 1, "hash", "sn")?;
-        let plan = plan
-            .as_any()
+        let plan = (plan.as_ref() as &dyn Any)
             .downcast_ref::<BoundedWindowAggExec>()
             .expect("expected BoundedWindowAggExec");
 

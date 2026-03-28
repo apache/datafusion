@@ -18,6 +18,7 @@
 use super::*;
 use insta::assert_snapshot;
 use rstest::rstest;
+use std::any::Any;
 
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -139,14 +140,14 @@ async fn explain_analyze_baseline_metrics() {
         use datafusion::physical_plan;
         use datafusion::physical_plan::sorts;
 
-        plan.as_any().downcast_ref::<sorts::sort::SortExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::aggregates::AggregateExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::limit::LocalLimitExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::coalesce_partitions::CoalescePartitionsExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::union::UnionExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::windows::WindowAggExec>().is_some()
+        (plan as &dyn Any).downcast_ref::<sorts::sort::SortExec>().is_some()
+            || (plan as &dyn Any).downcast_ref::<physical_plan::aggregates::AggregateExec>().is_some()
+            || (plan as &dyn Any).downcast_ref::<physical_plan::filter::FilterExec>().is_some()
+            || (plan as &dyn Any).downcast_ref::<physical_plan::limit::LocalLimitExec>().is_some()
+            || (plan as &dyn Any).downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
+            || (plan as &dyn Any).downcast_ref::<physical_plan::coalesce_partitions::CoalescePartitionsExec>().is_some()
+            || (plan as &dyn Any).downcast_ref::<physical_plan::union::UnionExec>().is_some()
+            || (plan as &dyn Any).downcast_ref::<physical_plan::windows::WindowAggExec>().is_some()
     }
 
     // Validate that the recorded elapsed compute time was more than

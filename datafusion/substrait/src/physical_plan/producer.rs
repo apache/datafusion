@@ -51,7 +51,8 @@ pub fn to_substrait_rel(
         HashMap<String, u32>,
     ),
 ) -> Result<Box<Rel>> {
-    if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+    if let Some(data_source_exec) =
+        (plan as &dyn std::any::Any).downcast_ref::<DataSourceExec>()
         && let Some((file_config, _)) =
             data_source_exec.downcast_to_file_source::<ParquetSource>()
     {

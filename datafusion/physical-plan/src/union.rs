@@ -23,8 +23,8 @@
 
 use std::borrow::Borrow;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{any::Any, sync::Arc};
 
 use super::{
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
@@ -225,10 +225,6 @@ impl ExecutionPlan for UnionExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -593,10 +589,6 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -906,6 +898,8 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use super::*;
     use crate::collect;
     use crate::test::{self, TestMemoryExec};
@@ -1410,8 +1404,7 @@ mod tests {
         let union_plan = UnionExec::try_new(vec![memory_exec1, memory_exec2])?;
 
         // Downcast to verify it's a UnionExec
-        let union = union_plan
-            .as_any()
+        let union = (&union_plan as &dyn Any)
             .downcast_ref::<UnionExec>()
             .expect("Expected UnionExec");
 
@@ -1451,8 +1444,7 @@ mod tests {
             Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
 
         let union = UnionExec::try_new(vec![input1, input2])?;
-        let union = union
-            .as_any()
+        let union = (&union as &dyn Any)
             .downcast_ref::<UnionExec>()
             .expect("expected UnionExec for multiple inputs");
 

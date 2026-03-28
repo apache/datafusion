@@ -103,10 +103,6 @@ impl ExecutionPlan for ParentExec {
         "ParentExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         unreachable!()
     }
@@ -161,7 +157,10 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        if node.as_any().downcast_ref::<ParentExec>().is_some() {
+        if (node.as_ref() as &dyn Any)
+            .downcast_ref::<ParentExec>()
+            .is_some()
+        {
             buf.extend_from_slice("ParentExec".as_bytes());
             Ok(())
         } else {
@@ -186,10 +185,6 @@ impl DisplayAs for ChildExec {
 impl ExecutionPlan for ChildExec {
     fn name(&self) -> &str {
         "ChildExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
@@ -244,7 +239,10 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        if node.as_any().downcast_ref::<ChildExec>().is_some() {
+        if (node.as_ref() as &dyn Any)
+            .downcast_ref::<ChildExec>()
+            .is_some()
+        {
             buf.extend_from_slice("ChildExec".as_bytes());
             Ok(())
         } else {

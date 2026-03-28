@@ -18,6 +18,7 @@
 //! An optimizer rule that checks ordering requirements of aggregate expressions
 //! and modifies the expressions to work more efficiently if possible.
 
+use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
@@ -78,7 +79,9 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
-            if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+            if let Some(aggr_exec) =
+                (plan.as_ref() as &dyn Any).downcast_ref::<AggregateExec>()
+            {
                 // Final stage implementations do not rely on ordering -- those
                 // ordering fields may be pruned out by first stage aggregates.
                 // Hence, necessary information for proper merge is added during

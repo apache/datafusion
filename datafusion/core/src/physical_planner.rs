@@ -3624,8 +3624,7 @@ mod tests {
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        let final_hash_agg = execution_plan
-            .as_any()
+        let final_hash_agg = (execution_plan.as_ref() as &dyn Any)
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
@@ -3652,8 +3651,7 @@ mod tests {
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        let final_hash_agg = execution_plan
-            .as_any()
+        let final_hash_agg = (execution_plan.as_ref() as &dyn Any)
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
@@ -3788,7 +3786,7 @@ mod tests {
             .unwrap();
 
         let plan = plan(&logical_plan).await.unwrap();
-        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+        if let Some(plan) = (plan.as_ref() as &dyn Any).downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert!(stringified_plans.len() >= 4);
             assert!(
@@ -3856,7 +3854,7 @@ mod tests {
             .handle_explain(&explain, &ctx.state())
             .await
             .unwrap();
-        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+        if let Some(plan) = (plan.as_ref() as &dyn Any).downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert_eq!(stringified_plans.len(), 1);
             assert_eq!(stringified_plans[0].plan.as_str(), "Test Err");
@@ -3996,10 +3994,6 @@ mod tests {
         }
 
         /// Return a reference to Any that can be used for downcasting
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
@@ -4162,9 +4156,6 @@ digraph {
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::empty())
         }
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!()
-        }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             self.0.iter().collect::<Vec<_>>()
         }
@@ -4215,9 +4206,6 @@ digraph {
             self: Arc<Self>,
             _children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
-        }
-        fn as_any(&self) -> &dyn Any {
             unimplemented!()
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -4342,9 +4330,6 @@ digraph {
             self: Arc<Self>,
             _children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
-        }
-        fn as_any(&self) -> &dyn Any {
             unimplemented!()
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -4758,6 +4743,6 @@ digraph {
             .unwrap();
 
         assert_eq!(plan.schema(), schema);
-        assert!(plan.as_any().is::<EmptyExec>());
+        assert!((plan.as_ref() as &dyn Any).is::<EmptyExec>());
     }
 }

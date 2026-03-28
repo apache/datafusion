@@ -23,7 +23,7 @@ use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{any::Any, vec};
+use std::vec;
 
 use super::common::SharedMemoryReservation;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -902,10 +902,6 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }

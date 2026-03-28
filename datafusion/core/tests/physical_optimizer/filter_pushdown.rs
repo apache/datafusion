@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::sync::{Arc, LazyLock};
 
 use arrow::{
@@ -4323,8 +4324,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
             .unwrap();
 
         // Get the HashJoinExec to check the dynamic filter
-        let hash_join = plan
-            .as_any()
+        let hash_join = (plan.as_ref() as &dyn Any)
             .downcast_ref::<HashJoinExec>()
             .expect("Plan should be HashJoinExec");
 

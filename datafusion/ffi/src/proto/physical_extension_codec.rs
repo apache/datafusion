@@ -466,7 +466,7 @@ pub(crate) mod tests {
         ) -> Result<()> {
             buf.push(Self::MAGIC_NUMBER);
 
-            let Some(_) = node.as_any().downcast_ref::<EmptyExec>() else {
+            let Some(_) = (node.as_ref() as &dyn Any).downcast_ref::<EmptyExec>() else {
                 return exec_err!("TestExtensionCodec only expects EmptyExec");
             };
 
@@ -588,7 +588,7 @@ pub(crate) mod tests {
         let returned_exec =
             foreign_codec.try_decode(&bytes, &input_execs, ctx.task_ctx().as_ref())?;
 
-        assert!(returned_exec.as_any().is::<EmptyExec>());
+        assert!((returned_exec.as_ref() as &dyn Any).is::<EmptyExec>());
 
         Ok(())
     }

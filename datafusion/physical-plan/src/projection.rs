@@ -283,10 +283,6 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -732,20 +728,21 @@ pub fn try_pushdown_through_join(
 pub fn remove_unnecessary_projections(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let maybe_modified =
-        if let Some(projection) = plan.as_any().downcast_ref::<ProjectionExec>() {
-            // If the projection does not cause any change on the input, we can
-            // safely remove it:
-            if is_projection_removable(projection) {
-                return Ok(Transformed::yes(Arc::clone(projection.input())));
-            }
-            // If it does, check if we can push it under its child(ren):
-            projection
-                .input()
-                .try_swapping_with_projection(projection)?
-        } else {
-            return Ok(Transformed::no(plan));
-        };
+    let maybe_modified = if let Some(projection) =
+        (plan.as_ref() as &dyn Any).downcast_ref::<ProjectionExec>()
+    {
+        // If the projection does not cause any change on the input, we can
+        // safely remove it:
+        if is_projection_removable(projection) {
+            return Ok(Transformed::yes(Arc::clone(projection.input())));
+        }
+        // If it does, check if we can push it under its child(ren):
+        projection
+            .input()
+            .try_swapping_with_projection(projection)?
+    } else {
+        return Ok(Transformed::no(plan));
+    };
     Ok(maybe_modified.map_or_else(|| Transformed::no(plan), Transformed::yes))
 }
 

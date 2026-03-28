@@ -22,6 +22,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::buffer::BufferExec;
 use datafusion_physical_plan::joins::HashJoinExec;
+use std::any::Any;
 use std::sync::Arc;
 
 /// Looks for all the [HashJoinExec]s in the plan and places a [BufferExec] node with the
@@ -64,14 +65,18 @@ impl PhysicalOptimizerRule for HashJoinBuffering {
         }
 
         plan.transform_down(|plan| {
-            let Some(node) = plan.as_any().downcast_ref::<HashJoinExec>() else {
+            let Some(node) = (plan.as_ref() as &dyn Any).downcast_ref::<HashJoinExec>()
+            else {
                 return Ok(Transformed::no(plan));
             };
             let plan = Arc::clone(&plan);
             Ok(Transformed::yes(
                 if HashJoinExec::probe_side() == JoinSide::Left {
                     // Do not stack BufferExec nodes together.
-                    if node.left.as_any().downcast_ref::<BufferExec>().is_some() {
+                    if (node.left.as_ref() as &dyn Any)
+                        .downcast_ref::<BufferExec>()
+                        .is_some()
+                    {
                         return Ok(Transformed::no(plan));
                     }
                     plan.with_new_children(vec![
@@ -80,7 +85,10 @@ impl PhysicalOptimizerRule for HashJoinBuffering {
                     ])?
                 } else {
                     // Do not stack BufferExec nodes together.
-                    if node.right.as_any().downcast_ref::<BufferExec>().is_some() {
+                    if (node.right.as_ref() as &dyn Any)
+                        .downcast_ref::<BufferExec>()
+                        .is_some()
+                    {
                         return Ok(Transformed::no(plan));
                     }
                     plan.with_new_children(vec![

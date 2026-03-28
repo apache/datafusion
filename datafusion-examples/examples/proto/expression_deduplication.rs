@@ -32,6 +32,7 @@
 //! This demonstrates the decorator pattern enabled by the `PhysicalExtensionCodec` trait,
 //! where all expression serialization/deserialization routes through the codec methods.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
@@ -124,7 +125,8 @@ pub async fn expression_deduplication() -> Result<()> {
 
     // Step 5: check that we deduplicated expressions
     println!("Step 5: Checking for deduplicated expressions...");
-    let Some(filter_exec) = deserialized_plan.as_any().downcast_ref::<FilterExec>()
+    let Some(filter_exec) =
+        (deserialized_plan.as_ref() as &dyn Any).downcast_ref::<FilterExec>()
     else {
         panic!("Deserialized plan is not a FilterExec");
     };

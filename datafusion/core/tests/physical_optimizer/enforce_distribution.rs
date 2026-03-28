@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -174,10 +175,6 @@ impl ExecutionPlan for SortRequiredExec {
         "SortRequiredExec"
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -273,10 +270,6 @@ impl DisplayAs for SinglePartitionMaintainsOrderExec {
 impl ExecutionPlan for SinglePartitionMaintainsOrderExec {
     fn name(&self) -> &'static str {
         "SinglePartitionMaintainsOrderExec"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -3899,9 +3892,7 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     let result = replace_order_preserving_variants(dist_context)?;
 
     // Verify the plan was transformed to CoalescePartitionsExec
-    result
-        .plan
-        .as_any()
+    (result.plan.as_ref() as &dyn Any)
         .downcast_ref::<CoalescePartitionsExec>()
         .expect("Expected CoalescePartitionsExec");
 

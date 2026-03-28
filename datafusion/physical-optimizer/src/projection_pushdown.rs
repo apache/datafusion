@@ -23,6 +23,7 @@
 use crate::PhysicalOptimizerRule;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::alias::AliasGenerator;
+use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -65,7 +66,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
         let alias_generator = AliasGenerator::new();
         let plan = plan
             .transform_up(|plan| {
-                match plan.as_any().downcast_ref::<NestedLoopJoinExec>() {
+                match (plan.as_ref() as &dyn Any).downcast_ref::<NestedLoopJoinExec>() {
                     None => Ok(Transformed::no(plan)),
                     Some(hash_join) => try_push_down_join_filter(
                         Arc::clone(&plan),
@@ -244,7 +245,7 @@ fn minimize_join_filter(
 ) -> JoinFilter {
     let mut used_columns = HashSet::new();
     expr.apply(|expr| {
-        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(col) = (expr.as_ref() as &dyn Any).downcast_ref::<Column>() {
             used_columns.insert(col.index());
         }
         Ok(TreeNodeRecursion::Continue)
@@ -267,19 +268,21 @@ fn minimize_join_filter(
         .collect::<Fields>();
 
     let final_expr = expr
-        .transform_up(|expr| match expr.as_any().downcast_ref::<Column>() {
-            None => Ok(Transformed::no(expr)),
-            Some(column) => {
-                let new_idx = used_columns
-                    .iter()
-                    .filter(|idx| **idx < column.index())
-                    .count();
-                let new_column = Column::new(column.name(), new_idx);
-                Ok(Transformed::yes(
-                    Arc::new(new_column) as Arc<dyn PhysicalExpr>
-                ))
-            }
-        })
+        .transform_up(
+            |expr| match (expr.as_ref() as &dyn Any).downcast_ref::<Column>() {
+                None => Ok(Transformed::no(expr)),
+                Some(column) => {
+                    let new_idx = used_columns
+                        .iter()
+                        .filter(|idx| **idx < column.index())
+                        .count();
+                    let new_column = Column::new(column.name(), new_idx);
+                    Ok(Transformed::yes(
+                        Arc::new(new_column) as Arc<dyn PhysicalExpr>
+                    ))
+                }
+            },
+        )
         .expect("Closure cannot fail");
 
     JoinFilter::new(
@@ -380,7 +383,7 @@ impl<'a> JoinFilterRewriter<'a> {
         // executed against the filter schema.
         let new_idx = self.join_side_projections.len();
         let rewritten_expr = expr.transform_up(|expr| {
-            Ok(match expr.as_any().downcast_ref::<Column>() {
+            Ok(match (expr.as_ref() as &dyn Any).downcast_ref::<Column>() {
                 None => Transformed::no(expr),
                 Some(column) => {
                     let intermediate_column =
@@ -414,17 +417,19 @@ impl<'a> JoinFilterRewriter<'a> {
         join_side: JoinSide,
     ) -> Result<bool> {
         let mut result = false;
-        expr.apply(|expr| match expr.as_any().downcast_ref::<Column>() {
-            None => Ok(TreeNodeRecursion::Continue),
-            Some(c) => {
-                let column_index = &self.intermediate_column_indices[c.index()];
-                if column_index.side == join_side {
-                    result = true;
-                    return Ok(TreeNodeRecursion::Stop);
+        expr.apply(
+            |expr| match (expr.as_ref() as &dyn Any).downcast_ref::<Column>() {
+                None => Ok(TreeNodeRecursion::Continue),
+                Some(c) => {
+                    let column_index = &self.intermediate_column_indices[c.index()];
+                    if column_index.side == join_side {
+                        result = true;
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                    Ok(TreeNodeRecursion::Continue)
                 }
-                Ok(TreeNodeRecursion::Continue)
-            }
-        })?;
+            },
+        )?;
 
         Ok(result)
     }

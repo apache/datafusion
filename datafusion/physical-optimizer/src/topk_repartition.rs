@@ -48,6 +48,7 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use std::any::Any;
 use std::sync::Arc;
 // CoalesceBatchesExec is deprecated on main (replaced by arrow-rs BatchCoalescer),
 // but older DataFusion versions may still insert it between SortExec and RepartitionExec.
@@ -82,7 +83,8 @@ impl PhysicalOptimizerRule for TopKRepartition {
         }
         plan.transform_down(|node| {
             // Match SortExec with fetch (TopK)
-            let Some(sort_exec) = node.as_any().downcast_ref::<SortExec>() else {
+            let Some(sort_exec) = (node.as_ref() as &dyn Any).downcast_ref::<SortExec>()
+            else {
                 return Ok(Transformed::no(node));
             };
             let Some(fetch) = sort_exec.fetch() else {
@@ -91,7 +93,7 @@ impl PhysicalOptimizerRule for TopKRepartition {
 
             // The child might be a CoalesceBatchesExec; look through it
             let sort_input = sort_exec.input();
-            let sort_any = sort_input.as_any();
+            let sort_any = sort_input.as_ref() as &dyn Any;
             let (repart_parent, repart_exec) = if let Some(rp) =
                 sort_any.downcast_ref::<RepartitionExec>()
             {
@@ -101,7 +103,9 @@ impl PhysicalOptimizerRule for TopKRepartition {
                 // There's a CoalesceBatchesExec between TopK & RepartitionExec
                 // in this case we will need to reconstruct both nodes
                 let cb_input = cb_exec.input();
-                let Some(rp) = cb_input.as_any().downcast_ref::<RepartitionExec>() else {
+                let Some(rp) =
+                    (cb_input.as_ref() as &dyn Any).downcast_ref::<RepartitionExec>()
+                else {
                     return Ok(Transformed::no(node));
                 };
                 (Some(Arc::clone(sort_input)), rp)
@@ -133,7 +137,10 @@ impl PhysicalOptimizerRule for TopKRepartition {
             // Don't push if the input to the repartition is already bounded
             // (e.g., another TopK), as it would be redundant.
             let repart_input = repart_exec.input();
-            if repart_input.as_any().downcast_ref::<SortExec>().is_some() {
+            if (repart_input.as_ref() as &dyn Any)
+                .downcast_ref::<SortExec>()
+                .is_some()
+            {
                 return Ok(Transformed::no(node));
             }
 

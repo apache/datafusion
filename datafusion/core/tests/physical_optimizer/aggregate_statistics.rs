@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::TestAggregate;
@@ -83,7 +84,7 @@ async fn assert_count_optim_success(
     let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &config)?;
 
     // A ProjectionExec is a sign that the count optimization was applied
-    assert!(optimized.as_any().is::<ProjectionExec>());
+    assert!((optimized.as_ref() as &dyn Any).is::<ProjectionExec>());
 
     // run both the optimized and nonoptimized plan
     let optimized_result =
@@ -280,7 +281,7 @@ async fn test_count_inexact_stat() -> Result<()> {
     let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
     // check that the original ExecutionPlan was not replaced
-    assert!(optimized.as_any().is::<AggregateExec>());
+    assert!((optimized.as_ref() as &dyn Any).is::<AggregateExec>());
 
     Ok(())
 }
@@ -324,7 +325,7 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
     let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
     // check that the original ExecutionPlan was not replaced
-    assert!(optimized.as_any().is::<AggregateExec>());
+    assert!((optimized.as_ref() as &dyn Any).is::<AggregateExec>());
 
     Ok(())
 }
@@ -526,7 +527,7 @@ async fn test_count_distinct_optimization() -> Result<()> {
 
         if case.expect_optimized {
             assert!(
-                optimized.as_any().is::<ProjectionExec>(),
+                (optimized.as_ref() as &dyn Any).is::<ProjectionExec>(),
                 "'{}': expected ProjectionExec",
                 case.name
             );
@@ -544,7 +545,7 @@ async fn test_count_distinct_optimization() -> Result<()> {
             }
         } else {
             assert!(
-                optimized.as_any().is::<AggregateExec>(),
+                (optimized.as_ref() as &dyn Any).is::<AggregateExec>(),
                 "'{}': expected AggregateExec (not optimized)",
                 case.name
             );

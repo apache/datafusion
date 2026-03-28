@@ -32,6 +32,7 @@
 //! of the `PhysicalExtensionCodec` interception pattern. Both plan and expression
 //! serialization route through the codec, enabling interception at every node in the tree.
 
+use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -317,7 +318,7 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalPlanNode> {
         // Check if this is a DataSourceExec with adapter
-        if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+        if let Some(exec) = (plan.as_ref() as &dyn Any).downcast_ref::<DataSourceExec>()
             && let Some(config) =
                 exec.data_source().as_any().downcast_ref::<FileScanConfig>()
             && let Some(adapter_factory) = &config.expr_adapter_factory
@@ -481,7 +482,7 @@ fn inject_adapter_into_plan(
     plan: Arc<dyn ExecutionPlan>,
     adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+    if let Some(exec) = (plan.as_ref() as &dyn Any).downcast_ref::<DataSourceExec>()
         && let Some(config) = exec.data_source().as_any().downcast_ref::<FileScanConfig>()
     {
         let new_config = FileScanConfigBuilder::from(config.clone())
@@ -497,7 +498,7 @@ fn inject_adapter_into_plan(
 fn verify_adapter_in_plan(plan: &Arc<dyn ExecutionPlan>, label: &str) -> bool {
     // Walk the plan tree to find DataSourceExec with adapter
     fn check_plan(plan: &dyn ExecutionPlan) -> bool {
-        if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+        if let Some(exec) = (plan as &dyn Any).downcast_ref::<DataSourceExec>()
             && let Some(config) =
                 exec.data_source().as_any().downcast_ref::<FileScanConfig>()
             && config.expr_adapter_factory.is_some()

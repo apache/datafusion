@@ -56,6 +56,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use std::any::Any;
 use std::sync::Arc;
 
 /// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources.
@@ -84,7 +85,8 @@ impl PhysicalOptimizerRule for PushdownSort {
         // Use transform_down to find and optimize all SortExec nodes (including nested ones)
         plan.transform_down(|plan: Arc<dyn ExecutionPlan>| {
             // Check if this is a SortExec
-            let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() else {
+            let Some(sort_exec) = (plan.as_ref() as &dyn Any).downcast_ref::<SortExec>()
+            else {
                 return Ok(Transformed::no(plan));
             };
 

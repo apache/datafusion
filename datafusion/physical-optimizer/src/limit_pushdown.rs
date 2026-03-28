@@ -60,6 +60,7 @@
 //!
 //! Reference implementation in Hash Join: <https://github.com/apache/datafusion/pull/20228>
 
+use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -325,7 +326,9 @@ pub(crate) fn pushdown_limits(
 /// Extracts limit information from the [`ExecutionPlan`] if it is a
 /// [`GlobalLimitExec`] or a [`LocalLimitExec`].
 fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
-    if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
+    if let Some(global_limit) =
+        (plan.as_ref() as &dyn Any).downcast_ref::<GlobalLimitExec>()
+    {
         Some(LimitInfo {
             input: Arc::clone(global_limit.input()),
             fetch: global_limit.fetch(),
@@ -333,7 +336,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
             preserve_order: global_limit.required_ordering().is_some(),
         })
     } else {
-        plan.as_any()
+        (plan.as_ref() as &dyn Any)
             .downcast_ref::<LocalLimitExec>()
             .map(|local_limit| LimitInfo {
                 input: Arc::clone(local_limit.input()),
@@ -346,7 +349,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
 
 /// Checks if the given plan combines input partitions.
 fn combines_input_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let plan = plan.as_any();
+    let plan = plan.as_ref() as &dyn Any;
     plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
 }
 
