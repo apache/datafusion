@@ -248,16 +248,17 @@ fn output_rows_skew_score(output_rows: &[u128]) -> Option<f64> {
         return Some(0.0);
     }
 
-    let output_rows = output_rows
-        .iter()
-        .map(|rows| *rows as f64)
-        .collect::<Vec<_>>();
-    let total_rows = output_rows.iter().sum::<f64>();
+    let (total_rows, sum_of_squares) =
+        output_rows
+            .iter()
+            .fold((0.0, 0.0), |(total_rows, sum_of_squares), rows| {
+                let rows = *rows as f64;
+                (total_rows + rows, sum_of_squares + rows.powi(2))
+            });
     if total_rows == 0.0 {
         return None;
     }
 
-    let sum_of_squares = output_rows.iter().map(|rows| rows.powi(2)).sum::<f64>();
     if sum_of_squares == 0.0 {
         return None;
     }
