@@ -203,6 +203,24 @@ impl Precision<usize> {
 }
 
 impl Precision<ScalarValue> {
+    fn sum_data_type(data_type: &DataType) -> DataType {
+        match data_type {
+            DataType::Int8 | DataType::Int16 | DataType::Int32 => DataType::Int64,
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 => DataType::UInt64,
+            _ => data_type.clone(),
+        }
+    }
+
+    fn cast_scalar_to_sum_type(value: &ScalarValue) -> Result<ScalarValue> {
+        let source_type = value.data_type();
+        let target_type = Self::sum_data_type(&source_type);
+        if source_type == target_type {
+            Ok(value.clone())
+        } else {
+            value.cast_to(&target_type)
+        }
+    }
+
     /// Calculates the sum of two (possibly inexact) [`ScalarValue`] values,
     /// conservatively propagating exactness information. If one of the input
     /// values is [`Precision::Absent`], the result is `Absent` too.
@@ -226,6 +244,31 @@ impl Precision<ScalarValue> {
                 .unwrap_or(Precision::Absent),
             (_, _) => Precision::Absent,
         }
+    }
+
+    /// Casts integer values to the wider SQL `SUM` return type.
+    ///
+    /// This narrows overflow risk when `sum_value` statistics are merged:
+    /// `Int8/Int16/Int32 -> Int64` and `UInt8/UInt16/UInt32 -> UInt64`.
+    pub fn cast_to_sum_type(&self) -> Precision<ScalarValue> {
+        match (self.is_exact(), self.get_value()) {
+            (Some(true), Some(value)) => Self::cast_scalar_to_sum_type(value)
+                .map(Precision::Exact)
+                .unwrap_or(Precision::Absent),
+            (Some(false), Some(value)) => Self::cast_scalar_to_sum_type(value)
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
+            (_, _) => Precision::Absent,
+        }
+    }
+
+    /// SUM-style addition with integer widening to match SQL `SUM` return
+    /// types for smaller integral inputs.
+    pub fn add_for_sum(&self, other: &Precision<ScalarValue>) -> Precision<ScalarValue> {
+        let mut lhs = self.cast_to_sum_type();
+        let rhs = other.cast_to_sum_type();
+        precision_add(&mut lhs, &rhs);
+        lhs
     }
 
     /// Calculates the difference of two (possibly inexact) [`ScalarValue`] values,
@@ -620,7 +663,7 @@ impl Statistics {
     /// assert_eq!(merged.column_statistics[0].max_value,
     ///     Precision::Exact(ScalarValue::from(200)));
     /// assert_eq!(merged.column_statistics[0].sum_value,
-    ///     Precision::Exact(ScalarValue::from(1500)));
+    ///     Precision::Exact(ScalarValue::Int64(Some(1500))));
     /// ```
     pub fn try_merge_iter<'a, I>(items: I, schema: &Schema) -> Result<Statistics>
     where
@@ -664,26 +707,38 @@ impl Statistics {
                 null_count: cs.null_count,
                 max_value: cs.max_value.clone(),
                 min_value: cs.min_value.clone(),
-                sum_value: cs.sum_value.clone(),
-                distinct_count: Precision::Absent,
+                sum_value: cs.sum_value.cast_to_sum_type(),
+                distinct_count: cs.distinct_count,
                 byte_size: cs.byte_size,
             })
             .collect();
 
         // Accumulate all statistics in a single pass.
-        // Uses precision_add for sum (avoids the expensive
-        // ScalarValue::add round-trip through Arrow arrays), and
-        // Precision::min/max which use cheap PartialOrd comparison.
+        // Uses precision_add for sum (reuses the lhs accumulator for
+        // direct numeric addition), while preserving the NDV update
+        // ordering required by estimate_ndv_with_overlap.
         for stat in items.iter().skip(1) {
             for (col_idx, col_stats) in column_statistics.iter_mut().enumerate() {
                 let item_cs = &stat.column_statistics[col_idx];
 
                 col_stats.null_count = col_stats.null_count.add(&item_cs.null_count);
-                col_stats.byte_size = col_stats.byte_size.add(&item_cs.byte_size);
-                col_stats.sum_value =
-                    precision_add(&col_stats.sum_value, &item_cs.sum_value);
+
+                // NDV must be computed before min/max update (needs pre-merge ranges)
+                col_stats.distinct_count = match (
+                    col_stats.distinct_count.get_value(),
+                    item_cs.distinct_count.get_value(),
+                ) {
+                    (Some(&l), Some(&r)) => Precision::Inexact(
+                        estimate_ndv_with_overlap(col_stats, item_cs, l, r)
+                            .unwrap_or_else(|| usize::max(l, r)),
+                    ),
+                    _ => Precision::Absent,
+                };
                 col_stats.min_value = col_stats.min_value.min(&item_cs.min_value);
                 col_stats.max_value = col_stats.max_value.max(&item_cs.max_value);
+                let item_sum_value = item_cs.sum_value.cast_to_sum_type();
+                precision_add(&mut col_stats.sum_value, &item_sum_value);
+                col_stats.byte_size = col_stats.byte_size.add(&item_cs.byte_size);
             }
         }
 
@@ -693,6 +748,96 @@ impl Statistics {
             column_statistics,
         })
     }
+}
+
+/// Estimates the combined number of distinct values (NDV) when merging two
+/// column statistics, using range overlap to avoid double-counting shared values.
+///
+/// Assumes values are distributed uniformly within each input's
+/// `[min, max]` range (the standard assumption when only summary
+/// statistics are available). Under uniformity the fraction of an input's
+/// distinct values that land in a sub-range equals the fraction of
+/// the range that sub-range covers.
+///
+/// The combined value space is split into three disjoint regions:
+///
+/// ```text
+///   |-- only A --|-- overlap --|-- only B --|
+/// ```
+///
+/// * **Only in A/B** - values outside the other input's range
+///   contribute `(1 - overlap_a) * NDV_a` and `(1 - overlap_b) * NDV_b`.
+/// * **Overlap** - both inputs may produce values here. We take
+///   `max(overlap_a * NDV_a, overlap_b * NDV_b)` rather than the
+///   sum because values in the same sub-range are likely shared
+///   (the smaller set is assumed to be a subset of the larger).
+///
+/// The formula ranges between `[max(NDV_a, NDV_b), NDV_a + NDV_b]`,
+/// from full overlap to no overlap.
+///
+/// ```text
+/// NDV = max(overlap_a * NDV_a, overlap_b * NDV_b)   [intersection]
+///     + (1 - overlap_a) * NDV_a                      [only in A]
+///     + (1 - overlap_b) * NDV_b                      [only in B]
+/// ```
+///
+/// Returns `None` when min/max are absent or distance is unsupported
+/// (e.g. strings), in which case the caller should fall back to a simpler
+/// estimate.
+pub fn estimate_ndv_with_overlap(
+    left: &ColumnStatistics,
+    right: &ColumnStatistics,
+    ndv_left: usize,
+    ndv_right: usize,
+) -> Option<usize> {
+    let left_min = left.min_value.get_value()?;
+    let left_max = left.max_value.get_value()?;
+    let right_min = right.min_value.get_value()?;
+    let right_max = right.max_value.get_value()?;
+
+    let range_left = left_max.distance(left_min)?;
+    let range_right = right_max.distance(right_min)?;
+
+    // Constant columns (range == 0) can't use the proportional overlap
+    // formula below, so check interval overlap directly instead.
+    if range_left == 0 || range_right == 0 {
+        let overlaps = left_min <= right_max && right_min <= left_max;
+        return Some(if overlaps {
+            usize::max(ndv_left, ndv_right)
+        } else {
+            ndv_left + ndv_right
+        });
+    }
+
+    let overlap_min = if left_min >= right_min {
+        left_min
+    } else {
+        right_min
+    };
+    let overlap_max = if left_max <= right_max {
+        left_max
+    } else {
+        right_max
+    };
+
+    // Disjoint ranges: no overlap, NDVs are additive
+    if overlap_min > overlap_max {
+        return Some(ndv_left + ndv_right);
+    }
+
+    let overlap_range = overlap_max.distance(overlap_min)? as f64;
+
+    let overlap_left = overlap_range / range_left as f64;
+    let overlap_right = overlap_range / range_right as f64;
+
+    let intersection = f64::max(
+        overlap_left * ndv_left as f64,
+        overlap_right * ndv_right as f64,
+    );
+    let only_left = (1.0 - overlap_left) * ndv_left as f64;
+    let only_right = (1.0 - overlap_right) * ndv_right as f64;
+
+    Some((intersection + only_left + only_right).round() as usize)
 }
 
 /// Creates an estimate of the number of rows in the output using the given
@@ -776,7 +921,15 @@ pub struct ColumnStatistics {
     pub max_value: Precision<ScalarValue>,
     /// Minimum value of column
     pub min_value: Precision<ScalarValue>,
-    /// Sum value of a column
+    /// Sum value of a column.
+    ///
+    /// For integral columns, values should be kept in SUM-compatible widened
+    /// types (`Int8/Int16/Int32 -> Int64`, `UInt8/UInt16/UInt32 -> UInt64`) to
+    /// reduce overflow risk during statistics propagation.
+    ///
+    /// Callers should prefer [`ColumnStatistics::with_sum_value`] for setting
+    /// this field and [`Precision<ScalarValue>::add_for_sum`] /
+    /// [`Precision<ScalarValue>::cast_to_sum_type`] for sum arithmetic.
     pub sum_value: Precision<ScalarValue>,
     /// Number of distinct values
     pub distinct_count: Precision<usize>,
@@ -841,7 +994,19 @@ impl ColumnStatistics {
 
     /// Set the sum value
     pub fn with_sum_value(mut self, sum_value: Precision<ScalarValue>) -> Self {
-        self.sum_value = sum_value;
+        self.sum_value = match sum_value {
+            Precision::Exact(value) => {
+                Precision::<ScalarValue>::cast_scalar_to_sum_type(&value)
+                    .map(Precision::Exact)
+                    .unwrap_or(Precision::Absent)
+            }
+            Precision::Inexact(value) => {
+                Precision::<ScalarValue>::cast_scalar_to_sum_type(&value)
+                    .map(Precision::Inexact)
+                    .unwrap_or(Precision::Absent)
+            }
+            Precision::Absent => Precision::Absent,
+        };
         self
     }
 
@@ -992,6 +1157,45 @@ mod tests {
             Precision::Exact(ScalarValue::Int32(None)),
         );
         assert_eq!(precision.add(&Precision::Absent), Precision::Absent);
+    }
+
+    #[test]
+    fn test_add_for_sum_scalar_integer_widening() {
+        let precision = Precision::Exact(ScalarValue::Int32(Some(42)));
+
+        assert_eq!(
+            precision.add_for_sum(&Precision::Exact(ScalarValue::Int32(Some(23)))),
+            Precision::Exact(ScalarValue::Int64(Some(65))),
+        );
+        assert_eq!(
+            precision.add_for_sum(&Precision::Inexact(ScalarValue::Int32(Some(23)))),
+            Precision::Inexact(ScalarValue::Int64(Some(65))),
+        );
+    }
+
+    #[test]
+    fn test_add_for_sum_prevents_int32_overflow() {
+        let lhs = Precision::Exact(ScalarValue::Int32(Some(i32::MAX)));
+        let rhs = Precision::Exact(ScalarValue::Int32(Some(1)));
+
+        assert_eq!(
+            lhs.add_for_sum(&rhs),
+            Precision::Exact(ScalarValue::Int64(Some(i64::from(i32::MAX) + 1))),
+        );
+    }
+
+    #[test]
+    fn test_add_for_sum_scalar_unsigned_integer_widening() {
+        let precision = Precision::Exact(ScalarValue::UInt32(Some(42)));
+
+        assert_eq!(
+            precision.add_for_sum(&Precision::Exact(ScalarValue::UInt32(Some(23)))),
+            Precision::Exact(ScalarValue::UInt64(Some(65))),
+        );
+        assert_eq!(
+            precision.add_for_sum(&Precision::Inexact(ScalarValue::UInt32(Some(23)))),
+            Precision::Inexact(ScalarValue::UInt64(Some(65))),
+        );
     }
 
     #[test]
@@ -1239,7 +1443,7 @@ mod tests {
         );
         assert_eq!(
             col1_stats.sum_value,
-            Precision::Exact(ScalarValue::Int32(Some(1100)))
+            Precision::Exact(ScalarValue::Int64(Some(1100)))
         ); // 500 + 600
 
         let col2_stats = &summary_stats.column_statistics[1];
@@ -1254,7 +1458,7 @@ mod tests {
         );
         assert_eq!(
             col2_stats.sum_value,
-            Precision::Exact(ScalarValue::Int32(Some(2200)))
+            Precision::Exact(ScalarValue::Int64(Some(2200)))
         ); // 1000 + 1200
     }
 
@@ -1358,6 +1562,253 @@ mod tests {
         assert_contains!(
             e.to_string(),
             "Error during planning: Cannot merge statistics with different number of columns: 0 vs 1"
+        );
+    }
+
+    #[test]
+    fn test_try_merge_distinct_count_absent() {
+        // Create statistics with known distinct counts
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .with_total_byte_size(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_distinct_count(Precision::Exact(5)),
+            );
+
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(15))
+            .with_total_byte_size(Precision::Exact(150))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(20))))
+                    .with_distinct_count(Precision::Exact(7)),
+            );
+
+        // Merge statistics
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged_stats =
+            Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+
+        // Verify the results
+        assert_eq!(merged_stats.num_rows, Precision::Exact(25));
+        assert_eq!(merged_stats.total_byte_size, Precision::Exact(250));
+
+        let col_stats = &merged_stats.column_statistics[0];
+        assert_eq!(col_stats.null_count, Precision::Exact(0));
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Exact(ScalarValue::Int32(Some(1)))
+        );
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Exact(ScalarValue::Int32(Some(20)))
+        );
+        // Overlap-based NDV: ranges [1,10] and [5,20], overlap [5,10]
+        // range_left=9, range_right=15, overlap=5
+        // overlap_left=5*(5/9)=2.78, overlap_right=7*(5/15)=2.33
+        // result = max(2.78, 2.33) + (5-2.78) + (7-2.33) = 9.67 -> 10
+        assert_eq!(col_stats.distinct_count, Precision::Inexact(10));
+    }
+
+    #[test]
+    fn test_try_merge_ndv_disjoint_ranges() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_distinct_count(Precision::Exact(5)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(20))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(30))))
+                    .with_distinct_count(Precision::Exact(8)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // No overlap -> sum of NDVs
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(13)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_identical_ranges() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+                    .with_distinct_count(Precision::Exact(50)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+                    .with_distinct_count(Precision::Exact(30)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // Full overlap -> max(50, 30) = 50
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(50)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_partial_overlap() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+                    .with_distinct_count(Precision::Exact(80)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(50))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(150))))
+                    .with_distinct_count(Precision::Exact(60)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // overlap=[50,100], range_left=100, range_right=100, overlap_range=50
+        // overlap_left=80*(50/100)=40, overlap_right=60*(50/100)=30
+        // result = max(40,30) + (80-40) + (60-30) = 40 + 40 + 30 = 110
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(110)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_missing_min_max() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown().with_distinct_count(Precision::Exact(5)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown().with_distinct_count(Precision::Exact(8)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // No min/max -> fallback to max(5, 8)
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(8)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_non_numeric_types() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Utf8(Some(
+                        "aaa".to_string(),
+                    ))))
+                    .with_max_value(Precision::Exact(ScalarValue::Utf8(Some(
+                        "zzz".to_string(),
+                    ))))
+                    .with_distinct_count(Precision::Exact(5)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Utf8(Some(
+                        "bbb".to_string(),
+                    ))))
+                    .with_max_value(Precision::Exact(ScalarValue::Utf8(Some(
+                        "yyy".to_string(),
+                    ))))
+                    .with_distinct_count(Precision::Exact(8)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // distance() unsupported for strings -> fallback to max
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(8)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_constant_columns() {
+        // Same constant: [5,5]+[5,5] -> max
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_distinct_count(Precision::Exact(1)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_distinct_count(Precision::Exact(1)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(1)
+        );
+
+        // Different constants: [5,5]+[10,10] -> sum
+        let stats3 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_distinct_count(Precision::Exact(1)),
+            );
+        let stats4 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_distinct_count(Precision::Exact(1)),
+            );
+
+        let merged = Statistics::try_merge_iter([&stats3, &stats4], &schema).unwrap();
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(2)
         );
     }
 
@@ -1650,6 +2101,16 @@ mod tests {
     }
 
     #[test]
+    fn test_with_sum_value_builder_widens_small_integers() {
+        let col_stats = ColumnStatistics::new_unknown()
+            .with_sum_value(Precision::Exact(ScalarValue::UInt32(Some(123))));
+        assert_eq!(
+            col_stats.sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(123)))
+        );
+    }
+
+    #[test]
     fn test_with_fetch_scales_byte_size() {
         // Test that byte_size is scaled by the row ratio in with_fetch
         let original_stats = Statistics {
@@ -1796,7 +2257,7 @@ mod tests {
         );
         assert_eq!(
             col1_stats.sum_value,
-            Precision::Exact(ScalarValue::Int32(Some(1100)))
+            Precision::Exact(ScalarValue::Int64(Some(1100)))
         );
 
         let col2_stats = &summary_stats.column_statistics[1];
@@ -1811,7 +2272,7 @@ mod tests {
         );
         assert_eq!(
             col2_stats.sum_value,
-            Precision::Exact(ScalarValue::Int32(Some(2200)))
+            Precision::Exact(ScalarValue::Int64(Some(2200)))
         );
     }
 
@@ -2005,8 +2466,9 @@ mod tests {
             Precision::Exact(ScalarValue::Int64(Some(3500)))
         );
         assert_eq!(col_stats.byte_size, Precision::Exact(480));
-        // distinct_count is always Absent after merge (can't accurately merge NDV)
-        assert_eq!(col_stats.distinct_count, Precision::Absent);
+        // Overlap-based NDV merge (pairwise left-to-right):
+        // stats1+stats2: [10,100]+[5,200] -> NDV=16, then +stats3: [5,200]+[1,150] -> NDV=29
+        assert_eq!(col_stats.distinct_count, Precision::Inexact(29));
     }
 
     #[test]
@@ -2159,7 +2621,7 @@ mod tests {
         );
         assert_eq!(
             col_stats.sum_value,
-            Precision::Inexact(ScalarValue::Int32(Some(1500)))
+            Precision::Inexact(ScalarValue::Int64(Some(1500)))
         );
     }
 }

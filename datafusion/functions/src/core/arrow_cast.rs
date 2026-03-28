@@ -24,7 +24,6 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, types::logical_string,
     utils::take_function_args,
 };
-use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
@@ -115,10 +114,6 @@ impl ArrowCastFunc {
 }
 
 impl ScalarUDFImpl for ArrowCastFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "arrow_cast"
     }
@@ -163,7 +158,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // convert this into a real cast
-        let target_type = data_type_from_args(&args)?;
+        let target_type = data_type_from_args(self.name(), &args)?;
         // remove second (type) argument
         args.pop().unwrap();
         let arg = args.pop().unwrap();
@@ -189,12 +184,12 @@ impl ScalarUDFImpl for ArrowCastFunc {
 }
 
 /// Returns the requested type from the arguments
-fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
-    let [_, type_arg] = take_function_args("arrow_cast", args)?;
+pub(crate) fn data_type_from_args(name: &str, args: &[Expr]) -> Result<DataType> {
+    let [_, type_arg] = take_function_args(name, args)?;
 
     let Expr::Literal(ScalarValue::Utf8(Some(val)), _) = type_arg else {
         return exec_err!(
-            "arrow_cast requires its second argument to be a constant string, got {:?}",
+            "{name} requires its second argument to be a constant string, got {:?}",
             type_arg
         );
     };

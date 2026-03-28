@@ -421,7 +421,9 @@ fn create_simplified_expr_test(expr: Expr, expected_expr: &str) {
     let df_schema = DFSchema::try_from(batch.schema()).unwrap();
 
     // Simplify the expression first
-    let simplify_context = SimplifyContext::default().with_schema(Arc::new(df_schema));
+    let simplify_context = SimplifyContext::builder()
+        .with_schema(Arc::new(df_schema))
+        .build();
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     let simplified = simplifier.simplify(expr).unwrap();
     create_expr_test(simplified, expected_expr);

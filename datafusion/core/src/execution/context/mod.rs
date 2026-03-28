@@ -531,19 +531,14 @@ impl SessionContext {
         self.runtime_env().deregister_object_store(url)
     }
 
-    /// Registers the [`RecordBatch`] as the specified table name
+    /// Registers the given [`RecordBatch`] as the specified table reference.
     pub fn register_batch(
         &self,
-        table_name: &str,
+        table_ref: impl Into<TableReference>,
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        self.register_table(
-            TableReference::Bare {
-                table: table_name.into(),
-            },
-            Arc::new(table),
-        )
+        self.register_table(table_ref, Arc::new(table))
     }
 
     /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
@@ -1494,12 +1489,13 @@ impl SessionContext {
         })?;
 
         let state = self.state.read();
-        let context = SimplifyContext::default()
+        let context = SimplifyContext::builder()
             .with_schema(Arc::clone(prepared.plan.schema()))
             .with_config_options(Arc::clone(state.config_options()))
             .with_query_execution_start_time(
                 state.execution_props().query_execution_start_time,
-            );
+            )
+            .build();
         let simplifier = ExprSimplifier::new(context);
 
         // Only allow literals as parameters for now.
@@ -1789,15 +1785,14 @@ impl SessionContext {
     /// SQL statements executed against this context.
     pub async fn register_arrow(
         &self,
-        name: &str,
-        table_path: &str,
+        table_ref: impl Into<TableReference>,
+        table_path: impl AsRef<str>,
         options: ArrowReadOptions<'_>,
     ) -> Result<()> {
         let listing_options = options
             .to_listing_options(&self.copied_config(), self.copied_table_options());
-
         self.register_listing_table(
-            name,
+            table_ref,
             table_path,
             listing_options,
             options.schema.map(|s| Arc::new(s.to_owned())),

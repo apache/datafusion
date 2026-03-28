@@ -17,7 +17,6 @@
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
-use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
 use arrow::datatypes::Field;
 use arrow::datatypes::{
@@ -27,6 +26,7 @@ use arrow::datatypes::{
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
     Float64Type, Int64Type, TimeUnit, UInt64Type,
 };
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::internal_err;
 use datafusion_common::types::{
     NativeType, logical_float64, logical_int8, logical_int16, logical_int32,

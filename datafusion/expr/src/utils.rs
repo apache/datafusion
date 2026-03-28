@@ -1314,7 +1314,7 @@ mod tests {
         test::function_stub::{max_udaf, min_udaf, sum_udaf},
     };
     use arrow::datatypes::{UnionFields, UnionMode};
-    use datafusion_expr_common::signature::{TypeSignature, Volatility};
+    use datafusion_expr_common::signature::Volatility;
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {

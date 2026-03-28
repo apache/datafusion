@@ -31,7 +31,8 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility, in_list,
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility, in_list,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -41,7 +42,6 @@ use crate::make_array::make_array_udf;
 use crate::utils::make_scalar_function;
 
 use hashbrown::HashSet;
-use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -112,9 +112,6 @@ impl ArrayHas {
 }
 
 impl ScalarUDFImpl for ArrayHas {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_has"
     }
@@ -181,10 +178,7 @@ impl ScalarUDFImpl for ArrayHas {
         Ok(ExprSimplifyResult::Original(args))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [first_arg, second_arg] = take_function_args(self.name(), &args.args)?;
         if first_arg.data_type().is_null() {
             // Always return null if the first argument is null
@@ -829,9 +823,6 @@ impl ArrayHasAll {
 }
 
 impl ScalarUDFImpl for ArrayHasAll {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_has_all"
     }
@@ -844,10 +835,7 @@ impl ScalarUDFImpl for ArrayHasAll {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_has_all_inner)(&args.args)
     }
 
@@ -903,9 +891,6 @@ impl ArrayHasAny {
 }
 
 impl ScalarUDFImpl for ArrayHasAny {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_has_any"
     }
@@ -918,10 +903,7 @@ impl ScalarUDFImpl for ArrayHasAny {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [first_arg, second_arg] = take_function_args(self.name(), &args.args)?;
 
         // If either argument is scalar, use the fast path.
@@ -1007,6 +989,7 @@ mod tests {
         DataFusionError, ScalarValue, config::ConfigOptions,
         utils::SingleRowListArrayBuilder,
     };
+    use datafusion_expr::simplify::SimplifyContext;
     use datafusion_expr::{
         ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col, lit,
         simplify::ExprSimplifyResult,
@@ -1025,7 +1008,7 @@ mod tests {
         .build_list_scalar());
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -1048,7 +1031,7 @@ mod tests {
         let haystack = make_array(vec![lit(1), lit(2), lit(3)]);
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -1071,7 +1054,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::Null, None);
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -1088,7 +1071,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::List(Arc::new(haystack)), None);
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -1103,7 +1086,7 @@ mod tests {
         let haystack = col("c1");
         let needle = col("c2");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Original(args)) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)

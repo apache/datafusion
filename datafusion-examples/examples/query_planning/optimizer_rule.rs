@@ -28,7 +28,6 @@ use datafusion::logical_expr::{
 use datafusion::optimizer::ApplyOrder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion::prelude::SessionContext;
-use std::any::Any;
 use std::sync::Arc;
 
 /// This example demonstrates how to add your own [`OptimizerRule`]
@@ -190,10 +189,6 @@ impl MyEq {
 }
 
 impl ScalarUDFImpl for MyEq {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "my_eq"
     }
