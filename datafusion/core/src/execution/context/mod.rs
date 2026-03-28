@@ -3024,10 +3024,10 @@ mod tests {
         fn plan_executed(
             &self,
             _id: &str,
-            explain_result: RecordBatch,
+            annotated_plan: RecordBatch,
             _duration: Duration,
         ) -> Result<()> {
-            let analyze = arrow::util::pretty::pretty_format_batches(&[explain_result])?
+            let analyze = arrow::util::pretty::pretty_format_batches(&[annotated_plan])?
                 .to_string();
             // the plan is simplified to become deterministic
             let re = Regex::new(r"\s+\w+?Exec").unwrap();

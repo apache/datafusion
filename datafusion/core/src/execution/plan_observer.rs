@@ -49,7 +49,7 @@ pub trait PlanObserver: Send + Sync + 'static + Debug {
     fn plan_executed(
         &self,
         id: &str,
-        explain_result: RecordBatch,
+        annotated_plan: RecordBatch,
         duration: Duration,
     ) -> Result<()>;
 }
@@ -133,7 +133,7 @@ impl PlanObserver for DefaultPlanObserver {
     fn plan_executed(
         &self,
         id: &str,
-        explain_result: RecordBatch,
+        annotated_plan: RecordBatch,
         duration: Duration,
     ) -> Result<()> {
         let mut queries = self.queries.lock();
@@ -148,7 +148,7 @@ impl PlanObserver for DefaultPlanObserver {
             return Ok(());
         }
 
-        let analyze = pretty_format_batches(&[explain_result])?;
+        let analyze = pretty_format_batches(&[annotated_plan])?;
         let message =
             format!("QUERY: {sql}\nDURATION: {duration_ms:.3}ms\nEXPLAIN:\n{analyze}");
 
