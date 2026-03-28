@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{RecordBatch, StringArray};
@@ -207,10 +206,6 @@ impl Default for JsonGetStr {
 }
 
 impl ScalarUDFImpl for JsonGetStr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "json_get_str"
     }

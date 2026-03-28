@@ -1565,12 +1565,6 @@ pub struct PhysicalHashExprNode {
     pub on_columns: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(uint64, tag = "2")]
     pub seed0: u64,
-    #[prost(uint64, tag = "3")]
-    pub seed1: u64,
-    #[prost(uint64, tag = "4")]
-    pub seed2: u64,
-    #[prost(uint64, tag = "5")]
-    pub seed3: u64,
     #[prost(string, tag = "6")]
     pub description: ::prost::alloc::string::String,
 }

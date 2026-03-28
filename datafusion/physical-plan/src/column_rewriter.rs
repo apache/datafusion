@@ -74,12 +74,11 @@ impl<'a> TreeNodeRewriter for PhysicalColumnRewriter<'a> {
 mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{DataFusionError, Result, tree_node::TreeNode};
+    use datafusion_common::{Result, tree_node::TreeNode};
     use datafusion_physical_expr::{
         PhysicalExpr,
         expressions::{Column, binary, col, lit},
     };
-    use std::sync::Arc;
 
     /// Helper function to create a test schema
     fn create_test_schema() -> Arc<Schema> {

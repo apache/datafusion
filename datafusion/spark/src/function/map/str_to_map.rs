@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -84,10 +83,6 @@ impl SparkStrToMap {
 }
 
 impl ScalarUDFImpl for SparkStrToMap {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "str_to_map"
     }

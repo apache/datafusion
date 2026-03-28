@@ -1974,7 +1974,7 @@ substr(str, start_pos[, length])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **start_pos**: Character position to start the substring at. The first character in the string has a position of 1.
+- **start_pos**: Character position to start the substring at. The first character in the string has a position of 1. If the start position is less than 1, it is treated as if it is before the start of the string and the (absolute) number of characters before position 1 is subtracted from `length` (if given). For example, `substr('abc', -3, 6)` returns `'ab'`.
 - **length**: Number of characters to extract. If not specified, returns the rest of the string after the start position.
 
 #### Example
@@ -3823,7 +3823,7 @@ array_positions(array, element)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 
 #### Example
 
@@ -3880,7 +3880,7 @@ _Alias of [array_prepend](#array_prepend)._
 
 ### `array_remove`
 
-Removes the first element from the array equal to the given value.
+Removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
 array_remove(array, element)
@@ -3900,6 +3900,13 @@ array_remove(array, element)
 +----------------------------------------------+
 | [1, 2, 3, 2, 1, 4]                           |
 +----------------------------------------------+
+
+> select array_remove([1, 2, NULL, 2, 4], 2);
++---------------------------------------------------+
+| array_remove(List([1,2,NULL,2,4]),Int64(2)) |
++---------------------------------------------------+
+| [1, NULL, 2, 4]                              |
++---------------------------------------------------+
 ```
 
 #### Aliases
@@ -3908,7 +3915,7 @@ array_remove(array, element)
 
 ### `array_remove_all`
 
-Removes all elements from the array equal to the given value.
+Removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
 array_remove_all(array, element)
@@ -3928,6 +3935,13 @@ array_remove_all(array, element)
 +--------------------------------------------------+
 | [1, 3, 1, 4]                                     |
 +--------------------------------------------------+
+
+> select array_remove_all([1, 2, NULL, 2, 4], 2);
++-----------------------------------------------------+
+| array_remove_all(List([1,2,NULL,2,4]),Int64(2)) |
++-----------------------------------------------------+
+| [1, NULL, 4]                                     |
++-----------------------------------------------------+
 ```
 
 #### Aliases
@@ -3936,10 +3950,10 @@ array_remove_all(array, element)
 
 ### `array_remove_n`
 
-Removes the first `max` elements from the array equal to the given value.
+Removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
-array_remove_n(array, element, max))
+array_remove_n(array, element, max)
 ```
 
 #### Arguments
@@ -3957,6 +3971,13 @@ array_remove_n(array, element, max))
 +---------------------------------------------------------+
 | [1, 3, 2, 1, 4]                                         |
 +---------------------------------------------------------+
+
+> select array_remove_n([1, 2, NULL, 2, 4], 2, 2);
++----------------------------------------------------------+
+| array_remove_n(List([1,2,NULL,2,4]),Int64(2),Int64(2)) |
++----------------------------------------------------------+
+| [1, NULL, 4]                                            |
++----------------------------------------------------------+
 ```
 
 #### Aliases
@@ -4182,8 +4203,8 @@ array_sort(array, desc, nulls_first)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **desc**: Whether to sort in descending order(`ASC` or `DESC`).
-- **nulls_first**: Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).
+- **desc**: Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`.
+- **nulls_first**: Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`.
 
 #### Example
 
@@ -4274,29 +4295,28 @@ _Alias of [array_has_any](#array_has_any)._
 Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.
 
 ```sql
-arrays_zip(array1, array2[, ..., array_n])
+arrays_zip(array1[, ..., array_n])
 ```
 
 #### Arguments
 
 - **array1**: First array expression.
-- **array2**: Second array expression.
-- **array_n**: Subsequent array expressions.
+- **array_n**: Optional additional array expressions.
 
 #### Example
 
 ```sql
-> select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
+> select arrays_zip([1, 2, 3]);
 +---------------------------------------------------+
-| arrays_zip([1, 2, 3], ['a', 'b', 'c'])             |
+| arrays_zip([1, 2, 3])                             |
 +---------------------------------------------------+
-| [{c0: 1, c1: a}, {c0: 2, c1: b}, {c0: 3, c1: c}] |
+| [{1: 1}, {1: 2}, {1: 3}]                          |
 +---------------------------------------------------+
 > select arrays_zip([1, 2], [3, 4, 5]);
 +---------------------------------------------------+
-| arrays_zip([1, 2], [3, 4, 5])                       |
+| arrays_zip([1, 2], [3, 4, 5])                     |
 +---------------------------------------------------+
-| [{c0: 1, c1: 3}, {c0: 2, c1: 4}, {c0: , c1: 5}]  |
+| [{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]     |
 +---------------------------------------------------+
 ```
 
@@ -5165,6 +5185,7 @@ union_tag(union_expression)
 
 - [arrow_cast](#arrow_cast)
 - [arrow_metadata](#arrow_metadata)
+- [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
 - [get_field](#get_field)
 - [version](#version)
@@ -5235,6 +5256,32 @@ arrow_metadata(expression[, key])
 +-------------------------------+
 | v                             |
 +-------------------------------+
+```
+
+### `arrow_try_cast`
+
+Casts a value to a specific Arrow data type, returning NULL if the cast fails.
+
+```sql
+arrow_try_cast(expression, datatype)
+```
+
+#### Arguments
+
+- **expression**: Expression to cast. The expression can be a constant, column, or function, and any combination of operators.
+- **datatype**: [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]
+
+#### Example
+
+```sql
+> select arrow_try_cast('123', 'Int64') as a,
+         arrow_try_cast('not_a_number', 'Int64') as b;
+
++-----+------+
+| a   | b    |
++-----+------+
+| 123 | NULL |
++-----+------+
 ```
 
 ### `arrow_typeof`

@@ -46,6 +46,8 @@ use datafusion_common::tree_node::{
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, binary, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
@@ -59,6 +61,7 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 
+use datafusion_physical_expr::Distribution;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
@@ -227,6 +230,106 @@ impl ExecutionPlan for SortRequiredExec {
     }
 }
 
+#[derive(Debug)]
+struct SinglePartitionMaintainsOrderExec {
+    input: Arc<dyn ExecutionPlan>,
+    cache: Arc<PlanProperties>,
+}
+
+impl SinglePartitionMaintainsOrderExec {
+    fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+        let cache = Self::compute_properties(&input);
+        Self {
+            input,
+            cache: Arc::new(cache),
+        }
+    }
+
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        PlanProperties::new(
+            input.equivalence_properties().clone(),
+            input.output_partitioning().clone(),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        )
+    }
+}
+
+impl DisplayAs for SinglePartitionMaintainsOrderExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "SinglePartitionMaintainsOrderExec")
+            }
+            DisplayFormatType::TreeRender => write!(f, ""),
+        }
+    }
+}
+
+impl ExecutionPlan for SinglePartitionMaintainsOrderExec {
+    fn name(&self) -> &'static str {
+        "SinglePartitionMaintainsOrderExec"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), 1);
+        let child = children.pop().unwrap();
+        Ok(Arc::new(Self::new(child)))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::context::TaskContext>,
+    ) -> Result<datafusion_physical_plan::SendableRecordBatchStream> {
+        unreachable!();
+    }
+}
+
+fn single_partition_maintains_order_exec(
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(SinglePartitionMaintainsOrderExec::new(input))
+}
+
 fn parquet_exec() -> Arc<DataSourceExec> {
     parquet_exec_with_sort(schema(), vec![])
 }
@@ -356,6 +459,71 @@ fn aggregate_exec_with_alias(
                 .unwrap(),
             ),
             schema,
+        )
+        .unwrap(),
+    )
+}
+
+fn partitioned_count_aggregate_exec(
+    input: Arc<dyn ExecutionPlan>,
+    group_alias_pairs: Vec<(String, String)>,
+    count_column: &str,
+) -> Arc<dyn ExecutionPlan> {
+    let input_schema = input.schema();
+    let group_by_expr = group_alias_pairs
+        .iter()
+        .map(|(column, alias)| {
+            (
+                col(column, &input_schema).unwrap() as Arc<dyn PhysicalExpr>,
+                alias.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let partial_group_by = PhysicalGroupBy::new_single(group_by_expr.clone());
+    let final_group_by = PhysicalGroupBy::new_single(
+        group_by_expr
+            .iter()
+            .enumerate()
+            .map(|(idx, (_expr, alias))| {
+                (
+                    Arc::new(Column::new(alias, idx)) as Arc<dyn PhysicalExpr>,
+                    alias.clone(),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    let aggr_expr = vec![Arc::new(
+        AggregateExprBuilder::new(
+            count_udaf(),
+            vec![col(count_column, &input_schema).unwrap()],
+        )
+        .schema(Arc::clone(&input_schema))
+        .alias(format!("COUNT({count_column})"))
+        .build()
+        .unwrap(),
+    )];
+
+    let partial = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Partial,
+            partial_group_by,
+            aggr_expr.clone(),
+            vec![None],
+            input,
+            Arc::clone(&input_schema),
+        )
+        .unwrap(),
+    );
+
+    Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            final_group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&partial) as _,
+            partial.schema(),
         )
         .unwrap(),
     )
@@ -3222,6 +3390,71 @@ fn preserve_ordering_through_repartition() -> Result<()> {
 }
 
 #[test]
+fn preserve_ordering_for_streaming_sorted_aggregate() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let input = parquet_exec_multiple_sorted(vec![sort_key]);
+    let physical_plan = partitioned_count_aggregate_exec(
+        input,
+        vec![("a".to_string(), "a".to_string())],
+        "b",
+    );
+
+    let test_config = TestConfig::default().with_query_execution_partitions(2);
+
+    let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan_distrib, @r"
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
+      RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
+          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    ");
+
+    let plan_sort = test_config.to_plan(physical_plan, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
+
+    Ok(())
+}
+
+#[test]
+fn preserve_ordering_for_streaming_partially_sorted_aggregate() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let input = parquet_exec_multiple_sorted(vec![sort_key]);
+    let physical_plan = partitioned_count_aggregate_exec(
+        input,
+        vec![
+            ("a".to_string(), "a".to_string()),
+            ("b".to_string(), "b".to_string()),
+        ],
+        "c",
+    );
+
+    let test_config = TestConfig::default().with_query_execution_partitions(2);
+
+    let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan_distrib, @r"
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0])
+      RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
+        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0])
+          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    ");
+
+    let plan_sort = test_config.to_plan(physical_plan, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
+
+    Ok(())
+}
+
+#[test]
 fn do_not_preserve_ordering_through_repartition() -> Result<()> {
     let schema = schema();
     let sort_key: LexOrdering = [PhysicalSortExpr {
@@ -3678,6 +3911,79 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
         Some(5),
         "Fetch value was not preserved after transformation"
     );
+
+    Ok(())
+}
+
+/// When a parent requires SinglePartition and maintains input order, order-preserving
+/// variants (e.g. SortPreservingMergeExec) should be kept so that ordering can
+/// propagate to ancestors. Replacing them with CoalescePartitionsExec would destroy
+/// ordering and force unnecessary sorts later.
+#[test]
+fn maintains_order_preserves_spm_for_single_partition() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    // GlobalLimitExec -> LocalLimitExec -> sorted multi-partition parquet
+    let plan: Arc<dyn ExecutionPlan> =
+        limit_exec(parquet_exec_multiple_sorted(vec![sort_key.clone()]));
+
+    // Test EnforceDistribution in isolation: SPM should be preserved because
+    // GlobalLimitExec maintains input order.
+    let result = ensure_distribution_helper(plan, 10, false)?;
+    assert_plan!(result,
+        @r"
+    GlobalLimitExec: skip=0, fetch=100
+      SortPreservingMergeExec: [c@2 ASC]
+        LocalLimitExec: fetch=100
+          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+    ");
+
+    Ok(())
+}
+
+/// Tests the cascading effect through a UnionExec with the full optimizer
+/// pipeline and `prefer_existing_sort=true`. Each Union branch has an operator
+/// that requires SinglePartition and maintains input order. SortPreservingMergeExec
+/// should be preserved in each branch, allowing ordering to flow through to the
+/// ancestor SortRequiredExec.
+#[test]
+fn maintains_order_preserves_spm_through_union_with_prefer_existing_sort() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    let branch1 =
+        single_partition_maintains_order_exec(parquet_exec_multiple_sorted(vec![
+            sort_key.clone(),
+        ]));
+    let branch2 =
+        single_partition_maintains_order_exec(parquet_exec_multiple_sorted(vec![
+            sort_key.clone(),
+        ]));
+    let plan = sort_required_exec_with_req(union_exec(vec![branch1, branch2]), sort_key);
+
+    let test_config = TestConfig::default().with_prefer_existing_sort();
+
+    let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan_distrib,
+        @r"
+    SortRequiredExec: [c@2 ASC]
+      UnionExec
+        SinglePartitionMaintainsOrderExec
+          SortPreservingMergeExec: [c@2 ASC]
+            DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+        SinglePartitionMaintainsOrderExec
+          SortPreservingMergeExec: [c@2 ASC]
+            DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+    ");
 
     Ok(())
 }

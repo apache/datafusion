@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::ops::Add;
 use std::sync::Arc;
 
@@ -52,10 +51,6 @@ impl SparkAddMonths {
 }
 
 impl ScalarUDFImpl for SparkAddMonths {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "add_months"
     }
