@@ -20,7 +20,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
@@ -28,7 +27,7 @@ use crate::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
-use crate::execution::plan_observer::PlanObserver;
+use crate::execution::plan_observer::AnalyzeObserverImpl;
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
@@ -98,7 +97,6 @@ use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::analyze::AnalyzeCallback;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
@@ -280,16 +278,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         let mut plan = self.optimize_physical_plan(plan, session_state, |_, _| {})?;
 
         // setup the auto explain mode if necessary
-        if session_state.config().options().explain.auto_explain
-            && let Some(plan_observer) = &session_state.plan_observer()
-        {
-            plan = self.setup_auto_explain(
-                plan,
-                logical_plan,
-                session_state,
-                plan_observer,
-            )?;
-        }
+        plan = self.setup_auto_explain(plan, logical_plan, session_state)?;
 
         Ok(plan)
     }
@@ -1851,14 +1840,22 @@ impl DefaultPhysicalPlanner {
         }
     }
 
-    /// Returns a new plan wrapped in an `AnalyzeExec` auto_explain operator.
+    /// Returns a new plan wrapped in an `AnalyzeExec` auto_explain operator, if the `auto_explain`
+    /// config is enabled and a plan observer is set. Otherwise, returns the unmodified plan.
     fn setup_auto_explain(
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
-        plan_observer: &Arc<dyn PlanObserver>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if !session_state.config().options().explain.auto_explain {
+            return Ok(physical_plan);
+        }
+
+        let Some(plan_observer) = &session_state.plan_observer() else {
+            return Ok(physical_plan);
+        };
+
         let id = uuid::Uuid::new_v4().to_string();
         plan_observer.plan_created(id.as_str(), logical_plan, &physical_plan)?;
 
@@ -1878,12 +1875,8 @@ impl DefaultPhysicalPlanner {
         );
 
         let plan_observer = Arc::clone(plan_observer);
-        let callback = AnalyzeCallback {
-            callback: Arc::new(move |explain_result: RecordBatch, duration: Duration| {
-                plan_observer.plan_executed(id.as_str(), explain_result, duration)
-            }),
-        };
-        plan.set_callback(callback);
+        let analyze_observer = AnalyzeObserverImpl::new(plan_observer, id);
+        plan.set_observer(Arc::new(analyze_observer));
         plan.set_return_inner(true);
 
         Ok(Arc::new(plan))

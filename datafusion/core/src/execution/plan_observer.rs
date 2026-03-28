@@ -27,6 +27,7 @@ use arrow::{array::RecordBatch, util::pretty::pretty_format_batches};
 use datafusion_common::error::Result;
 use datafusion_expr::LogicalPlan;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::analyze::AnalyzeObserver;
 use parking_lot::Mutex;
 
 #[cfg(feature = "sql")]
@@ -44,13 +45,32 @@ pub trait PlanObserver: Send + Sync + 'static + Debug {
     ) -> Result<()>;
 
     /// Called after the physical plan has been executed.
-    /// Receives the identifier, the EXPLAIN ANALYZE output, and the duration.
+    /// Receives the identifier, the EXPLAIN ANALYZE output (annotated plan), and the duration.
     fn plan_executed(
         &self,
         id: &str,
         explain_result: RecordBatch,
         duration: Duration,
     ) -> Result<()>;
+}
+
+/// States where the plans will be outputted.
+/// `LogError`, `LogWarn`, `LogInfo`, `LogDebug`, and `LogTrace` use the respective macros from the
+/// [`log`] crate. `LogToFile(file)` writes the plans to the provided file.
+#[derive(Debug)]
+pub enum PlanOutput {
+    /// Writes to log::error!
+    LogError,
+    /// Writes to log::warn!
+    LogWarn,
+    /// Writes to log::info!
+    LogInfo,
+    /// Writes to log::debug!
+    LogDebug,
+    /// Writes to log::trace!
+    LogTrace,
+    /// Writes to the provided file path
+    LogToFile(String),
 }
 
 /// Default implementation of [`PlanObserver`].
@@ -62,7 +82,7 @@ pub trait PlanObserver: Send + Sync + 'static + Debug {
 /// ```
 #[derive(Debug)]
 pub struct DefaultPlanObserver {
-    output: String,
+    output: PlanOutput,
     min_duration_ms: usize,
     /// stores a SQL representation of the logical plan, if the `sql` feature is enabled.
     queries: Arc<Mutex<HashMap<String, String>>>,
@@ -70,17 +90,11 @@ pub struct DefaultPlanObserver {
 
 impl DefaultPlanObserver {
     /// Creates a new `DefaultPlanObserver`.
-    /// * `output`: where to write the output.
-    ///   Possible values:
-    ///   - `log::error`
-    ///   - `log::warn`
-    ///   - `log::info`
-    ///   - `log::debug`
-    ///   - `log::trace`
-    ///   - a file path: creates the file if it does not exist, or appends to it if it does.
+    /// * `output`: where to write the output. If `PlanOutput::LogToFile` is provided and the file
+    ///   does not exist, it will be created (otherwise it appends to it).
     /// * `min_duration_ms`: only outputs the result if the execution duration is greater than or
     ///   equal to this value.
-    pub fn new(output: String, min_duration_ms: usize) -> Self {
+    pub fn new(output: PlanOutput, min_duration_ms: usize) -> Self {
         Self {
             output,
             min_duration_ms,
@@ -92,7 +106,7 @@ impl DefaultPlanObserver {
 impl Default for DefaultPlanObserver {
     fn default() -> Self {
         Self {
-            output: "log::info".to_owned(),
+            output: PlanOutput::LogInfo,
             min_duration_ms: 0,
             queries: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -138,21 +152,46 @@ impl PlanObserver for DefaultPlanObserver {
         let message =
             format!("QUERY: {sql}\nDURATION: {duration_ms:.3}ms\nEXPLAIN:\n{analyze}");
 
-        match self.output.as_str() {
-            "log::error" => log::error!("{message}"),
-            "log::warn" => log::warn!("{message}"),
-            "log::info" => log::info!("{message}"),
-            "log::debug" => log::debug!("{message}"),
-            "log::trace" => log::trace!("{message}"),
-            _ => {
+        match self.output {
+            PlanOutput::LogError => log::error!("{message}"),
+            PlanOutput::LogWarn => log::warn!("{message}"),
+            PlanOutput::LogInfo => log::info!("{message}"),
+            PlanOutput::LogDebug => log::debug!("{message}"),
+            PlanOutput::LogTrace => log::trace!("{message}"),
+            PlanOutput::LogToFile(ref file) => {
                 let fd = &mut fs::OpenOptions::new()
                     .create(true)
                     .append(true)
-                    .open(&self.output)?;
+                    .open(file)?;
                 writeln!(fd, "{message}")?;
             }
         }
 
         Ok(())
+    }
+}
+
+/// Implementation that bridges [`PlanObserver`] with the [`AnalyzeObserver`].
+#[derive(Debug)]
+pub struct AnalyzeObserverImpl {
+    plan_observer: Arc<dyn PlanObserver>,
+    id: String,
+}
+
+impl AnalyzeObserverImpl {
+    /// Creates a new `AnalyzeObserverImpl`, receiving the `plan_observer` and an identifier for the
+    /// query being executed.
+    pub fn new(plan_observer: Arc<dyn PlanObserver>, id: String) -> Self {
+        Self { plan_observer, id }
+    }
+}
+
+impl AnalyzeObserver for AnalyzeObserverImpl {
+    fn analyze_result_callback(
+        &self,
+        result: RecordBatch,
+        duration: Duration,
+    ) -> Result<()> {
+        self.plan_observer.plan_executed(&self.id, result, duration)
     }
 }

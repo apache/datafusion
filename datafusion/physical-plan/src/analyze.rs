@@ -18,6 +18,7 @@
 //! Defines the ANALYZE operator
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
@@ -55,25 +56,24 @@ pub struct AnalyzeExec {
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
     cache: Arc<PlanProperties>,
-    /// If Some, passes the output of the analyze once it completes, as well as the duration.
-    callback: Option<AnalyzeCallback>,
+    /// Used to callback with information related to this operator's execution.
+    observer: Option<Arc<dyn AnalyzeObserver>>,
     /// If true, returns the inner batches instead of the analyze result.
-    /// Can be used together with the `callback` to keep track of the analyze result without
+    /// Can be used together with the `observer` to keep track of the analyze result without
     /// having to return it as the plan's output.
+    /// Note that, if enabled, the entire inner batches will be buffered in memory before the query
+    /// completes.
     return_inner: bool,
 }
 
-/// Optionally used by the `AnalyzeExec` operator to callback it with the result.
-#[derive(Clone)]
-pub struct AnalyzeCallback {
-    pub callback:
-        Arc<dyn Fn(RecordBatch, std::time::Duration) -> Result<()> + Send + Sync>,
-}
-
-impl std::fmt::Debug for AnalyzeCallback {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AnalyzeCallback")
-    }
+/// Optionally used by the `AnalyzeExec` to provide information externally.
+pub trait AnalyzeObserver: Debug + Send + Sync {
+    /// Provides the EXPLAIN ANALYZE output (annotated plan) and the total duration.
+    fn analyze_result_callback(
+        &self,
+        result: RecordBatch,
+        duration: std::time::Duration,
+    ) -> Result<()>;
 }
 
 impl AnalyzeExec {
@@ -93,7 +93,7 @@ impl AnalyzeExec {
             input,
             schema,
             cache: Arc::new(cache),
-            callback: None,
+            observer: None,
             return_inner: false,
         }
     }
@@ -126,10 +126,9 @@ impl AnalyzeExec {
         )
     }
 
-    /// Sets a function to call after the analyze has been computed, passing the result and the
-    /// duration.
-    pub fn set_callback(&mut self, callback: AnalyzeCallback) {
-        self.callback = Some(callback);
+    /// Sets an `AnalyzeObserver`.
+    pub fn set_observer(&mut self, observer: Arc<dyn AnalyzeObserver>) {
+        self.observer = Some(observer);
     }
 
     /// Sets whether to return the inner batches (true) or return the analyze's batches (false;
@@ -199,8 +198,8 @@ impl ExecutionPlan for AnalyzeExec {
         );
 
         plan.return_inner = self.return_inner;
-        if self.callback.is_some() {
-            plan.callback.clone_from(&self.callback);
+        if self.observer.is_some() {
+            plan.observer.clone_from(&self.observer);
         }
 
         Ok(Arc::new(plan))
@@ -246,7 +245,7 @@ impl ExecutionPlan for AnalyzeExec {
         let mut input_stream = builder.build();
 
         let inner_schema = Arc::clone(&self.input.schema());
-        let callback = self.callback.clone();
+        let observer = self.observer.clone();
         let return_inner = self.return_inner;
 
         let output = async move {
@@ -271,8 +270,8 @@ impl ExecutionPlan for AnalyzeExec {
                 &metric_types,
             )?;
 
-            if let Some(callback) = callback {
-                (callback.callback)(out.clone(), duration)?;
+            if let Some(observer) = observer {
+                observer.analyze_result_callback(out.clone(), duration)?;
             }
 
             if return_inner {
