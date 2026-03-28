@@ -793,9 +793,7 @@ fn sorting_columns_to_physical_exprs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, BooleanArray, Int32Array};
-    use datafusion_common::ScalarValue;
-    use std::sync::Arc;
+    use arrow::array::Int32Array;
 
     #[test]
     fn test_has_any_exact_match() {
@@ -847,12 +845,11 @@ mod tests {
     mod ndv_tests {
         use super::*;
         use arrow::datatypes::Field;
-        use parquet::arrow::parquet_to_arrow_schema;
         use parquet::basic::Type as PhysicalType;
-        use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+        use parquet::file::metadata::ColumnChunkMetaData;
         use parquet::file::reader::{FileReader, SerializedFileReader};
         use parquet::file::statistics::Statistics as ParquetStatistics;
-        use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
+        use parquet::schema::types::Type as SchemaType;
         use std::fs::File;
         use std::path::PathBuf;
 

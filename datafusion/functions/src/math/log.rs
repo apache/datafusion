@@ -188,9 +188,6 @@ fn log_decimal256(value: i256, scale: i8, base: f64) -> Result<f64, ArrowError> 
 }
 
 impl ScalarUDFImpl for LogFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "log"
     }
@@ -402,7 +399,9 @@ impl ScalarUDFImpl for LogFunc {
 
 /// Returns true if the function is `PowerFunc`
 fn is_pow(func: &ScalarUDF) -> bool {
-    func.inner().as_any().downcast_ref::<PowerFunc>().is_some()
+    (func.inner().as_ref() as &dyn Any)
+        .downcast_ref::<PowerFunc>()
+        .is_some()
 }
 
 #[cfg(test)]
@@ -418,7 +417,6 @@ mod tests {
     use arrow::datatypes::{DECIMAL256_MAX_PRECISION, Field};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::simplify::SimplifyContext;
 
     #[test]
     fn test_log_decimal_native() {

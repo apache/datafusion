@@ -630,11 +630,9 @@ impl Session for ForeignSession {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::execution::SessionStateBuilder;
-    use datafusion_common::DataFusionError;
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;

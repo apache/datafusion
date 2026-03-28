@@ -28,7 +28,6 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{DataFusionError, Result, not_impl_err};
 
-use std::any::Any;
 use std::fmt::{self, Write};
 
 use crate::utils::make_scalar_function;
@@ -131,10 +130,6 @@ impl ArrayToString {
 }
 
 impl ScalarUDFImpl for ArrayToString {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_to_string"
     }
@@ -222,10 +217,6 @@ impl StringToArray {
 }
 
 impl ScalarUDFImpl for StringToArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "string_to_array"
     }
@@ -727,31 +718,31 @@ where
     let mut list_builder = ListBuilder::new(string_builder);
 
     match null_value_array {
-        None => {
-            string_array.iter().zip(delimiter_array.iter()).for_each(
-                |(string, delimiter)| {
-                    match (string, delimiter) {
-                        (Some(string), Some("")) => {
-                            list_builder.values().append_value(string);
-                            list_builder.append(true);
-                        }
-                        (Some(string), Some(delimiter)) => {
-                            string.split(delimiter).for_each(|s| {
-                                list_builder.values().append_value(s);
-                            });
-                            list_builder.append(true);
-                        }
-                        (Some(string), None) => {
-                            string.chars().map(|c| c.to_string()).for_each(|c| {
-                                list_builder.values().append_value(c.as_str());
-                            });
-                            list_builder.append(true);
-                        }
-                        _ => list_builder.append(false), // null value
+        None => string_array.iter().zip(delimiter_array.iter()).for_each(
+            |(string, delimiter)| match (string, delimiter) {
+                (Some(string), Some("")) => {
+                    if !string.is_empty() {
+                        list_builder.values().append_value(string);
                     }
-                },
-            )
-        }
+                    list_builder.append(true);
+                }
+                (Some(string), Some(delimiter)) => {
+                    if !string.is_empty() {
+                        string.split(delimiter).for_each(|s| {
+                            list_builder.values().append_value(s);
+                        });
+                    }
+                    list_builder.append(true);
+                }
+                (Some(string), None) => {
+                    string.chars().map(|c| c.to_string()).for_each(|c| {
+                        list_builder.values().append_value(c.as_str());
+                    });
+                    list_builder.append(true);
+                }
+                _ => list_builder.append(false),
+            },
+        ),
         Some(null_value_array) => string_array
             .iter()
             .zip(delimiter_array.iter())
@@ -759,21 +750,25 @@ where
             .for_each(|((string, delimiter), null_value)| {
                 match (string, delimiter) {
                     (Some(string), Some("")) => {
-                        if Some(string) == null_value {
-                            list_builder.values().append_null();
-                        } else {
-                            list_builder.values().append_value(string);
+                        if !string.is_empty() {
+                            if Some(string) == null_value {
+                                list_builder.values().append_null();
+                            } else {
+                                list_builder.values().append_value(string);
+                            }
                         }
                         list_builder.append(true);
                     }
                     (Some(string), Some(delimiter)) => {
-                        string.split(delimiter).for_each(|s| {
-                            if Some(s) == null_value {
-                                list_builder.values().append_null();
-                            } else {
-                                list_builder.values().append_value(s);
-                            }
-                        });
+                        if !string.is_empty() {
+                            string.split(delimiter).for_each(|s| {
+                                if Some(s) == null_value {
+                                    list_builder.values().append_null();
+                                } else {
+                                    list_builder.values().append_value(s);
+                                }
+                            });
+                        }
                         list_builder.append(true);
                     }
                     (Some(string), None) => {

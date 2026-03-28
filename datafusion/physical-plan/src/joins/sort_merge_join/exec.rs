@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
+use crate::joins::semi_anti_sort_merge_join::stream::SemiAntiSortMergeJoinStream;
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::sort_merge_join::stream::SortMergeJoinStream;
 use crate::joins::utils::{
@@ -32,11 +33,12 @@ use crate::joins::utils::{
     estimate_join_statistics, reorder_output_after_swap,
     symmetric_join_output_partitioning,
 };
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics};
 use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on,
 };
+use crate::spill::spill_manager::SpillManager;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, Statistics, check_if_same_properties,
@@ -522,30 +524,62 @@ impl ExecutionPlan for SortMergeJoinExec {
         let streamed = streamed.execute(partition, Arc::clone(&context))?;
         let buffered = buffered.execute(partition, Arc::clone(&context))?;
 
-        // create output buffer
         let batch_size = context.session_config().batch_size();
-
-        // create memory reservation
         let reservation = MemoryConsumer::new(format!("SMJStream[{partition}]"))
             .register(context.memory_pool());
 
-        // create join stream
-        Ok(Box::pin(SortMergeJoinStream::try_new(
-            context.session_config().spill_compression(),
-            Arc::clone(&self.schema),
-            self.sort_options.clone(),
-            self.null_equality,
-            streamed,
-            buffered,
-            on_streamed,
-            on_buffered,
-            self.filter.clone(),
+        if matches!(
             self.join_type,
-            batch_size,
-            SortMergeJoinMetrics::new(partition, &self.metrics),
-            reservation,
-            context.runtime_env(),
-        )?))
+            JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::RightSemi
+                | JoinType::RightAnti
+        ) {
+            let peak_mem_used =
+                MetricBuilder::new(&self.metrics).gauge("peak_mem_used", partition);
+            let spill_manager = SpillManager::new(
+                context.runtime_env(),
+                SpillMetrics::new(&self.metrics, partition),
+                buffered.schema(),
+            )
+            .with_compression_type(context.session_config().spill_compression());
+
+            Ok(Box::pin(SemiAntiSortMergeJoinStream::try_new(
+                Arc::clone(&self.schema),
+                self.sort_options.clone(),
+                self.null_equality,
+                streamed,
+                buffered,
+                on_streamed,
+                on_buffered,
+                self.filter.clone(),
+                self.join_type,
+                batch_size,
+                partition,
+                &self.metrics,
+                reservation,
+                peak_mem_used,
+                spill_manager,
+                context.runtime_env(),
+            )?))
+        } else {
+            Ok(Box::pin(SortMergeJoinStream::try_new(
+                context.session_config().spill_compression(),
+                Arc::clone(&self.schema),
+                self.sort_options.clone(),
+                self.null_equality,
+                streamed,
+                buffered,
+                on_streamed,
+                on_buffered,
+                self.filter.clone(),
+                self.join_type,
+                batch_size,
+                SortMergeJoinMetrics::new(partition, &self.metrics),
+                reservation,
+                context.runtime_env(),
+            )?))
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

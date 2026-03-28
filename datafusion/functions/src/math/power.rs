@@ -392,10 +392,6 @@ fn pow_decimal_with_float_fallback(
 }
 
 impl ScalarUDFImpl for PowerFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "power"
     }
@@ -605,7 +601,9 @@ impl ScalarUDFImpl for PowerFunc {
 
 /// Return true if this function call is a call to `Log`
 fn is_log(func: &ScalarUDF) -> bool {
-    func.inner().as_any().downcast_ref::<LogFunc>().is_some()
+    (func.inner().as_ref() as &dyn Any)
+        .downcast_ref::<LogFunc>()
+        .is_some()
 }
 
 #[cfg(test)]

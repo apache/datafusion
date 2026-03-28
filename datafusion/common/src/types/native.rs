@@ -565,7 +565,6 @@ impl NativeType {
 mod tests {
     use super::*;
     use crate::types::LogicalField;
-    use arrow::datatypes::Field;
     use insta::assert_snapshot;
 
     #[test]

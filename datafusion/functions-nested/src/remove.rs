@@ -33,20 +33,19 @@ use datafusion_expr::{
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArrayRemove,
     array_remove,
     array element,
-    "removes the first element from the array equal to the given value.",
+    "removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     array_remove_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes the first element from the array equal to the given value.",
+    description = "Removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     syntax_example = "array_remove(array, element)",
     sql_example = r#"```sql
 > select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
@@ -55,6 +54,13 @@ make_udf_expr_and_func!(
 +----------------------------------------------+
 | [1, 2, 3, 2, 1, 4]                           |
 +----------------------------------------------+
+
+> select array_remove([1, 2, NULL, 2, 4], 2);
++---------------------------------------------------+
+| array_remove(List([1,2,NULL,2,4]),Int64(2)) |
++---------------------------------------------------+
+| [1, NULL, 2, 4]                              |
++---------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -87,10 +93,6 @@ impl ArrayRemove {
 }
 
 impl ScalarUDFImpl for ArrayRemove {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_remove"
     }
@@ -127,14 +129,14 @@ make_udf_expr_and_func!(
     ArrayRemoveN,
     array_remove_n,
     array element max,
-    "removes the first `max` elements from the array equal to the given value.",
+    "removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     array_remove_n_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes the first `max` elements from the array equal to the given value.",
-    syntax_example = "array_remove_n(array, element, max))",
+    description = "Removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
+    syntax_example = "array_remove_n(array, element, max)",
     sql_example = r#"```sql
 > select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
 +---------------------------------------------------------+
@@ -142,6 +144,13 @@ make_udf_expr_and_func!(
 +---------------------------------------------------------+
 | [1, 3, 2, 1, 4]                                         |
 +---------------------------------------------------------+
+
+> select array_remove_n([1, 2, NULL, 2, 4], 2, 2);
++----------------------------------------------------------+
+| array_remove_n(List([1,2,NULL,2,4]),Int64(2),Int64(2)) |
++----------------------------------------------------------+
+| [1, NULL, 4]                                            |
++----------------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -179,10 +188,6 @@ impl ArrayRemoveN {
 }
 
 impl ScalarUDFImpl for ArrayRemoveN {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_remove_n"
     }
@@ -219,13 +224,13 @@ make_udf_expr_and_func!(
     ArrayRemoveAll,
     array_remove_all,
     array element,
-    "removes all elements from the array equal to the given value.",
+    "removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     array_remove_all_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes all elements from the array equal to the given value.",
+    description = "Removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.",
     syntax_example = "array_remove_all(array, element)",
     sql_example = r#"```sql
 > select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
@@ -234,6 +239,13 @@ make_udf_expr_and_func!(
 +--------------------------------------------------+
 | [1, 3, 1, 4]                                     |
 +--------------------------------------------------+
+
+> select array_remove_all([1, 2, NULL, 2, 4], 2);
++-----------------------------------------------------+
+| array_remove_all(List([1,2,NULL,2,4]),Int64(2)) |
++-----------------------------------------------------+
+| [1, NULL, 4]                                     |
++-----------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -260,10 +272,6 @@ impl ArrayRemoveAll {
 }
 
 impl ScalarUDFImpl for ArrayRemoveAll {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_remove_all"
     }

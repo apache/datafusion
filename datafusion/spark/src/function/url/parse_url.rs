@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -160,10 +159,6 @@ impl ParseUrl {
 }
 
 impl ScalarUDFImpl for ParseUrl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "parse_url"
     }
@@ -336,10 +331,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, StringArray};
-    use datafusion_common::Result;
+    use arrow::array::Int32Array;
     use std::array::from_ref;
-    use std::sync::Arc;
 
     fn sa(vals: &[Option<&str>]) -> ArrayRef {
         Arc::new(StringArray::from(vals.to_vec())) as ArrayRef

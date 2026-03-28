@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType::{Int64, Timestamp, Utf8};
@@ -70,10 +69,6 @@ impl FromUnixtimeFunc {
 }
 
 impl ScalarUDFImpl for FromUnixtimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "from_unixtime"
     }

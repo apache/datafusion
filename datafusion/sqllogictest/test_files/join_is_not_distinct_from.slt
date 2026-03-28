@@ -291,6 +291,36 @@ JOIN t4 ON (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.val2 IS NOT DISTINCT F
 2 2 NULL NULL 200 200
 3 3 30 30 NULL NULL
 
+# Test mixed: 1 Eq key + multiple IS NOT DISTINCT FROM keys.
+# The optimizer unconditionally favours Eq keys (see extract_equijoin_predicate.rs,
+# "Only convert when there are NO equijoin predicates, to be conservative").
+# All IS NOT DISTINCT FROM predicates should be demoted to filter, even when they outnumber the Eq key.
+query TT
+EXPLAIN SELECT t3.id AS t3_id, t4.id AS t4_id, t3.val1, t4.val1, t3.val2, t4.val2
+FROM t3
+JOIN t4 ON (t3.id = t4.id) AND (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.val2 IS NOT DISTINCT FROM t4.val2)
+----
+logical_plan
+01)Projection: t3.id AS t3_id, t4.id AS t4_id, t3.val1, t4.val1, t3.val2, t4.val2
+02)--Inner Join: t3.id = t4.id Filter: t3.val1 IS NOT DISTINCT FROM t4.val1 AND t3.val2 IS NOT DISTINCT FROM t4.val2
+03)----TableScan: t3 projection=[id, val1, val2]
+04)----TableScan: t4 projection=[id, val1, val2]
+physical_plan
+01)ProjectionExec: expr=[id@0 as t3_id, id@3 as t4_id, val1@1 as val1, val1@4 as val1, val2@2 as val2, val2@5 as val2]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], filter=val1@0 IS NOT DISTINCT FROM val1@2 AND val2@1 IS NOT DISTINCT FROM val2@3
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Verify correct results: all 3 rows should match (including NULL=NULL via IS NOT DISTINCT FROM in filter)
+query IIIIII rowsort
+SELECT t3.id AS t3_id, t4.id AS t4_id, t3.val1, t4.val1, t3.val2, t4.val2
+FROM t3
+JOIN t4 ON (t3.id = t4.id) AND (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.val2 IS NOT DISTINCT FROM t4.val2)
+----
+1 1 10 10 100 100
+2 2 NULL NULL 200 200
+3 3 30 30 NULL NULL
+
 statement ok
 drop table t0;
 

@@ -23,7 +23,6 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#expm1>
@@ -47,10 +46,6 @@ impl SparkExpm1 {
 }
 
 impl ScalarUDFImpl for SparkExpm1 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "expm1"
     }

@@ -20,7 +20,6 @@ use datafusion_common::{Result, ScalarValue, utils::take_function_args};
 use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Other Functions"),
@@ -60,9 +59,6 @@ impl ArrowTypeOfFunc {
 }
 
 impl ScalarUDFImpl for ArrowTypeOfFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "arrow_typeof"
     }

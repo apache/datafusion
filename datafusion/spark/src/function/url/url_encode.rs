@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
@@ -64,10 +63,6 @@ impl UrlEncode {
 }
 
 impl ScalarUDFImpl for UrlEncode {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "url_encode"
     }

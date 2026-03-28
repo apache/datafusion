@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::function::map::utils::{
@@ -55,10 +54,6 @@ impl MapFromEntries {
 }
 
 impl ScalarUDFImpl for MapFromEntries {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_from_entries"
     }
@@ -160,7 +155,6 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::datatypes::Fields;
-    use datafusion_expr::ReturnFieldArgs;
 
     fn make_entries_field(array_nullable: bool, element_nullable: bool) -> FieldRef {
         let struct_type = DataType::Struct(Fields::from(vec![

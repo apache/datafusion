@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -71,10 +70,6 @@ impl ReverseFunc {
 }
 
 impl ScalarUDFImpl for ReverseFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "reverse"
     }

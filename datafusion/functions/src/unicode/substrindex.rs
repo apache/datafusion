@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -93,10 +92,6 @@ impl SubstrIndexFunc {
 }
 
 impl ScalarUDFImpl for SubstrIndexFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "substr_index"
     }

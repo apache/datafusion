@@ -635,6 +635,18 @@ impl Dialect for BigQueryDialect {
     fn unnest_as_table_factor(&self) -> bool {
         true
     }
+
+    fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, unit: TimeUnit) -> String {
+        // https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/data-types#timestamp_type
+        let format = match unit {
+            TimeUnit::Second => "%Y-%m-%d %H:%M:%S%:z",
+            TimeUnit::Millisecond => "%Y-%m-%d %H:%M:%S%.3f%:z",
+            TimeUnit::Microsecond => "%Y-%m-%d %H:%M:%S%.6f%:z",
+            TimeUnit::Nanosecond => "%Y-%m-%d %H:%M:%S%.9f%:z",
+        };
+
+        dt.format(format).to_string()
+    }
 }
 
 impl BigQueryDialect {

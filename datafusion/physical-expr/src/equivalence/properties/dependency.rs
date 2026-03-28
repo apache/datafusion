@@ -383,7 +383,6 @@ pub fn generate_dependency_orderings(
 #[cfg(test)]
 mod tests {
     use std::ops::Not;
-    use std::sync::Arc;
 
     use super::*;
     use crate::equivalence::tests::{
@@ -401,7 +400,6 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_expr::sort_properties::SortProperties;
     use datafusion_functions::string::concat;
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{
         LexRequirement, PhysicalSortRequirement,
     };

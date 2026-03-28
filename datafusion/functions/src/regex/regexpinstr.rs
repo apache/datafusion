@@ -109,10 +109,6 @@ impl RegexpInstrFunc {
 }
 
 impl ScalarUDFImpl for RegexpInstrFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regexp_instr"
     }
@@ -446,7 +442,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
     use arrow::array::{GenericStringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;

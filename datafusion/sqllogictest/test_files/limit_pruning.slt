@@ -79,3 +79,7 @@ drop table tracking_data;
 
 statement ok
 reset datafusion.explain.analyze_level;
+
+# Config reset
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
