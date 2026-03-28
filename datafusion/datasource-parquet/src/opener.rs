@@ -47,7 +47,7 @@ use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
+    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricCategory, PruningMetrics,
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
@@ -269,6 +269,7 @@ impl FileOpener for ParquetOpener {
         let limit = self.limit;
 
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
             .global_counter("num_predicate_creation_errors");
 
         let expr_adapter_factory = Arc::clone(&self.expr_adapter_factory);

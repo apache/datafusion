@@ -234,7 +234,8 @@ mod tests {
             let analyze_exec = Arc::new(AnalyzeExec::new(
                 false,
                 false,
-                vec![MetricType::SUMMARY, MetricType::DEV],
+                vec![MetricType::Summary, MetricType::Dev],
+                None,
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
                     file_group.clone(),
