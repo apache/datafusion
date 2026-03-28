@@ -138,6 +138,16 @@ FROM t1 WHERE ((false > (v1 = v1)) IS DISTINCT FROM true);
 ----
 1
 
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.enable_round_robin_repartition;
+
 statement ok
 DROP TABLE t1;
 

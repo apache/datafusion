@@ -27,7 +27,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
@@ -73,10 +72,6 @@ impl CharacterLengthFunc {
 }
 
 impl ScalarUDFImpl for CharacterLengthFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "character_length"
     }

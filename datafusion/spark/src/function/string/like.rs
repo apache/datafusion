@@ -24,7 +24,6 @@ use datafusion_expr::{
     ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// LIKE function for case-sensitive pattern matching
@@ -49,10 +48,6 @@ impl SparkLike {
 }
 
 impl ScalarUDFImpl for SparkLike {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "like"
     }

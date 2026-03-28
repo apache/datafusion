@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, AsArray, LargeStringBuilder, StringBuilder,
     StringLikeArrayBuilder, StringViewBuilder,
@@ -81,10 +79,6 @@ impl TranslateFunc {
 }
 
 impl ScalarUDFImpl for TranslateFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "translate"
     }

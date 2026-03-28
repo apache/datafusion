@@ -1659,6 +1659,13 @@ logical_plan
 10)----------SubqueryAlias: p
 11)------------TableScan: project_assignments projection=[project_id]
 
+# Config reset
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
 statement count 0
 drop table employees;
 

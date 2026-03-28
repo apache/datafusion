@@ -184,5 +184,12 @@ drop table small_table;
 statement ok
 drop table large_table;
 
+# Config reset
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
 statement ok
 drop table t;

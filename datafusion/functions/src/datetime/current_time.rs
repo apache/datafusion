@@ -28,7 +28,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -69,10 +68,6 @@ impl CurrentTimeFunc {
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
 impl ScalarUDFImpl for CurrentTimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "current_time"
     }

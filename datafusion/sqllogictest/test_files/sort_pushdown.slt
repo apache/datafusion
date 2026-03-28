@@ -1520,9 +1520,12 @@ SELECT * FROM multi_partition_parquet ORDER BY id ASC;
 8 800
 9 900
 
-# Restore target_partitions to 1 for remaining cleanup
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
 statement ok
-SET datafusion.execution.target_partitions = 2;
+SET datafusion.execution.target_partitions = 4;
 
 # Cleanup
 statement ok
@@ -1631,4 +1634,13 @@ statement ok
 DROP TABLE agg_expr_parquet;
 
 statement ok
-SET datafusion.optimizer.enable_sort_pushdown = true;
+RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+RESET datafusion.execution.parquet.max_row_group_size;
+
+statement ok
+RESET datafusion.execution.parquet.enable_page_index;
+
+statement ok
+RESET datafusion.optimizer.enable_sort_pushdown;

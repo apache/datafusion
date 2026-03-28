@@ -15,25 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains code for reading [Avro] data into `RecordBatch`es
+//! Specialized Sort Merge Join stream for Semi/Anti joins.
 //!
-//! [Avro]: https://avro.apache.org/docs/1.2.0/
+//! Used internally by `SortMergeJoinExec` for semi/anti join types.
 
-mod arrow_array_reader;
-mod reader;
-mod schema;
+pub(crate) mod stream;
 
-use arrow::datatypes::Schema;
-pub use reader::{Reader, ReaderBuilder};
-
-pub use schema::to_arrow_schema;
-use std::io::Read;
-
-/// Read Avro schema given a reader
-pub fn read_avro_schema_from_reader<R: Read>(
-    reader: &mut R,
-) -> datafusion_common::Result<Schema> {
-    let avro_reader = apache_avro::Reader::new(reader)?;
-    let schema = avro_reader.writer_schema();
-    to_arrow_schema(schema)
-}
+#[cfg(test)]
+mod tests;

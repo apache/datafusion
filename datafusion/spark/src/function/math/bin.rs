@@ -25,7 +25,6 @@ use datafusion_expr::{
     TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `bin` expression
@@ -57,10 +56,6 @@ impl SparkBin {
 }
 
 impl ScalarUDFImpl for SparkBin {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bin"
     }
