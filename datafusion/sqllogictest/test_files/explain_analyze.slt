@@ -24,6 +24,108 @@ EXPLAIN ANALYZE SELECT * FROM generate_series(100);
 Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 
 # --------------------------------------------
+# Test parquet-only output_rows_skew metric
+# --------------------------------------------
+
+statement ok
+set datafusion.explain.analyze_level = dev;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query I
+COPY (
+  SELECT 1 AS x
+  UNION ALL SELECT 2
+  UNION ALL SELECT 3
+  UNION ALL SELECT 4
+)
+TO 'test_files/scratch/explain_analyze/output_rows_skew/f1.parquet'
+STORED AS PARQUET;
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE skew_parquet
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
+
+# All partition's output_rows: [4]
+query TT
+EXPLAIN ANALYZE SELECT * FROM skew_parquet;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=0%<slt:ignore>
+
+statement ok
+DROP TABLE skew_parquet;
+
+query I
+COPY (SELECT * FROM (SELECT 1 AS x) WHERE false)
+TO 'test_files/scratch/explain_analyze/output_rows_skew/f2.parquet'
+STORED AS PARQUET;
+----
+0
+
+# All partition's output_rows: [4, 0]
+statement ok
+CREATE EXTERNAL TABLE skew_parquet
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM skew_parquet;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=100%<slt:ignore>
+
+statement ok
+DROP TABLE skew_parquet;
+
+query I
+COPY (SELECT * FROM (SELECT 1 AS x))
+TO 'test_files/scratch/explain_analyze/output_rows_skew/f3.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT * FROM (SELECT 1 AS x) WHERE false)
+TO 'test_files/scratch/explain_analyze/output_rows_skew/f4.parquet'
+STORED AS PARQUET;
+----
+0
+
+# All partition's output_rows: [4, 0, 1, 0]
+statement ok
+CREATE EXTERNAL TABLE skew_parquet
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_analyze/output_rows_skew';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM skew_parquet;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=84.31%<slt:ignore>
+
+# All partition's output_rows: [0]
+statement ok
+CREATE EXTERNAL TABLE skew_parquet_single
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_analyze/output_rows_skew/f4.parquet';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM skew_parquet_single;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>output_rows_skew=0%<slt:ignore>
+
+statement ok
+DROP TABLE skew_parquet_single;
+
+statement ok
+DROP TABLE skew_parquet;
+
+statement ok
+reset datafusion.execution.target_partitions;
+
+# --------------------------------------------
 # Test ProjectionExec's per-expression metrics
 # --------------------------------------------
 
