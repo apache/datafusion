@@ -19,8 +19,9 @@
 //! data transfer as much as possible.
 //!
 //! # Plan Limit Absorption
-//! In addition to pushing down [`LimitExec`] in the plan, some operators can
-//! "absorb" a limit and stop early during execution.
+//! In addition to pushing down `GlobalLimitExec` and `LocalLimitExec` nodes in
+//! the plan, some operators can "absorb" a limit and stop early during
+//! execution.
 //!
 //! ## Background: vectorized volcano execution model
 //! DataFusion uses a batched volcano model. For most operators, output is
@@ -33,7 +34,7 @@
 //! ## Example
 //! For a join with an expensive, selective predicate:
 //! ```text
-//! LimitExec(fetch=10)
+//! GlobalLimitExec: skip=0, fetch=10
 //! -- NestedLoopJoinExec(on=expr_expensive_and_selective)
 //! --- DataSourceExec()
 //! --- DataSourceExec()
@@ -158,8 +159,8 @@ pub fn pushdown_limit_helper(
         global_state.satisfied = false;
 
         // Now the global state has the most recent information, we can remove
-        // the `LimitExec` plan. We will decide later if we should add it again
-        // or not.
+        // the limit node. We will decide later if we should add it again or
+        // not.
         return Ok((
             Transformed {
                 data: limit_info.input,
@@ -212,7 +213,7 @@ pub fn pushdown_limit_helper(
             Ok((Transformed::no(pushdown_plan), global_state))
         } else if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
             // This plan is combining input partitions, so we need to add the
-            // fetch info to plan if possible. If not, we must add a `LimitExec`
+            // fetch info to plan if possible. If not, we must add a limit node
             // with the information from the global state.
             let mut new_plan = plan_with_fetch;
             // Execution plans can't (yet) handle skip, so if we have one,
@@ -321,7 +322,7 @@ pub(crate) fn pushdown_limits(
     }
 }
 
-/// Transforms the [`ExecutionPlan`] into a [`LimitExec`] if it is a
+/// Extracts limit information from the [`ExecutionPlan`] if it is a
 /// [`GlobalLimitExec`] or a [`LocalLimitExec`].
 fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
