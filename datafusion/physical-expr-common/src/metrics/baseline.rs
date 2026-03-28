@@ -17,7 +17,7 @@
 
 //! Metrics common for almost all operators
 
-use std::{borrow::Cow, sync::Arc, task::Poll};
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc, task::Poll};
 
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, utils::memory::get_record_batch_memory_size};
@@ -146,12 +146,20 @@ impl BaselineMetrics {
     pub fn output_rows_skew_metric(metrics: &MetricsSet) -> Option<Arc<Metric>> {
         let output_rows = metrics
             .iter()
-            .filter_map(|metric| match metric.value() {
-                super::MetricValue::OutputRows(count) => {
-                    Some((metric.partition(), count.value() as u128))
+            .filter_map(|metric| match (metric.partition(), metric.value()) {
+                (Some(partition), super::MetricValue::OutputRows(count)) => {
+                    Some((partition, count.value() as u128))
                 }
                 _ => None,
             })
+            .fold(
+                BTreeMap::<usize, u128>::new(),
+                |mut output_rows, (partition, rows)| {
+                    *output_rows.entry(partition).or_default() += rows;
+                    output_rows
+                },
+            )
+            .into_values()
             .collect::<Vec<_>>();
 
         if output_rows.is_empty() {
@@ -230,7 +238,7 @@ impl Drop for BaselineMetrics {
 }
 
 /// See [`BaselineMetrics::output_rows_skew_metric`] for the algorithm.
-fn output_rows_skew_score(output_rows: &[(Option<usize>, u128)]) -> Option<f64> {
+fn output_rows_skew_score(output_rows: &[u128]) -> Option<f64> {
     if output_rows.is_empty() {
         return None;
     }
@@ -242,7 +250,7 @@ fn output_rows_skew_score(output_rows: &[(Option<usize>, u128)]) -> Option<f64> 
 
     let output_rows = output_rows
         .iter()
-        .map(|(_partition, rows)| *rows as f64)
+        .map(|rows| *rows as f64)
         .collect::<Vec<_>>();
     let total_rows = output_rows.iter().sum::<f64>();
     if total_rows == 0.0 {

@@ -122,8 +122,9 @@ DROP TABLE skew_parquet_single;
 statement ok
 DROP TABLE skew_parquet;
 
+# The SLT runner sets `target_partitions` to 4 for deterministic plans.
 statement ok
-reset datafusion.execution.target_partitions;
+set datafusion.execution.target_partitions = 4;
 
 # --------------------------------------------
 # Test ProjectionExec's per-expression metrics
