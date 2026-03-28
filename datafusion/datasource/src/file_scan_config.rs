@@ -920,7 +920,6 @@ impl DataSource for FileScanConfig {
     ///         │     │                      rebuild_with_source(exact=true)
     ///         │     │                        ├─ sort files by stats within groups
     ///         │     │                        ├─ verify non-overlapping
-    ///         │     │                        ├─ redistribute across groups (consecutive)
     ///         │     │                        └─► keep output_ordering → SortExec removed
     ///         │     │
     ///         │     ├─ reversed ordering matches? ──► Inexact
@@ -1329,8 +1328,7 @@ impl FileScanConfig {
     /// │  1. Reverse file groups (if DESC matches reversed ordering) │
     /// │  2. Sort files within groups by min/max statistics          │
     /// │  3. If Exact + non-overlapping:                             │
-    /// │     a. Redistribute files consecutively across groups       │
-    /// │     b. Keep output_ordering → SortExec eliminated           │
+    /// │     Keep output_ordering → SortExec eliminated              │
     /// │     Otherwise: clear output_ordering → SortExec stays       │
     /// └─────────────────────────────────────────────────────────────┘
     /// ```
@@ -1344,14 +1342,6 @@ impl FileScanConfig {
     /// Even when files overlap (Inexact), statistics-based ordering helps
     /// TopK/LIMIT queries: reading low-value files first lets dynamic filters
     /// prune high-value files earlier.
-    ///
-    /// # Why redistribute across groups?
-    ///
-    /// `split_groups_by_statistics` uses bin-packing to balance group sizes,
-    /// which can interleave file ranges across groups. We fix this by
-    /// assigning consecutive files to consecutive groups, so groups are
-    /// ordered relative to each other. This preserves parallel I/O while
-    /// ensuring SPM's merge is a cheap sequential read.
     fn rebuild_with_source(
         &self,
         new_file_source: Arc<dyn FileSource>,
@@ -1418,40 +1408,28 @@ impl FileScanConfig {
 
         if is_exact && all_non_overlapping {
             // Truly exact: within-file ordering guaranteed and files are non-overlapping.
+            // Keep output_ordering so SortExec can be eliminated for each partition.
             //
-            // When there are multiple groups, redistribute files using consecutive
-            // assignment so that each group remains non-overlapping AND groups are
-            // ordered relative to each other. This enables:
-            // - No SortExec per partition (files in each group are sorted & non-overlapping)
-            // - SPM cheaply merges ordered streams (O(n) merge)
-            // - Parallel I/O across partitions
+            // We intentionally do NOT redistribute files across groups here.
+            // The planning-phase bin-packing may interleave file ranges across groups:
             //
-            // Before (bin-packing may interleave):
-            //   Group 0: [file_01(1-10), file_03(21-30)]  ← gap, interleaved with group 1
-            //   Group 1: [file_02(11-20), file_04(31-40)]
+            //   Group 0: [f1(1-10), f3(21-30)]   ← interleaved with group 1
+            //   Group 1: [f2(11-20), f4(31-40)]
             //
-            // After (consecutive assignment):
-            //   Group 0: [file_01(1-10), file_02(11-20)]  ← consecutive, ordered
-            //   Group 1: [file_03(21-30), file_04(31-40)]  ← consecutive, ordered
-            if new_config.file_groups.len() > 1
-                && let Some(sort_order) = LexOrdering::new(order.iter().cloned())
-            {
-                let projected_schema = new_config.projected_schema()?;
-                let projection_indices = new_config
-                    .file_source
-                    .projection()
-                    .as_ref()
-                    .and_then(|p| ordered_column_indices_from_projection(p));
-                let num_groups = new_config.file_groups.len();
-                new_config.file_groups =
-                    Self::redistribute_files_across_groups_by_statistics(
-                        &new_config.file_groups,
-                        &sort_order,
-                        &projected_schema,
-                        projection_indices.as_deref(),
-                        num_groups,
-                    );
-            }
+            // This interleaving is actually beneficial because SPM pulls from both
+            // partitions concurrently, keeping parallel I/O active:
+            //
+            //   SPM: pull P0 [1-10] → pull P1 [11-20] → pull P0 [21-30] → pull P1 [31-40]
+            //        ^^^^^^^^^^^^     ^^^^^^^^^^^^
+            //        both partitions scanning files simultaneously
+            //
+            // If we were to redistribute files consecutively:
+            //   Group 0: [f1(1-10), f2(11-20)]   ← all values < group 1
+            //   Group 1: [f3(21-30), f4(31-40)]
+            //
+            // SPM would read ALL of group 0 first (values always smaller), then group 1.
+            // This degrades to single-threaded sequential I/O — the other partition
+            // sits idle the entire time, losing the parallelism benefit.
         } else {
             new_config.output_ordering = vec![];
         }
@@ -1545,82 +1523,6 @@ impl FileScanConfig {
             any_reordered,
             all_non_overlapping: confirmed_non_overlapping == file_groups.len(),
         }
-    }
-
-    /// Redistribute files across groups using consecutive assignment.
-    ///
-    /// `split_groups_by_statistics` uses bin-packing which balances group sizes
-    /// but can interleave file ranges. This method fixes that by assigning
-    /// consecutive sorted files to consecutive groups:
-    ///
-    /// ```text
-    /// Input (bin-packed, interleaved):
-    ///   Group 0: [f1(0-9),  f3(20-29)]     max(f1)=9  but f3=20 > Group1.f2=10
-    ///   Group 1: [f2(10-19), f4(30-39)]     groups overlap!
-    ///
-    /// After global sort + consecutive assignment:
-    ///   Group 0: [f1(0-9),  f2(10-19)]     max=19
-    ///   Group 1: [f3(20-29), f4(30-39)]    min=20 > 19 ✓ groups are ordered!
-    ///
-    /// Resulting plan:
-    ///   SPM [col ASC]                       ← O(n) merge, reads group 0 then group 1
-    ///     DataSourceExec [f1, f2]           ← parallel I/O, no SortExec
-    ///     DataSourceExec [f3, f4]           ← parallel I/O, no SortExec
-    /// ```
-    ///
-    /// Falls back to the original groups if statistics are unavailable.
-    fn redistribute_files_across_groups_by_statistics(
-        file_groups: &[FileGroup],
-        sort_order: &LexOrdering,
-        projected_schema: &SchemaRef,
-        projection_indices: Option<&[usize]>,
-        num_groups: usize,
-    ) -> Vec<FileGroup> {
-        if num_groups <= 1 {
-            return file_groups.to_vec();
-        }
-
-        // Flatten all files
-        let all_files: Vec<_> = file_groups.iter().flat_map(|g| g.iter()).collect();
-        if all_files.is_empty() {
-            return file_groups.to_vec();
-        }
-
-        // Sort globally by statistics
-        let statistics = match MinMaxStatistics::new_from_files(
-            sort_order,
-            projected_schema,
-            projection_indices,
-            all_files.iter().copied(),
-        ) {
-            Ok(stats) => stats,
-            Err(_) => return file_groups.to_vec(),
-        };
-
-        let sorted_indices = statistics.min_values_sorted();
-
-        // Assign consecutive files to groups
-        let total = sorted_indices.len();
-        let base_size = total / num_groups;
-        let remainder = total % num_groups;
-
-        let mut new_groups = Vec::with_capacity(num_groups);
-        let mut offset = 0;
-        for i in 0..num_groups {
-            // First `remainder` groups get one extra file
-            let group_size = base_size + if i < remainder { 1 } else { 0 };
-            if group_size == 0 {
-                continue;
-            }
-            let group: FileGroup = sorted_indices[offset..offset + group_size]
-                .iter()
-                .map(|(idx, _)| all_files[*idx].clone())
-                .collect();
-            new_groups.push(group);
-            offset += group_size;
-        }
-
-        new_groups
     }
 
     /// Last-resort optimization when FileSource returns `Unsupported`.
@@ -3419,9 +3321,12 @@ mod tests {
     }
 
     #[test]
-    fn sort_pushdown_exact_multi_group_redistributes_consecutively() -> Result<()> {
-        // ExactSortPushdownSource + 4 non-overlapping files in 2 interleaved groups
-        // → files should be redistributed so groups are consecutive and ordered
+    fn sort_pushdown_exact_multi_group_preserves_parallelism() -> Result<()> {
+        // ExactSortPushdownSource + 4 non-overlapping files in 2 interleaved groups.
+        // Groups should NOT be redistributed — interleaved groups allow SPM to
+        // pull from both partitions concurrently, keeping parallel I/O active.
+        // Redistributing consecutively would make SPM read one partition at a
+        // time (all values in group 0 < group 1), degrading to single-threaded I/O.
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
         let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
@@ -3460,75 +3365,20 @@ mod tests {
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
 
-        // Should still have 2 groups (preserving parallelism)
+        // 2 groups preserved (parallelism maintained)
         assert_eq!(pushed_config.file_groups.len(), 2);
 
-        // Group 0 should have consecutive files [file_01, file_02]
+        // Files within each group are sorted by stats, but groups are NOT
+        // redistributed — interleaved assignment from bin-packing is kept
         let files0 = pushed_config.file_groups[0].files();
         assert_eq!(files0[0].object_meta.location.as_ref(), "file_01");
-        assert_eq!(files0[1].object_meta.location.as_ref(), "file_02");
-
-        // Group 1 should have consecutive files [file_03, file_04]
+        assert_eq!(files0[1].object_meta.location.as_ref(), "file_03");
         let files1 = pushed_config.file_groups[1].files();
-        assert_eq!(files1[0].object_meta.location.as_ref(), "file_03");
+        assert_eq!(files1[0].object_meta.location.as_ref(), "file_02");
         assert_eq!(files1[1].object_meta.location.as_ref(), "file_04");
 
-        // output_ordering preserved
+        // output_ordering preserved (Exact, each group internally non-overlapping)
         assert!(!pushed_config.output_ordering.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn sort_pushdown_exact_multi_group_uneven_distribution() -> Result<()> {
-        // 5 files across 2 groups → group 0 gets 3 files, group 1 gets 2
-        let file_schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
-        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
-
-        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
-
-        let file_groups = vec![
-            FileGroup::new(vec![
-                make_file_with_stats("f1", 0.0, 9.0),
-                make_file_with_stats("f3", 20.0, 29.0),
-                make_file_with_stats("f5", 40.0, 49.0),
-            ]),
-            FileGroup::new(vec![
-                make_file_with_stats("f2", 10.0, 19.0),
-                make_file_with_stats("f4", 30.0, 39.0),
-            ]),
-        ];
-
-        let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-                .with_file_groups(file_groups)
-                .with_output_ordering(vec![
-                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
-                ])
-                .build();
-
-        let result = config.try_pushdown_sort(&[sort_expr])?;
-        let SortOrderPushdownResult::Exact { inner } = result else {
-            panic!("Expected Exact result, got {result:?}");
-        };
-        let pushed_config = inner
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .expect("Expected FileScanConfig");
-
-        assert_eq!(pushed_config.file_groups.len(), 2);
-        // Group 0: 3 files (5/2 = 2 base + 1 remainder)
-        let files0 = pushed_config.file_groups[0].files();
-        assert_eq!(files0.len(), 3);
-        assert_eq!(files0[0].object_meta.location.as_ref(), "f1");
-        assert_eq!(files0[1].object_meta.location.as_ref(), "f2");
-        assert_eq!(files0[2].object_meta.location.as_ref(), "f3");
-        // Group 1: 2 files
-        let files1 = pushed_config.file_groups[1].files();
-        assert_eq!(files1.len(), 2);
-        assert_eq!(files1[0].object_meta.location.as_ref(), "f4");
-        assert_eq!(files1[1].object_meta.location.as_ref(), "f5");
         Ok(())
     }
 
