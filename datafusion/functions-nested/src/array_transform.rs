@@ -128,7 +128,7 @@ impl LambdaUDF for ArrayTransform {
         Ok(vec![coerced])
     }
 
-    fn lambdas_parameters(&self, value_fields: &[FieldRef]) -> Result<Vec<Vec<Field>>> {
+    fn lambda_parameters(&self, value_fields: &[FieldRef]) -> Result<Vec<Vec<Field>>> {
         let list = if value_fields.len() == 1 {
             &value_fields[0]
         } else {
@@ -160,7 +160,7 @@ impl LambdaUDF for ArrayTransform {
         //TODO: should metadata be copied into the transformed array?
 
         // lambda is the resulting field of executing the lambda body
-        // with the parameters returned in lambdas_parameters
+        // with the parameters returned in lambda_parameters
         let field = Arc::new(Field::new(
             Field::LIST_FIELD_DEFAULT_NAME,
             lambda.data_type().clone(),

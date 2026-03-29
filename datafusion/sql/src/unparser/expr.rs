@@ -1947,7 +1947,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn lambdas_parameters(
+        fn lambda_parameters(
             &self,
             _value_fields: &[FieldRef],
         ) -> Result<Vec<Vec<Field>>> {

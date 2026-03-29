@@ -445,9 +445,9 @@ impl LambdaFunction {
         self.func.name()
     }
 
-    /// Invokes the inner function [`LambdaUDF::lambdas_parameters`]
+    /// Invokes the inner function [`LambdaUDF::lambda_parameters`]
     /// using the arguments of this invocation
-    pub fn lambdas_parameters(&self, schema: &dyn ExprSchema) -> Result<Vec<Vec<Field>>> {
+    pub fn lambda_parameters(&self, schema: &dyn ExprSchema) -> Result<Vec<Vec<Field>>> {
         let args = self
             .args
             .iter()
@@ -465,7 +465,7 @@ impl LambdaFunction {
             })
             .collect::<Vec<_>>();
 
-        self.func.lambdas_parameters(&coerced_values)
+        self.func.lambda_parameters(&coerced_values)
     }
 }
 

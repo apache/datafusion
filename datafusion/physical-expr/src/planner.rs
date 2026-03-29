@@ -423,14 +423,14 @@ pub fn create_physical_expr(
                 .filter(|arg| matches!(arg, Expr::Lambda(_)))
                 .count();
 
-            let mut lambdas_parameters =
-                invocation.lambdas_parameters(input_dfschema)?.into_iter();
+            let mut lambda_parameters =
+                invocation.lambda_parameters(input_dfschema)?.into_iter();
 
-            if num_lambdas > lambdas_parameters.len() {
+            if num_lambdas > lambda_parameters.len() {
                 return plan_err!(
-                    "{} lambdas_parameters returned only {} values for {num_lambdas} lambdas",
+                    "{} lambda_parameters returned only {} values for {num_lambdas} lambdas",
                     func.name(),
-                    lambdas_parameters.len()
+                    lambda_parameters.len()
                 );
             }
 
@@ -438,11 +438,11 @@ pub fn create_physical_expr(
                 .iter()
                 .map(|arg| match arg {
                     Expr::Lambda(lambda) => {
-                        let lambda_parameters = lambdas_parameters
+                        let lambda_parameters = lambda_parameters
                             .next()
                             .ok_or_else(|| {
                                 internal_datafusion_err!(
-                                    "lambdas_parameters len should have been checked above"
+                                    "lambda_parameters len should have been checked above"
                                 )
                             })?
                             .into_iter()

@@ -371,7 +371,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         if let Some(fm) = self.context_provider.get_lambda_meta(&name) {
             // plan non-lambda arguments first so we can get theirs datatype and call
-            // LambdaUDF::lambdas_parameters to then plan the lambda arguments with
+            // LambdaUDF::lambda_parameters to then plan the lambda arguments with
             // resolved lambda variables
             enum ExprOrLambda {
                 Expr(Expr),
@@ -422,26 +422,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     })
                     .collect::<Vec<_>>();
 
-            // lambdas_parameters refers only to lambdas and not to values, so instead
+            // lambda_parameters refers only to lambdas and not to values, so instead
             // of zipping it with partially_planned, we iterate over partially_planned and only
-            // consume from lambdas_parameters when a given argument is a lambda
+            // consume from lambda_parameters when a given argument is a lambda
             // to reconstruct the arguments list with the correct order
             // this supports any value and lambda positioning including
             // multiple lambdas interleaved with values
-            let mut lambdas_parameters =
-                fm.lambdas_parameters(&coerced_values)?.into_iter();
+            let mut lambda_parameters =
+                fm.lambda_parameters(&coerced_values)?.into_iter();
 
             let num_lambdas = partially_planned.len() - coerced_values.len();
 
             // functions can support multiple lambdas where some trailing ones are optional,
-            // but to simplify the implementor, lambdas_parameters returns the parameters of all of them,
+            // but to simplify the implementor, lambda_parameters returns the parameters of all of them,
             // so we can't do equality check. one example is spark reduce:
             // https://spark.apache.org/docs/latest/api/sql/index.html#reduce
-            if lambdas_parameters.len() < num_lambdas {
+            if lambda_parameters.len() < num_lambdas {
                 return plan_err!(
-                    "{} invocation defined {num_lambdas} but lambdas_parameters returned only {}",
+                    "{} invocation defined {num_lambdas} but lambda_parameters returned only {}",
                     fm.name(),
-                    lambdas_parameters.len()
+                    lambda_parameters.len()
                 );
             }
 
@@ -451,9 +451,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     ExprOrLambda::Expr(expr) => Ok(expr),
                     ExprOrLambda::Lambda(lambda) => {
                         let lambda_params =
-                            lambdas_parameters.next().ok_or_else(|| {
+                            lambda_parameters.next().ok_or_else(|| {
                                 internal_datafusion_err!(
-                                    "lambdas_parameters len should have been checked above"
+                                    "lambda_parameters len should have been checked above"
                                 )
                             })?;
 

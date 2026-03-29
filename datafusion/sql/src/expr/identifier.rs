@@ -61,8 +61,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let normalize_ident = self.ident_normalizer.normalize(id);
 
             // lambdas parameters have higher precedence
-            if let Some(field) =
-                planner_context.lambdas_parameters().get(&normalize_ident)
+            if let Some(field) = planner_context.lambda_parameters().get(&normalize_ident)
             {
                 let mut lambda_var =
                     LambdaVariable::new(normalize_ident, Arc::clone(field));

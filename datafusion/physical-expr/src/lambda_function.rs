@@ -260,25 +260,25 @@ impl PhysicalExpr for LambdaFunctionExpr {
             })
             .collect::<Vec<_>>();
 
-        // lambdas_parameters refers only to lambdas and not to values, so instead
+        // lambda_parameters refers only to lambdas and not to values, so instead
         // of zipping it with self.args, we iterate over self.args and only
-        // consume from lambdas_parameters when a given argument is a lambda
+        // consume from lambda_parameters when a given argument is a lambda
         // to reconstruct the arguments list with the correct order
         // this supports any value and lambda positioning including
         // multiple lambdas interleaved with values
-        let mut lambdas_parameters =
-            self.fun().lambdas_parameters(&value_fields)?.into_iter();
+        let mut lambda_parameters =
+            self.fun().lambda_parameters(&value_fields)?.into_iter();
         let num_lambdas = self.args.len() - value_fields.len();
 
         // functions can support multiple lambdas where some trailing ones are optional,
-        // but to simplify the implementor, lambdas_parameters returns the parameters of all of them,
+        // but to simplify the implementor, lambda_parameters returns the parameters of all of them,
         // so we can't do equality check. one example is spark reduce:
         // https://spark.apache.org/docs/latest/api/sql/index.html#reduce
-        if lambdas_parameters.len() < num_lambdas {
+        if lambda_parameters.len() < num_lambdas {
             return exec_err!(
-                "{} invocation defined {num_lambdas} but lambdas_parameters returned only {}",
+                "{} invocation defined {num_lambdas} but lambda_parameters returned only {}",
                 self.name(),
-                lambdas_parameters.len()
+                lambda_parameters.len()
             );
         }
 
@@ -287,7 +287,7 @@ impl PhysicalExpr for LambdaFunctionExpr {
             .iter()
             .map(|arg| match arg.as_any().downcast_ref::<LambdaExpr>() {
                 Some(lambda) => {
-                    let lambda_params = lambdas_parameters.next().ok_or_else(|| {
+                    let lambda_params = lambda_parameters.next().ok_or_else(|| {
                         internal_datafusion_err!(
                             "params len should have been checked above"
                         )
@@ -432,7 +432,7 @@ mod tests {
             &self.signature
         }
 
-        fn lambdas_parameters(
+        fn lambda_parameters(
             &self,
             _value_fields: &[FieldRef],
         ) -> Result<Vec<Vec<Field>>> {

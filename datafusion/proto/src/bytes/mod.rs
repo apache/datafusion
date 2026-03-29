@@ -144,7 +144,7 @@ impl Serializeable for Expr {
                         &self.signature
                     }
 
-                    fn lambdas_parameters(
+                    fn lambda_parameters(
                         &self,
                         _value_fields: &[arrow::datatypes::FieldRef],
                     ) -> Result<Vec<Vec<arrow::datatypes::Field>>> {

@@ -161,7 +161,7 @@ pub struct LambdaFunctionArgs {
     /// Field associated with each arg, if it exists
     /// For lambdas, it will be the field of the result of
     /// the lambda if evaluated with the parameters
-    /// returned from [`LambdaUDF::lambdas_parameters`]
+    /// returned from [`LambdaUDF::lambda_parameters`]
     pub arg_fields: Vec<ValueOrLambda<FieldRef, FieldRef>>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
@@ -203,7 +203,7 @@ impl LambdaArgument {
 
     /// Evaluate this lambda
     /// `args` should evaluate to the value of each parameter
-    /// of the correspondent lambda returned in [LambdaUDF::lambdas_parameters].
+    /// of the correspondent lambda returned in [LambdaUDF::lambda_parameters].
     pub fn evaluate(
         &self,
         args: &[&dyn Fn() -> Result<ArrayRef>],
@@ -234,7 +234,7 @@ pub struct LambdaReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
     ///
     /// If argument `i` to the function is a lambda, it will be the field of the result of the
-    /// lambda if evaluated with the parameters returned from [`LambdaUDF::lambdas_parameters`]
+    /// lambda if evaluated with the parameters returned from [`LambdaUDF::lambda_parameters`]
     ///
     /// For example, with `array_transform([1], v -> v == 5)`
     /// this field will be `[
@@ -314,22 +314,22 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// regardless of whether they are used on a particular invocation
     ///
     /// Tip: If you have a [`LambdaFunction`] invocation, you can call the helper
-    /// [`LambdaFunction::lambdas_parameters`] instead of this method directly
+    /// [`LambdaFunction::lambda_parameters`] instead of this method directly
     ///
     /// [`LambdaFunction`]: crate::expr::LambdaFunction
-    /// [`LambdaFunction::lambdas_parameters`]: crate::expr::LambdaFunction::lambdas_parameters
+    /// [`LambdaFunction::lambda_parameters`]: crate::expr::LambdaFunction::lambda_parameters
     ///
     /// Example for array_transform:
     ///
     /// `array_transform([2.0, 8.0], v -> v > 4.0)`
     ///
     /// ```ignore
-    /// let lambdas_parameters = array_transform.lambdas_parameters(&[
+    /// let lambda_parameters = array_transform.lambda_parameters(&[
     ///      Arc::new(Field::new("", DataType::new_list(DataType::Float32, false))), // the Field of the literal `[2, 8]`
     /// ])?;
     ///
     /// assert_eq!(
-    ///      lambdas_parameters,
+    ///      lambda_parameters,
     ///      vec![
     ///         // the lambda supported parameters, regardless of how many are actually used
     ///         vec![
@@ -345,7 +345,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// The implementation can assume that some other part of the code has coerced
     /// the actual argument types to match [`Self::signature`].
-    fn lambdas_parameters(&self, value_fields: &[FieldRef]) -> Result<Vec<Vec<Field>>>;
+    fn lambda_parameters(&self, value_fields: &[FieldRef]) -> Result<Vec<Vec<Field>>>;
 
     /// What type will be returned by this function, given the arguments?
     ///
@@ -495,7 +495,7 @@ mod tests {
             &self.signature
         }
 
-        fn lambdas_parameters(
+        fn lambda_parameters(
             &self,
             _value_fields: &[FieldRef],
         ) -> Result<Vec<Vec<Field>>> {

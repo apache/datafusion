@@ -271,7 +271,7 @@ pub struct PlannerContext {
     /// The query schema defined by the table
     create_table_schema: Option<DFSchemaRef>,
     /// The parameters of all lambdas seen so far
-    lambdas_parameters: HashMap<String, FieldRef>,
+    lambda_parameters: HashMap<String, FieldRef>,
 }
 
 impl Default for PlannerContext {
@@ -289,7 +289,7 @@ impl PlannerContext {
             outer_queries_schemas_stack: vec![],
             outer_from_schema: None,
             create_table_schema: None,
-            lambdas_parameters: HashMap::new(),
+            lambda_parameters: HashMap::new(),
         }
     }
 
@@ -399,16 +399,16 @@ impl PlannerContext {
         self.ctes.get(cte_name).map(|cte| cte.as_ref())
     }
 
-    pub fn lambdas_parameters(&self) -> &HashMap<String, FieldRef> {
-        &self.lambdas_parameters
+    pub fn lambda_parameters(&self) -> &HashMap<String, FieldRef> {
+        &self.lambda_parameters
     }
 
     pub fn with_lambda_parameters(
         mut self,
-        arguments: impl IntoIterator<Item = FieldRef>,
+        parameters: impl IntoIterator<Item = FieldRef>,
     ) -> Self {
-        self.lambdas_parameters
-            .extend(arguments.into_iter().map(|f| (f.name().clone(), f)));
+        self.lambda_parameters
+            .extend(parameters.into_iter().map(|f| (f.name().clone(), f)));
 
         self
     }
