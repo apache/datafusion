@@ -40,6 +40,7 @@ use crate::expressions::{LambdaExpr, Literal};
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
+use datafusion_common::utils::remove_list_null_values;
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_datafusion_err, internal_err,
 };
@@ -309,7 +310,20 @@ impl PhysicalExpr for LambdaFunctionExpr {
                         Arc::clone(lambda.body()),
                     )))
                 }
-                None => Ok(ValueOrLambda::Value(arg.evaluate(batch)?)),
+                None => {
+                    let value = arg.evaluate(batch)?;
+
+                    let value =
+                        if self.fun.clear_null_values() && value.data_type().is_list() {
+                            ColumnarValue::Array(remove_list_null_values(
+                                &value.into_array(batch.num_rows())?,
+                            )?)
+                        } else {
+                            value
+                        };
+
+                    Ok(ValueOrLambda::Value(value))
+                }
             })
             .collect::<Result<Vec<_>>>()?;
 

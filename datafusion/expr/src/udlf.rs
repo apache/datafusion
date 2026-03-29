@@ -372,6 +372,19 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// ```
     fn return_field_from_args(&self, args: LambdaReturnFieldArgs) -> Result<FieldRef>;
 
+    /// Whether List, LargeList and FixedSizeList arguments should have it's
+    /// non-empty null sublists cleaned by Datafusion before invoking this function
+    ///
+    /// The default implementation always returns true and should only be implemented
+    /// if you want to handle non-empty null sublists yourself
+    ///
+    /// fully null fixed size list arrays should always be handled regardless of
+    /// the return of this function
+    // todo: extend this to listview and maps when remove_list_null_values supports it
+    fn clear_null_values(&self) -> bool {
+        true
+    }
+
     /// Invoke the function returning the appropriate result.
     ///
     /// # Performance

@@ -26,12 +26,18 @@ pub mod string_utils;
 use crate::assert_or_internal_err;
 use crate::error::{_exec_datafusion_err, _exec_err, _internal_datafusion_err};
 use crate::{Result, ScalarValue};
-use arrow::array::GenericListArray;
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
     cast::AsArray,
 };
+use arrow::array::{
+    BooleanArray, Datum, GenericListArray, Int32Array, Int64Array, MutableArrayData,
+    Scalar, make_array,
+};
 use arrow::buffer::OffsetBuffer;
+use arrow::compute::kernels::cmp::neq;
+use arrow::compute::kernels::length::length;
+use arrow::compute::kernels::zip::zip;
 use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 #[cfg(feature = "sql")]
@@ -1027,12 +1033,123 @@ pub fn adjust_offsets_for_slice<O: OffsetSizeTrait>(
     offsets.clone()
 }
 
+/// For lists and large lists, truncates the sublist of null values
+///
+/// For fixed size lists, if there's any valid value, replace all null values with it,
+/// otherwise return the array unchanged
+pub fn remove_list_null_values(array: &ArrayRef) -> Result<ArrayRef> {
+    // todo: handle list view and map
+    match array.data_type() {
+        DataType::List(_) => Ok(Arc::new(truncate_list_nulls(array.as_list::<i32>())?)),
+        DataType::LargeList(_) => {
+            Ok(Arc::new(truncate_list_nulls(array.as_list::<i64>())?))
+        }
+        DataType::FixedSizeList(_, _) => replace_nulls_with_first_valid(array),
+        dt => _exec_err!("expected list, got {dt}"),
+    }
+}
+
+fn replace_nulls_with_first_valid(array: &ArrayRef) -> Result<ArrayRef> {
+    if let Some(nulls) = array.nulls() {
+        let null_count = array.null_count();
+
+        if null_count > 0 {
+            if null_count == array.len() {
+                return Ok(Arc::clone(array));
+            }
+
+            let first_valid = nulls
+                .inner()
+                .set_indices()
+                .next()
+                .ok_or_else(|| _internal_datafusion_err!("fixed size list should have been checked to contain at least one valid value"))?;
+
+            let mask = BooleanArray::new(nulls.inner().clone(), None);
+            // perf: remove the null buffer so zip doesn't unnecessarly zip it too
+            let without_null_buffer =
+                make_array(array.to_data().into_builder().nulls(None).build()?);
+            let first_valid = array.slice(first_valid, 1);
+            let zipped = zip(&mask, &without_null_buffer, &Scalar::new(first_valid))?;
+            let zipped_with_null_buffer = make_array(
+                zipped
+                    .to_data()
+                    .into_builder()
+                    .nulls(Some(nulls.clone()))
+                    .build()?,
+            );
+
+            return Ok(zipped_with_null_buffer);
+        }
+    }
+
+    Ok(Arc::clone(array))
+}
+
+fn truncate_list_nulls<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> Result<GenericListArray<O>> {
+    if let Some(nulls) = list.nulls()
+        && nulls.null_count() > 0
+    {
+        let lengths = length(list)?;
+        let zero: &dyn Datum = if lengths.data_type() == &DataType::Int32 {
+            &Int32Array::new_scalar(0)
+        } else {
+            &Int64Array::new_scalar(0)
+        };
+
+        let not_empty = neq(&lengths, zero)?;
+        let null_and_non_empty = &!nulls.inner() & not_empty.values();
+
+        if null_and_non_empty.count_set_bits() > 0 {
+            let array_data = list.values().to_data();
+            let offsets = list.offsets();
+            let capacity = offsets[offsets.len() - 1] - offsets[0];
+            let mut mutable_array_data =
+                MutableArrayData::new(vec![&array_data], false, capacity.as_usize());
+
+            let valid_or_empty = nulls.inner() | &!not_empty.values();
+
+            for (start, end) in valid_or_empty.set_slices() {
+                mutable_array_data.extend(
+                    0,
+                    offsets[start].as_usize(),
+                    offsets[end].as_usize(),
+                );
+            }
+
+            let lengths = std::iter::zip(offsets.lengths(), nulls)
+                .map(|(length, is_valid)| if is_valid { length } else { 0 });
+
+            let offsets = OffsetBuffer::from_lengths(lengths);
+            let values = make_array(mutable_array_data.freeze());
+
+            let field = match list.data_type() {
+                DataType::List(field) => field,
+                DataType::LargeList(field) => field,
+                _ => unreachable!(),
+            };
+
+            return Ok(GenericListArray::try_new(
+                Arc::clone(field),
+                offsets,
+                values,
+                list.nulls().cloned(),
+            )?);
+        }
+    }
+    Ok(list.clone())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
         array::{Float64Array, Int32Array},
+        buffer::NullBuffer,
         datatypes::Int32Type,
     };
     use sqlparser::ast::Ident;
@@ -1424,6 +1541,77 @@ mod tests {
         assert_eq!(
             adjust_offsets_for_slice(&list.slice(3, 0)),
             OffsetBuffer::from_lengths([])
+        );
+    }
+
+    fn create_i32_list(
+        values: impl Into<Int32Array>,
+        offsets: OffsetBuffer<i32>,
+        nulls: Option<NullBuffer>,
+    ) -> ListArray {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+
+        ListArray::new(list_field, offsets, Arc::new(values.into()), nulls)
+    }
+
+    fn create_i32_fsl(
+        size: i32,
+        values: Vec<i32>,
+        nulls: Option<NullBuffer>,
+    ) -> FixedSizeListArray {
+        FixedSizeListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            size,
+            Arc::new(Int32Array::from(values)),
+            nulls,
+        )
+    }
+
+    #[test]
+    fn test_remove_list_null_values_list() {
+        let list = Arc::new(create_i32_list(
+            vec![100, 20, 10, 0, 0, 0, 0, 1, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![3, 4, 0, 2, 0]),
+            Some(NullBuffer::from(vec![true, false, false, true, false])),
+        )) as ArrayRef;
+
+        let res = remove_list_null_values(&list).unwrap();
+        let res = res.as_list::<i32>();
+
+        let expected = Arc::new(create_i32_list(
+            vec![100, 20, 10, 1, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![3, 0, 0, 2, 0]),
+            Some(NullBuffer::from(vec![true, false, false, true, false])),
+        )) as ArrayRef;
+        let expected = expected.as_list::<i32>();
+
+        assert_eq!(res, expected);
+        // check above skips inner value of nulls
+        assert_eq!(res.values(), expected.values());
+        assert_eq!(res.offsets(), expected.offsets());
+    }
+
+    #[test]
+    fn test_remove_list_null_values_fsl() {
+        let list = Arc::new(create_i32_fsl(
+            3,
+            vec![100, 20, 10, 0, 0, 0, 0, 0, 0],
+            Some(NullBuffer::from(vec![true, false, false])),
+        )) as ArrayRef;
+
+        let res = remove_list_null_values(&list).unwrap();
+
+        let expected = Arc::new(create_i32_fsl(
+            3,
+            vec![100, 20, 10, 100, 20, 10, 100, 20, 10],
+            Some(NullBuffer::from(vec![true, false, false])),
+        )) as ArrayRef;
+
+        assert_eq!(&res, &expected);
+        // check above skips inner value of nulls
+        assert_eq!(
+            res.as_fixed_size_list().values(),
+            expected.as_fixed_size_list().values()
         );
     }
 }

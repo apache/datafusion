@@ -19,15 +19,13 @@
 
 use arrow::{
     array::{
-        Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, LargeListArray,
-        ListArray, OffsetSizeTrait, UInt64Array, new_null_array,
+        Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray,
+        new_null_array,
     },
-    buffer::OffsetBuffer,
-    compute::take,
     datatypes::{DataType, Field, FieldRef},
 };
 use datafusion_common::{
-    Result, exec_err, internal_datafusion_err, plan_err,
+    Result, exec_err, plan_err,
     utils::{adjust_offsets_for_slice, list_values, take_function_args},
 };
 use datafusion_expr::{
@@ -193,10 +191,6 @@ impl LambdaUDF for ArrayTransform {
             )));
         }
 
-        // null sublists may contain values that cause problems, like a 0 used on a division
-        // use remove_list_null_values to remove them
-        let list_array = remove_list_null_values(&list_array)?;
-
         // as per list_values docs, if list_array is sliced, list_values will be sliced too,
         // so before constructing the transformed array below, we must adjust the list offsets with
         // adjust_offsets_for_slice
@@ -285,115 +279,6 @@ fn value_lambda_pair<'a, V: Debug, L: Debug>(
     };
 
     Ok((value, lambda))
-}
-
-//todo: make this function public and move to a more generic crate like datafusion-common
-fn remove_list_null_values(list: &dyn Array) -> Result<ArrayRef> {
-    match list.data_type() {
-        DataType::List(_) => Ok(Arc::new(truncate_nulls(list.as_list::<i32>())?)),
-        DataType::LargeList(_) => Ok(Arc::new(truncate_nulls(list.as_list::<i64>())?)),
-        DataType::FixedSizeList(_, _) => Ok(Arc::new(replace_nulls_with_valid(
-            list.as_fixed_size_list(),
-        )?)),
-        dt => exec_err!("expected list, got {dt}"),
-    }
-}
-
-fn replace_nulls_with_valid(list: &FixedSizeListArray) -> Result<FixedSizeListArray> {
-    if let Some(nulls) = list.nulls() {
-        let null_count = list.null_count();
-
-        if null_count > 0 {
-            if null_count == list.len() {
-                return exec_err!("no valid value to use");
-            }
-
-            let first_valid = nulls
-                .inner()
-                .set_indices()
-                .next()
-                .ok_or_else(|| internal_datafusion_err!("fixed size list should have been checked to contain at least one valid value"))? as u64;
-
-            let mut indices = Vec::with_capacity(list.values().len());
-
-            let size = list.value_length() as u64;
-
-            for (i, is_valid) in nulls.iter().enumerate() {
-                let range = if is_valid {
-                    let i = i as u64;
-
-                    i * size..(i + 1) * size
-                } else {
-                    first_valid * size..(first_valid + 1) * size
-                };
-
-                indices.extend(range)
-            }
-
-            let indices = UInt64Array::from(indices);
-            let values = take(list.values(), &indices, None)?;
-
-            let DataType::FixedSizeList(field, size) = list.data_type() else {
-                unreachable!()
-            };
-
-            return Ok(FixedSizeListArray::try_new(
-                Arc::clone(field),
-                *size,
-                values,
-                list.nulls().cloned(),
-            )?);
-        }
-    }
-
-    Ok(list.clone())
-}
-
-fn truncate_nulls<O: OffsetSizeTrait>(
-    list: &GenericListArray<O>,
-) -> Result<GenericListArray<O>> {
-    if let Some(nulls) = list.nulls()
-        && nulls.null_count() > 0
-    {
-        let contains_null_and_non_empty = std::iter::zip(list.offsets().lengths(), nulls)
-            .any(|(len, is_valid)| len > 0 && !is_valid);
-
-        if contains_null_and_non_empty {
-            let mut indices = Vec::with_capacity(list.values().len());
-
-            let lengths = list.offsets().windows(2).enumerate().map(|(i, window)| {
-                let start = window[0].as_usize();
-                let end = window[1].as_usize();
-
-                if list.is_valid(i) {
-                    indices.extend((start..end).map(|i| i as u64));
-
-                    end - start
-                } else {
-                    0
-                }
-            });
-
-            let offsets = OffsetBuffer::from_lengths(lengths);
-            let indices = UInt64Array::from(indices);
-            let values = take(list.values(), &indices, None)?;
-
-            let field = match list.data_type() {
-                DataType::List(field) => field,
-                DataType::LargeList(field) => field,
-                _ => unreachable!(),
-            };
-
-            return Ok(GenericListArray::try_new(
-                Arc::clone(field),
-                offsets,
-                values,
-                list.nulls().cloned(),
-            )?);
-        }
-    }
-
-    Ok(list.clone())
 }
 
 #[cfg(test)]
