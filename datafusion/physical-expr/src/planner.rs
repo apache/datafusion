@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::{LambdaFunctionExpr, ScalarFunctionExpr};
+use crate::{HigherOrderFunctionExpr, ScalarFunctionExpr};
 use crate::{
     PhysicalExpr,
     expressions::{self, Column, Literal, binary, like, similar_to},
@@ -33,7 +33,7 @@ use datafusion_common::{
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
-    Alias, Cast, InList, Lambda, LambdaFunction, LambdaVariable, Placeholder,
+    Alias, Cast, HigherOrderFunction, InList, Lambda, LambdaVariable, Placeholder,
     ScalarFunction,
 };
 use datafusion_expr::var_provider::VarType;
@@ -417,7 +417,7 @@ pub fn create_physical_expr(
         Expr::Placeholder(Placeholder { id, .. }) => {
             exec_err!("Placeholder '{id}' was not provided a value for execution.")
         }
-        Expr::LambdaFunction(invocation @ LambdaFunction { func, args }) => {
+        Expr::HigherOrderFunction(invocation @ HigherOrderFunction { func, args }) => {
             let num_lambdas = args
                 .iter()
                 .filter(|arg| matches!(arg, Expr::Lambda(_)))
@@ -466,7 +466,7 @@ pub fn create_physical_expr(
                 None => Arc::new(ConfigOptions::default()),
             };
 
-            Ok(Arc::new(LambdaFunctionExpr::try_new(
+            Ok(Arc::new(HigherOrderFunctionExpr::try_new(
                 Arc::clone(func),
                 physical_args,
                 input_schema,

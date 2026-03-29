@@ -27,7 +27,9 @@ use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DFSchema, GetExt, Result, TableReference, plan_err};
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
-use datafusion_expr::{AggregateUDF, Expr, LambdaUDF, ScalarUDF, TableSource, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, Expr, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
+};
 use datafusion_functions_nested::expr_fn::make_array;
 use datafusion_sql::planner::ContextProvider;
 
@@ -54,7 +56,7 @@ impl Display for MockCsvType {
 #[derive(Default)]
 pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    lambda_functions: HashMap<String, Arc<dyn LambdaUDF>>,
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     type_planner: Option<Arc<dyn TypePlanner>>,
@@ -263,8 +265,8 @@ impl ContextProvider for MockContextProvider {
         self.state.scalar_functions.get(name).cloned()
     }
 
-    fn get_lambda_meta(&self, name: &str) -> Option<Arc<dyn LambdaUDF>> {
-        self.state.lambda_functions.get(name).cloned()
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+        self.state.higher_order_functions.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
@@ -302,8 +304,8 @@ impl ContextProvider for MockContextProvider {
         self.state.scalar_functions.keys().cloned().collect()
     }
 
-    fn udlf_names(&self) -> Vec<String> {
-        self.state.lambda_functions.keys().cloned().collect()
+    fn udhof_names(&self) -> Vec<String> {
+        self.state.higher_order_functions.keys().cloned().collect()
     }
 
     fn udaf_names(&self) -> Vec<String> {

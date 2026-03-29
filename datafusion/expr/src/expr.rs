@@ -27,8 +27,8 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
-use crate::type_coercion::functions::value_fields_with_lambda_udf;
-use crate::udlf::LambdaUDF;
+use crate::type_coercion::functions::value_fields_with_higher_order_udf;
+use crate::udhof::HigherOrderUDF;
 use crate::{AggregateUDF, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
@@ -406,12 +406,12 @@ pub enum Expr {
     OuterReferenceColumn(FieldRef, Column),
     /// Unnest expression
     Unnest(Unnest),
-    /// Call a lambda function with a set of arguments.
+    /// Call a higher order function with a set of arguments.
     ///
     /// For example, `array_transform([1,2,3], v -> v+1)` would be equivalent to:
     ///
     /// ```text
-    /// LambdaFunction(array_transform)
+    /// HigherOrderFunction(array_transform)
     /// ├── args[0]: Literal([1,2,3])
     /// └── args[1]: Lambda
     ///     ├── params: ["v"]
@@ -419,25 +419,25 @@ pub enum Expr {
     ///         ├── LambdaVariable("v")
     ///         └── Literal(1)
     /// ```
-    LambdaFunction(LambdaFunction),
+    HigherOrderFunction(HigherOrderFunction),
     /// A Lambda expression with a set of parameters names and a body
     Lambda(Lambda),
     /// A named reference to a lambda parameter
     LambdaVariable(LambdaVariable),
 }
 
-/// Invoke a [`LambdaUDF`] with a set of arguments
+/// Invoke a [`HigherOrderUDF`] with a set of arguments
 #[derive(Clone, Eq, PartialOrd, Debug)]
-pub struct LambdaFunction {
+pub struct HigherOrderFunction {
     /// The function
-    pub func: Arc<dyn LambdaUDF>,
+    pub func: Arc<dyn HigherOrderUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
 }
 
-impl LambdaFunction {
-    /// Create a new `LambdaFunction` from a [`LambdaUDF`]
-    pub fn new(func: Arc<dyn LambdaUDF>, args: Vec<Expr>) -> Self {
+impl HigherOrderFunction {
+    /// Create a new `HigherOrderFunction` from a [`HigherOrderUDF`]
+    pub fn new(func: Arc<dyn HigherOrderUDF>, args: Vec<Expr>) -> Self {
         Self { func, args }
     }
 
@@ -445,7 +445,7 @@ impl LambdaFunction {
         self.func.name()
     }
 
-    /// Invokes the inner function [`LambdaUDF::lambda_parameters`]
+    /// Invokes the inner function [`HigherOrderUDF::lambda_parameters`]
     /// using the arguments of this invocation
     pub fn lambda_parameters(&self, schema: &dyn ExprSchema) -> Result<Vec<Vec<Field>>> {
         let args = self
@@ -457,26 +457,27 @@ impl LambdaFunction {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let coerced_values = value_fields_with_lambda_udf(&args, self.func.as_ref())?
-            .into_iter()
-            .filter_map(|arg| match arg {
-                ValueOrLambda::Value(value) => Some(value),
-                ValueOrLambda::Lambda(_lambda) => None,
-            })
-            .collect::<Vec<_>>();
+        let coerced_values =
+            value_fields_with_higher_order_udf(&args, self.func.as_ref())?
+                .into_iter()
+                .filter_map(|arg| match arg {
+                    ValueOrLambda::Value(value) => Some(value),
+                    ValueOrLambda::Lambda(_lambda) => None,
+                })
+                .collect::<Vec<_>>();
 
         self.func.lambda_parameters(&coerced_values)
     }
 }
 
-impl Hash for LambdaFunction {
+impl Hash for HigherOrderFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.func.hash(state);
         self.args.hash(state);
     }
 }
 
-impl PartialEq for LambdaFunction {
+impl PartialEq for HigherOrderFunction {
     fn eq(&self, other: &Self) -> bool {
         self.func.as_ref() == other.func.as_ref() && self.args == other.args
     }
@@ -1730,7 +1731,7 @@ impl Expr {
             #[expect(deprecated)]
             Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
-            Expr::LambdaFunction { .. } => "LambdaFunction",
+            Expr::HigherOrderFunction { .. } => "HigherOrderFunction",
             Expr::Lambda { .. } => "Lambda",
             Expr::LambdaVariable { .. } => "LambdaVariable",
         }
@@ -2248,7 +2249,9 @@ impl Expr {
     pub fn short_circuits(&self) -> bool {
         match self {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => func.short_circuits(),
-            Expr::LambdaFunction(LambdaFunction { func, .. }) => func.short_circuits(),
+            Expr::HigherOrderFunction(HigherOrderFunction { func, .. }) => {
+                func.short_circuits()
+            }
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 matches!(op, Operator::And | Operator::Or)
             }
@@ -2890,7 +2893,7 @@ impl HashNode for Expr {
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
-            Expr::LambdaFunction(LambdaFunction { func, args: _args }) => {
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args: _args }) => {
                 func.hash(state);
             }
             Expr::Lambda(Lambda { params, body: _ }) => {
@@ -3222,7 +3225,7 @@ impl Display for SchemaDisplay<'_> {
                     }
                 }
             }
-            Expr::LambdaFunction(LambdaFunction { func, args }) => {
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
                 match func.schema_name(args) {
                     Ok(name) => {
                         write!(f, "{name}")
@@ -3741,7 +3744,7 @@ impl Display for Expr {
             Expr::Unnest(Unnest { expr }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
-            Expr::LambdaFunction(fun) => {
+            Expr::HigherOrderFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
             Expr::Lambda(Lambda { params, body }) => {

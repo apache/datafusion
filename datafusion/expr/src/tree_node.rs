@@ -21,8 +21,8 @@ use crate::{
     Expr,
     expr::{
         AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case,
-        Cast, GroupingSet, InList, InSubquery, Lambda, LambdaFunction, Like, Placeholder,
-        ScalarFunction, SetComparison, TryCast, Unnest, WindowFunction,
+        Cast, GroupingSet, HigherOrderFunction, InList, InSubquery, Lambda, Like,
+        Placeholder, ScalarFunction, SetComparison, TryCast, Unnest, WindowFunction,
         WindowFunctionParams,
     },
 };
@@ -112,7 +112,7 @@ impl TreeNode for Expr {
             Expr::InList(InList { expr, list, .. }) => {
                 (expr, list).apply_ref_elements(f)
             }
-            Expr::LambdaFunction(LambdaFunction { func: _, args}) => args.apply_elements(f),
+            Expr::HigherOrderFunction(HigherOrderFunction { func: _, args}) => args.apply_elements(f),
             Expr::Lambda (Lambda{ params: _, body}) => body.apply_elements(f)
         }
     }
@@ -333,9 +333,11 @@ impl TreeNode for Expr {
                 .update_data(|(new_expr, new_list)| {
                     Expr::InList(InList::new(new_expr, new_list, negated))
                 }),
-            Expr::LambdaFunction(LambdaFunction { func, args }) => args
-                .map_elements(f)?
-                .update_data(|args| Expr::LambdaFunction(LambdaFunction { func, args })),
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                args.map_elements(f)?.update_data(|args| {
+                    Expr::HigherOrderFunction(HigherOrderFunction { func, args })
+                })
+            }
             Expr::Lambda(Lambda { params, body }) => body
                 .map_elements(f)?
                 .update_data(|body| Expr::Lambda(Lambda { params, body })),

@@ -35,15 +35,15 @@ use datafusion_common::{
     plan_err,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
-    InSubquery, LambdaFunction, Like, ScalarFunction, SetComparison, Sort,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists,
+    HigherOrderFunction, InList, InSubquery, Like, ScalarFunction, SetComparison, Sort,
     WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
-use datafusion_expr::type_coercion::functions::value_fields_with_lambda_udf;
+use datafusion_expr::type_coercion::functions::value_fields_with_higher_order_udf;
 use datafusion_expr::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
@@ -762,7 +762,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 });
                 Ok(Transformed::yes(new_expr))
             }
-            Expr::LambdaFunction(LambdaFunction { func, args }) => {
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
                 let current_fields = args
                     .iter()
                     .map(|arg| match arg {
@@ -772,20 +772,20 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     .collect::<Result<Vec<_>>>()?;
 
                 let new_fields =
-                    value_fields_with_lambda_udf(&current_fields, func.as_ref())?;
+                    value_fields_with_higher_order_udf(&current_fields, func.as_ref())?;
 
                 let new_args = std::iter::zip(args, new_fields)
                     .map(|(arg, new_field)| match (&arg, new_field) {
                         (Expr::Lambda(_lambda), ValueOrLambda::Lambda(_)) => Ok(arg),
-                        (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => plan_err!("value_fields_with_lambda_udf return a value for a lambda argument"),
+                        (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => plan_err!("value_fields_with_higher_order_udf return a value for a lambda argument"),
                         (_, ValueOrLambda::Value(new_field)) => arg.cast_to(new_field.data_type(), self.schema),
-                        (_, ValueOrLambda::Lambda(_)) => plan_err!("value_fields_with_lambda_udf return a lambda for a value argument"),
+                        (_, ValueOrLambda::Lambda(_)) => plan_err!("value_fields_with_higher_order_udf return a lambda for a value argument"),
                     })
                     .collect::<Result<_>>()?;
 
-                Ok(Transformed::yes(Expr::LambdaFunction(LambdaFunction::new(
-                    func, new_args,
-                ))))
+                Ok(Transformed::yes(Expr::HigherOrderFunction(
+                    HigherOrderFunction::new(func, new_args),
+                )))
             }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`LambdaUDF`]: Lambda User Defined Functions
+//! [`HigherOrderUDF`]: User Defined Higher Order Functions
 
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::{ColumnarValue, Documentation, Expr};
@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 /// The types of arguments for which a function has implementations.
 ///
-/// [`LambdaTypeSignature`] **DOES NOT** define the types that a user query could call the
+/// [`HigherOrderTypeSignature`] **DOES NOT** define the types that a user query could call the
 /// function with. DataFusion will automatically coerce (cast) argument types to
 /// one of the supported function signatures, if possible.
 ///
@@ -43,17 +43,17 @@ use std::sync::Arc;
 /// argument [`DataType`]s, rather than all possible combinations. If a user
 /// calls a function with arguments that do not match any of the declared types,
 /// DataFusion will attempt to automatically coerce (add casts to) function
-/// arguments so they match the [`LambdaTypeSignature`]. See the [`type_coercion`] module
+/// arguments so they match the [`HigherOrderTypeSignature`]. See the [`type_coercion`] module
 /// for more details
 ///
 /// [`type_coercion`]: crate::type_coercion
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub enum LambdaTypeSignature {
+pub enum HigherOrderTypeSignature {
     /// The acceptable signature and coercions rules are special for this
     /// function.
     ///
     /// If this signature is specified,
-    /// DataFusion will call [`LambdaUDF::coerce_value_types`] to prepare argument types.
+    /// DataFusion will call [`HigherOrderUDF::coerce_value_types`] to prepare argument types.
     UserDefined,
     /// One or more lambdas or arguments with arbitrary types
     VariadicAny,
@@ -61,24 +61,24 @@ pub enum LambdaTypeSignature {
     Any(usize),
 }
 
-/// Provides information necessary for calling a lambda function.
+/// Provides information necessary for calling a higher order function.
 ///
-/// - [`LambdaTypeSignature`] defines the argument types that a function has implementations
+/// - [`HigherOrderTypeSignature`] defines the argument types that a function has implementations
 ///   for.
 ///
 /// - [`Volatility`] defines how the output of the function changes with the input.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub struct LambdaSignature {
-    /// The data types that the function accepts. See [LambdaTypeSignature] for more information.
-    pub type_signature: LambdaTypeSignature,
+pub struct HigherOrderSignature {
+    /// The data types that the function accepts. See [HigherOrderTypeSignature] for more information.
+    pub type_signature: HigherOrderTypeSignature,
     /// The volatility of the function. See [Volatility] for more information.
     pub volatility: Volatility,
 }
 
-impl LambdaSignature {
-    /// Creates a new `LambdaSignature` from a given type signature and volatility.
-    pub fn new(type_signature: LambdaTypeSignature, volatility: Volatility) -> Self {
-        LambdaSignature {
+impl HigherOrderSignature {
+    /// Creates a new `HigherOrderSignature` from a given type signature and volatility.
+    pub fn new(type_signature: HigherOrderTypeSignature, volatility: Volatility) -> Self {
+        HigherOrderSignature {
             type_signature,
             volatility,
         }
@@ -87,7 +87,7 @@ impl LambdaSignature {
     /// User-defined coercion rules for the function.
     pub fn user_defined(volatility: Volatility) -> Self {
         Self {
-            type_signature: LambdaTypeSignature::UserDefined,
+            type_signature: HigherOrderTypeSignature::UserDefined,
             volatility,
         }
     }
@@ -95,7 +95,7 @@ impl LambdaSignature {
     /// An arbitrary number of lambdas or arguments of any type.
     pub fn variadic_any(volatility: Volatility) -> Self {
         Self {
-            type_signature: LambdaTypeSignature::VariadicAny,
+            type_signature: HigherOrderTypeSignature::VariadicAny,
             volatility,
         }
     }
@@ -103,19 +103,19 @@ impl LambdaSignature {
     /// A specified number of arguments of any type
     pub fn any(arg_count: usize, volatility: Volatility) -> Self {
         Self {
-            type_signature: LambdaTypeSignature::Any(arg_count),
+            type_signature: HigherOrderTypeSignature::Any(arg_count),
             volatility,
         }
     }
 }
 
-impl PartialEq for dyn LambdaUDF {
+impl PartialEq for dyn HigherOrderUDF {
     fn eq(&self, other: &Self) -> bool {
         self.dyn_eq(other.as_any())
     }
 }
 
-impl PartialOrd for dyn LambdaUDF {
+impl PartialOrd for dyn HigherOrderUDF {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let mut cmp = self.name().cmp(other.name());
         if cmp == Ordering::Equal {
@@ -144,28 +144,28 @@ impl PartialOrd for dyn LambdaUDF {
     }
 }
 
-impl Eq for dyn LambdaUDF {}
+impl Eq for dyn HigherOrderUDF {}
 
-impl Hash for dyn LambdaUDF {
+impl Hash for dyn HigherOrderUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.dyn_hash(state)
     }
 }
 
-/// Arguments passed to [`LambdaUDF::invoke_with_args`] when invoking a
-/// lambda function.
+/// Arguments passed to [`HigherOrderUDF::invoke_with_args`] when invoking a
+/// higher order function.
 #[derive(Debug, Clone)]
-pub struct LambdaFunctionArgs {
+pub struct HigherOrderFunctionArgs {
     /// The evaluated arguments and lambdas to the function
     pub args: Vec<ValueOrLambda<ColumnarValue, LambdaArgument>>,
     /// Field associated with each arg, if it exists
     /// For lambdas, it will be the field of the result of
     /// the lambda if evaluated with the parameters
-    /// returned from [`LambdaUDF::lambda_parameters`]
+    /// returned from [`HigherOrderUDF::lambda_parameters`]
     pub arg_fields: Vec<ValueOrLambda<FieldRef, FieldRef>>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
-    /// The return field of the lambda function returned
+    /// The return field of the higher order function returned
     /// (from `return_field_from_args`) when creating the
     /// physical expression from the logical expression
     pub return_field: FieldRef,
@@ -173,7 +173,7 @@ pub struct LambdaFunctionArgs {
     pub config_options: Arc<ConfigOptions>,
 }
 
-impl LambdaFunctionArgs {
+impl HigherOrderFunctionArgs {
     /// The return type of the function. See [`Self::return_field`] for more
     /// details.
     pub fn return_type(&self) -> &DataType {
@@ -181,7 +181,7 @@ impl LambdaFunctionArgs {
     }
 }
 
-/// A lambda argument to a LambdaFunction
+/// A lambda argument to a HigherOrderFunction
 #[derive(Clone, Debug)]
 pub struct LambdaArgument {
     /// The parameters defined in this lambda
@@ -203,7 +203,7 @@ impl LambdaArgument {
 
     /// Evaluate this lambda
     /// `args` should evaluate to the value of each parameter
-    /// of the correspondent lambda returned in [LambdaUDF::lambda_parameters].
+    /// of the correspondent lambda returned in [HigherOrderUDF::lambda_parameters].
     pub fn evaluate(
         &self,
         args: &[&dyn Fn() -> Result<ArrayRef>],
@@ -228,13 +228,13 @@ impl LambdaArgument {
 /// such as the type of the arguments, any scalar arguments and if the
 /// arguments can (ever) be null
 ///
-/// See [`LambdaUDF::return_field_from_args`] for more information
+/// See [`HigherOrderUDF::return_field_from_args`] for more information
 #[derive(Clone, Debug)]
-pub struct LambdaReturnFieldArgs<'a> {
+pub struct HigherOrderReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
     ///
     /// If argument `i` to the function is a lambda, it will be the field of the result of the
-    /// lambda if evaluated with the parameters returned from [`LambdaUDF::lambda_parameters`]
+    /// lambda if evaluated with the parameters returned from [`HigherOrderUDF::lambda_parameters`]
     ///
     /// For example, with `array_transform([1], v -> v == 5)`
     /// this field will be `[
@@ -251,7 +251,7 @@ pub struct LambdaReturnFieldArgs<'a> {
     pub scalar_arguments: &'a [Option<&'a ScalarValue>],
 }
 
-/// An argument to a lambda function
+/// An argument to a higher order function
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ValueOrLambda<V, L> {
     /// A value with associated data
@@ -260,7 +260,7 @@ pub enum ValueOrLambda<V, L> {
     Lambda(L),
 }
 
-/// Trait for implementing user defined lambda functions.
+/// Trait for implementing user defined higher order functions.
 ///
 /// This trait exposes the full API for implementing user defined functions and
 /// can be used to implement any function.
@@ -268,7 +268,7 @@ pub enum ValueOrLambda<V, L> {
 /// See [`array_transform.rs`] for a commented complete implementation
 ///
 /// [`array_transform.rs`]: https://github.com/apache/datafusion/blob/main/datafusion/functions-nested/src/array_transform.rs
-pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
+pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -299,25 +299,25 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
         ))
     }
 
-    /// Returns a [`LambdaSignature`] describing the argument types for which this
+    /// Returns a [`HigherOrderSignature`] describing the argument types for which this
     /// function has an implementation, and the function's [`Volatility`].
     ///
-    /// See [`LambdaSignature`] for more details on argument type handling
+    /// See [`HigherOrderSignature`] for more details on argument type handling
     /// and [`Self::return_field_from_args`] for computing the return type.
     ///
     /// [`Volatility`]: datafusion_expr_common::signature::Volatility
-    fn signature(&self) -> &LambdaSignature;
+    fn signature(&self) -> &HigherOrderSignature;
 
     /// Return the field of all the parameters supported by all the supported lambdas of this function
     /// based on the field of the value arguments. If a lambda support multiple parameters, or if multiple
     /// lambdas are supported and some are optional, all should be returned,
     /// regardless of whether they are used on a particular invocation
     ///
-    /// Tip: If you have a [`LambdaFunction`] invocation, you can call the helper
-    /// [`LambdaFunction::lambda_parameters`] instead of this method directly
+    /// Tip: If you have a [`HigherOrderFunction`] invocation, you can call the helper
+    /// [`HigherOrderFunction::lambda_parameters`] instead of this method directly
     ///
-    /// [`LambdaFunction`]: crate::expr::LambdaFunction
-    /// [`LambdaFunction::lambda_parameters`]: crate::expr::LambdaFunction::lambda_parameters
+    /// [`HigherOrderFunction`]: crate::expr::HigherOrderFunction
+    /// [`HigherOrderFunction::lambda_parameters`]: crate::expr::HigherOrderFunction::lambda_parameters
     ///
     /// Example for array_transform:
     ///
@@ -361,16 +361,19 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// # use std::sync::Arc;
     /// # use arrow::datatypes::{DataType, Field, FieldRef};
     /// # use datafusion_common::Result;
-    /// # use datafusion_expr::LambdaReturnFieldArgs;
+    /// # use datafusion_expr::HigherOrderReturnFieldArgs;
     /// # struct Example{}
     /// # impl Example {
-    /// fn return_field_from_args(&self, args: LambdaReturnFieldArgs) -> Result<FieldRef> {
+    /// fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
     ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
     ///     Ok(field)
     /// }
     /// # }
     /// ```
-    fn return_field_from_args(&self, args: LambdaReturnFieldArgs) -> Result<FieldRef>;
+    fn return_field_from_args(
+        &self,
+        args: HigherOrderReturnFieldArgs,
+    ) -> Result<FieldRef>;
 
     /// Whether List, LargeList and FixedSizeList arguments should have it's
     /// non-empty null sublists cleaned by Datafusion before invoking this function
@@ -395,7 +398,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
-    fn invoke_with_args(&self, args: LambdaFunctionArgs) -> Result<ColumnarValue>;
+    fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue>;
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
     /// and thus any side effects (like divide by zero) may not be encountered.
@@ -403,7 +406,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// Setting this to true prevents certain optimizations such as common
     /// subexpression elimination
     ///
-    /// When overriding this function to return `true`, [LambdaUDF::conditional_arguments] can also be
+    /// When overriding this function to return `true`, [HigherOrderUDF::conditional_arguments] can also be
     /// overridden to report more accurately which arguments are eagerly evaluated and which ones
     /// lazily.
     fn short_circuits(&self) -> bool {
@@ -425,7 +428,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
     /// Implementations must ensure that the two returned `Vec`s are disjunct,
     /// and that each argument from `args` is present in one the two `Vec`s.
     ///
-    /// When overriding this function, [LambdaUDF::short_circuits] must
+    /// When overriding this function, [HigherOrderUDF::short_circuits] must
     /// be overridden to return `true`.
     fn conditional_arguments<'a>(
         &self,
@@ -460,7 +463,7 @@ pub trait LambdaUDF: Debug + DynEq + DynHash + Send + Sync {
         )
     }
 
-    /// Returns the documentation for this Lambda UDF.
+    /// Returns the documentation for this HigherOrderUDF.
     ///
     /// Documentation can be accessed programmatically as well as generating
     /// publicly facing documentation.
@@ -477,12 +480,12 @@ mod tests {
     use std::hash::DefaultHasher;
 
     #[derive(Debug, PartialEq, Eq, Hash)]
-    struct TestLambdaUDF {
+    struct TestHigherOrderUDF {
         name: &'static str,
         field: &'static str,
-        signature: LambdaSignature,
+        signature: HigherOrderSignature,
     }
-    impl LambdaUDF for TestLambdaUDF {
+    impl HigherOrderUDF for TestHigherOrderUDF {
         fn as_any(&self) -> &dyn Any {
             self
         }
@@ -491,7 +494,7 @@ mod tests {
             self.name
         }
 
-        fn signature(&self) -> &LambdaSignature {
+        fn signature(&self) -> &HigherOrderSignature {
             &self.signature
         }
 
@@ -504,12 +507,15 @@ mod tests {
 
         fn return_field_from_args(
             &self,
-            _args: LambdaReturnFieldArgs,
+            _args: HigherOrderReturnFieldArgs,
         ) -> Result<FieldRef> {
             unimplemented!()
         }
 
-        fn invoke_with_args(&self, _args: LambdaFunctionArgs) -> Result<ColumnarValue> {
+        fn invoke_with_args(
+            &self,
+            _args: HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
             unimplemented!()
         }
     }
@@ -545,11 +551,11 @@ mod tests {
         assert_eq!(b.partial_cmp(&o), Some(Ordering::Less));
     }
 
-    fn test_func(name: &'static str, parameter: &'static str) -> Arc<dyn LambdaUDF> {
-        Arc::new(TestLambdaUDF {
+    fn test_func(name: &'static str, parameter: &'static str) -> Arc<dyn HigherOrderUDF> {
+        Arc::new(TestHigherOrderUDF {
             name,
             field: parameter,
-            signature: LambdaSignature::variadic_any(Volatility::Immutable),
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
         })
     }
 

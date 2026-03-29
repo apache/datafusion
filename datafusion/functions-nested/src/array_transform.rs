@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`LambdaUDF`] definitions for array_transform function.
+//! [`HigherOrderUDF`] definitions for array_transform function.
 
 use arrow::{
     array::{
@@ -29,18 +29,18 @@ use datafusion_common::{
     utils::{adjust_offsets_for_slice, list_values, take_function_args},
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, LambdaFunctionArgs, LambdaReturnFieldArgs,
-    LambdaSignature, LambdaUDF, ValueOrLambda, Volatility,
+    ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
+    HigherOrderSignature, HigherOrderUDF, ValueOrLambda, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::{any::Any, fmt::Debug, sync::Arc};
 
-make_udlf_expr_and_func!(
+make_udhof_expr_and_func!(
     ArrayTransform,
     array_transform,
     array lambda,
     "transforms the values of a array",
-    array_transform_udlf
+    array_transform_udhof
 );
 
 #[user_doc(
@@ -63,7 +63,7 @@ make_udlf_expr_and_func!(
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayTransform {
-    signature: LambdaSignature,
+    signature: HigherOrderSignature,
     aliases: Vec<String>,
 }
 
@@ -76,13 +76,13 @@ impl Default for ArrayTransform {
 impl ArrayTransform {
     pub fn new() -> Self {
         Self {
-            signature: LambdaSignature::user_defined(Volatility::Immutable),
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("list_transform")],
         }
     }
 }
 
-impl LambdaUDF for ArrayTransform {
+impl HigherOrderUDF for ArrayTransform {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -95,7 +95,7 @@ impl LambdaUDF for ArrayTransform {
         &self.aliases
     }
 
-    fn signature(&self) -> &LambdaSignature {
+    fn signature(&self) -> &HigherOrderSignature {
         &self.signature
     }
 
@@ -154,7 +154,10 @@ impl LambdaUDF for ArrayTransform {
         Ok(vec![vec![value]])
     }
 
-    fn return_field_from_args(&self, args: LambdaReturnFieldArgs) -> Result<Arc<Field>> {
+    fn return_field_from_args(
+        &self,
+        args: HigherOrderReturnFieldArgs,
+    ) -> Result<Arc<Field>> {
         let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
 
         //TODO: should metadata be copied into the transformed array?
@@ -177,7 +180,7 @@ impl LambdaUDF for ArrayTransform {
         Ok(Arc::new(Field::new("", return_type, list.is_nullable())))
     }
 
-    fn invoke_with_args(&self, args: LambdaFunctionArgs) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
         let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
 
         let list_array = list.to_array(args.number_rows)?;
@@ -295,12 +298,12 @@ mod tests {
     };
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
-        Expr, col, execution_props::ExecutionProps, expr::LambdaFunction, lambda,
+        Expr, col, execution_props::ExecutionProps, expr::HigherOrderFunction, lambda,
         lambda_var, lit,
     };
     use datafusion_physical_expr::create_physical_expr;
 
-    use crate::array_transform::array_transform_udlf;
+    use crate::array_transform::array_transform_udhof;
 
     fn create_i32_list(
         values: impl Into<Int32Array>,
@@ -326,7 +329,7 @@ mod tests {
     }
 
     fn divide_100_by(list: impl Array + Clone + 'static) -> Result<ArrayRef> {
-        let array_transform = array_transform_udlf();
+        let array_transform = array_transform_udhof();
 
         let schema = DFSchema::from_unqualified_fields(
             vec![Field::new(
@@ -339,7 +342,7 @@ mod tests {
         )?;
 
         create_physical_expr(
-            &Expr::LambdaFunction(LambdaFunction::new(
+            &Expr::HigherOrderFunction(HigherOrderFunction::new(
                 array_transform,
                 vec![
                     col("list"),

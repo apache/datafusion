@@ -18,7 +18,7 @@
 use datafusion::execution::SessionStateDefaults;
 use datafusion_common::{HashSet, Result, not_impl_err};
 use datafusion_expr::{
-    AggregateUDF, DocSection, Documentation, LambdaUDF, ScalarUDF, WindowUDF,
+    AggregateUDF, DocSection, Documentation, HigherOrderUDF, ScalarUDF, WindowUDF,
     aggregate_doc_sections, scalar_doc_sections, window_doc_sections,
 };
 use itertools::Itertools;
@@ -282,7 +282,7 @@ impl DocProvider for WindowUDF {
     }
 }
 
-impl DocProvider for dyn LambdaUDF {
+impl DocProvider for dyn HigherOrderUDF {
     fn get_name(&self) -> String {
         self.name().to_string()
     }

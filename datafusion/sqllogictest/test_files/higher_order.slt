@@ -16,7 +16,7 @@
 # under the License.
 
 #############
-## Lambda Expressions Tests
+## Higher Order Function Tests
 #############
 
 statement ok

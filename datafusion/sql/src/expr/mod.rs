@@ -1300,7 +1300,9 @@ mod tests {
     use datafusion_common::TableReference;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, LambdaUDF, ScalarUDF, TableSource, WindowUDF};
+    use datafusion_expr::{
+        AggregateUDF, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
+    };
 
     use super::*;
 
@@ -1340,7 +1342,7 @@ mod tests {
             None
         }
 
-        fn get_lambda_meta(&self, _name: &str) -> Option<Arc<dyn LambdaUDF>> {
+        fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
             None
         }
 
@@ -1367,7 +1369,7 @@ mod tests {
             Vec::new()
         }
 
-        fn udlf_names(&self) -> Vec<String> {
+        fn udhof_names(&self) -> Vec<String> {
             Vec::new()
         }
 

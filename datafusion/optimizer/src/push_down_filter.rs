@@ -275,7 +275,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::TryCast(_)
         | Expr::InList { .. }
         | Expr::ScalarFunction(_)
-        | Expr::LambdaFunction(_)
+        | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
         | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
         // TODO: remove the next line after `Expr::Wildcard` is removed

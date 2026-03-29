@@ -59,7 +59,7 @@ use datafusion_expr::planner::{RelationPlanner, TypePlanner};
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    AggregateUDF, Explain, Expr, LambdaUDF, LogicalPlan, ScalarUDF, WindowUDF,
+    AggregateUDF, Explain, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
@@ -156,8 +156,8 @@ pub struct SessionState {
     table_functions: HashMap<String, Arc<TableFunction>>,
     /// Scalar functions that are registered with the context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    /// Lambda functions that are registered with the context
-    lambda_functions: HashMap<String, Arc<dyn LambdaUDF>>,
+    /// Higher order functions that are registered with the context
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions registered in the context
@@ -226,7 +226,7 @@ impl Debug for SessionState {
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
-            .field("lambda_functions", &self.lambda_functions)
+            .field("higher_order_functions", &self.higher_order_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
             .field("prepared_plans", &self.prepared_plans)
@@ -263,8 +263,8 @@ impl Session for SessionState {
         &self.scalar_functions
     }
 
-    fn lambda_functions(&self) -> &HashMap<String, Arc<dyn LambdaUDF>> {
-        &self.lambda_functions
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+        &self.higher_order_functions
     }
 
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
@@ -898,9 +898,9 @@ impl SessionState {
         &self.scalar_functions
     }
 
-    /// Return reference to lambda_functions
-    pub fn lambda_functions(&self) -> &HashMap<String, Arc<dyn LambdaUDF>> {
-        &self.lambda_functions
+    /// Return reference to higher_order_functions
+    pub fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+        &self.higher_order_functions
     }
 
     /// Return reference to aggregate_functions
@@ -999,7 +999,7 @@ pub struct SessionStateBuilder {
     catalog_list: Option<Arc<dyn CatalogProviderList>>,
     table_functions: Option<HashMap<String, Arc<TableFunction>>>,
     scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
-    lambda_functions: Option<Vec<Arc<dyn LambdaUDF>>>,
+    higher_order_functions: Option<Vec<Arc<dyn HigherOrderUDF>>>,
     aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
     window_functions: Option<Vec<Arc<WindowUDF>>>,
     serializer_registry: Option<Arc<dyn SerializerRegistry>>,
@@ -1040,7 +1040,7 @@ impl SessionStateBuilder {
             catalog_list: None,
             table_functions: None,
             scalar_functions: None,
-            lambda_functions: None,
+            higher_order_functions: None,
             aggregate_functions: None,
             window_functions: None,
             serializer_registry: None,
@@ -1094,7 +1094,9 @@ impl SessionStateBuilder {
             catalog_list: Some(existing.catalog_list),
             table_functions: Some(existing.table_functions),
             scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
-            lambda_functions: Some(existing.lambda_functions.into_values().collect_vec()),
+            higher_order_functions: Some(
+                existing.higher_order_functions.into_values().collect_vec(),
+            ),
             aggregate_functions: Some(
                 existing.aggregate_functions.into_values().collect_vec(),
             ),
@@ -1136,9 +1138,9 @@ impl SessionStateBuilder {
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_scalar_functions());
 
-        self.lambda_functions
+        self.higher_order_functions
             .get_or_insert_with(Vec::new)
-            .extend(SessionStateDefaults::default_lambda_functions());
+            .extend(SessionStateDefaults::default_higher_order_functions());
 
         self.aggregate_functions
             .get_or_insert_with(Vec::new)
@@ -1320,12 +1322,12 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Set the map of [`LambdaUDF`]s
-    pub fn with_lambda_functions(
+    /// Set the map of [`HigherOrderUDF`]s
+    pub fn with_higher_order_functions(
         mut self,
-        lambda_functions: Vec<Arc<dyn LambdaUDF>>,
+        higher_order_functions: Vec<Arc<dyn HigherOrderUDF>>,
     ) -> Self {
-        self.lambda_functions = Some(lambda_functions);
+        self.higher_order_functions = Some(higher_order_functions);
         self
     }
 
@@ -1483,7 +1485,7 @@ impl SessionStateBuilder {
             catalog_list,
             table_functions,
             scalar_functions,
-            lambda_functions,
+            higher_order_functions,
             aggregate_functions,
             window_functions,
             serializer_registry,
@@ -1520,7 +1522,7 @@ impl SessionStateBuilder {
             }),
             table_functions: table_functions.unwrap_or_default(),
             scalar_functions: HashMap::new(),
-            lambda_functions: HashMap::new(),
+            higher_order_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: serializer_registry
@@ -1574,17 +1576,17 @@ impl SessionStateBuilder {
             }
         }
 
-        if let Some(lambda_functions) = lambda_functions {
-            for udlf in lambda_functions {
-                match state.register_udlf(Arc::clone(&udlf)) {
+        if let Some(higher_order_functions) = higher_order_functions {
+            for udhof in higher_order_functions {
+                match state.register_udhof(Arc::clone(&udhof)) {
                     Ok(Some(existing)) => {
-                        debug!("Overwrote existing UDLF '{}'", existing.name());
+                        debug!("Overwrote existing UDHOF '{}'", existing.name());
                     }
                     Ok(None) => {
-                        debug!("Registered UDLF '{}'", udlf.name());
+                        debug!("Registered UDHOF '{}'", udhof.name());
                     }
                     Err(err) => {
-                        debug!("Failed to register UDLF '{}': {}", udlf.name(), err);
+                        debug!("Failed to register UDHOF '{}': {}", udhof.name(), err);
                     }
                 }
             }
@@ -1709,8 +1711,10 @@ impl SessionStateBuilder {
     }
 
     /// Returns the current scalar_functions value
-    pub fn lambda_functions(&mut self) -> &mut Option<Vec<Arc<dyn LambdaUDF>>> {
-        &mut self.lambda_functions
+    pub fn higher_order_functions(
+        &mut self,
+    ) -> &mut Option<Vec<Arc<dyn HigherOrderUDF>>> {
+        &mut self.higher_order_functions
     }
 
     /// Returns the current aggregate_functions value
@@ -1821,7 +1825,7 @@ impl Debug for SessionStateBuilder {
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
-            .field("lambda_functions", &self.lambda_functions)
+            .field("higher_order_functions", &self.higher_order_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
             .finish()
@@ -1929,8 +1933,8 @@ impl ContextProvider for SessionContextProvider<'_> {
         self.state.scalar_functions().get(name).cloned()
     }
 
-    fn get_lambda_meta(&self, name: &str) -> Option<Arc<dyn LambdaUDF>> {
-        self.state.lambda_functions().get(name).cloned()
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+        self.state.higher_order_functions().get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
@@ -1969,8 +1973,12 @@ impl ContextProvider for SessionContextProvider<'_> {
         self.state.scalar_functions().keys().cloned().collect()
     }
 
-    fn udlf_names(&self) -> Vec<String> {
-        self.state.lambda_functions().keys().cloned().collect()
+    fn udhof_names(&self) -> Vec<String> {
+        self.state
+            .higher_order_functions()
+            .keys()
+            .cloned()
+            .collect()
     }
 
     fn udaf_names(&self) -> Vec<String> {
@@ -2012,11 +2020,11 @@ impl FunctionRegistry for SessionState {
         })
     }
 
-    fn udlf(&self, name: &str) -> datafusion_common::Result<Arc<dyn LambdaUDF>> {
-        self.lambda_functions
+    fn udhof(&self, name: &str) -> datafusion_common::Result<Arc<dyn HigherOrderUDF>> {
+        self.higher_order_functions
             .get(name)
             .cloned()
-            .ok_or_else(|| plan_datafusion_err!("Lambda Function {name} not found"))
+            .ok_or_else(|| plan_datafusion_err!("Higher Order Function {name} not found"))
     }
 
     fn udaf(&self, name: &str) -> datafusion_common::Result<Arc<AggregateUDF>> {
@@ -2046,15 +2054,17 @@ impl FunctionRegistry for SessionState {
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 
-    fn register_udlf(
+    fn register_udhof(
         &mut self,
-        udlf: Arc<dyn LambdaUDF>,
-    ) -> datafusion_common::Result<Option<Arc<dyn LambdaUDF>>> {
-        udlf.aliases().iter().for_each(|alias| {
-            self.lambda_functions
-                .insert(alias.clone(), Arc::clone(&udlf));
+        udhof: Arc<dyn HigherOrderUDF>,
+    ) -> datafusion_common::Result<Option<Arc<dyn HigherOrderUDF>>> {
+        udhof.aliases().iter().for_each(|alias| {
+            self.higher_order_functions
+                .insert(alias.clone(), Arc::clone(&udhof));
         });
-        Ok(self.lambda_functions.insert(udlf.name().into(), udlf))
+        Ok(self
+            .higher_order_functions
+            .insert(udhof.name().into(), udhof))
     }
 
     fn register_udaf(
@@ -2092,17 +2102,17 @@ impl FunctionRegistry for SessionState {
         Ok(udf)
     }
 
-    fn deregister_udlf(
+    fn deregister_udhof(
         &mut self,
         name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn LambdaUDF>>> {
-        let udlf = self.lambda_functions.remove(name);
-        if let Some(udlf) = &udlf {
-            for alias in udlf.aliases() {
-                self.lambda_functions.remove(alias);
+    ) -> datafusion_common::Result<Option<Arc<dyn HigherOrderUDF>>> {
+        let udhof = self.higher_order_functions.remove(name);
+        if let Some(udhof) = &udhof {
+            for alias in udhof.aliases() {
+                self.higher_order_functions.remove(alias);
             }
         }
-        Ok(udlf)
+        Ok(udhof)
     }
 
     fn deregister_udaf(
@@ -2151,8 +2161,8 @@ impl FunctionRegistry for SessionState {
         Ok(())
     }
 
-    fn udlfs(&self) -> HashSet<String> {
-        self.lambda_functions.keys().cloned().collect()
+    fn udhofs(&self) -> HashSet<String> {
+        self.higher_order_functions.keys().cloned().collect()
     }
 
     fn udafs(&self) -> HashSet<String> {
@@ -2197,7 +2207,7 @@ impl From<&SessionState> for TaskContext {
             state.session_id.clone(),
             state.config.clone(),
             state.scalar_functions.clone(),
-            state.lambda_functions.clone(),
+            state.higher_order_functions.clone(),
             state.aggregate_functions.clone(),
             state.window_functions.clone(),
             Arc::clone(&state.runtime_env),
@@ -2267,7 +2277,7 @@ mod tests {
     use datafusion_common::config::Dialect;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
-    use datafusion_expr::LambdaUDF;
+    use datafusion_expr::HigherOrderUDF;
     use datafusion_optimizer::Optimizer;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
@@ -2581,8 +2591,8 @@ mod tests {
             self.state.scalar_functions().get(name).cloned()
         }
 
-        fn get_lambda_meta(&self, name: &str) -> Option<Arc<dyn LambdaUDF>> {
-            self.state.lambda_functions().get(name).cloned()
+        fn get_higher_order_meta(&self, name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+            self.state.higher_order_functions().get(name).cloned()
         }
 
         fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
@@ -2605,8 +2615,12 @@ mod tests {
             self.state.scalar_functions().keys().cloned().collect()
         }
 
-        fn udlf_names(&self) -> Vec<String> {
-            self.state.lambda_functions().keys().cloned().collect()
+        fn udhof_names(&self) -> Vec<String> {
+            self.state
+                .higher_order_functions()
+                .keys()
+                .cloned()
+                .collect()
         }
 
         fn udaf_names(&self) -> Vec<String> {

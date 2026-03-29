@@ -17,7 +17,7 @@
 
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::expr::{
-    AggregateFunctionParams, LambdaFunction, WindowFunctionParams,
+    AggregateFunctionParams, HigherOrderFunction, WindowFunctionParams,
 };
 use datafusion_expr::expr::{Lambda, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
@@ -555,12 +555,12 @@ impl Unparser<'_> {
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
-            Expr::LambdaFunction(LambdaFunction { func, args }) => {
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
                 let func_name = func.name();
 
                 if let Some(expr) = self
                     .dialect
-                    .lambda_function_to_sql_overrides(self, func_name, args)?
+                    .higher_order_function_to_sql_overrides(self, func_name, args)?
                 {
                     return Ok(expr);
                 }
@@ -1870,7 +1870,7 @@ mod tests {
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        ColumnarValue, LambdaUDF, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+        ColumnarValue, HigherOrderUDF, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col,
         cube, exists, grouping_set, interval_datetime_lit, interval_year_month_lit,
         lambda, lambda_var, lit, not, not_exists, out_ref_col, placeholder, rollup,
@@ -1932,18 +1932,18 @@ mod tests {
     // See sql::tests for E2E tests.
 
     #[derive(Debug, Hash, Eq, PartialEq)]
-    struct DummyLambdaUDF;
+    struct DummyHigherOrderUDF;
 
-    impl LambdaUDF for DummyLambdaUDF {
+    impl HigherOrderUDF for DummyHigherOrderUDF {
         fn as_any(&self) -> &dyn Any {
             unimplemented!()
         }
 
         fn name(&self) -> &str {
-            "dummy_udlf"
+            "dummy_udhof"
         }
 
-        fn signature(&self) -> &datafusion_expr::LambdaSignature {
+        fn signature(&self) -> &datafusion_expr::HigherOrderSignature {
             unimplemented!()
         }
 
@@ -1956,14 +1956,14 @@ mod tests {
 
         fn return_field_from_args(
             &self,
-            _args: datafusion_expr::LambdaReturnFieldArgs,
+            _args: datafusion_expr::HigherOrderReturnFieldArgs,
         ) -> Result<FieldRef> {
             unimplemented!()
         }
 
         fn invoke_with_args(
             &self,
-            _args: datafusion_expr::LambdaFunctionArgs,
+            _args: datafusion_expr::HigherOrderFunctionArgs,
         ) -> Result<ColumnarValue> {
             unimplemented!()
         }
@@ -2054,8 +2054,8 @@ mod tests {
                 r#"dummy_udf(a, b) IS NOT NULL"#,
             ),
             (
-                Expr::LambdaFunction(LambdaFunction::new(
-                    Arc::new(DummyLambdaUDF),
+                Expr::HigherOrderFunction(HigherOrderFunction::new(
+                    Arc::new(DummyHigherOrderUDF),
                     vec![
                         col("a"),
                         lambda(
@@ -2067,7 +2067,7 @@ mod tests {
                         ),
                     ],
                 )),
-                r#"dummy_udlf(a, (v) -> -v)"#,
+                r#"dummy_udhof(a, (v) -> -v)"#,
             ),
             (
                 Expr::Like(Like {

@@ -17,8 +17,8 @@
 
 use super::binary::binary_numeric_coercion;
 use crate::{
-    AggregateUDF, LambdaTypeSignature, LambdaUDF, ScalarUDF, Signature, TypeSignature,
-    ValueOrLambda, WindowUDF,
+    AggregateUDF, HigherOrderTypeSignature, HigherOrderUDF, ScalarUDF, Signature,
+    TypeSignature, ValueOrLambda, WindowUDF,
 };
 use arrow::datatypes::{Field, FieldRef};
 use arrow::{
@@ -151,7 +151,7 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
         .collect())
 }
 
-/// Performs type coercion for lambda function arguments.
+/// Performs type coercion for higher order function arguments.
 ///
 /// For value arguments, returns the field to which each
 /// argument must be coerced to match `signature`.
@@ -159,12 +159,12 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
-pub fn value_fields_with_lambda_udf<L: Clone>(
+pub fn value_fields_with_higher_order_udf<L: Clone>(
     current_fields: &[ValueOrLambda<FieldRef, L>],
-    func: &dyn LambdaUDF,
+    func: &dyn HigherOrderUDF,
 ) -> Result<Vec<ValueOrLambda<FieldRef, L>>> {
     match func.signature().type_signature {
-        LambdaTypeSignature::UserDefined => {
+        HigherOrderTypeSignature::UserDefined => {
             let arg_types = current_fields
                 .iter()
                 .filter_map(|p| match p {
@@ -211,8 +211,8 @@ pub fn value_fields_with_lambda_udf<L: Clone>(
                 })
                 .collect())
         }
-        LambdaTypeSignature::VariadicAny => Ok(current_fields.to_vec()),
-        LambdaTypeSignature::Any(number) => {
+        HigherOrderTypeSignature::VariadicAny => Ok(current_fields.to_vec()),
+        HigherOrderTypeSignature::Any(number) => {
             if current_fields.len() != number {
                 return plan_err!(
                     "The function '{}' expected {number} arguments but received {}",

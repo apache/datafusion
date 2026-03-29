@@ -38,7 +38,7 @@ use datafusion_common::{
     metadata::FieldMetadata,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
-use datafusion_expr::expr::LambdaFunction;
+use datafusion_expr::expr::HigherOrderFunction;
 use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
     and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
@@ -647,7 +647,7 @@ impl ConstEvaluator {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
-            Expr::LambdaFunction(LambdaFunction { func, .. }) => {
+            Expr::HigherOrderFunction(HigherOrderFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
             Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => {

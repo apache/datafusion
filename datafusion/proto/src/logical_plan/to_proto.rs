@@ -626,7 +626,7 @@ pub fn serialize_expr(
                     .unwrap_or(HashMap::new()),
             })),
         },
-        Expr::LambdaFunction(_) | Expr::Lambda(_) | Expr::LambdaVariable(_) => {
+        Expr::HigherOrderFunction(_) | Expr::Lambda(_) | Expr::LambdaVariable(_) => {
             return Err(Error::General(
                 "Proto serialization error: Lambda not implemented".to_string(),
             ));

@@ -30,9 +30,9 @@ pub fn from_scalar_function(
     from_function(producer, fun.name(), &fun.args, schema)
 }
 
-pub fn from_lambda_function(
+pub fn from_higher_order_function(
     producer: &mut impl SubstraitProducer,
-    fun: &expr::LambdaFunction,
+    fun: &expr::HigherOrderFunction,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
     from_function(producer, fun.name(), &fun.args, schema)

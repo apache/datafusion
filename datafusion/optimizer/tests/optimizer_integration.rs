@@ -735,10 +735,10 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_lambda_meta(
+    fn get_higher_order_meta(
         &self,
         _name: &str,
-    ) -> Option<Arc<dyn datafusion_expr::LambdaUDF>> {
+    ) -> Option<Arc<dyn datafusion_expr::HigherOrderUDF>> {
         None
     }
 
@@ -770,7 +770,7 @@ impl ContextProvider for MyContextProvider {
         Vec::new()
     }
 
-    fn udlf_names(&self) -> Vec<String> {
+    fn udhof_names(&self) -> Vec<String> {
         Vec::new()
     }
 

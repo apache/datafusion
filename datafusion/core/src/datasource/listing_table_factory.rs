@@ -595,9 +595,9 @@ mod tests {
             ) -> &HashMap<String, Arc<datafusion_expr::ScalarUDF>> {
                 unimplemented!()
             }
-            fn lambda_functions(
+            fn higher_order_functions(
                 &self,
-            ) -> &HashMap<String, Arc<dyn datafusion_expr::LambdaUDF>> {
+            ) -> &HashMap<String, Arc<dyn datafusion_expr::HigherOrderUDF>> {
                 unimplemented!()
             }
             fn aggregate_functions(

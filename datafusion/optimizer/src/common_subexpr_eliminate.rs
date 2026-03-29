@@ -30,7 +30,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, qualified_name};
-use datafusion_expr::expr::{Alias, LambdaFunction, ScalarFunction};
+use datafusion_expr::expr::{Alias, HigherOrderFunction, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -651,13 +651,13 @@ impl CSEController for ExprCSEController<'_> {
 
     fn conditional_children(node: &Expr) -> Option<(Vec<&Expr>, Vec<&Expr>)> {
         match node {
-            // In case of `ScalarFunction`s and `LambdaFunction`s we don't know which children are surely
+            // In case of `ScalarFunction`s and `HigherOrderFunction`s we don't know which children are surely
             // executed so start visiting all children conditionally and stop the
             // recursion with `TreeNodeRecursion::Jump`.
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 func.conditional_arguments(args)
             }
-            Expr::LambdaFunction(LambdaFunction { func, args }) => {
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
                 func.conditional_arguments(args)
             }
 

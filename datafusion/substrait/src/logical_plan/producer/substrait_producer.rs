@@ -19,7 +19,7 @@ use crate::extensions::Extensions;
 use crate::logical_plan::producer::{
     from_aggregate, from_aggregate_function, from_alias, from_between, from_binary_expr,
     from_case, from_cast, from_column, from_distinct, from_empty_relation, from_exists,
-    from_filter, from_in_list, from_in_subquery, from_join, from_lambda_function,
+    from_filter, from_higher_order_function, from_in_list, from_in_subquery, from_join,
     from_like, from_limit, from_literal, from_projection, from_repartition,
     from_scalar_function, from_scalar_subquery, from_set_comparison, from_sort,
     from_subquery_alias, from_table_scan, from_try_cast, from_unary_expr, from_union,
@@ -334,12 +334,12 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_scalar_function(self, scalar_fn, schema)
     }
 
-    fn handle_lambda_function(
+    fn handle_higher_order_function(
         &mut self,
-        scalar_fn: &expr::LambdaFunction,
+        scalar_fn: &expr::HigherOrderFunction,
         schema: &DFSchemaRef,
     ) -> datafusion::common::Result<Expression> {
-        from_lambda_function(self, scalar_fn, schema)
+        from_higher_order_function(self, scalar_fn, schema)
     }
 
     fn handle_aggregate_function(

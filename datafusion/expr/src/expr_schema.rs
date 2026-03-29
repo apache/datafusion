@@ -23,10 +23,10 @@ use crate::expr::{
     WindowFunctionParams,
 };
 use crate::expr::{FieldMetadata, LambdaVariable};
-use crate::type_coercion::functions::value_fields_with_lambda_udf;
+use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
-use crate::udlf::LambdaReturnFieldArgs;
+use crate::udhof::HigherOrderReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
@@ -203,7 +203,7 @@ impl ExprSchemable for Expr {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::LambdaFunction(_func) => {
+            Expr::HigherOrderFunction(_func) => {
                 Ok(self.to_field(schema)?.1.data_type().clone())
             }
             Expr::Lambda(Lambda { params: _, body }) => body.get_type(schema),
@@ -363,7 +363,7 @@ impl ExprSchemable for Expr {
                 // in projections
                 Ok(true)
             }
-            Expr::LambdaFunction(_func) => {
+            Expr::HigherOrderFunction(_func) => {
                 Ok(self.to_field(input_schema)?.1.is_nullable())
             }
             Expr::Lambda(l) => l.body.nullable(input_schema),
@@ -608,7 +608,7 @@ impl ExprSchemable for Expr {
                 self.get_type(schema)?,
                 self.nullable(schema)?,
             ))),
-            Expr::LambdaFunction(func) => {
+            Expr::HigherOrderFunction(func) => {
                 let arg_fields = func
                     .args
                     .iter()
@@ -622,7 +622,7 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
 
                 let new_fields =
-                    value_fields_with_lambda_udf(&arg_fields, func.func.as_ref())?;
+                    value_fields_with_higher_order_udf(&arg_fields, func.func.as_ref())?;
 
                 let arguments = func
                     .args
@@ -633,7 +633,7 @@ impl ExprSchemable for Expr {
                     })
                     .collect::<Vec<_>>();
 
-                let args = LambdaReturnFieldArgs {
+                let args = HigherOrderReturnFieldArgs {
                     arg_fields: &new_fields,
                     scalar_arguments: &arguments,
                 };

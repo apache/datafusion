@@ -33,7 +33,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
-    AggregateUDF, AggregateUDFImpl, Expr, LambdaUDF, LogicalPlan, ScalarUDF,
+    AggregateUDF, AggregateUDFImpl, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF,
     ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
 use datafusion_physical_expr::PhysicalExpr;
@@ -376,7 +376,7 @@ pub struct ForeignSession {
     session: FFI_SessionRef,
     config: SessionConfig,
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    lambda_functions: HashMap<String, Arc<dyn LambdaUDF>>,
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     window_functions: HashMap<String, Arc<WindowUDF>>,
     table_options: TableOptions,
@@ -445,7 +445,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 config,
                 table_options,
                 scalar_functions,
-                lambda_functions: HashMap::new(),
+                higher_order_functions: HashMap::new(),
                 aggregate_functions,
                 window_functions,
                 runtime_env: Default::default(),
@@ -586,8 +586,8 @@ impl Session for ForeignSession {
         &self.scalar_functions
     }
 
-    fn lambda_functions(&self) -> &HashMap<String, Arc<dyn LambdaUDF>> {
-        &self.lambda_functions
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+        &self.higher_order_functions
     }
 
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {

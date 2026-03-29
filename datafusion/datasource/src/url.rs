@@ -518,7 +518,7 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{
-        AggregateUDF, Expr, LambdaUDF, LogicalPlan, ScalarUDF, WindowUDF,
+        AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
@@ -1209,7 +1209,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn lambda_functions(&self) -> &HashMap<String, Arc<dyn LambdaUDF>> {
+        fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
             unimplemented!()
         }
 

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{AggregateUDFImpl, LambdaUDF, ScalarUDFImpl, WindowUDFImpl};
+use crate::{AggregateUDFImpl, HigherOrderUDF, ScalarUDFImpl, WindowUDFImpl};
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
@@ -93,7 +93,7 @@ impl UdfPointer for Arc<dyn ScalarUDFImpl + '_> {
     }
 }
 
-impl UdfPointer for Arc<dyn LambdaUDF + '_> {
+impl UdfPointer for Arc<dyn HigherOrderUDF + '_> {
     fn equals(&self, other: &Self::Target) -> bool {
         self.as_ref().dyn_eq(other.as_any())
     }

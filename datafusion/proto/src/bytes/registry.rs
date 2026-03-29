@@ -38,9 +38,9 @@ impl FunctionRegistry for NoRegistry {
         )
     }
 
-    fn udlf(&self, name: &str) -> Result<Arc<dyn datafusion_expr::LambdaUDF>> {
+    fn udhof(&self, name: &str) -> Result<Arc<dyn datafusion_expr::HigherOrderUDF>> {
         plan_err!(
-            "No function registry provided to deserialize, so can not deserialize User Defined Lambda Function '{name}'"
+            "No function registry provided to deserialize, so can not deserialize User Defined Higher Order Function '{name}'"
         )
     }
 
@@ -81,7 +81,7 @@ impl FunctionRegistry for NoRegistry {
         vec![]
     }
 
-    fn udlfs(&self) -> HashSet<String> {
+    fn udhofs(&self) -> HashSet<String> {
         HashSet::new()
     }
 

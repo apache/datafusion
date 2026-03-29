@@ -28,8 +28,8 @@ use crate::protobuf;
 use datafusion_common::{Result, not_impl_err, plan_datafusion_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
-    AggregateUDF, Expr, LambdaSignature, LambdaUDF, LogicalPlan, Volatility, WindowUDF,
-    create_udaf, create_udf, create_udwf,
+    AggregateUDF, Expr, HigherOrderSignature, HigherOrderUDF, LogicalPlan, Volatility,
+    WindowUDF, create_udaf, create_udf, create_udwf,
 };
 use prost::{
     Message,
@@ -123,15 +123,18 @@ impl Serializeable for Expr {
                 )))
             }
 
-            fn udlf(&self, name: &str) -> Result<Arc<dyn datafusion_expr::LambdaUDF>> {
-                // if a SimpleLambdaFunction get's added, use it instead of MockLambdaUDF
+            fn udhof(
+                &self,
+                name: &str,
+            ) -> Result<Arc<dyn datafusion_expr::HigherOrderUDF>> {
+                // if a SimpleHigherOrderFunction get's added, use it instead of MockHigherOrderUDF
                 #[derive(Debug, PartialEq, Eq, Hash)]
-                struct MockLambdaUDF {
+                struct MockHigherOrderUDF {
                     name: String,
-                    signature: LambdaSignature,
+                    signature: HigherOrderSignature,
                 }
 
-                impl LambdaUDF for MockLambdaUDF {
+                impl HigherOrderUDF for MockHigherOrderUDF {
                     fn as_any(&self) -> &dyn std::any::Any {
                         self
                     }
@@ -140,7 +143,7 @@ impl Serializeable for Expr {
                         &self.name
                     }
 
-                    fn signature(&self) -> &LambdaSignature {
+                    fn signature(&self) -> &HigherOrderSignature {
                         &self.signature
                     }
 
@@ -148,27 +151,27 @@ impl Serializeable for Expr {
                         &self,
                         _value_fields: &[arrow::datatypes::FieldRef],
                     ) -> Result<Vec<Vec<arrow::datatypes::Field>>> {
-                        not_impl_err!("mock LambdaUDF")
+                        not_impl_err!("mock HigherOrderUDF")
                     }
 
                     fn return_field_from_args(
                         &self,
-                        _args: datafusion_expr::LambdaReturnFieldArgs,
+                        _args: datafusion_expr::HigherOrderReturnFieldArgs,
                     ) -> Result<arrow::datatypes::FieldRef> {
-                        not_impl_err!("mock LambdaUDF")
+                        not_impl_err!("mock HigherOrderUDF")
                     }
 
                     fn invoke_with_args(
                         &self,
-                        _args: datafusion_expr::LambdaFunctionArgs,
+                        _args: datafusion_expr::HigherOrderFunctionArgs,
                     ) -> Result<datafusion_expr::ColumnarValue> {
-                        not_impl_err!("mock LambdaUDF")
+                        not_impl_err!("mock HigherOrderUDF")
                     }
                 }
 
-                Ok(Arc::new(MockLambdaUDF {
+                Ok(Arc::new(MockHigherOrderUDF {
                     name: name.to_string(),
-                    signature: LambdaSignature::variadic_any(Volatility::Immutable),
+                    signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
                 }))
             }
 
@@ -208,12 +211,12 @@ impl Serializeable for Expr {
                     "register_udf called in Placeholder Registry!"
                 )
             }
-            fn register_udlf(
+            fn register_udhof(
                 &mut self,
-                _udlf: Arc<dyn datafusion_expr::LambdaUDF>,
-            ) -> Result<Option<Arc<dyn datafusion_expr::LambdaUDF>>> {
+                _udhof: Arc<dyn datafusion_expr::HigherOrderUDF>,
+            ) -> Result<Option<Arc<dyn datafusion_expr::HigherOrderUDF>>> {
                 datafusion_common::internal_err!(
-                    "register_udlf called in Placeholder Registry!"
+                    "register_udhof called in Placeholder Registry!"
                 )
             }
             fn register_udwf(
@@ -229,7 +232,7 @@ impl Serializeable for Expr {
                 vec![]
             }
 
-            fn udlfs(&self) -> std::collections::HashSet<String> {
+            fn udhofs(&self) -> std::collections::HashSet<String> {
                 std::collections::HashSet::default()
             }
 

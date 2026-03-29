@@ -21,7 +21,7 @@ use crate::{
 };
 use datafusion_common::{Result, internal_datafusion_err, plan_datafusion_err};
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, LambdaUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
 
@@ -42,8 +42,8 @@ pub struct TaskContext {
     session_config: SessionConfig,
     /// Scalar functions associated with this task context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    /// Lambda functions associated with this task context
-    lambda_functions: HashMap<String, Arc<dyn LambdaUDF>>,
+    /// Higher order functions associated with this task context
+    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
     /// Aggregate functions associated with this task context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions associated with this task context
@@ -62,7 +62,7 @@ impl Default for TaskContext {
             task_id: None,
             session_config: SessionConfig::new(),
             scalar_functions: HashMap::new(),
-            lambda_functions: HashMap::new(),
+            higher_order_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             runtime,
@@ -82,7 +82,7 @@ impl TaskContext {
         session_id: String,
         session_config: SessionConfig,
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-        lambda_functions: HashMap<String, Arc<dyn LambdaUDF>>,
+        higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         window_functions: HashMap<String, Arc<WindowUDF>>,
         runtime: Arc<RuntimeEnv>,
@@ -92,7 +92,7 @@ impl TaskContext {
             session_id,
             session_config,
             scalar_functions,
-            lambda_functions,
+            higher_order_functions,
             aggregate_functions,
             window_functions,
             runtime,
@@ -162,11 +162,11 @@ impl FunctionRegistry for TaskContext {
         })
     }
 
-    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
-        let result = self.lambda_functions.get(name);
+    fn udhof(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+        let result = self.higher_order_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDLF named \"{name}\" in the TaskContext")
+            plan_datafusion_err!("There is no UDHOF named \"{name}\" in the TaskContext")
         })
     }
 
@@ -212,23 +212,25 @@ impl FunctionRegistry for TaskContext {
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 
-    fn register_udlf(
+    fn register_udhof(
         &mut self,
-        udlf: Arc<dyn LambdaUDF>,
-    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
-        udlf.aliases().iter().for_each(|alias| {
-            self.lambda_functions
-                .insert(alias.clone(), Arc::clone(&udlf));
+        udhof: Arc<dyn HigherOrderUDF>,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        udhof.aliases().iter().for_each(|alias| {
+            self.higher_order_functions
+                .insert(alias.clone(), Arc::clone(&udhof));
         });
-        Ok(self.lambda_functions.insert(udlf.name().into(), udlf))
+        Ok(self
+            .higher_order_functions
+            .insert(udhof.name().into(), udhof))
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
     }
 
-    fn udlfs(&self) -> HashSet<String> {
-        self.lambda_functions.keys().cloned().collect()
+    fn udhofs(&self) -> HashSet<String> {
+        self.higher_order_functions.keys().cloned().collect()
     }
 
     fn udafs(&self) -> HashSet<String> {

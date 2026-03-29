@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Declaration of built-in (lambda) functions.
+//! Declaration of built-in (higher order) functions.
 //! This module contains built-in functions' enumeration and metadata.
 //!
 //! Generally, a function has:
@@ -44,24 +44,24 @@ use datafusion_common::utils::remove_list_null_values;
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_datafusion_err, internal_err,
 };
-use datafusion_expr::type_coercion::functions::value_fields_with_lambda_udf;
+use datafusion_expr::type_coercion::functions::value_fields_with_higher_order_udf;
 use datafusion_expr::{
-    ColumnarValue, LambdaArgument, LambdaFunctionArgs, LambdaReturnFieldArgs, LambdaUDF,
-    ValueOrLambda, Volatility, expr_vec_fmt,
+    ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderUDF,
+    LambdaArgument, ValueOrLambda, Volatility, expr_vec_fmt,
 };
 
-/// Physical expression of a lambda function
-pub struct LambdaFunctionExpr {
-    fun: Arc<dyn LambdaUDF>,
+/// Physical expression of a higher order function
+pub struct HigherOrderFunctionExpr {
+    fun: Arc<dyn HigherOrderUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_field: FieldRef,
     config_options: Arc<ConfigOptions>,
 }
 
-impl Debug for LambdaFunctionExpr {
+impl Debug for HigherOrderFunctionExpr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("LambdaFunctionExpr")
+        f.debug_struct("HigherOrderFunctionExpr")
             .field("fun", &"<FUNC>")
             .field("name", &self.name)
             .field("args", &self.args)
@@ -70,11 +70,11 @@ impl Debug for LambdaFunctionExpr {
     }
 }
 
-impl LambdaFunctionExpr {
-    /// Create a new Lambda function
+impl HigherOrderFunctionExpr {
+    /// Create a new Higher Order function
     pub fn new(
         name: impl Into<String>,
-        fun: Arc<dyn LambdaUDF>,
+        fun: Arc<dyn HigherOrderUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_field: FieldRef,
         config_options: Arc<ConfigOptions>,
@@ -88,9 +88,9 @@ impl LambdaFunctionExpr {
         }
     }
 
-    /// Create a new Lambda function
+    /// Create a new Higher Order function
     pub fn try_new(
-        fun: Arc<dyn LambdaUDF>,
+        fun: Arc<dyn HigherOrderUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         schema: &Schema,
         config_options: Arc<ConfigOptions>,
@@ -107,8 +107,8 @@ impl LambdaFunctionExpr {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // verify that input data types is consistent with function's `LambdaTypeSignature`
-        value_fields_with_lambda_udf(&arg_fields, fun.as_ref())?;
+        // verify that input data types is consistent with function's `HigherOrderTypeSignature`
+        value_fields_with_higher_order_udf(&arg_fields, fun.as_ref())?;
 
         let arguments = args
             .iter()
@@ -119,7 +119,7 @@ impl LambdaFunctionExpr {
             })
             .collect::<Vec<_>>();
 
-        let ret_args = LambdaReturnFieldArgs {
+        let ret_args = HigherOrderReturnFieldArgs {
             arg_fields: &arg_fields,
             scalar_arguments: &arguments,
         };
@@ -135,8 +135,8 @@ impl LambdaFunctionExpr {
         })
     }
 
-    /// Get the lambda function implementation
-    pub fn fun(&self) -> &dyn LambdaUDF {
+    /// Get the higher order function implementation
+    pub fn fun(&self) -> &dyn HigherOrderUDF {
         self.fun.as_ref()
     }
 
@@ -174,13 +174,13 @@ impl LambdaFunctionExpr {
     }
 }
 
-impl fmt::Display for LambdaFunctionExpr {
+impl fmt::Display for HigherOrderFunctionExpr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}({})", self.name, expr_vec_fmt!(self.args))
     }
 }
 
-impl PartialEq for LambdaFunctionExpr {
+impl PartialEq for HigherOrderFunctionExpr {
     fn eq(&self, o: &Self) -> bool {
         if std::ptr::eq(self, o) {
             // The equality implementation is somewhat expensive, so let's short-circuit when possible.
@@ -202,8 +202,8 @@ impl PartialEq for LambdaFunctionExpr {
                     == sorted_config_entries(&o.config_options))
     }
 }
-impl Eq for LambdaFunctionExpr {}
-impl Hash for LambdaFunctionExpr {
+impl Eq for HigherOrderFunctionExpr {}
+impl Hash for HigherOrderFunctionExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let Self {
             fun,
@@ -225,7 +225,7 @@ fn sorted_config_entries(config_options: &ConfigOptions) -> Vec<ConfigEntry> {
     entries
 }
 
-impl PhysicalExpr for LambdaFunctionExpr {
+impl PhysicalExpr for HigherOrderFunctionExpr {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -333,7 +333,7 @@ impl PhysicalExpr for LambdaFunctionExpr {
             .all(|arg| matches!(arg, ValueOrLambda::Value(ColumnarValue::Scalar(_))));
 
         // evaluate the function
-        let output = self.fun.invoke_with_args(LambdaFunctionArgs {
+        let output = self.fun.invoke_with_args(HigherOrderFunctionArgs {
             args,
             arg_fields,
             number_rows: batch.num_rows(),
@@ -373,7 +373,7 @@ impl PhysicalExpr for LambdaFunctionExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(LambdaFunctionExpr::new(
+        Ok(Arc::new(HigherOrderFunctionExpr::new(
             &self.name,
             Arc::clone(&self.fun),
             children,
@@ -404,22 +404,24 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::LambdaFunctionExpr;
+    use crate::HigherOrderFunctionExpr;
     use crate::expressions::Column;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
-    use datafusion_expr::{LambdaFunctionArgs, LambdaSignature, LambdaUDF};
+    use datafusion_expr::{
+        HigherOrderFunctionArgs, HigherOrderSignature, HigherOrderUDF,
+    };
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::physical_expr::is_volatile;
 
     /// Test helper to create a mock UDF with a specific volatility
     #[derive(Debug, PartialEq, Eq, Hash)]
-    struct MockLambdaUDF {
-        signature: LambdaSignature,
+    struct MockHigherOrderUDF {
+        signature: HigherOrderSignature,
     }
 
-    impl LambdaUDF for MockLambdaUDF {
+    impl HigherOrderUDF for MockHigherOrderUDF {
         fn as_any(&self) -> &dyn Any {
             self
         }
@@ -428,7 +430,7 @@ mod tests {
             "mock_function"
         }
 
-        fn signature(&self) -> &LambdaSignature {
+        fn signature(&self) -> &HigherOrderSignature {
             &self.signature
         }
 
@@ -441,26 +443,29 @@ mod tests {
 
         fn return_field_from_args(
             &self,
-            _args: LambdaReturnFieldArgs,
+            _args: HigherOrderReturnFieldArgs,
         ) -> Result<FieldRef> {
             Ok(Arc::new(Field::new("", DataType::Int32, false)))
         }
 
-        fn invoke_with_args(&self, _args: LambdaFunctionArgs) -> Result<ColumnarValue> {
+        fn invoke_with_args(
+            &self,
+            _args: HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))))
         }
     }
 
     #[test]
-    fn test_lambda_function_volatile_node() {
+    fn test_higher_order_function_volatile_node() {
         // Create a volatile UDF
-        let volatile_udf = Arc::new(MockLambdaUDF {
-            signature: LambdaSignature::variadic_any(Volatility::Volatile),
+        let volatile_udf = Arc::new(MockHigherOrderUDF {
+            signature: HigherOrderSignature::variadic_any(Volatility::Volatile),
         });
 
         // Create a non-volatile UDF
-        let stable_udf = Arc::new(MockLambdaUDF {
-            signature: LambdaSignature::variadic_any(Volatility::Stable),
+        let stable_udf = Arc::new(MockHigherOrderUDF {
+            signature: HigherOrderSignature::variadic_any(Volatility::Stable),
         });
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
@@ -468,7 +473,7 @@ mod tests {
         let config_options = Arc::new(ConfigOptions::new());
 
         // Test volatile function
-        let volatile_expr = LambdaFunctionExpr::try_new(
+        let volatile_expr = HigherOrderFunctionExpr::try_new(
             volatile_udf,
             args.clone(),
             &schema,
@@ -482,7 +487,7 @@ mod tests {
 
         // Test non-volatile function
         let stable_expr =
-            LambdaFunctionExpr::try_new(stable_udf, args, &schema, config_options)
+            HigherOrderFunctionExpr::try_new(stable_udf, args, &schema, config_options)
                 .unwrap();
 
         assert!(!stable_expr.is_volatile_node());

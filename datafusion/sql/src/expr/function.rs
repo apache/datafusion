@@ -28,11 +28,11 @@ use datafusion_expr::{
     Expr, ExprSchemable, SortExpr, ValueOrLambda, WindowFrame, WindowFunctionDefinition,
     arguments::ArgumentName,
     expr::{
-        self, Lambda, LambdaFunction, NullTreatment, ScalarFunction, Unnest,
+        self, HigherOrderFunction, Lambda, NullTreatment, ScalarFunction, Unnest,
         WildcardOptions, WindowFunction,
     },
     planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
-    type_coercion::functions::value_fields_with_lambda_udf,
+    type_coercion::functions::value_fields_with_higher_order_udf,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
@@ -62,7 +62,7 @@ pub fn suggest_valid_function(
         let mut funcs = Vec::new();
 
         funcs.extend(ctx.udf_names());
-        funcs.extend(ctx.udlf_names());
+        funcs.extend(ctx.udhof_names());
         funcs.extend(ctx.udaf_names());
 
         funcs
@@ -369,9 +369,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        if let Some(fm) = self.context_provider.get_lambda_meta(&name) {
+        if let Some(fm) = self.context_provider.get_higher_order_meta(&name) {
             // plan non-lambda arguments first so we can get theirs datatype and call
-            // LambdaUDF::lambda_parameters to then plan the lambda arguments with
+            // HigherOrderUDF::lambda_parameters to then plan the lambda arguments with
             // resolved lambda variables
             enum ExprOrLambda {
                 Expr(Expr),
@@ -414,7 +414,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect::<Result<Vec<_>>>()?;
 
             let coerced_values =
-                value_fields_with_lambda_udf(&current_fields, fm.as_ref())?
+                value_fields_with_higher_order_udf(&current_fields, fm.as_ref())?
                     .into_iter()
                     .filter_map(|arg| match arg {
                         ValueOrLambda::Value(value) => Some(value),
@@ -489,10 +489,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let inner = LambdaFunction::new(fm, args);
+            let inner = HigherOrderFunction::new(fm, args);
 
             if name.eq_ignore_ascii_case(inner.name()) {
-                return Ok(Expr::LambdaFunction(inner));
+                return Ok(Expr::HigherOrderFunction(inner));
             } else {
                 // If the function is called by an alias, a verbose string representation is created
                 // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
@@ -505,7 +505,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .join(",");
                 let verbose_alias = format!("{name}({arg_names})");
 
-                return Ok(Expr::LambdaFunction(inner).alias(verbose_alias));
+                return Ok(Expr::HigherOrderFunction(inner).alias(verbose_alias));
             }
         }
 

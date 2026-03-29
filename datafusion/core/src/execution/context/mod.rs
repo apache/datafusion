@@ -83,7 +83,7 @@ use datafusion_execution::disk_manager::{
     DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
 };
 use datafusion_execution::registry::SerializerRegistry;
-use datafusion_expr::LambdaUDF;
+use datafusion_expr::HigherOrderUDF;
 pub use datafusion_expr::execution_props::ExecutionProps;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::RelationPlanner;
@@ -1978,8 +1978,8 @@ impl FunctionRegistry for SessionContext {
         self.state.read().udf(name)
     }
 
-    fn udlf(&self, name: &str) -> Result<Arc<dyn LambdaUDF>> {
-        self.state.read().udlf(name)
+    fn udhof(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+        self.state.read().udhof(name)
     }
 
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
@@ -1994,11 +1994,11 @@ impl FunctionRegistry for SessionContext {
         self.state.write().register_udf(udf)
     }
 
-    fn register_udlf(
+    fn register_udhof(
         &mut self,
-        udlf: Arc<dyn LambdaUDF>,
-    ) -> Result<Option<Arc<dyn LambdaUDF>>> {
-        self.state.write().register_udlf(udlf)
+        udhof: Arc<dyn HigherOrderUDF>,
+    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        self.state.write().register_udhof(udhof)
     }
 
     fn register_udaf(
@@ -2030,8 +2030,8 @@ impl FunctionRegistry for SessionContext {
         self.state.write().register_expr_planner(expr_planner)
     }
 
-    fn udlfs(&self) -> HashSet<String> {
-        self.state.read().udlfs()
+    fn udhofs(&self) -> HashSet<String> {
+        self.state.read().udhofs()
     }
 
     fn udafs(&self) -> HashSet<String> {

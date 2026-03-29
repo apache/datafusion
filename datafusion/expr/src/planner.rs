@@ -24,7 +24,7 @@ use crate::expr::NullTreatment;
 #[cfg(feature = "sql")]
 use crate::logical_plan::LogicalPlan;
 use crate::{
-    AggregateUDF, Expr, GetFieldAccess, LambdaUDF, ScalarUDF, SortExpr, TableSource,
+    AggregateUDF, Expr, GetFieldAccess, HigherOrderUDF, ScalarUDF, SortExpr, TableSource,
     WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
@@ -103,8 +103,8 @@ pub trait ContextProvider {
     /// Return the scalar function with a given name, if any
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
 
-    /// Return the lambda function with a given name, if any
-    fn get_lambda_meta(&self, name: &str) -> Option<Arc<dyn LambdaUDF>>;
+    /// Return the higher order function with a given name, if any
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<dyn HigherOrderUDF>>;
 
     /// Return the aggregate function with a given name, if any
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
@@ -134,8 +134,8 @@ pub trait ContextProvider {
     /// Return all scalar function names
     fn udf_names(&self) -> Vec<String>;
 
-    /// Return all lambda function names
-    fn udlf_names(&self) -> Vec<String>;
+    /// Return all higher order function names
+    fn udhof_names(&self) -> Vec<String>;
 
     /// Return all aggregate function names
     fn udaf_names(&self) -> Vec<String>;

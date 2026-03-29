@@ -75,7 +75,7 @@ pub mod utils;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::{LambdaUDF, ScalarUDF};
+use datafusion_expr::{HigherOrderUDF, ScalarUDF};
 use log::debug;
 use std::sync::Arc;
 
@@ -183,8 +183,8 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
     ]
 }
 
-pub fn all_default_lambda_functions() -> Vec<Arc<dyn LambdaUDF>> {
-    vec![array_transform::array_transform_udlf()]
+pub fn all_default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
+    vec![array_transform::array_transform_udhof()]
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
@@ -198,11 +198,11 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         Ok(()) as Result<()>
     })?;
 
-    let functions: Vec<Arc<dyn LambdaUDF>> = all_default_lambda_functions();
-    functions.into_iter().try_for_each(|udlf| {
-        let existing_udlf = registry.register_udlf(udlf)?;
-        if let Some(existing_udlf) = existing_udlf {
-            debug!("Overwrite existing UDLF: {}", existing_udlf.name());
+    let functions: Vec<Arc<dyn HigherOrderUDF>> = all_default_higher_order_functions();
+    functions.into_iter().try_for_each(|udhof| {
+        let existing_udhof = registry.register_udhof(udhof)?;
+        if let Some(existing_udhof) = existing_udhof {
+            debug!("Overwrite existing UDHOF: {}", existing_udhof.name());
         }
         Ok(()) as Result<()>
     })?;
@@ -212,7 +212,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{all_default_lambda_functions, all_default_nested_functions};
+    use crate::{all_default_higher_order_functions, all_default_nested_functions};
     use datafusion_common::Result;
     use std::collections::HashSet;
 
@@ -221,7 +221,7 @@ mod tests {
         let scalars = all_default_nested_functions();
         let scalars = scalars.iter().map(|s| (s.name(), s.aliases()));
 
-        let lambdas = all_default_lambda_functions();
+        let lambdas = all_default_higher_order_functions();
         let lambdas = lambdas.iter().map(|l| (l.name(), l.aliases()));
 
         let mut names = HashSet::new();

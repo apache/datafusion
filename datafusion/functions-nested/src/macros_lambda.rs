@@ -17,12 +17,12 @@
 
 /// Creates external API functions for an array UDF. Specifically, creates
 ///
-/// 1. Single `LambdaUDF` instance
+/// 1. Single `HigherOrderUDF` instance
 ///
-/// Creates a singleton `LambdaUDF` of the `$UDF` function named `STATIC_$(UDF)` and a
-/// function named `$LAMBDA_UDF_FUNC` which returns that function named `STATIC_$(UDF)`.
+/// Creates a singleton `HigherOrderUDF` of the `$UDF` function named `STATIC_$(UDF)` and a
+/// function named `$HIGHER_ORDER_UDF_FUNC` which returns that function named `STATIC_$(UDF)`.
 ///
-/// This is used to ensure creating the list of `LambdaUDF` only happens once.
+/// This is used to ensure creating the list of `HigherOrderUDF` only happens once.
 ///
 /// # 2. `expr_fn` style function
 ///
@@ -36,68 +36,68 @@
 /// }
 /// ```
 /// # Arguments
-/// * `UDF`: name of the [`LambdaUDF`]
+/// * `UDF`: name of the [`HigherOrderUDF`]
 /// * `EXPR_FN`: name of the expr_fn function to be created
 /// * `arg`: 0 or more named arguments for the function
 /// * `DOC`: documentation string for the function
-/// * `LAMBDA_UDF_FUNC`: name of the function to create (just) the `LambdaUDF`
+/// * `HIGHER_ORDER_UDF_FUNC`: name of the function to create (just) the `HigherOrderUDF`
 /// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
 ///   automatically resolves to `$UDF::new()`.
 ///
-/// [`LambdaUDF`]: datafusion_expr::LambdaUDF
-macro_rules! make_udlf_expr_and_func {
-    ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $LAMBDA_UDF_FN:ident) => {
-        make_udlf_expr_and_func!($UDF, $EXPR_FN, $($arg)*, $DOC, $LAMBDA_UDF_FN, $UDF::new);
+/// [`HigherOrderUDF`]: datafusion_expr::HigherOrderUDF
+macro_rules! make_udhof_expr_and_func {
+    ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $HIGHER_ORDER_UDF_FN:ident) => {
+        make_udhof_expr_and_func!($UDF, $EXPR_FN, $($arg)*, $DOC, $HIGHER_ORDER_UDF_FN, $UDF::new);
     };
-    ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $LAMBDA_UDF_FN:ident, $CTOR:path) => {
+    ($UDF:ident, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $HIGHER_ORDER_UDF_FN:ident, $CTOR:path) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
         pub fn $EXPR_FN($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
-            datafusion_expr::Expr::LambdaFunction(datafusion_expr::expr::LambdaFunction::new(
-                $LAMBDA_UDF_FN(),
+            datafusion_expr::Expr::HigherOrderFunction(datafusion_expr::expr::HigherOrderFunction::new(
+                $HIGHER_ORDER_UDF_FN(),
                 vec![$($arg),*],
             ))
         }
-        create_lambda!($UDF, $LAMBDA_UDF_FN, $CTOR);
+        create_higher_order!($UDF, $HIGHER_ORDER_UDF_FN, $CTOR);
     };
-    ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $LAMBDA_UDF_FN:ident) => {
-        make_udlf_expr_and_func!($UDF, $EXPR_FN, $DOC, $LAMBDA_UDF_FN, $UDF::new);
+    ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $HIGHER_ORDER_UDF_FN:ident) => {
+        make_udhof_expr_and_func!($UDF, $EXPR_FN, $DOC, $HIGHER_ORDER_UDF_FN, $UDF::new);
     };
-    ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $LAMBDA_UDF_FN:ident, $CTOR:path) => {
+    ($UDF:ident, $EXPR_FN:ident, $DOC:expr, $HIGHER_ORDER_UDF_FN:ident, $CTOR:path) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
         pub fn $EXPR_FN(arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
-            datafusion_expr::Expr::LambdaFunction(datafusion_expr::expr::LambdaFunction::new(
-                $LAMBDA_UDF_FN(),
+            datafusion_expr::Expr::HigherOrderFunction(datafusion_expr::expr::HigherOrderFunction::new(
+                $HIGHER_ORDER_UDF_FN(),
                 arg,
             ))
         }
-        create_lambda!($UDF, $LAMBDA_UDF_FN, $CTOR);
+        create_higher_order!($UDF, $HIGHER_ORDER_UDF_FN, $CTOR);
     };
 }
 
-/// Creates a singleton `LambdaUDF` of the `$UDF` function named `STATIC_$(UDF)` and a
-/// function named `$LAMBDA_UDF_FUNC` which returns that function named `STATIC_$(UDF)`.
+/// Creates a singleton `HigherOrderUDF` of the `$UDF` function named `STATIC_$(UDF)` and a
+/// function named `$HIGHER_ORDER_UDF_FUNC` which returns that function named `STATIC_$(UDF)`.
 ///
-/// This is used to ensure creating the list of `LambdaUDF` only happens once.
+/// This is used to ensure creating the list of `HigherOrderUDF` only happens once.
 ///
 /// # Arguments
-/// * `UDF`: name of the [`LambdaUDF`]
-/// * `LAMBDA_UDF_FUNC`: name of the function to create (just) the `LambdaUDF`
+/// * `UDF`: name of the [`HigherOrderUDF`]
+/// * `HIGHER_ORDER_UDF_FUNC`: name of the function to create (just) the `HigherOrderUDF`
 /// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
 ///   automatically resolves to `$UDF::new()`.
 ///
-/// [`LambdaUDF`]: datafusion_expr::LambdaUDF
-macro_rules! create_lambda {
-    ($UDF:ident, $LAMBDA_UDF_FN:ident) => {
-        create_lambda!($UDF, $LAMBDA_UDF_FN, $UDF::new);
+/// [`HigherOrderUDF`]: datafusion_expr::HigherOrderUDF
+macro_rules! create_higher_order {
+    ($UDF:ident, $HIGHER_ORDER_UDF_FN:ident) => {
+        create_higher_order!($UDF, $HIGHER_ORDER_UDF_FN, $UDF::new);
     };
-    ($UDF:ident, $LAMBDA_UDF_FN:ident, $CTOR:path) => {
-        #[doc = concat!("LambdaFunction that returns a [`LambdaUDF`](datafusion_expr::LambdaUDF) for ")]
+    ($UDF:ident, $HIGHER_ORDER_UDF_FN:ident, $CTOR:path) => {
+        #[doc = concat!("HigherOrderFunction that returns a [`HigherOrderUDF`](datafusion_expr::HigherOrderUDF) for ")]
         #[doc = stringify!($UDF)]
-        pub fn $LAMBDA_UDF_FN() -> std::sync::Arc<dyn datafusion_expr::LambdaUDF> {
+        pub fn $HIGHER_ORDER_UDF_FN() -> std::sync::Arc<dyn datafusion_expr::HigherOrderUDF> {
             // Singleton instance of [`$UDF`], ensures the UDF is only created once
-            static INSTANCE: std::sync::LazyLock<std::sync::Arc<dyn datafusion_expr::LambdaUDF>> =
+            static INSTANCE: std::sync::LazyLock<std::sync::Arc<dyn datafusion_expr::HigherOrderUDF>> =
                 std::sync::LazyLock::new(|| {
                     std::sync::Arc::new($CTOR())
                 });

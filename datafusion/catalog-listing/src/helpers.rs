@@ -99,8 +99,8 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
                 }
             }
         }
-        Expr::LambdaFunction(lambda_function) => {
-            match lambda_function.func.signature().volatility {
+        Expr::HigherOrderFunction(hof) => {
+            match hof.func.signature().volatility {
                 Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
                 // TODO: Stable functions could be `applicable`, but that would require access to the context
                 Volatility::Stable | Volatility::Volatile => {
