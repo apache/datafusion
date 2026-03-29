@@ -18,7 +18,7 @@
 //! Logical plan types
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
@@ -290,6 +290,8 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+    /// Dependent join. Unlike a normal join, the right side depends on values from the left side.
+    DependentJoin(DependentJoin),
 }
 
 impl Default for LogicalPlan {
@@ -354,6 +356,7 @@ impl LogicalPlan {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
             }
+            LogicalPlan::DependentJoin(DependentJoin { schema, .. }) => schema,
         }
     }
 
@@ -476,6 +479,9 @@ impl LogicalPlan {
                 recursive_term,
                 ..
             }) => vec![static_term, recursive_term],
+            LogicalPlan::DependentJoin(DependentJoin { left, right, .. }) => {
+                vec![left, right]
+            }
             LogicalPlan::Statement(stmt) => stmt.inputs(),
             // plans without inputs
             LogicalPlan::TableScan { .. }
@@ -566,6 +572,29 @@ impl LogicalPlan {
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 static_term.head_output_expr()
             }
+            LogicalPlan::DependentJoin(DependentJoin {
+                left,
+                right,
+                join_type,
+                ..
+            }) => match join_type {
+                Some((JoinType::Inner | JoinType::Left, _)) | None => {
+                    if left.schema().fields().is_empty() {
+                        right.head_output_expr()
+                    } else {
+                        left.head_output_expr()
+                    }
+                }
+                Some((JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark, _)) => {
+                    left.head_output_expr()
+                }
+                Some((JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark, _)) => {
+                    right.head_output_expr()
+                }
+                Some((JoinType::Right | JoinType::Full, _)) => {
+                    unimplemented!("Right and Full joins not supported in DependentJoin")
+                }
+            },
             LogicalPlan::Union(union) => Ok(Some(Expr::Column(Column::from(
                 union.schema.qualified_field(0),
             )))),
@@ -686,73 +715,31 @@ impl LogicalPlan {
                     null_aware,
                 }))
             }
-            LogicalPlan::Subquery(_) => Ok(self),
-            LogicalPlan::SubqueryAlias(SubqueryAlias {
-                input,
-                alias,
+            LogicalPlan::DependentJoin(DependentJoin {
+                left,
+                right,
+                correlated_columns,
+                subquery_expr,
+                subquery_depth,
+                subquery_alias,
+                join_type,
                 schema: _,
-            }) => SubqueryAlias::try_new(input, alias).map(LogicalPlan::SubqueryAlias),
-            LogicalPlan::Limit(_) => Ok(self),
-            LogicalPlan::Ddl(_) => Ok(self),
-            LogicalPlan::Extension(Extension { node }) => {
-                // todo make an API that does not require cloning
-                // This requires a copy of the extension nodes expressions and inputs
-                let expr = node.expressions();
-                let inputs: Vec<_> = node.inputs().into_iter().cloned().collect();
-                Ok(LogicalPlan::Extension(Extension {
-                    node: node.with_exprs_and_inputs(expr, inputs)?,
+            }) => {
+                let join_type_only = join_type.as_ref().map(|(t, _)| *t).unwrap_or(JoinType::Left);
+                let schema =
+                    build_join_schema(left.schema(), right.schema(), &join_type_only)?;
+                Ok(LogicalPlan::DependentJoin(DependentJoin {
+                    left: Arc::clone(left),
+                    right: Arc::clone(right),
+                    correlated_columns: correlated_columns.clone(),
+                    subquery_expr: subquery_expr.clone(),
+                    subquery_depth: *subquery_depth,
+                    subquery_alias: subquery_alias.clone(),
+                    join_type: join_type.clone(),
+                    schema: Arc::new(schema),
                 }))
             }
-            LogicalPlan::Union(Union { inputs, schema }) => {
-                let first_input_schema = inputs[0].schema();
-                if schema.fields().len() == first_input_schema.fields().len() {
-                    // If inputs are not pruned do not change schema
-                    Ok(LogicalPlan::Union(Union { inputs, schema }))
-                } else {
-                    // A note on `Union`s constructed via `try_new_by_name`:
-                    //
-                    // At this point, the schema for each input should have
-                    // the same width. Thus, we do not need to save whether a
-                    // `Union` was created `BY NAME`, and can safely rely on the
-                    // `try_new` initializer to derive the new schema based on
-                    // column positions.
-                    Ok(LogicalPlan::Union(Union::try_new(inputs)?))
-                }
-            }
-            LogicalPlan::Distinct(distinct) => {
-                let distinct = match distinct {
-                    Distinct::All(input) => Distinct::All(input),
-                    Distinct::On(DistinctOn {
-                        on_expr,
-                        select_expr,
-                        sort_expr,
-                        input,
-                        schema: _,
-                    }) => Distinct::On(DistinctOn::try_new(
-                        on_expr,
-                        select_expr,
-                        sort_expr,
-                        input,
-                    )?),
-                };
-                Ok(LogicalPlan::Distinct(distinct))
-            }
-            LogicalPlan::RecursiveQuery(_) => Ok(self),
-            LogicalPlan::Analyze(_) => Ok(self),
-            LogicalPlan::Explain(_) => Ok(self),
-            LogicalPlan::TableScan(_) => Ok(self),
-            LogicalPlan::EmptyRelation(_) => Ok(self),
-            LogicalPlan::Statement(_) => Ok(self),
-            LogicalPlan::DescribeTable(_) => Ok(self),
-            LogicalPlan::Unnest(Unnest {
-                input,
-                exec_columns,
-                options,
-                ..
-            }) => {
-                // Update schema with unnested column type.
-                unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
-            }
+            LogicalPlan::Subquery(_) => Ok(self.clone()),
         }
     }
 
@@ -1151,6 +1138,48 @@ impl LogicalPlan {
                     unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
+            LogicalPlan::DependentJoin(DependentJoin {
+                correlated_columns,
+                subquery_depth,
+                subquery_alias,
+                join_type,
+                ..
+            }) => {
+                let (left, right) = self.only_two_inputs(inputs)?;
+                let join_type_only = join_type.as_ref().map(|(t, _)| *t).unwrap_or(JoinType::Left);
+                let schema = build_join_schema(left.schema(), right.schema(), &join_type_only)?;
+
+                let mut expr = VecDeque::from(expr);
+                let (subquery_expr, join_filter) = match join_type {
+                    Some(_) => {
+                        let filter = expr.pop_back().unwrap();
+                        let subquery = expr.pop_back().unwrap();
+                        (Some(subquery), Some(filter))
+                    }
+                    None => {
+                        if expr.is_empty() {
+                            (None, None)
+                        } else {
+                            (Some(expr.pop_back().unwrap()), None)
+                        }
+                    }
+                };
+
+                let jt_only = join_type.as_ref().map(|(jt, _)| *jt);
+                let join_type = jt_only.map(|jt| (jt, join_filter.unwrap()));
+
+                Ok(LogicalPlan::DependentJoin(DependentJoin {
+                    left: Arc::new(left),
+                    right: Arc::new(right),
+                    correlated_columns: correlated_columns.clone(),
+                    subquery_expr,
+                    subquery_depth: *subquery_depth,
+                    subquery_alias: subquery_alias.clone(),
+                    join_type,
+                    schema: Arc::new(schema),
+                }))
+            }
+            LogicalPlan::Subquery(_) => Ok(self.clone()),
         }
     }
 
@@ -1360,6 +1389,7 @@ impl LogicalPlan {
                     right.max_rows()
                 }
             },
+            LogicalPlan::DependentJoin(_) => None,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
             LogicalPlan::Union(Union { inputs, .. }) => {
                 inputs.iter().try_fold(0usize, |mut acc, plan| {
@@ -1415,6 +1445,7 @@ impl LogicalPlan {
             LogicalPlan::EmptyRelation(_) => Ok(None),
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::SubqueryAlias(_) => Ok(None),
+            LogicalPlan::DependentJoin(_) => Ok(None),
             LogicalPlan::Statement(_) => Ok(None),
             LogicalPlan::Values(_) => Ok(None),
             LogicalPlan::Explain(_) => Ok(None),
@@ -1453,6 +1484,7 @@ impl LogicalPlan {
             LogicalPlan::EmptyRelation(_) => Ok(None),
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::SubqueryAlias(_) => Ok(None),
+            LogicalPlan::DependentJoin(_) => Ok(None),
             LogicalPlan::Statement(_) => Ok(None),
             LogicalPlan::Values(_) => Ok(None),
             LogicalPlan::Explain(_) => Ok(None),
@@ -2180,6 +2212,29 @@ impl LogicalPlan {
                             expr_vec_fmt!(list_type_columns),
                             expr_vec_fmt!(struct_type_columns)
                         )
+                    }
+                    LogicalPlan::DependentJoin(DependentJoin {
+                        correlated_columns,
+                        subquery_expr,
+                        subquery_depth,
+                        subquery_alias,
+                        join_type,
+                        ..
+                    }) => {
+                        write!(
+                            f,
+                            "DependentJoin: correlated_columns=[{}], subquery_depth={}, subquery_alias={}",
+                            expr_vec_fmt!(correlated_columns),
+                            subquery_depth,
+                            subquery_alias
+                        )?;
+                        if let Some(expr) = subquery_expr {
+                            write!(f, ", subquery_expr={}", expr)?;
+                        }
+                        if let Some((jt, filter)) = join_type {
+                            write!(f, ", join_type={} join_filter={}", jt, filter)?;
+                        }
+                        Ok(())
                     }
                 }
             }
@@ -4035,6 +4090,82 @@ pub struct Subquery {
     pub outer_ref_columns: Vec<Expr>,
     /// Span information for subquery projection columns
     pub spans: Spans,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DependentJoin {
+    pub left: Arc<LogicalPlan>,
+    pub right: Arc<LogicalPlan>,
+    pub correlated_columns: Vec<CorrelatedColumnInfo>,
+    pub subquery_expr: Option<Expr>,
+    pub subquery_depth: usize,
+    pub subquery_alias: String,
+    pub join_type: Option<(JoinType, Expr)>,
+    pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for DependentJoin {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.left.partial_cmp(&other.left) {
+            Some(Ordering::Equal) => match self.right.partial_cmp(&other.right) {
+                Some(Ordering::Equal) => {
+                    match self.correlated_columns.partial_cmp(&other.correlated_columns) {
+                        Some(Ordering::Equal) => {
+                            match self.subquery_expr.partial_cmp(&other.subquery_expr) {
+                                Some(Ordering::Equal) => {
+                                    match self.subquery_depth.partial_cmp(&other.subquery_depth) {
+                                        Some(Ordering::Equal) => {
+                                            match self.subquery_alias.partial_cmp(&other.subquery_alias) {
+                                                Some(Ordering::Equal) => {
+                                                    self.join_type.partial_cmp(&other.join_type)
+                                                }
+                                                cmp => cmp,
+                                            }
+                                        }
+                                        cmp => cmp,
+                                    }
+                                }
+                                cmp => cmp,
+                            }
+                        }
+                        cmp => cmp,
+                    }
+                }
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+        // Comparison excludes `schema`
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CorrelatedColumnInfo {
+    pub col: Column,
+    pub field: FieldRef,
+    pub depth: usize,
+    pub delim_scan_node_id: usize,
+}
+
+impl PartialOrd for CorrelatedColumnInfo {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.col.partial_cmp(&other.col) {
+            Some(Ordering::Equal) => match self.depth.partial_cmp(&other.depth) {
+                Some(Ordering::Equal) => {
+                    self.delim_scan_node_id.partial_cmp(&other.delim_scan_node_id)
+                }
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
+}
+
+impl Display for CorrelatedColumnInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{} lvl {}", self.col, self.depth)
+    }
 }
 
 impl Normalizeable for Subquery {

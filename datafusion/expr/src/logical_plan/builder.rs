@@ -32,10 +32,10 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
-    Aggregate, Analyze, Distinct, DistinctOn, EmptyRelation, Explain, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-    Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
-    Window,
+    Aggregate, Analyze, DependentJoin, Distinct, DistinctOn, EmptyRelation, Explain,
+    Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
+    Prepare, Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest,
+    Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -1526,6 +1526,33 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
             .map(Self::new)
+    }
+
+    pub fn dependent_join(
+        self,
+        right: LogicalPlan,
+        correlated_columns: Vec<crate::CorrelatedColumnInfo>,
+        subquery_expr: Option<Expr>,
+        subquery_depth: usize,
+        subquery_alias: String,
+        join_type: Option<(JoinType, Expr)>,
+    ) -> Result<Self> {
+        let join_type_only = join_type
+            .as_ref()
+            .map(|(t, _)| t)
+            .cloned()
+            .unwrap_or(JoinType::Left);
+        let schema = build_join_schema(self.plan.schema(), right.schema(), &join_type_only)?;
+        Ok(Self::new(LogicalPlan::DependentJoin(DependentJoin {
+            left: self.plan,
+            right: Arc::new(right),
+            correlated_columns,
+            subquery_expr,
+            subquery_depth,
+            subquery_alias,
+            join_type,
+            schema: Arc::new(schema),
+        })))
     }
 }
 

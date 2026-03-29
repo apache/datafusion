@@ -316,6 +316,7 @@ fn optimize_projections(
         | LogicalPlan::Explain(_)
         | LogicalPlan::Analyze(_)
         | LogicalPlan::Subquery(_)
+        | LogicalPlan::DependentJoin(_)
         | LogicalPlan::Statement(_)
         | LogicalPlan::Distinct(Distinct::All(_)) => {
             // These plans require all their fields, and their children should
@@ -383,16 +384,15 @@ fn optimize_projections(
                 })
                 .collect::<Result<Vec<_>>>()?
         }
-        LogicalPlan::Join(join) => {
+        LogicalPlan::DependentJoin(join) => {
             let left_len = join.left.schema().fields().len();
+            let join_type = join.join_type.as_ref().map(|(t, _)| t).unwrap_or(&JoinType::Left);
             let (left_req_indices, right_req_indices) =
-                split_join_requirements(left_len, indices, &join.join_type);
+                split_join_requirements(left_len, indices, join_type);
             let left_indices =
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
             let right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
-            // Joins benefit from "small" input tables (lower memory usage).
-            // Therefore, each child benefits from projection:
             vec![
                 left_indices.with_projection_beneficial(),
                 right_indices.with_projection_beneficial(),

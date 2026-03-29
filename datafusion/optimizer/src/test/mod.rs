@@ -63,6 +63,15 @@ pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
     table_scan(Some(name), &schema, None)?.build()
 }
 
+pub fn test_table_with_columns(name: &str, columns: &[(&str, DataType)]) -> Result<LogicalPlan> {
+    let fields = columns
+        .iter()
+        .map(|(name, dt)| Field::new(*name, dt.clone(), true))
+        .collect::<Vec<_>>();
+    let schema = Schema::new(fields);
+    table_scan(Some(name), &schema, None)?.build()
+}
+
 /// some tests share a common table
 pub fn test_table_scan() -> Result<LogicalPlan> {
     test_table_scan_with_name("test")

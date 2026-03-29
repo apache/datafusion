@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join,
+    Aggregate, DependentJoin, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join,
     Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Sort,
     Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values,
     Window, expr_vec_fmt,
@@ -633,6 +633,29 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "ListColumn": expr_vec_fmt!(list_type_columns),
                     "StructColumn": expr_vec_fmt!(struct_type_columns),
                 })
+            }
+            LogicalPlan::DependentJoin(DependentJoin {
+                correlated_columns,
+                subquery_expr,
+                subquery_depth,
+                subquery_alias,
+                join_type,
+                ..
+            }) => {
+                let mut object = json!({
+                    "Node Type": "DependentJoin",
+                    "Correlated Columns": format!("{:?}", correlated_columns),
+                    "Subquery Depth": subquery_depth,
+                    "Subquery Alias": subquery_alias,
+                });
+                if let Some(expr) = subquery_expr {
+                    object["Subquery Expr"] = serde_json::Value::String(expr.to_string());
+                }
+                if let Some((jt, filter)) = join_type {
+                    object["Join Type"] = serde_json::Value::String(jt.to_string());
+                    object["Join Filter"] = serde_json::Value::String(filter.to_string());
+                }
+                object
             }
         }
     }
