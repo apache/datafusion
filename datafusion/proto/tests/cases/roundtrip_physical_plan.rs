@@ -1559,7 +1559,8 @@ fn roundtrip_analyze() -> Result<()> {
     roundtrip_test(Arc::new(AnalyzeExec::new(
         false,
         false,
-        vec![MetricType::SUMMARY, MetricType::DEV],
+        vec![MetricType::Summary, MetricType::Dev],
+        None,
         input,
         Arc::new(schema),
     )))
