@@ -102,6 +102,15 @@ SELECT * FROM x WHERE column_1 NOT IN (1,3);
 +----------+----------+
 ```
 
+#### `IN` with tuple-like values and `NULL`
+
+For tuple-like values, `IN` uses DataFusion's struct equality semantics:
+
+```sql
+SELECT (7521, 30) IN ((7521, NULL));
+-- false
+```
+
 ## SELECT clause subqueries
 
 `SELECT` clause subqueries use values returned from the inner query as part
