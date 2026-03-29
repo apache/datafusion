@@ -355,11 +355,7 @@ where
 /// Applies `f` to each non-null string in `string_array`, appending the
 /// result (or `""` when `f` returns `None`) to `builder`.
 #[inline]
-fn map_strings<'a, S, B, F>(
-    string_array: S,
-    mut builder: B,
-    f: F,
-) -> Result<ArrayRef>
+fn map_strings<'a, S, B, F>(string_array: S, mut builder: B, f: F) -> Result<ArrayRef>
 where
     S: StringArrayType<'a> + Copy,
     B: StringLikeArrayBuilder,
