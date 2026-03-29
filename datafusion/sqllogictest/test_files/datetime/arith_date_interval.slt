@@ -35,3 +35,9 @@ query T
 SELECT arrow_typeof('2001-09-28'::date - interval '25 hour')
 ----
 Date32
+
+query error Arrow error: Compute error: Date arithmetic overflow
+SELECT DATE '2020-01-01' + INTERVAL '999999' YEAR
+
+query error Arrow error: Compute error: Date arithmetic overflow
+SELECT DATE '2020-01-01' - INTERVAL '999999' YEAR
