@@ -316,7 +316,6 @@ fn optimize_projections(
         | LogicalPlan::Explain(_)
         | LogicalPlan::Analyze(_)
         | LogicalPlan::Subquery(_)
-        | LogicalPlan::DependentJoin(_)
         | LogicalPlan::Statement(_)
         | LogicalPlan::Distinct(Distinct::All(_)) => {
             // These plans require all their fields, and their children should
@@ -328,6 +327,18 @@ fn optimize_projections(
                 .into_iter()
                 .map(RequiredIndices::new_for_all_exprs)
                 .collect()
+        }
+        LogicalPlan::Join(join) => {
+            let left_len = join.left.schema().fields().len();
+            let (left_req_indices, right_req_indices) =
+                split_join_requirements(left_len, indices, &join.join_type);
+            let left_indices = left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
+            let right_indices =
+                right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
+            vec![
+                left_indices.with_projection_beneficial(),
+                right_indices.with_projection_beneficial(),
+            ]
         }
         LogicalPlan::Extension(extension) => {
             let Some(necessary_children_indices) =
@@ -384,20 +395,6 @@ fn optimize_projections(
                 })
                 .collect::<Result<Vec<_>>>()?
         }
-        LogicalPlan::DependentJoin(join) => {
-            let left_len = join.left.schema().fields().len();
-            let join_type = join.join_type.as_ref().map(|(t, _)| t).unwrap_or(&JoinType::Left);
-            let (left_req_indices, right_req_indices) =
-                split_join_requirements(left_len, indices, join_type);
-            let left_indices =
-                left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
-            let right_indices =
-                right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
-            vec![
-                left_indices.with_projection_beneficial(),
-                right_indices.with_projection_beneficial(),
-            ]
-        }
         // these nodes are explicitly rewritten in the match statement above
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
@@ -424,6 +421,9 @@ fn optimize_projections(
                 }
             });
             vec![required_indices.append(&additional_necessary_child_indices)]
+        }
+        LogicalPlan::DependentJoin(..) => {
+            return Ok(Transformed::no(plan));
         }
     };
 

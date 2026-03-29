@@ -340,24 +340,26 @@ impl TreeNode for LogicalPlan {
                 },
             ),
             LogicalPlan::DependentJoin(DependentJoin {
-                left,
-                right,
+                schema,
                 correlated_columns,
                 subquery_expr,
                 subquery_depth,
-                subquery_alias,
-                join_type,
-                schema,
+                subquery_name,
+                lateral_join_condition,
+                left,
+                right,
+                any_join,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::DependentJoin(DependentJoin {
-                    left,
-                    right,
+                    schema,
                     correlated_columns,
                     subquery_expr,
                     subquery_depth,
-                    subquery_alias,
-                    join_type,
-                    schema,
+                    subquery_name,
+                    lateral_join_condition,
+                    left,
+                    right,
+                    any_join,
                 })
             }),
             LogicalPlan::Statement(stmt) => match stmt {
@@ -479,17 +481,20 @@ impl LogicalPlan {
                 (skip, fetch).apply_ref_elements(f)
             }
             LogicalPlan::DependentJoin(DependentJoin {
-                subquery_expr,
-                join_type,
+                correlated_columns,
+                lateral_join_condition,
                 ..
             }) => {
-                if let Some(subquery_expr) = subquery_expr {
-                    f(subquery_expr)?;
-                }
-                if let Some((_, filter)) = join_type {
-                    f(filter)?;
-                }
-                Ok(TreeNodeRecursion::Continue)
+                let correlated_column_exprs = correlated_columns
+                    .iter()
+                    .map(|info| Expr::Column(info.col.clone()))
+                    .collect::<Vec<_>>();
+                let maybe_lateral_join_condition = lateral_join_condition
+                    .as_ref()
+                    .map(|(_, condition)| condition.clone());
+
+                (&correlated_column_exprs, &maybe_lateral_join_condition)
+                    .apply_ref_elements(f)
             }
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Execute(Execute { parameters, .. }) => {
@@ -670,36 +675,30 @@ impl LogicalPlan {
                 })
             }
             LogicalPlan::DependentJoin(DependentJoin {
-                left,
-                right,
-                correlated_columns,
-                subquery_expr,
-                subquery_depth,
-                subquery_alias,
-                join_type,
-                schema,
+                ..
             }) => {
-                let subquery_expr = subquery_expr.map_elements(&mut f)?;
-                let join_type = match join_type {
-                    Some((jt, filter)) => filter
-                        .map_elements(f)?
-                        .update_data(|filter| Some((jt, filter))),
-                    None => Transformed::no(None),
-                };
-                subquery_expr.update_tnr(join_type.tnr).update_data(
-                    |subquery_expr| {
-                        LogicalPlan::DependentJoin(DependentJoin {
-                            left,
-                            right,
-                            correlated_columns,
-                            subquery_expr,
-                            subquery_depth,
-                            subquery_alias,
-                            join_type: join_type.data,
-                            schema,
-                        })
-                    },
-                )
+                Transformed::no(self)
+                // let subquery_expr = subquery_expr.map_elements(&mut f)?;
+                // let join_type = match join_type {
+                //     Some((jt, filter)) => filter
+                //         .map_elements(f)?
+                //         .update_data(|filter| Some((jt, filter))),
+                //     None => Transformed::no(None),
+                // };
+                // subquery_expr.update_tnr(join_type.tnr).update_data(
+                //     |subquery_expr| {
+                //         LogicalPlan::DependentJoin(DependentJoin {
+                //             left,
+                //             right,
+                //             correlated_columns,
+                //             subquery_expr,
+                //             subquery_depth,
+                //             subquery_alias,
+                //             join_type: join_type.data,
+                //             schema,
+                //         })
+                //     },
+                // )
             }
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Execute(e) => {

@@ -634,29 +634,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "StructColumn": expr_vec_fmt!(struct_type_columns),
                 })
             }
-            LogicalPlan::DependentJoin(DependentJoin {
-                correlated_columns,
-                subquery_expr,
-                subquery_depth,
-                subquery_alias,
-                join_type,
-                ..
-            }) => {
-                let mut object = json!({
-                    "Node Type": "DependentJoin",
-                    "Correlated Columns": format!("{:?}", correlated_columns),
-                    "Subquery Depth": subquery_depth,
-                    "Subquery Alias": subquery_alias,
-                });
-                if let Some(expr) = subquery_expr {
-                    object["Subquery Expr"] = serde_json::Value::String(expr.to_string());
-                }
-                if let Some((jt, filter)) = join_type {
-                    object["Join Type"] = serde_json::Value::String(jt.to_string());
-                    object["Join Filter"] = serde_json::Value::String(filter.to_string());
-                }
-                object
-            }
+            LogicalPlan::DependentJoin(..) => json!({}),
         }
     }
 }

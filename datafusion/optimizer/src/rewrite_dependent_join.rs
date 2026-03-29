@@ -35,7 +35,7 @@ use datafusion_common::{
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
     Aggregate, CorrelatedColumnInfo, Expr, Filter, Join, LogicalPlan, LogicalPlanBuilder,
-    Projection, SubqueryAlias, col, lit,
+    Projection, col, lit,
 };
 
 use indexmap::IndexMap;
@@ -503,7 +503,6 @@ impl DependentJoinRewriter {
                         provider_node_id,
                     });
                     is_table_provider = true;
-                    println!("resolving access to {} by {}",access.node_id, provider_node_id);
                     // the access is resolved, remove from the list
                     return false;
                 }

@@ -1199,6 +1199,9 @@ impl DefaultPhysicalPlanner {
                 Arc::new(new_sort)
             }
             LogicalPlan::Subquery(_) => todo!(),
+            LogicalPlan::DependentJoin(_) => {
+                return not_impl_err!("Physical plan does not support DependentJoin");
+            }
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
@@ -2152,6 +2155,7 @@ fn extract_dml_filters(
             | LogicalPlan::Sort(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Join(_)
+            | LogicalPlan::DependentJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Window(_)

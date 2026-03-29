@@ -44,8 +44,7 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery,
-    Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit,
+    CorrelatedColumnInfo, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit
 };
 
 use super::dml::InsertOp;
@@ -55,10 +54,7 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions, exec_err,
-    get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
-    plan_err,
+    Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions, exec_err, get_target_functional_dependencies, internal_datafusion_err, internal_err, plan_datafusion_err, plan_err
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -1528,32 +1524,81 @@ impl LogicalPlanBuilder {
             .map(Self::new)
     }
 
+    /// Build a dependent join provided a subquery plan
+    /// this function should only be used by the optimizor
+    /// a dependent join node will provides all columns belonging to the LHS
+    /// and one additional column as the result of evaluating the subquery on the RHS
+    /// under the name "subquery_name.output"
     pub fn dependent_join(
         self,
         right: LogicalPlan,
-        correlated_columns: Vec<crate::CorrelatedColumnInfo>,
+        correlated_columns: Vec<CorrelatedColumnInfo>,
         subquery_expr: Option<Expr>,
         subquery_depth: usize,
-        subquery_alias: String,
-        join_type: Option<(JoinType, Expr)>,
+        subquery_name: String,
+        lateral_join_condition: Option<(JoinType, Expr)>,
     ) -> Result<Self> {
-        let join_type_only = join_type
-            .as_ref()
-            .map(|(t, _)| t)
-            .cloned()
-            .unwrap_or(JoinType::Left);
-        let schema = build_join_schema(self.plan.schema(), right.schema(), &join_type_only)?;
+        let left = self.build()?;
+        let schema = left.schema();
+        // TODO: for lateral join, output schema is similar to a normal join
+        let qualified_fields = schema
+            .iter()
+            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+            .chain(
+                subquery_expr
+                    .iter()
+                    .map(|expr| subquery_output_field(&subquery_name, expr)),
+            )
+            .collect();
+        let metadata = schema.metadata().clone();
+        let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
+        let any_join = match subquery_expr {
+            Some(ref expr) => match expr {
+                Expr::Exists(_) | Expr::InSubquery(_) => true,
+                _ => false,
+            },
+            None => match lateral_join_condition {
+                None => {
+                    return internal_err!("at least lateral join or subquery expr must be set to build dependent join");
+                }
+                Some(_) => false,
+            },
+        };
+
         Ok(Self::new(LogicalPlan::DependentJoin(DependentJoin {
-            left: self.plan,
+            schema: DFSchemaRef::new(dfschema),
+            left: Arc::new(left),
             right: Arc::new(right),
             correlated_columns,
+            any_join,
             subquery_expr,
+            subquery_name,
             subquery_depth,
-            subquery_alias,
-            join_type,
-            schema: Arc::new(schema),
+            lateral_join_condition,
         })))
     }
+}
+
+fn subquery_output_field(
+    subquery_alias: &str,
+    subquery_expr: &Expr,
+) -> (Option<TableReference>, Arc<Field>) {
+    // TODO: check nullability
+    let field = match subquery_expr {
+        Expr::InSubquery(_) => {
+            Arc::new(Field::new(subquery_alias, DataType::Boolean, false))
+        }
+        Expr::Exists(_) => Arc::new(Field::new(subquery_alias, DataType::Boolean, false)),
+        Expr::ScalarSubquery(sq) => {
+            let data_type = sq.subquery.schema().field(0).data_type().clone();
+            Arc::new(Field::new(subquery_alias, data_type, false))
+        }
+        _ => {
+            unreachable!()
+        }
+    };
+
+    (None, field)
 }
 
 impl From<LogicalPlan> for LogicalPlanBuilder {

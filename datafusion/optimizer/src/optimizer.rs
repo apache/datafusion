@@ -52,7 +52,6 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
-use crate::rewrite_dependent_join::RewriteDependentJoin;
 use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -282,7 +281,6 @@ impl Optimizer {
             Arc::new(RewriteSetComparison::new()),
             Arc::new(OptimizeUnions::new()),
             Arc::new(SimplifyExpressions::new()),
-            Arc::new(RewriteDependentJoin::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
             Arc::new(DecorrelatePredicateSubquery::new()),
