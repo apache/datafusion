@@ -320,7 +320,7 @@ where
         // PostgreSQL: empty delimiter treats input as a single field,
         // so only position 1 or -1 returns the input string.
         return if position == 1 || position == -1 {
-            map_strings(string_array, builder, |s| Some(s))
+            map_strings(string_array, builder, Some)
         } else {
             map_strings(string_array, builder, |_| None)
         };
