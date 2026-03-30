@@ -158,10 +158,17 @@ fn json_tuple_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRe
                                     Err(_) => builder.append_value(raw_str),
                                 }
                             } else {
-                                // Numbers, booleans: use raw text as-is
-                                // Spark uppercases exponent: 1.5e10 → 1.5E10
-                                if raw_str.contains('e') {
+                                // Numbers, booleans, objects, arrays: raw text
+                                // Spark uppercases exponent in numeric literals:
+                                // 1.5e10 → 1.5E10
+                                // Only apply to numbers (not booleans like "false")
+                                let first = raw_str.as_bytes().first();
+                                let is_number = matches!(first, Some(b'0'..=b'9' | b'-'));
+                                if is_number && raw_str.contains('e') {
                                     builder.append_value(raw_str.replace('e', "E"));
+                                } else if is_number && raw_str == "-0" {
+                                    // Spark normalizes -0 to 0
+                                    builder.append_value("0");
                                 } else {
                                     builder.append_value(raw_str);
                                 }
@@ -275,13 +282,7 @@ mod tests {
     #[test]
     fn test_number_negative_zero() {
         // Spark: json_tuple('{"v":-0}', 'v') → '0'
-        // RawValue preserves '-0', but Spark returns '0'
-        // This is acceptable — both are valid representations
-        let result = json_tuple_single(r#"{"v":-0}"#, "v");
-        assert!(
-            result == Some("-0".to_string()) || result == Some("0".to_string()),
-            "expected '-0' or '0', got {result:?}"
-        );
+        assert_eq!(json_tuple_single(r#"{"v":-0}"#, "v"), Some("0".to_string()));
     }
 
     #[test]
