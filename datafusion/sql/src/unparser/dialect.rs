@@ -24,7 +24,7 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -372,7 +372,10 @@ impl PostgreSqlDialect {
         args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
         let [haystack, needle] = args else {
-            return Ok(None);
+            return internal_err!(
+                "array_has expected 2 arguments, got {}",
+                args.len()
+            );
         };
 
         Ok(Some(ast::Expr::AnyOp {
