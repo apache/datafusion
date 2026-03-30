@@ -396,9 +396,9 @@ impl FileStreamMetrics {
 
 #[cfg(test)]
 mod tests {
-    use crate::PartitionedFile;
-    use crate::file_scan_config::FileScanConfigBuilder;
+    use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
     use crate::tests::make_partition;
+    use crate::{PartitionedFile, TableSchema};
     use datafusion_common::error::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -526,7 +526,7 @@ mod tests {
 
             let on_error = self.on_error;
 
-            let table_schema = crate::table_schema::TableSchema::new(file_schema, vec![]);
+            let table_schema = TableSchema::new(file_schema, vec![]);
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
@@ -540,8 +540,7 @@ mod tests {
                 .with_file_opener(Arc::new(self.opener))
                 .with_metrics(&metrics_set)
                 .with_on_error(on_error)
-                .build()
-                .unwrap();
+                .build()?;
 
             file_stream
                 .collect::<Vec<_>>()
@@ -560,6 +559,23 @@ mod tests {
             .result()
             .await
             .expect("error executing stream")
+    }
+
+    /// Create the smallest valid file scan config for builder validation tests.
+    fn builder_test_config() -> FileScanConfig {
+        let table_schema = TableSchema::new(Arc::new(Schema::empty()), vec![]);
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_file(PartitionedFile::new("mock_file", 10))
+        .build()
+    }
+
+    /// Convenience helper to keep builder error assertions focused on the
+    /// specific missing or invalid input under test.
+    fn builder_error(builder: FileStreamBuilder<'_>) -> String {
+        builder.build().err().unwrap().to_string()
     }
 
     #[tokio::test]
@@ -859,65 +875,33 @@ mod tests {
 
     #[test]
     fn builder_requires_partition_file_opener_and_metrics() {
-        let table_schema =
-            crate::table_schema::TableSchema::new(Arc::new(Schema::empty()), vec![]);
-        let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test:///").unwrap(),
-            Arc::new(MockSource::new(table_schema)),
-        )
-        .with_file(PartitionedFile::new("mock_file", 10))
-        .build();
+        let config = builder_test_config();
 
-        let err = FileStreamBuilder::new(&config).build().err().unwrap();
-        assert!(
-            err.to_string()
-                .contains("FileStreamBuilder missing required field: partition")
-        );
+        let err = builder_error(FileStreamBuilder::new(&config));
+        assert!(err.contains("FileStreamBuilder missing required field: partition"));
 
-        let err = FileStreamBuilder::new(&config)
-            .with_partition(0)
-            .build()
-            .err()
-            .unwrap();
-        assert!(
-            err.to_string()
-                .contains("FileStreamBuilder missing required field: file_opener")
-        );
+        let err = builder_error(FileStreamBuilder::new(&config).with_partition(0));
+        assert!(err.contains("FileStreamBuilder missing required field: file_opener"));
 
-        let err = FileStreamBuilder::new(&config)
-            .with_partition(0)
-            .with_file_opener(Arc::new(TestOpener::default()))
-            .build()
-            .err()
-            .unwrap();
-        assert!(
-            err.to_string()
-                .contains("FileStreamBuilder missing required field: metrics")
+        let err = builder_error(
+            FileStreamBuilder::new(&config)
+                .with_partition(0)
+                .with_file_opener(Arc::new(TestOpener::default())),
         );
+        assert!(err.contains("FileStreamBuilder missing required field: metrics"));
     }
 
     #[test]
     fn builder_errors_on_invalid_partition() {
-        let table_schema =
-            crate::table_schema::TableSchema::new(Arc::new(Schema::empty()), vec![]);
-        let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test:///").unwrap(),
-            Arc::new(MockSource::new(table_schema)),
-        )
-        .with_file(PartitionedFile::new("mock_file", 10))
-        .build();
+        let config = builder_test_config();
         let metrics = ExecutionPlanMetricsSet::new();
 
-        let err = FileStreamBuilder::new(&config)
-            .with_partition(1)
-            .with_file_opener(Arc::new(TestOpener::default()))
-            .with_metrics(&metrics)
-            .build()
-            .err()
-            .unwrap();
-        assert!(
-            err.to_string()
-                .contains("FileStreamBuilder invalid partition index: 1")
+        let err = builder_error(
+            FileStreamBuilder::new(&config)
+                .with_partition(1)
+                .with_file_opener(Arc::new(TestOpener::default()))
+                .with_metrics(&metrics),
         );
+        assert!(err.contains("FileStreamBuilder invalid partition index: 1"));
     }
 }
