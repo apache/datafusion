@@ -128,6 +128,10 @@ impl TaskContext {
         &self.scalar_functions
     }
 
+    pub fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+        &self.higher_order_functions
+    }
+
     pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         &self.aggregate_functions
     }
