@@ -21,6 +21,8 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
+mod builder;
+
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -29,7 +31,7 @@ use std::task::{Context, Poll};
 use crate::PartitionedFile;
 use crate::file_scan_config::FileScanConfig;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::Result;
 use datafusion_execution::RecordBatchStream;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, Time,
@@ -41,6 +43,8 @@ use datafusion_common::instant::Instant;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{FutureExt as _, Stream, StreamExt as _, ready};
+
+pub use builder::FileStreamBuilder;
 
 /// A stream that iterates record batch by record batch, file over file.
 pub struct FileStream {
@@ -62,100 +66,6 @@ pub struct FileStream {
     baseline_metrics: BaselineMetrics,
     /// Describes the behavior of the `FileStream` if file opening or scanning fails
     on_error: OnError,
-}
-
-/// Builder for constructing a [`FileStream`].
-pub struct FileStreamBuilder<'a> {
-    config: &'a FileScanConfig,
-    partition: Option<usize>,
-    file_opener: Option<Arc<dyn FileOpener>>,
-    metrics: Option<&'a ExecutionPlanMetricsSet>,
-    on_error: OnError,
-}
-
-impl<'a> FileStreamBuilder<'a> {
-    /// Create a new builder.
-    pub fn new(config: &'a FileScanConfig) -> Self {
-        Self {
-            config,
-            partition: None,
-            file_opener: None,
-            metrics: None,
-            on_error: OnError::Fail,
-        }
-    }
-
-    /// Configure the partition to scan.
-    pub fn with_partition(mut self, partition: usize) -> Self {
-        self.partition = Some(partition);
-        self
-    }
-
-    /// Configure the [`FileOpener`] used to open files.
-    pub fn with_file_opener(mut self, file_opener: Arc<dyn FileOpener>) -> Self {
-        self.file_opener = Some(file_opener);
-        self
-    }
-
-    /// Configure the metrics set used by the stream.
-    pub fn with_metrics(mut self, metrics: &'a ExecutionPlanMetricsSet) -> Self {
-        self.metrics = Some(metrics);
-        self
-    }
-
-    /// Configure the behavior when opening or scanning a file fails.
-    pub fn with_on_error(mut self, on_error: OnError) -> Self {
-        self.on_error = on_error;
-        self
-    }
-
-    /// Build the configured [`FileStream`].
-    pub fn build(self) -> Result<FileStream> {
-        let partition = match self.partition {
-            Some(partition) => partition,
-            None => {
-                return internal_err!(
-                    "FileStreamBuilder missing required field: partition"
-                );
-            }
-        };
-        let file_opener = match self.file_opener {
-            Some(file_opener) => file_opener,
-            None => {
-                return internal_err!(
-                    "FileStreamBuilder missing required field: file_opener"
-                );
-            }
-        };
-        let metrics = match self.metrics {
-            Some(metrics) => metrics,
-            None => {
-                return internal_err!(
-                    "FileStreamBuilder missing required field: metrics"
-                );
-            }
-        };
-        let projected_schema = self.config.projected_schema()?;
-        let file_group = match self.config.file_groups.get(partition).cloned() {
-            Some(file_group) => file_group,
-            None => {
-                return internal_err!(
-                    "FileStreamBuilder invalid partition index: {partition}"
-                );
-            }
-        };
-
-        Ok(FileStream {
-            file_iter: file_group.into_inner().into_iter().collect(),
-            projected_schema,
-            remain: self.config.limit,
-            file_opener,
-            state: FileStreamState::Idle,
-            file_stream_metrics: FileStreamMetrics::new(metrics, partition),
-            baseline_metrics: BaselineMetrics::new(metrics, partition),
-            on_error: self.on_error,
-        })
-    }
 }
 
 impl FileStream {
