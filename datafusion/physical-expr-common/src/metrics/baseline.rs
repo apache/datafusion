@@ -180,7 +180,7 @@ impl BaselineMetrics {
                 },
                 None,
             )
-            .with_type(super::MetricType::DEV),
+            .with_type(super::MetricType::Dev),
         ))
     }
 
