@@ -147,6 +147,58 @@ SELECT json_tuple('{"имя":"Иван","город":"Москва"}'::STRING, '
 ----
 {c0: Иван, c1: Москва}
 
+# ── Additional edge cases ────────────────────────────────────
+
+# Trailing comma in JSON is invalid → NULL
+query ?
+SELECT json_tuple('{"a":1,}'::STRING, 'a'::STRING);
+----
+NULL
+
+# Empty string as key
+query ?
+SELECT json_tuple('{"":1}'::STRING, ''::STRING);
+----
+{c0: 1}
+
+# "null" as key name (not JSON null, literal key)
+query ?
+SELECT json_tuple('{"null":1}'::STRING, 'null'::STRING);
+----
+{c0: 1}
+
+# Interleaved existing and missing fields
+query ?
+SELECT json_tuple('{"a":1,"c":3}'::STRING, 'a'::STRING, 'b'::STRING, 'c'::STRING, 'd'::STRING);
+----
+{c0: 1, c1: NULL, c2: 3, c3: NULL}
+
+# ── Number precision (raw text preservation) ─────────────────
+
+# Scientific notation: Spark returns uppercase exponent
+query ?
+SELECT json_tuple('{"v":1.5e10}'::STRING, 'v'::STRING);
+----
+{c0: 1.5E10}
+
+# Large integer: preserved without float conversion
+query ?
+SELECT json_tuple('{"v":99999999999999999999}'::STRING, 'v'::STRING);
+----
+{c0: 99999999999999999999}
+
+# Normal integer
+query ?
+SELECT json_tuple('{"v":42}'::STRING, 'v'::STRING);
+----
+{c0: 42}
+
+# Normal float
+query ?
+SELECT json_tuple('{"v":3.14}'::STRING, 'v'::STRING);
+----
+{c0: 3.14}
+
 # Verify return type with arrow_typeof
 query T
 SELECT arrow_typeof(json_tuple('{"a":1}'::STRING, 'a'::STRING));
