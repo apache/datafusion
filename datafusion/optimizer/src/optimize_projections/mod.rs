@@ -2358,6 +2358,14 @@ mod tests {
             "Full optimizer should not fail with schema mismatch: {:?}",
             result.err()
         );
+        let optimized = result.unwrap();
+        let plan_str = format!("{optimized}");
+        // Verify no double projection — the projection we add to strip mark
+        // columns should be merged by optimize_projections, not left stacked.
+        assert!(
+            !plan_str.contains("Projection: a.a, a.b, a.c\n            Projection:"),
+            "Double projection should be merged by optimize_projections"
+        );
 
         Ok(())
     }
