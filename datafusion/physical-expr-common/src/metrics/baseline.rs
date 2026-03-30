@@ -90,7 +90,7 @@ impl BaselineMetrics {
                 .with_type(super::MetricType::SUMMARY)
                 .output_bytes(partition),
             output_batches: MetricBuilder::new(metrics)
-                .with_type(super::MetricType::Dev)
+                .with_type(super::MetricType::DEV)
                 .output_batches(partition),
         }
     }
