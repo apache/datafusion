@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example custom_data_source -- [all|csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|default_column_values|file_stream_provider]
+//! cargo run --example custom_data_source -- [all|csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|default_column_values|file_stream_provider|literal_guarantee_filter_pushdown]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -50,6 +50,12 @@
 //!
 //! - `file_stream_provider`
 //!   (file: file_stream_provider.rs, desc: Read/write via FileStreamProvider for streams)
+//!
+//! - `literal_guarantee_filter_pushdown`
+//!   (file: literal_guarantee_filter_pushdown.rs, desc: Filter pushdown using LiteralGuarantee with a custom index)
+//!
+//! - `pruning_predicate_filter_pushdown`
+//!   (file: pruning_predicate_filter_pushdown.rs, desc: Filter pushdown using PruningPredicate with partition statistics)
 
 mod adapter_serialization;
 mod csv_json_opener;
@@ -59,6 +65,8 @@ mod custom_file_casts;
 mod custom_file_format;
 mod default_column_values;
 mod file_stream_provider;
+mod literal_guarantee_filter_pushdown;
+mod pruning_predicate_filter_pushdown;
 
 use datafusion::error::{DataFusionError, Result};
 use strum::{IntoEnumIterator, VariantNames};
@@ -74,6 +82,8 @@ enum ExampleKind {
     CustomDatasource,
     CustomFileCasts,
     CustomFileFormat,
+    LiteralGuaranteeFilterPushdown,
+    PruningPredicateFilterPushdown,
     DefaultColumnValues,
     FileStreamProvider,
 }
@@ -108,6 +118,12 @@ impl ExampleKind {
             }
             ExampleKind::CustomFileFormat => {
                 custom_file_format::custom_file_format().await?
+            }
+            ExampleKind::LiteralGuaranteeFilterPushdown => {
+                literal_guarantee_filter_pushdown::literal_guarantee_filter_pushdown().await?
+            }
+            ExampleKind::PruningPredicateFilterPushdown => {
+                pruning_predicate_filter_pushdown::pruning_predicate_filter_pushdown().await?
             }
             ExampleKind::DefaultColumnValues => {
                 default_column_values::default_column_values().await?
