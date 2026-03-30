@@ -44,6 +44,7 @@ on:
       - 'datafusion/physical*/**/*.rs'
       - 'datafusion/expr*/**/*.rs'
       - 'datafusion/optimizer/**/*.rs'
+      - 'datafusion/sql/**/*.rs'
       - 'datafusion-testing'
   workflow_dispatch:
     inputs:

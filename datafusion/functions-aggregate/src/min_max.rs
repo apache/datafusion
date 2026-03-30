@@ -203,10 +203,6 @@ impl FromColumnStatistics for Max {
 }
 
 impl AggregateUDFImpl for Max {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "max"
     }
@@ -490,10 +486,6 @@ impl FromColumnStatistics for Min {
 }
 
 impl AggregateUDFImpl for Min {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "min"
     }
