@@ -197,6 +197,23 @@ The following configuration settings are available:
 | datafusion.format.duration_format                                       | pretty                    | Duration format. Can be either `"pretty"` or `"ISO8601"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | datafusion.format.types_info                                            | false                     | Show types in visual representation batches                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
+# Reset Configuration Settings
+
+You can also reset configuration options to default settings via SQL using the `RESET` command. For
+example, to set and reset `datafusion.execution.batch_size`:
+
+```sql
+SET datafusion.execution.batch_size = '10000';
+
+SHOW datafusion.execution.batch_size;
+datafusion.execution.batch_size 10000
+
+RESET datafusion.execution.batch_size;
+
+SHOW datafusion.execution.batch_size;
+datafusion.execution.batch_size 8192
+```
+
 # Runtime Configuration Settings
 
 DataFusion runtime configurations can be set via SQL using the `SET` command.
@@ -217,6 +234,23 @@ The following runtime configuration settings are available:
 | datafusion.runtime.memory_limit            | NULL    | Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.                               |
 | datafusion.runtime.metadata_cache_limit    | 50M     | Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes. |
 | datafusion.runtime.temp_directory          | NULL    | The path to the temporary file directory.                                                                                                                                 |
+
+# Reset Runtime Configuration Settings
+
+You can also reset runtime configuration options to default settings via SQL using the `RESET` command. For
+example, to set and reset `datafusion.runtime.list_files_cache_limit`:
+
+```sql
+SET datafusion.runtime.list_files_cache_limit = '10M';
+
+SHOW datafusion.runtime.list_files_cache_limit;
+datafusion.runtime.list_files_cache_limit 10M
+
+RESET datafusion.runtime.list_files_cache_limit;
+
+SHOW datafusion.runtime.list_files_cache_limit;
+datafusion.runtime.list_files_cache_limit 1M
+```
 
 # Tuning Guide
 
