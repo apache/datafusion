@@ -505,6 +505,9 @@ impl DisplayAs for FilterExec {
                 )
             }
             DisplayFormatType::TreeRender => {
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "fetch={fetch}")?;
+                }
                 write!(f, "predicate={}", fmt_sql(self.predicate.as_ref()))
             }
         }

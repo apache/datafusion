@@ -1256,7 +1256,8 @@ async fn test_union_inputs_different_sorted_with_limit() -> Result<()> {
     let physical_plan = sort_preserving_merge_exec(ordering3, union);
 
     let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
-    // Should not change the unnecessarily fine `SortExec`s because there is `LimitExec`
+    // Should not change the unnecessarily fine `SortExec`s because there are
+    // explicit limit nodes above the second sort.
     assert_snapshot!(test.run(), @r"
     Input Plan:
     SortPreservingMergeExec: [nullable_col@0 ASC]
