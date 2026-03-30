@@ -111,7 +111,7 @@ impl HigherOrderSignature {
 
 impl PartialEq for dyn HigherOrderUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.dyn_eq(other.as_any())
+        self.dyn_eq(other as _)
     }
 }
 
@@ -268,10 +268,7 @@ pub enum ValueOrLambda<V, L> {
 /// See [`array_transform.rs`] for a commented complete implementation
 ///
 /// [`array_transform.rs`]: https://github.com/apache/datafusion/blob/main/datafusion/functions-nested/src/array_transform.rs
-pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync {
-    /// Returns this object as an [`Any`] trait object
-    fn as_any(&self) -> &dyn Any;
-
+pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns this function's name
     fn name(&self) -> &str;
 
@@ -486,10 +483,6 @@ mod tests {
         signature: HigherOrderSignature,
     }
     impl HigherOrderUDF for TestHigherOrderUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             self.name
         }

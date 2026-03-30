@@ -1935,10 +1935,6 @@ mod tests {
     struct DummyHigherOrderUDF;
 
     impl HigherOrderUDF for DummyHigherOrderUDF {
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!()
-        }
-
         fn name(&self) -> &str {
             "dummy_udhof"
         }

@@ -95,7 +95,7 @@ impl UdfPointer for Arc<dyn ScalarUDFImpl + '_> {
 
 impl UdfPointer for Arc<dyn HigherOrderUDF + '_> {
     fn equals(&self, other: &Self::Target) -> bool {
-        self.as_ref().dyn_eq(other.as_any())
+        self.as_ref().dyn_eq(other)
     }
 
     fn hash_value(&self) -> u64 {

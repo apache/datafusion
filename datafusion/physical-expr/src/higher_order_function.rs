@@ -400,7 +400,6 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::sync::Arc;
 
     use super::*;
@@ -422,10 +421,6 @@ mod tests {
     }
 
     impl HigherOrderUDF for MockHigherOrderUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "mock_function"
         }

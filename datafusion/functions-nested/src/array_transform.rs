@@ -33,7 +33,7 @@ use datafusion_expr::{
     HigherOrderSignature, HigherOrderUDF, ValueOrLambda, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 
 make_udhof_expr_and_func!(
     ArrayTransform,
@@ -83,10 +83,6 @@ impl ArrayTransform {
 }
 
 impl HigherOrderUDF for ArrayTransform {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_transform"
     }
