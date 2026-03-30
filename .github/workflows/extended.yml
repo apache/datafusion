@@ -93,8 +93,7 @@ jobs:
   linux-test-extended:
     name: cargo test 'extended_tests' (amd64)
     needs: [linux-build-lib]
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion,spot=false', github.run_id) || 'ubuntu-latest' }}
-    # spot=false because the tests are long, https://runs-on.com/configuration/spot-instances/#disable-spot-pricing
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
       - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
@@ -162,8 +161,7 @@ jobs:
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=48,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion,spot=false', github.run_id) || 'ubuntu-latest' }}
-    # spot=false because the tests are long, https://runs-on.com/configuration/spot-instances/#disable-spot-pricing
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
