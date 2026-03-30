@@ -1065,7 +1065,7 @@ fn replace_nulls_with_first_valid(array: &ArrayRef) -> Result<ArrayRef> {
                 .ok_or_else(|| _internal_datafusion_err!("fixed size list should have been checked to contain at least one valid value"))?;
 
             let mask = BooleanArray::new(nulls.inner().clone(), None);
-            // perf: remove the null buffer so zip doesn't unnecessarly zip it too
+            // perf: remove the null buffer so zip doesn't unnecessarily zip it too
             let without_null_buffer =
                 make_array(array.to_data().into_builder().nulls(None).build()?);
             let first_valid = array.slice(first_valid, 1);
