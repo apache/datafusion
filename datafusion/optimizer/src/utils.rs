@@ -17,10 +17,58 @@
 
 //! Utility functions leveraged by the query optimizer rules
 
+mod null_restriction;
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
+
+/// Null restriction evaluation mode for optimizer tests.
+#[cfg(test)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NullRestrictionEvalMode {
+    Auto,
+    AuthoritativeOnly,
+}
+
+#[cfg(test)]
+thread_local! {
+    static NULL_RESTRICTION_EVAL_MODE: Cell<NullRestrictionEvalMode> =
+        const { Cell::new(NullRestrictionEvalMode::Auto) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_null_restriction_eval_mode_for_test(mode: NullRestrictionEvalMode) {
+    NULL_RESTRICTION_EVAL_MODE.with(|eval_mode| eval_mode.set(mode));
+}
+
+#[cfg(test)]
+fn null_restriction_eval_mode() -> NullRestrictionEvalMode {
+    NULL_RESTRICTION_EVAL_MODE.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn with_null_restriction_eval_mode_for_test<T>(
+    mode: NullRestrictionEvalMode,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct NullRestrictionEvalModeReset(NullRestrictionEvalMode);
+
+    impl Drop for NullRestrictionEvalModeReset {
+        fn drop(&mut self) {
+            set_null_restriction_eval_mode_for_test(self.0);
+        }
+    }
+
+    let previous_mode = null_restriction_eval_mode();
+    set_null_restriction_eval_mode_for_test(mode);
+    let _reset = NullRestrictionEvalModeReset(previous_mode);
+    f()
+}
 use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::cast::as_boolean_array;
@@ -38,9 +86,13 @@ pub use datafusion_expr::expr_rewriter::NamePreserver;
 
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
-    expr.column_refs()
+    let column_refs = expr.column_refs();
+    // note can't use HashSet::intersect because of different types (owned vs References)
+    schema_cols
         .iter()
-        .all(|column| schema_cols.contains(*column))
+        .filter(|c| column_refs.contains(c))
+        .count()
+        == column_refs.len()
 }
 
 pub(crate) fn replace_qualified_name(
@@ -78,17 +130,40 @@ pub fn is_restrict_null_predicate<'a>(
     // Collect join columns so they can be used in both the fast-path check and the
     // fallback evaluation path below.
     let join_cols: HashSet<&Column> = join_cols_of_predicate.into_iter().collect();
+    let column_refs = predicate.column_refs();
+
     // Fast path: if the predicate references columns outside the join key set,
     // `evaluate_expr_with_null_column` would fail because the null schema only
     // contains a placeholder for the join key columns. Callers treat such errors as
     // non-restricting (false) via `matches!(_, Ok(true))`, so we return false early
     // and avoid the expensive physical-expression compilation pipeline entirely.
-    if !predicate
-        .column_refs()
-        .iter()
-        .all(|column| join_cols.contains(*column))
-    {
+    if !null_restriction::all_columns_allowed(&column_refs, &join_cols) {
         return Ok(false);
+    }
+
+    #[cfg(test)]
+    if matches!(
+        null_restriction_eval_mode(),
+        NullRestrictionEvalMode::AuthoritativeOnly
+    ) {
+        return authoritative_restrict_null_predicate(predicate, join_cols);
+    }
+
+    if let Some(is_restricting) =
+        null_restriction::syntactic_restrict_null_predicate(&predicate, &join_cols)
+    {
+        #[cfg(debug_assertions)]
+        {
+            let authoritative = authoritative_restrict_null_predicate(
+                predicate.clone(),
+                join_cols.iter().copied(),
+            )?;
+            debug_assert_eq!(
+                is_restricting, authoritative,
+                "syntactic fast path disagrees with authoritative null-restriction evaluation for predicate: {predicate}"
+            );
+        }
+        return Ok(is_restricting);
     }
 
     authoritative_restrict_null_predicate(predicate, join_cols)
@@ -147,11 +222,14 @@ fn authoritative_restrict_null_predicate<'a>(
 ) -> Result<bool> {
     Ok(
         match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
-            ColumnarValue::Array(array) if array.len() == 1 => {
-                let boolean_array = as_boolean_array(&array)?;
-                boolean_array.is_null(0) || !boolean_array.value(0)
+            ColumnarValue::Array(array) => {
+                if array.len() == 1 {
+                    let boolean_array = as_boolean_array(&array)?;
+                    boolean_array.is_null(0) || !boolean_array.value(0)
+                } else {
+                    false
+                }
             }
-            ColumnarValue::Array(_) => false,
             ColumnarValue::Scalar(scalar) => matches!(
                 scalar,
                 ScalarValue::Boolean(None)
@@ -170,6 +248,8 @@ fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
     use datafusion_expr::{
         Operator, binary_expr, case, col, in_list, is_null, lit, when,
     };
@@ -315,5 +395,201 @@ mod tests {
         assert!(!actual, "{predicate}");
 
         Ok(())
+    }
+
+    #[test]
+    fn syntactic_fast_path_matches_authoritative_evaluator() -> Result<()> {
+        let test_cases = vec![
+            is_null(col("a")),
+            Expr::IsNotNull(Box::new(col("a"))),
+            binary_expr(col("a"), Operator::Gt, lit(8i64)),
+            binary_expr(col("a"), Operator::Eq, lit(ScalarValue::Null)),
+            binary_expr(col("a"), Operator::And, lit(true)),
+            binary_expr(col("a"), Operator::Or, lit(false)),
+            Expr::Not(Box::new(col("a").is_true())),
+            col("a").is_true(),
+            col("a").is_false(),
+            col("a").is_unknown(),
+            col("a").is_not_true(),
+            col("a").is_not_false(),
+            col("a").is_not_unknown(),
+            col("a").between(lit(1i64), lit(10i64)),
+            binary_expr(
+                when(Expr::IsNotNull(Box::new(col("a"))), col("a"))
+                    .otherwise(col("b"))?,
+                Operator::Gt,
+                lit(2i64),
+            ),
+            case(col("a"))
+                .when(lit(1i64), lit(true))
+                .otherwise(lit(false))?,
+            case(col("a"))
+                .when(lit(0i64), lit(false))
+                .otherwise(lit(true))?,
+            binary_expr(
+                case(col("a"))
+                    .when(lit(0i64), lit(true))
+                    .otherwise(lit(false))?,
+                Operator::Or,
+                lit(false),
+            ),
+            binary_expr(
+                case(lit(1i64))
+                    .when(lit(1i64), lit(ScalarValue::Null))
+                    .otherwise(lit(false))?,
+                Operator::IsNotDistinctFrom,
+                lit(true),
+            ),
+            binary_expr(col("a").is_true(), Operator::And, lit(true)),
+            binary_expr(col("a").is_false(), Operator::Or, lit(false)),
+            binary_expr(col("a").is_unknown(), Operator::And, is_null(col("a"))),
+            binary_expr(
+                Expr::Not(Box::new(col("a").is_not_unknown())),
+                Operator::Or,
+                Expr::IsNotNull(Box::new(col("a"))),
+            ),
+        ];
+
+        for predicate in test_cases {
+            let join_cols = predicate.column_refs();
+            if let Some(syntactic) = null_restriction::syntactic_restrict_null_predicate(
+                &predicate, &join_cols,
+            ) {
+                let authoritative = authoritative_restrict_null_predicate(
+                    predicate.clone(),
+                    join_cols.iter().copied(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "authoritative evaluator failed for predicate `{predicate}`: {error}"
+                    )
+                });
+                assert_eq!(
+                    syntactic, authoritative,
+                    "syntactic fast path disagrees with authoritative evaluator for predicate: {predicate}",
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_boolean_wrappers_defer_to_authoritative_evaluator() -> Result<()> {
+        let predicates = vec![
+            binary_expr(col("a").is_true(), Operator::And, lit(true)),
+            binary_expr(col("a").is_false(), Operator::Or, lit(false)),
+            binary_expr(col("a").is_unknown(), Operator::And, is_null(col("a"))),
+            binary_expr(
+                Expr::Not(Box::new(col("a").is_not_unknown())),
+                Operator::Or,
+                Expr::IsNotNull(Box::new(col("a"))),
+            ),
+        ];
+
+        for predicate in predicates {
+            let join_cols = predicate.column_refs();
+            assert!(
+                null_restriction::syntactic_restrict_null_predicate(
+                    &predicate, &join_cols
+                )
+                .is_none(),
+                "syntactic fast path should defer for predicate: {predicate}",
+            );
+
+            let auto_result = with_null_restriction_eval_mode_for_test(
+                NullRestrictionEvalMode::Auto,
+                || {
+                    is_restrict_null_predicate(
+                        predicate.clone(),
+                        join_cols.iter().copied(),
+                    )
+                },
+            )?;
+
+            let authoritative_result = with_null_restriction_eval_mode_for_test(
+                NullRestrictionEvalMode::AuthoritativeOnly,
+                || {
+                    is_restrict_null_predicate(
+                        predicate.clone(),
+                        join_cols.iter().copied(),
+                    )
+                },
+            )?;
+
+            assert_eq!(
+                auto_result, authoritative_result,
+                "auto mode should defer to authoritative evaluation for predicate: {predicate}",
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn null_restriction_eval_mode_auto_vs_authoritative_only() -> Result<()> {
+        let predicate = binary_expr(col("a"), Operator::Gt, lit(8i64));
+        let join_cols_of_predicate = predicate.column_refs();
+
+        let auto_result = with_null_restriction_eval_mode_for_test(
+            NullRestrictionEvalMode::Auto,
+            || {
+                is_restrict_null_predicate(
+                    predicate.clone(),
+                    join_cols_of_predicate.iter().copied(),
+                )
+            },
+        )?;
+
+        let authoritative_result = with_null_restriction_eval_mode_for_test(
+            NullRestrictionEvalMode::AuthoritativeOnly,
+            || {
+                is_restrict_null_predicate(
+                    predicate.clone(),
+                    join_cols_of_predicate.iter().copied(),
+                )
+            },
+        )?;
+
+        assert_eq!(auto_result, authoritative_result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_reference_predicate_remains_fast_pathed_in_authoritative_mode() -> Result<()>
+    {
+        let predicate = binary_expr(col("a"), Operator::Gt, col("b"));
+        let column_a = Column::from_name("a");
+
+        let auto_result = with_null_restriction_eval_mode_for_test(
+            NullRestrictionEvalMode::Auto,
+            || is_restrict_null_predicate(predicate.clone(), std::iter::once(&column_a)),
+        )?;
+
+        let authoritative_only_result = with_null_restriction_eval_mode_for_test(
+            NullRestrictionEvalMode::AuthoritativeOnly,
+            || is_restrict_null_predicate(predicate.clone(), std::iter::once(&column_a)),
+        )?;
+
+        assert!(!auto_result, "{predicate}");
+        assert!(!authoritative_only_result, "{predicate}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn null_restriction_eval_mode_guard_restores_on_panic() {
+        set_null_restriction_eval_mode_for_test(NullRestrictionEvalMode::Auto);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            with_null_restriction_eval_mode_for_test(
+                NullRestrictionEvalMode::AuthoritativeOnly,
+                || panic!("intentional panic to verify test mode reset"),
+            )
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(null_restriction_eval_mode(), NullRestrictionEvalMode::Auto);
     }
 }

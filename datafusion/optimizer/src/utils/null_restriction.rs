@@ -84,10 +84,9 @@ fn binary_boolean_value(
         | (_, Some(NullSubstitutionValue::NonNull))
         | (None, _)
         | (_, None) => None,
-        (left, right) => {
-            debug_assert_eq!(left, right);
-            left
-        }
+        // Any remaining mixed state is outside the reduced lattice this syntactic
+        // evaluator can model soundly. Defer to the authoritative evaluator.
+        _ => None,
     }
 }
 
