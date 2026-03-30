@@ -120,10 +120,12 @@ impl ExampleKind {
                 custom_file_format::custom_file_format().await?
             }
             ExampleKind::LiteralGuaranteeFilterPushdown => {
-                literal_guarantee_filter_pushdown::literal_guarantee_filter_pushdown().await?
+                literal_guarantee_filter_pushdown::literal_guarantee_filter_pushdown()
+                    .await?
             }
             ExampleKind::PruningPredicateFilterPushdown => {
-                pruning_predicate_filter_pushdown::pruning_predicate_filter_pushdown().await?
+                pruning_predicate_filter_pushdown::pruning_predicate_filter_pushdown()
+                    .await?
             }
             ExampleKind::DefaultColumnValues => {
                 default_column_values::default_column_values().await?
