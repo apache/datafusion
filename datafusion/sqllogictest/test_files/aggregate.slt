@@ -7941,16 +7941,21 @@ select count(), count() * count() from t;
 ----
 2 4
 
-# Duplicate aggregate expressions are now auto-suffixed
-query II
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\)\)" at position 0 and "count\(Int64\(1\)\)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
 select count(1), count(1) from t;
-----
-2 2
 
-query II
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\)\)" at position 0 and "count\(Int64\(1\)\)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+explain select count(1), count(1) from t;
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\) AS \)" at position 0 and "count\(Int64\(1\) AS \)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
 select count(), count() from t;
-----
-2 2
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\) AS \)" at position 0 and "count\(Int64\(1\) AS \)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+explain select count(), count() from t;
 
 query II
 select count(1), count(2) from t;
