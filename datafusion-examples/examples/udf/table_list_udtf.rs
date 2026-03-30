@@ -74,7 +74,7 @@ impl TableFunctionImpl for TableListUdtf {
             );
         }
         let state = args
-            .session
+            .session()
             .as_any()
             .downcast_ref::<SessionState>()
             .ok_or_else(|| {

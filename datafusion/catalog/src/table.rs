@@ -510,9 +510,9 @@ pub trait TableProviderFactory: Debug + Sync + Send {
 /// Describes arguments provided to the table function call.
 pub struct TableFunctionArgs<'e, 's> {
     /// Call arguments.
-    pub exprs: &'e [Expr],
+    exprs: &'e [Expr],
     /// Session within which the function is called.
-    pub session: &'s dyn Session,
+    session: &'s dyn Session,
 }
 
 impl<'e, 's> TableFunctionArgs<'e, 's> {

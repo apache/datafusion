@@ -274,7 +274,7 @@ impl From<FFI_TableFunction> for Arc<dyn TableFunctionImpl> {
 impl TableFunctionImpl for ForeignTableFunction {
     fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
         let session = FFI_SessionRef::new(
-            args.session,
+            args.session(),
             self.0.runtime(),
             self.0.logical_codec.clone(),
         );
