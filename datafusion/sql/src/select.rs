@@ -23,9 +23,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
-    check_columns_satisfy_exprs, deduplicate_select_expr_names, extract_aliases,
-    rebase_expr, resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
-    rewrite_recursive_unnests_bottom_up,
+    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
+    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
 };
 
 use datafusion_common::error::DataFusionErrorBuilder;
@@ -109,10 +108,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             empty_from,
             planner_context,
         )?;
-
-        // Auto-suffix duplicate expression names (e.g. cov, cov → cov, cov:1)
-        // before projection so that the unique-name constraint is satisfied.
-        let select_exprs = deduplicate_select_expr_names(select_exprs);
 
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;
