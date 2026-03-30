@@ -975,6 +975,20 @@ impl SessionState {
     }
 }
 
+/// Deduplicates function-registry map entries by keeping only entries whose key
+/// matches the canonical name. The session stores one hash map entry per alias
+/// plus the canonical name; filtering to canonical-name entries yields exactly
+/// one [`Arc`] per logical function.
+fn dedup_function_registry_by_canonical_name<T>(
+    map: &HashMap<String, Arc<T>>,
+    canonical_name: impl Fn(&T) -> &str,
+) -> Vec<Arc<T>> {
+    map.iter()
+        .filter(|(key, udf)| key.as_str() == canonical_name(udf.as_ref()))
+        .map(|(_, udf)| Arc::clone(udf))
+        .collect()
+}
+
 /// A builder to be used for building [`SessionState`]'s. Defaults will
 /// be used for all values unless explicitly provided.
 ///
@@ -1088,11 +1102,18 @@ impl SessionStateBuilder {
             query_planner: Some(existing.query_planner),
             catalog_list: Some(existing.catalog_list),
             table_functions: Some(existing.table_functions),
-            scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
-            aggregate_functions: Some(
-                existing.aggregate_functions.into_values().collect_vec(),
-            ),
-            window_functions: Some(existing.window_functions.into_values().collect_vec()),
+            scalar_functions: Some(dedup_function_registry_by_canonical_name(
+                &existing.scalar_functions,
+                |u| u.name(),
+            )),
+            aggregate_functions: Some(dedup_function_registry_by_canonical_name(
+                &existing.aggregate_functions,
+                |u| u.name(),
+            )),
+            window_functions: Some(dedup_function_registry_by_canonical_name(
+                &existing.window_functions,
+                |u| u.name(),
+            )),
             extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
@@ -2337,6 +2358,37 @@ mod tests {
         let new_state =
             SessionStateBuilder::new_from_existing(without_default_state).build();
         assert!(new_state.catalog_list().catalog(&default_catalog).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn new_from_existing_preserves_scalar_udf_aliases() -> Result<()> {
+        use arrow::datatypes::DataType;
+        use datafusion_common::ScalarValue;
+        use datafusion_expr::registry::FunctionRegistry;
+        use datafusion_expr::{ColumnarValue, Volatility, create_udf};
+
+        let udf = create_udf(
+            "postgres_to_char",
+            vec![DataType::Utf8],
+            DataType::Utf8,
+            Volatility::Immutable,
+            Arc::new(|_args| Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))),
+        )
+        .with_aliases(["to_char"]);
+
+        let mut state = SessionStateBuilder::new().build();
+        state.register_udf(Arc::new(udf))?;
+
+        assert_eq!(state.udf("postgres_to_char")?.name(), "postgres_to_char");
+        assert_eq!(state.udf("to_char")?.name(), "postgres_to_char");
+
+        let roundtrip = SessionStateBuilder::new_from_existing(state).build();
+        assert_eq!(roundtrip.udf("to_char")?.name(), "postgres_to_char");
+        assert_eq!(
+            roundtrip.udf("postgres_to_char")?.name(),
+            "postgres_to_char"
+        );
         Ok(())
     }
 
