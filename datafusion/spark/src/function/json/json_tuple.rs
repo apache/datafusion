@@ -280,8 +280,7 @@ mod tests {
         let result = json_tuple_single(r#"{"v":-0}"#, "v");
         assert!(
             result == Some("-0".to_string()) || result == Some("0".to_string()),
-            "expected '-0' or '0', got {:?}",
-            result
+            "expected '-0' or '0', got {result:?}"
         );
     }
 
