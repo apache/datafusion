@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Sort-merge join stream specialized for semi/anti joins.
+//! Sort-merge join stream specialized for semi/anti/mark joins.
 //!
 //! Instantiated by [`SortMergeJoinExec`](crate::joins::sort_merge_join::SortMergeJoinExec)
-//! when the join type is `LeftSemi`, `LeftAnti`, `RightSemi`, or `RightAnti`.
+//! when the join type is `LeftSemi`, `LeftAnti`, `RightSemi`, `RightAnti`,
+//! `LeftMark`, or `RightMark`.
 //!
 //! # Motivation
 //!
-//! The general-purpose `SortMergeJoinStream`
+//! The general-purpose `MaterializingSortMergeJoinStream`
 //! handles semi/anti joins by materializing `(outer, inner)` row pairs,
 //! applying a filter, then using a "corrected filter mask" to deduplicate.
 //! Semi/anti joins only need a boolean per outer row (does a match exist?),
@@ -36,7 +37,8 @@
 //!
 //! For `Left*` join types, left is outer and right is inner.
 //! For `Right*` join types, right is outer and left is inner.
-//! The output schema always equals the outer side's schema.
+//! The output schema always equals the outer side's schema (for semi/anti)
+//! or the outer side's schema plus a boolean mark column (for mark joins).
 //!
 //! # Algorithm
 //!
@@ -75,6 +77,7 @@
 //!   On emit:
 //!     Semi  → filter_record_batch(outer_batch, &matched)
 //!     Anti  → filter_record_batch(outer_batch, &NOT(matched))
+//!     Mark  → outer_batch + matched as boolean column
 //! ```
 //!
 //! ## Batch boundaries
@@ -245,14 +248,18 @@ enum PendingBoundary {
     Filtered { saved_keys: Vec<ArrayRef> },
 }
 
-pub(crate) struct SemiAntiSortMergeJoinStream {
-    // Decomposed from JoinType to avoid matching on 4 variants in hot paths.
-    // true for semi (emit matched), false for anti (emit unmatched).
-    is_semi: bool,
+/// Sort-Merge join stream for Semi/Anti/Mark joins.
+///
+/// Named "bitwise" because it tracks outer-row matches via a per-batch
+/// boolean bitset (`BooleanBufferBuilder`) rather than materializing
+/// `(outer, inner)` row pairs. Filter results are OR'd into the bitset
+/// in `u64` chunks, and emitting applies the bitset directly.
+pub(crate) struct BitwiseSortMergeJoinStream {
+    join_type: JoinType,
 
     // Input streams — in the nested-loop model that sort-merge join
     // implements, "outer" is the driving loop and "inner" is probed for
-    // matches. The existing SortMergeJoinStream calls these "streamed"
+    // matches. The existing MaterializingSortMergeJoinStream calls these "streamed"
     // and "buffered" respectively. For Left* joins, outer=left; for
     // Right* joins, outer=right. Output schema equals the outer side.
     outer: SendableRecordBatchStream,
@@ -330,7 +337,7 @@ pub(crate) struct SemiAntiSortMergeJoinStream {
     batch_emitted: bool,
 }
 
-impl SemiAntiSortMergeJoinStream {
+impl BitwiseSortMergeJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         schema: SchemaRef,
@@ -346,21 +353,35 @@ impl SemiAntiSortMergeJoinStream {
         partition: usize,
         metrics: &ExecutionPlanMetricsSet,
         reservation: MemoryReservation,
-        peak_mem_used: Gauge,
         spill_manager: SpillManager,
         runtime_env: Arc<datafusion_execution::runtime_env::RuntimeEnv>,
     ) -> Result<Self> {
-        let is_semi = matches!(join_type, JoinType::LeftSemi | JoinType::RightSemi);
-        let outer_is_left = matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti);
+        debug_assert!(
+            matches!(
+                join_type,
+                JoinType::LeftSemi
+                    | JoinType::RightSemi
+                    | JoinType::LeftAnti
+                    | JoinType::RightAnti
+                    | JoinType::LeftMark
+                    | JoinType::RightMark
+            ),
+            "BitwiseSortMergeJoinStream does not handle {join_type:?}"
+        );
+        let outer_is_left = matches!(
+            join_type,
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+        );
 
         let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
         let input_batches =
             MetricBuilder::new(metrics).counter("input_batches", partition);
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
+        let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
 
         Ok(Self {
-            is_semi,
+            join_type,
             outer,
             inner,
             outer_batch: None,
@@ -492,17 +513,38 @@ impl SemiAntiSortMergeJoinStream {
 
         // finish() converts the bit-packed builder directly to a
         // BooleanBuffer — no iteration or repacking needed.
-        let selection = BooleanArray::new(self.matched.finish(), None);
+        let matched_buf = self.matched.finish();
 
-        let selection = if self.is_semi {
-            selection
-        } else {
-            not(&selection)?
-        };
-
-        let filtered = filter_record_batch(batch, &selection)?;
-        if filtered.num_rows() > 0 {
-            self.coalescer.push_batch(filtered)?;
+        match self.join_type {
+            JoinType::LeftMark | JoinType::RightMark => {
+                // Mark joins emit ALL outer rows with a boolean match column appended.
+                debug_assert_eq!(
+                    self.schema.fields().len(),
+                    batch.num_columns() + 1,
+                    "Mark join output schema should be outer schema + 1 mark column"
+                );
+                let mark_col = Arc::new(BooleanArray::new(matched_buf, None)) as ArrayRef;
+                let mut columns = Vec::with_capacity(batch.num_columns() + 1);
+                columns.extend_from_slice(batch.columns());
+                columns.push(mark_col);
+                let output = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+                self.coalescer.push_batch(output)?;
+            }
+            JoinType::LeftSemi | JoinType::RightSemi => {
+                let selection = BooleanArray::new(matched_buf, None);
+                let filtered = filter_record_batch(batch, &selection)?;
+                if filtered.num_rows() > 0 {
+                    self.coalescer.push_batch(filtered)?;
+                }
+            }
+            JoinType::LeftAnti | JoinType::RightAnti => {
+                let selection = not(&BooleanArray::new(matched_buf, None))?;
+                let filtered = filter_record_batch(batch, &selection)?;
+                if filtered.num_rows() > 0 {
+                    self.coalescer.push_batch(filtered)?;
+                }
+            }
+            _ => unreachable!(),
         }
         Ok(())
     }
@@ -1184,7 +1226,7 @@ fn keys_match(
 
 /// Evaluate the join filter for one inner row against a slice of outer rows.
 ///
-/// Free function (not a method on SemiAntiSortMergeJoinStream) so that Rust
+/// Free function (not a method on BitwiseSortMergeJoinStream) so that Rust
 /// can split the struct borrow in process_key_match_with_filter: the caller
 /// holds &mut self.matched and &self.inner_key_buffer simultaneously, which
 /// is impossible if this borrows all of &self.
@@ -1257,7 +1299,7 @@ fn evaluate_filter_for_inner_row(
     }
 }
 
-impl Stream for SemiAntiSortMergeJoinStream {
+impl Stream for BitwiseSortMergeJoinStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -1269,7 +1311,7 @@ impl Stream for SemiAntiSortMergeJoinStream {
     }
 }
 
-impl RecordBatchStream for SemiAntiSortMergeJoinStream {
+impl RecordBatchStream for BitwiseSortMergeJoinStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

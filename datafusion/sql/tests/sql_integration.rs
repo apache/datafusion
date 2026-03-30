@@ -789,13 +789,11 @@ fn select_column_does_not_exist() {
 #[test]
 fn select_repeated_column() {
     let sql = "SELECT age, age FROM person";
-    let plan = logical_plan(sql).unwrap();
+    let err = logical_plan(sql).expect_err("query should have failed");
+
     assert_snapshot!(
-        plan,
-        @r"
-    Projection: person.age, person.age AS age:1
-      TableScan: person
-    "
+        err.strip_backtrace(),
+        @r#"Error during planning: Projections require unique expression names but the expression "person.age" at position 0 and "person.age" at position 1 have the same name. Consider aliasing ("AS") one of them."#
     );
 }
 
@@ -1533,14 +1531,11 @@ fn select_simple_aggregate_column_does_not_exist() {
 #[test]
 fn select_simple_aggregate_repeated_aggregate() {
     let sql = "SELECT MIN(age), MIN(age) FROM person";
-    let plan = logical_plan(sql).unwrap();
+    let err = logical_plan(sql).expect_err("query should have failed");
+
     assert_snapshot!(
-        plan,
-        @r"
-    Projection: min(person.age), min(person.age) AS min(person.age):1
-      Aggregate: groupBy=[[]], aggr=[[min(person.age)]]
-        TableScan: person
-    "
+        err.strip_backtrace(),
+        @r#"Error during planning: Projections require unique expression names but the expression "min(person.age)" at position 0 and "min(person.age)" at position 1 have the same name. Consider aliasing ("AS") one of them."#
     );
 }
 
@@ -1589,14 +1584,11 @@ fn select_from_typed_string_values() {
 #[test]
 fn select_simple_aggregate_repeated_aggregate_with_repeated_aliases() {
     let sql = "SELECT MIN(age) AS a, MIN(age) AS a FROM person";
-    let plan = logical_plan(sql).unwrap();
+    let err = logical_plan(sql).expect_err("query should have failed");
+
     assert_snapshot!(
-        plan,
-        @r"
-    Projection: min(person.age) AS a, min(person.age) AS a AS a:1
-      Aggregate: groupBy=[[]], aggr=[[min(person.age)]]
-        TableScan: person
-    "
+        err.strip_backtrace(),
+        @r#"Error during planning: Projections require unique expression names but the expression "min(person.age) AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them."#
     );
 }
 
@@ -1633,14 +1625,11 @@ fn select_simple_aggregate_with_groupby_with_aliases() {
 #[test]
 fn select_simple_aggregate_with_groupby_with_aliases_repeated() {
     let sql = "SELECT state AS a, MIN(age) AS a FROM person GROUP BY state";
-    let plan = logical_plan(sql).unwrap();
+    let err = logical_plan(sql).expect_err("query should have failed");
+
     assert_snapshot!(
-        plan,
-        @r"
-    Projection: person.state AS a, min(person.age) AS a AS a:1
-      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
-        TableScan: person
-    "
+        err.strip_backtrace(),
+        @r#"Error during planning: Projections require unique expression names but the expression "person.state AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them."#
     );
 }
 
@@ -1761,14 +1750,11 @@ fn select_simple_aggregate_with_groupby_can_use_alias() {
 #[test]
 fn select_simple_aggregate_with_groupby_aggregate_repeated() {
     let sql = "SELECT state, MIN(age), MIN(age) FROM person GROUP BY state";
-    let plan = logical_plan(sql).unwrap();
+    let err = logical_plan(sql).expect_err("query should have failed");
+
     assert_snapshot!(
-        plan,
-        @r"
-    Projection: person.state, min(person.age), min(person.age) AS min(person.age):1
-      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
-        TableScan: person
-    "
+        err.strip_backtrace(),
+        @r#"Error during planning: Projections require unique expression names but the expression "min(person.age)" at position 1 and "min(person.age)" at position 2 have the same name. Consider aliasing ("AS") one of them."#
     );
 }
 
