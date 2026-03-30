@@ -29,7 +29,7 @@ use std::task::{Context, Poll};
 use crate::PartitionedFile;
 use crate::file_scan_config::FileScanConfig;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::RecordBatchStream;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, Time,
@@ -98,10 +98,7 @@ impl<'a> FileStreamBuilder<'a> {
     }
 
     /// Configure the metrics set used by the stream.
-    pub fn with_metrics(
-        mut self,
-        metrics: &'a ExecutionPlanMetricsSet,
-    ) -> Self {
+    pub fn with_metrics(mut self, metrics: &'a ExecutionPlanMetricsSet) -> Self {
         self.metrics = Some(metrics);
         self
     }
@@ -133,7 +130,9 @@ impl<'a> FileStreamBuilder<'a> {
         let metrics = match self.metrics {
             Some(metrics) => metrics,
             None => {
-                return internal_err!("FileStreamBuilder missing required field: metrics");
+                return internal_err!(
+                    "FileStreamBuilder missing required field: metrics"
+                );
             }
         };
         let projected_schema = self.config.projected_schema()?;
@@ -161,6 +160,7 @@ impl<'a> FileStreamBuilder<'a> {
 
 impl FileStream {
     /// Create a new `FileStream` using the give `FileOpener` to scan underlying files
+    #[deprecated(since = "54.0.0", note = "Use FileStreamBuilder instead")]
     pub fn new(
         config: &FileScanConfig,
         partition: usize,
@@ -496,9 +496,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::file_stream::{
-        FileOpenFuture, FileOpener, FileStream, FileStreamBuilder, OnError,
-    };
+    use crate::file_stream::{FileOpenFuture, FileOpener, FileStreamBuilder, OnError};
     use crate::test_util::MockSource;
     use arrow::array::RecordBatch;
     use arrow::datatypes::Schema;
@@ -627,10 +625,13 @@ mod tests {
             .with_limit(self.limit)
             .build();
             let metrics_set = ExecutionPlanMetricsSet::new();
-            let file_stream =
-                FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)
-                    .unwrap()
-                    .with_on_error(on_error);
+            let file_stream = FileStreamBuilder::new(&config)
+                .with_partition(0)
+                .with_file_opener(Arc::new(self.opener))
+                .with_metrics(&metrics_set)
+                .with_on_error(on_error)
+                .build()
+                .unwrap();
 
             file_stream
                 .collect::<Vec<_>>()
@@ -948,10 +949,8 @@ mod tests {
 
     #[test]
     fn builder_requires_partition_file_opener_and_metrics() {
-        let table_schema = crate::table_schema::TableSchema::new(
-            Arc::new(Schema::empty()),
-            vec![],
-        );
+        let table_schema =
+            crate::table_schema::TableSchema::new(Arc::new(Schema::empty()), vec![]);
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test:///").unwrap(),
             Arc::new(MockSource::new(table_schema)),
@@ -959,22 +958,21 @@ mod tests {
         .with_file(PartitionedFile::new("mock_file", 10))
         .build();
 
-        let err = FileStreamBuilder::new(&config)
-            .build()
-            .err()
-            .unwrap();
-        assert!(err
-            .to_string()
-            .contains("FileStreamBuilder missing required field: partition"));
+        let err = FileStreamBuilder::new(&config).build().err().unwrap();
+        assert!(
+            err.to_string()
+                .contains("FileStreamBuilder missing required field: partition")
+        );
 
         let err = FileStreamBuilder::new(&config)
             .with_partition(0)
             .build()
             .err()
             .unwrap();
-        assert!(err
-            .to_string()
-            .contains("FileStreamBuilder missing required field: file_opener"));
+        assert!(
+            err.to_string()
+                .contains("FileStreamBuilder missing required field: file_opener")
+        );
 
         let err = FileStreamBuilder::new(&config)
             .with_partition(0)
@@ -982,17 +980,16 @@ mod tests {
             .build()
             .err()
             .unwrap();
-        assert!(err
-            .to_string()
-            .contains("FileStreamBuilder missing required field: metrics"));
+        assert!(
+            err.to_string()
+                .contains("FileStreamBuilder missing required field: metrics")
+        );
     }
 
     #[test]
     fn builder_errors_on_invalid_partition() {
-        let table_schema = crate::table_schema::TableSchema::new(
-            Arc::new(Schema::empty()),
-            vec![],
-        );
+        let table_schema =
+            crate::table_schema::TableSchema::new(Arc::new(Schema::empty()), vec![]);
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test:///").unwrap(),
             Arc::new(MockSource::new(table_schema)),
@@ -1008,8 +1005,9 @@ mod tests {
             .build()
             .err()
             .unwrap();
-        assert!(err
-            .to_string()
-            .contains("FileStreamBuilder invalid partition index: 1"));
+        assert!(
+            err.to_string()
+                .contains("FileStreamBuilder invalid partition index: 1")
+        );
     }
 }

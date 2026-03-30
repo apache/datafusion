@@ -21,8 +21,7 @@
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType,
-    file_stream::FileStreamBuilder,
+    file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
     source::DataSource, statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
