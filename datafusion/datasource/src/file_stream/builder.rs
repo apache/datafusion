@@ -70,32 +70,27 @@ impl<'a> FileStreamBuilder<'a> {
 
     /// Build the configured [`FileStream`].
     pub fn build(self) -> Result<FileStream> {
-        let partition = match self.partition {
-            Some(partition) => partition,
-            None => {
-                return internal_err!(
-                    "FileStreamBuilder missing required field: partition"
-                );
-            }
+        let Self {
+            config,
+            partition,
+            file_opener,
+            metrics,
+            on_error,
+        } = self;
+
+        let Some(partition) = partition else {
+            return internal_err!("FileStreamBuilder missing required field: partition");
         };
-        let file_opener = match self.file_opener {
-            Some(file_opener) => file_opener,
-            None => {
-                return internal_err!(
-                    "FileStreamBuilder missing required field: file_opener"
-                );
-            }
+        let Some(file_opener) = file_opener else {
+            return internal_err!(
+                "FileStreamBuilder missing required field: file_opener"
+            );
         };
-        let metrics = match self.metrics {
-            Some(metrics) => metrics,
-            None => {
-                return internal_err!(
-                    "FileStreamBuilder missing required field: metrics"
-                );
-            }
+        let Some(metrics) = metrics else {
+            return internal_err!("FileStreamBuilder missing required field: metrics");
         };
-        let projected_schema = self.config.projected_schema()?;
-        let file_group = match self.config.file_groups.get(partition).cloned() {
+        let projected_schema = config.projected_schema()?;
+        let file_group = match config.file_groups.get(partition).cloned() {
             Some(file_group) => file_group,
             None => {
                 return internal_err!(
@@ -112,7 +107,7 @@ impl<'a> FileStreamBuilder<'a> {
             state: FileStreamState::Idle,
             file_stream_metrics: FileStreamMetrics::new(metrics, partition),
             baseline_metrics: BaselineMetrics::new(metrics, partition),
-            on_error: self.on_error,
+            on_error,
         })
     }
 }
