@@ -510,12 +510,14 @@ to the main branch and are awaiting release in this version.</p>
 </pre></div>
 </div>
 </section>
-<section id="remove-as-any-from-scalarudfimpl">
-<h3>Remove <code class="docutils literal notranslate"><span class="pre">as_any</span></code> from <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code><a class="headerlink" href="#remove-as-any-from-scalarudfimpl" title="Link to this heading">#</a></h3>
+<section id="remove-as-any-from-scalarudfimpl-aggregateudfimpl-and-windowudfimpl">
+<h3>Remove <code class="docutils literal notranslate"><span class="pre">as_any</span></code> from <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code>, and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code><a class="headerlink" href="#remove-as-any-from-scalarudfimpl-aggregateudfimpl-and-windowudfimpl" title="Link to this heading">#</a></h3>
 <p>Now that we have a more recent minimum version of Rust, we can take advantage of
-trait upcasting for Scalar UDFs. This reduces the amount of boilerplate code that
-users need to do to create a UDF. In your implementations, you can simply remove
-this function. The below diff is an example from the associated PR</p>
+trait upcasting for UDFs. This reduces the amount of boilerplate code that
+users need to do to create a UDF. In your implementations of <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>,
+<code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code>, and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code>, you can simply remove the <code class="docutils literal notranslate"><span class="pre">as_any</span></code>
+function. The below diffs are examples from the associated PRs.</p>
+<p><strong>Scalar UDFs:</strong></p>
 <div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="w"> </span>impl ScalarUDFImpl for MyEq {
 <span class="gd">-    fn as_any(&amp;self) -&gt; &amp;dyn Any {</span>
 <span class="gd">-        self</span>
@@ -529,7 +531,35 @@ this function. The below diff is an example from the associated PR</p>
 <span class="w"> </span>}
 </pre></div>
 </div>
-<p>If you have a function that is downcasting a scalar function, you can replace
+<p><strong>Aggregate UDFs:</strong></p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="w"> </span>impl AggregateUDFImpl for GeoMeanUdf {
+<span class="gd">-    fn as_any(&amp;self) -&gt; &amp;dyn Any {</span>
+<span class="gd">-        self</span>
+<span class="gd">-    }</span>
+<span class="gd">-</span>
+<span class="w"> </span>    fn name(&amp;self) -&gt; &amp;str {
+<span class="w"> </span>        &quot;geo_mean&quot;
+<span class="w"> </span>    }
+
+<span class="w"> </span>    ...
+<span class="w"> </span>}
+</pre></div>
+</div>
+<p><strong>Window UDFs:</strong></p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="w"> </span>impl WindowUDFImpl for SmoothIt {
+<span class="gd">-    fn as_any(&amp;self) -&gt; &amp;dyn Any {</span>
+<span class="gd">-        self</span>
+<span class="gd">-    }</span>
+<span class="gd">-</span>
+<span class="w"> </span>    fn name(&amp;self) -&gt; &amp;str {
+<span class="w"> </span>        &quot;smooth_it&quot;
+<span class="w"> </span>    }
+
+<span class="w"> </span>    ...
+<span class="w"> </span>}
+</pre></div>
+</div>
+<p>If you have a function that is downcasting a UDF, you can replace
 the call to <code class="docutils literal notranslate"><span class="pre">.as_any()</span></code> with <code class="docutils literal notranslate"><span class="pre">.as_ref()</span> <span class="pre">as</span> <span class="pre">&amp;dyn</span> <span class="pre">Any</span></code>. For example</p>
 <p><strong>Before:</strong></p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">is_async</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">func</span>
@@ -639,7 +669,7 @@ timezone-naive.</p></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-54-0-0">DataFusion 54.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-apply-expressions-is-now-a-required-method"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::apply_expressions</span></code> is now a required method</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-partition-statistics-now-returns-arc-statistics"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Arc&lt;Statistics&gt;</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remove-as-any-from-scalarudfimpl">Remove <code class="docutils literal notranslate"><span class="pre">as_any</span></code> from <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remove-as-any-from-scalarudfimpl-aggregateudfimpl-and-windowudfimpl">Remove <code class="docutils literal notranslate"><span class="pre">as_any</span></code> from <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code>, and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#avro-api-and-timestamp-decoding-changes">Avro API and timestamp decoding changes</a></li>
 </ul>
 </li>
