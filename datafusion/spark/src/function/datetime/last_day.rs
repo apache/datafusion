@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Date32Array};
@@ -48,10 +47,6 @@ impl SparkLastDay {
 }
 
 impl ScalarUDFImpl for SparkLastDay {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "last_day"
     }

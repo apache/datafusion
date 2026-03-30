@@ -38,7 +38,6 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -108,10 +107,6 @@ impl ArrayRepeat {
 }
 
 impl ScalarUDFImpl for ArrayRepeat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_repeat"
     }

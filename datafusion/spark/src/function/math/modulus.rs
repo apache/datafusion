@@ -27,7 +27,6 @@ use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
 
 /// Attempts `rem(left, right)` with per-element divide-by-zero handling.
 /// In ANSI mode, any zero divisor causes an error.
@@ -108,10 +107,6 @@ impl SparkMod {
 }
 
 impl ScalarUDFImpl for SparkMod {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "mod"
     }
@@ -158,10 +153,6 @@ impl SparkPmod {
 }
 
 impl ScalarUDFImpl for SparkPmod {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "pmod"
     }

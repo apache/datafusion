@@ -42,7 +42,6 @@ use crate::make_array::make_array_udf;
 use crate::utils::make_scalar_function;
 
 use hashbrown::HashSet;
-use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -113,9 +112,6 @@ impl ArrayHas {
 }
 
 impl ScalarUDFImpl for ArrayHas {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_has"
     }
@@ -827,9 +823,6 @@ impl ArrayHasAll {
 }
 
 impl ScalarUDFImpl for ArrayHasAll {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_has_all"
     }
@@ -898,9 +891,6 @@ impl ArrayHasAny {
 }
 
 impl ScalarUDFImpl for ArrayHasAny {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_has_any"
     }

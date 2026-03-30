@@ -51,3 +51,13 @@ drop table t1
 
 statement ok
 drop table table_with_many_types
+
+# Config reset
+statement ok
+RESET datafusion.catalog.default_catalog;
+
+statement ok
+RESET datafusion.catalog.default_schema;
+
+statement ok
+RESET datafusion.catalog.information_schema;

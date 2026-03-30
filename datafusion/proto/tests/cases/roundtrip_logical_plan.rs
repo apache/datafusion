@@ -1499,7 +1499,9 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        let udf = binding.as_any().downcast_ref::<MyRegexUdf>().unwrap();
+        let udf = (binding.as_ref() as &dyn Any)
+            .downcast_ref::<MyRegexUdf>()
+            .unwrap();
         let proto = MyRegexUdfNode {
             pattern: udf.pattern.clone(),
         };
