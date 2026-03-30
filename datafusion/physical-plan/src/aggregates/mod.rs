@@ -33,7 +33,7 @@ use crate::filter_pushdown::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
-    SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::utils::collect_columns;
@@ -45,6 +45,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
@@ -86,8 +87,9 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
 }
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
-const AGGREGATION_HASH_SEED: ahash::RandomState =
-    ahash::RandomState::with_seeds('A' as u64, 'G' as u64, 'G' as u64, 'R' as u64);
+const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
+    // This seed is chosen to be a large 64-bit number
+    datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
 
 /// Whether an aggregate stage consumes raw input data or intermediate
 /// accumulator state from a previous aggregation stage.
@@ -651,7 +653,7 @@ pub struct AggregateExec {
     required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
     ///
@@ -675,7 +677,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
             filter_expr: Arc::clone(&self.filter_expr),
@@ -695,7 +697,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
             aggr_expr: Arc::clone(&self.aggr_expr),
@@ -836,7 +838,7 @@ impl AggregateExec {
             required_input_ordering,
             limit_options: None,
             input_order_mode,
-            cache,
+            cache: Arc::new(cache),
             dynamic_filter: None,
         };
 
@@ -1116,7 +1118,7 @@ impl AggregateExec {
     /// - If yes, init one inside `AggregateExec`'s `dynamic_filter` field.
     /// - If not supported, `self.dynamic_filter` should be kept `None`
     fn init_dynamic_filter(&mut self) {
-        if (!self.group_by.is_empty()) || (!matches!(self.mode, AggregateMode::Partial)) {
+        if (!self.group_by.is_empty()) || (self.mode != AggregateMode::Partial) {
             debug_assert!(
                 self.dynamic_filter.is_none(),
                 "The current operator node does not support dynamic filter"
@@ -1192,6 +1194,17 @@ impl AggregateExec {
                 Precision::Inexact(scaled_bytes)
             }
             _ => Precision::Absent,
+        }
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
         }
     }
 }
@@ -1332,7 +1345,7 @@ impl ExecutionPlan for AggregateExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -1371,10 +1384,42 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to group by expressions
+        let mut tnr = TreeNodeRecursion::Continue;
+        for expr in self.group_by.input_exprs() {
+            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+        }
+
+        // Apply to aggregate expressions
+        for aggr in self.aggr_expr.iter() {
+            for expr in aggr.expressions() {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+        }
+
+        // Apply to filter expressions (FILTER WHERE clauses)
+        for filter in self.filter_expr.iter().flatten() {
+            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
+        }
+
+        // Apply to dynamic filter expression if present
+        if let Some(dyn_filter) = &self.dynamic_filter {
+            tnr = tnr.visit_sibling(|| f(dyn_filter.filter.as_ref()))?;
+        }
+
+        Ok(tnr)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
+
         let mut me = AggregateExec::try_new_with_schema(
             self.mode,
             Arc::clone(&self.group_by),
@@ -1385,7 +1430,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.schema),
         )?;
         me.limit_options = self.limit_options;
-        me.dynamic_filter = self.dynamic_filter.clone();
+        me.dynamic_filter.clone_from(&self.dynamic_filter);
 
         Ok(Arc::new(me))
     }
@@ -1403,9 +1448,9 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let child_statistics = self.input().partition_statistics(partition)?;
-        self.statistics_inner(&child_statistics)
+        Ok(Arc::new(self.statistics_inner(&child_statistics)?))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -1492,7 +1537,7 @@ impl ExecutionPlan for AggregateExec {
         );
 
         // Include self dynamic filter when it's possible
-        if matches!(phase, FilterPushdownPhase::Post)
+        if phase == FilterPushdownPhase::Post
             && config.optimizer.enable_aggregate_dynamic_filter_pushdown
             && let Some(self_dyn_filter) = &self.dynamic_filter
         {
@@ -1515,7 +1560,9 @@ impl ExecutionPlan for AggregateExec {
 
         // If this node tried to pushdown some dynamic filter before, now we check
         // if the child accept the filter
-        if matches!(phase, FilterPushdownPhase::Post) && self.dynamic_filter.is_some() {
+        if phase == FilterPushdownPhase::Post
+            && let Some(dyn_filter) = &self.dynamic_filter
+        {
             // let child_accepts_dyn_filter = child_pushdown_result
             //     .self_filters
             //     .first()
@@ -1536,7 +1583,6 @@ impl ExecutionPlan for AggregateExec {
             // So here, we try to use ref count to determine if the dynamic filter
             // has actually be pushed down.
             // Issue: <https://github.com/apache/datafusion/issues/18856>
-            let dyn_filter = self.dynamic_filter.as_ref().unwrap();
             let child_accepts_dyn_filter = Arc::strong_count(dyn_filter) > 1;
 
             if !child_accepts_dyn_filter {
@@ -1976,9 +2022,9 @@ mod tests {
         UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
-    use arrow::datatypes::{DataType, Int32Type};
+    use arrow::datatypes::Int32Type;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{DataFusionError, ScalarValue, internal_err};
+    use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1992,7 +2038,6 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::Literal;
-    use datafusion_physical_expr::expressions::lit;
 
     use crate::projection::ProjectionExec;
     use datafusion_physical_expr::projection::ProjectionExpr;
@@ -2406,14 +2451,17 @@ mod tests {
     struct TestYieldingExec {
         /// True if this exec should yield back to runtime the first time it is polled
         pub yield_first: bool,
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
     }
 
     impl TestYieldingExec {
         fn new(yield_first: bool) -> Self {
             let schema = some_data().0;
             let cache = Self::compute_properties(schema);
-            Self { yield_first, cache }
+            Self {
+                yield_first,
+                cache: Arc::new(cache),
+            }
         }
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -2454,12 +2502,19 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn with_new_children(
@@ -2483,16 +2538,19 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             if partition.is_some() {
-                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+                return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             let (_, batches) = some_data();
-            Ok(common::compute_record_batch_statistics(
+            Ok(Arc::new(common::compute_record_batch_statistics(
                 &[batches],
                 &self.schema(),
                 None,
-            ))
+            )))
         }
     }
 
@@ -3817,6 +3875,142 @@ mod tests {
             +---+---+--------+
         ");
         }
+        Ok(())
+    }
+
+    /// Tests that when the memory pool is too small to accommodate the sort
+    /// reservation during spill, the error is properly propagated as
+    /// ResourcesExhausted rather than silently exceeding memory limits.
+    #[tokio::test]
+    async fn test_sort_reservation_fails_during_spill() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Int64, false),
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+            Field::new("c", DataType::Float64, false),
+            Field::new("d", DataType::Float64, false),
+            Field::new("e", DataType::Float64, false),
+        ]));
+
+        let batches = vec![vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(Float64Array::from(vec![10.0])),
+                    Arc::new(Float64Array::from(vec![20.0])),
+                    Arc::new(Float64Array::from(vec![30.0])),
+                    Arc::new(Float64Array::from(vec![40.0])),
+                    Arc::new(Float64Array::from(vec![50.0])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![2])),
+                    Arc::new(Float64Array::from(vec![11.0])),
+                    Arc::new(Float64Array::from(vec![21.0])),
+                    Arc::new(Float64Array::from(vec![31.0])),
+                    Arc::new(Float64Array::from(vec![41.0])),
+                    Arc::new(Float64Array::from(vec![51.0])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![3])),
+                    Arc::new(Float64Array::from(vec![12.0])),
+                    Arc::new(Float64Array::from(vec![22.0])),
+                    Arc::new(Float64Array::from(vec![32.0])),
+                    Arc::new(Float64Array::from(vec![42.0])),
+                    Arc::new(Float64Array::from(vec![52.0])),
+                ],
+            )?,
+        ]];
+
+        let scan = TestMemoryExec::try_new(&batches, Arc::clone(&schema), None)?;
+
+        let aggr = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new(
+                vec![(col("g", schema.as_ref())?, "g".to_string())],
+                vec![],
+                vec![vec![false]],
+                false,
+            ),
+            vec![
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("a", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(a)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("b", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(b)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("c", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(c)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("d", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(d)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("e", schema.as_ref())?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(e)")
+                    .build()?,
+                ),
+            ],
+            vec![None, None, None, None, None],
+            Arc::new(scan) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&schema),
+        )?);
+
+        // Pool must be large enough for accumulation to start but too small for
+        // sort_memory after clearing.
+        let task_ctx = new_spill_ctx(1, 500);
+        let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await;
+
+        match &result {
+            Ok(_) => panic!("Expected ResourcesExhausted error but query succeeded"),
+            Err(e) => {
+                let root = e.find_root();
+                assert!(
+                    matches!(root, DataFusionError::ResourcesExhausted(_)),
+                    "Expected ResourcesExhausted, got: {root}",
+                );
+                let msg = root.to_string();
+                assert!(
+                    msg.contains("Failed to reserve memory for sort during spill"),
+                    "Expected sort reservation error, got: {msg}",
+                );
+            }
+        }
+
         Ok(())
     }
 

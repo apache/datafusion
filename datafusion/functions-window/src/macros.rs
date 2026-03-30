@@ -30,8 +30,8 @@
 ///
 /// * `$UDWF`: The struct which defines the [`Signature`](datafusion_expr::Signature)
 ///   of the user-defined window function.
-/// * `$OUT_FN_NAME`: The basename to generate a unique function name like
-///   `$OUT_FN_NAME_udwf`.
+/// * `$OUT_FN_NAME`: The expression function name
+///   `UDWF_FN` : The unique function name
 /// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
 ///   automatically resolves to `$UDWF::default()`.
@@ -52,6 +52,7 @@
 /// get_or_init_udwf!(
 ///     SimpleUDWF,
 ///     simple,
+///     simple_udwf,
 ///     "Simple user-defined window function doc comment."
 /// );
 /// #
@@ -94,16 +95,15 @@
 /// ```
 #[macro_export]
 macro_rules! get_or_init_udwf {
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
-        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $UDWF::default);
+    ($UDWF:ident, $OUT_FN_NAME:ident, $UDWF_FN:ident, $DOC:expr) => {
+        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $UDWF_FN, $DOC, $UDWF::default);
     };
 
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr, $CTOR:path) => {
-        paste::paste! {
+    ($UDWF:ident, $OUT_FN_NAME:ident, $UDWF_FN:ident, $DOC:expr, $CTOR:path) => {
             #[doc = concat!(" Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [`", stringify!($OUT_FN_NAME), "`].")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
-            pub fn [<$OUT_FN_NAME _udwf>]() -> std::sync::Arc<datafusion_expr::WindowUDF> {
+            pub fn $UDWF_FN() -> std::sync::Arc<datafusion_expr::WindowUDF> {
                 // Singleton instance of UDWF, ensures it is only created once.
                 static INSTANCE: std::sync::LazyLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
                     std::sync::LazyLock::new(|| {
@@ -111,7 +111,6 @@ macro_rules! get_or_init_udwf {
                     });
                 std::sync::Arc::clone(&INSTANCE)
             }
-        }
     };
 }
 
@@ -149,6 +148,7 @@ macro_rules! get_or_init_udwf {
 /// # get_or_init_udwf!(
 /// #     RowNumber,
 /// #     row_number,
+/// #     row_number_udwf,
 /// #     "Returns a unique row number for each row in window partition beginning at 1."
 /// # );
 /// /// Creates `row_number()` API which has zero parameters:
@@ -163,6 +163,7 @@ macro_rules! get_or_init_udwf {
 /// create_udwf_expr!(
 ///     RowNumber,
 ///     row_number,
+///     row_number_udwf,
 ///     "Returns a unique row number for each row in window partition beginning at 1."
 /// );
 /// #
@@ -221,7 +222,7 @@ macro_rules! get_or_init_udwf {
 /// # use datafusion_expr::{col, lit};
 /// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// #
-/// # get_or_init_udwf!(Lead, lead, "user-defined window function");
+/// # get_or_init_udwf!(Lead, lead,lead_udwf, "user-defined window function");
 /// #
 /// /// Creates `lead(expr, offset, default)` with 3 parameters:
 /// ///
@@ -240,6 +241,7 @@ macro_rules! get_or_init_udwf {
 ///     Lead,
 ///     lead,
 ///     [expr, offset, default],
+///     lead_udwf,
 ///     "Returns a value evaluated at the row that is offset rows after the current row within the partition."
 /// );
 /// #
@@ -298,21 +300,18 @@ macro_rules! get_or_init_udwf {
 #[macro_export]
 macro_rules! create_udwf_expr {
     // zero arguments
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
-        paste::paste! {
+    ($UDWF:ident, $OUT_FN_NAME:ident, $UDWF_FN:ident, $DOC:expr) => {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
             #[doc = concat!(" `", stringify!($UDWF), "` user-defined window function.")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
             pub fn $OUT_FN_NAME() -> datafusion_expr::Expr {
-                [<$OUT_FN_NAME _udwf>]().call(vec![])
+                $UDWF_FN().call(vec![])
             }
-       }
     };
 
     // 1 or more arguments
-    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
-        paste::paste! {
+    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $UDWF_FN:ident, $DOC:expr) => {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
             #[doc = concat!(" `", stringify!($UDWF), "` user-defined window function.")]
             #[doc = ""]
@@ -320,10 +319,9 @@ macro_rules! create_udwf_expr {
             pub fn $OUT_FN_NAME(
                 $($PARAM: datafusion_expr::Expr),+
             ) -> datafusion_expr::Expr {
-                [<$OUT_FN_NAME _udwf>]()
+                $UDWF_FN()
                     .call(vec![$($PARAM),+])
             }
-       }
     };
 }
 
@@ -374,6 +372,7 @@ macro_rules! create_udwf_expr {
 /// define_udwf_and_expr!(
 ///     SimpleUDWF,
 ///     simple,
+///     simple_udwf,
 ///     "a simple user-defined window function"
 /// );
 /// #
@@ -437,6 +436,7 @@ macro_rules! create_udwf_expr {
 /// define_udwf_and_expr!(
 ///     RowNumber,
 ///     row_number,
+///     row_number_udwf,
 ///     "Returns a unique row number for each row in window partition beginning at 1.",
 ///     RowNumber::new // <-- custom constructor
 /// );
@@ -514,6 +514,7 @@ macro_rules! create_udwf_expr {
 ///     Lead,
 ///     lead,
 ///     [expr, offset, default],        // <- 3 parameters
+///     lead_udwf,
 ///     "user-defined window function"
 /// );
 /// #
@@ -603,6 +604,7 @@ macro_rules! create_udwf_expr {
 ///     Lead,
 ///     lead,
 ///     [expr, offset, default],        // <- 3 parameters
+///     lead_udwf,
 ///     "user-defined window function",
 ///     Lead::new                       // <- Custom constructor
 /// );
@@ -663,29 +665,29 @@ macro_rules! create_udwf_expr {
 macro_rules! define_udwf_and_expr {
     // Defines UDWF with default constructor
     // Defines expression API with zero parameters
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
-        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC);
-        create_udwf_expr!($UDWF, $OUT_FN_NAME, $DOC);
+    ($UDWF:ident, $OUT_FN_NAME:ident, $UDWF_FN:ident, $DOC:expr) => {
+        get_or_init_udwf!($UDWF, $OUT_FN_NAME,$UDWF_FN, $DOC);
+        create_udwf_expr!($UDWF, $OUT_FN_NAME, $UDWF_FN, $DOC);
     };
 
     // Defines UDWF by passing a custom constructor
     // Defines expression API with zero parameters
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr, $CTOR:path) => {
-        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $CTOR);
-        create_udwf_expr!($UDWF, $OUT_FN_NAME, $DOC);
+    ($UDWF:ident, $OUT_FN_NAME:ident, $UDWF_FN:ident, $DOC:expr, $CTOR:path) => {
+        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $UDWF_FN, $DOC, $CTOR);
+        create_udwf_expr!($UDWF, $OUT_FN_NAME, $UDWF_FN, $DOC);
     };
 
     // Defines UDWF with default constructor
     // Defines expression API with multiple parameters
-    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
-        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC);
-        create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $DOC);
+    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+],$UDWF_FN:ident, $DOC:expr) => {
+        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $UDWF_FN, $DOC);
+        create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $UDWF_FN, $DOC);
     };
 
     // Defines UDWF by passing a custom constructor
     // Defines expression API with multiple parameters
-    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr, $CTOR:path) => {
-        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $CTOR);
-        create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $DOC);
+    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $UDWF_FN:ident, $DOC:expr, $CTOR:path) => {
+        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $UDWF_FN, $DOC, $CTOR);
+        create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $UDWF_FN, $DOC);
     };
 }

@@ -1225,7 +1225,7 @@ bit_length(str)
 
 ### `btrim`
 
-Trims the specified trim string from the start and end of a string. If no trim string is provided, all whitespace is removed from the start and end of the input string.
+Trims the specified trim string from the start and end of a string. If no trim string is provided, all spaces are removed from the start and end of the input string.
 
 ```sql
 btrim(str[, trim_str])
@@ -1234,7 +1234,7 @@ btrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is whitespace characters._
+- **trim_str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is a space._
 
 #### Example
 
@@ -1592,7 +1592,7 @@ lpad(str, n[, padding_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **n**: String length to pad to.
+- **n**: String length to pad to. If the input string is longer than this length, it is truncated (on the right).
 - **padding_str**: Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
 #### Example
@@ -1612,7 +1612,7 @@ lpad(str, n[, padding_str])
 
 ### `ltrim`
 
-Trims the specified trim string from the beginning of a string. If no trim string is provided, all whitespace is removed from the start of the input string.
+Trims the specified trim string from the beginning of a string. If no trim string is provided, spaces are removed from the start of the input string.
 
 ```sql
 ltrim(str[, trim_str])
@@ -1621,7 +1621,7 @@ ltrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+- **trim_str**: String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._
 
 #### Example
 
@@ -1820,7 +1820,7 @@ rpad(str, n[, padding_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **n**: String length to pad to.
+- **n**: String length to pad to. If the input string is longer than this length, it is truncated.
 - **padding_str**: String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
 #### Example
@@ -1840,7 +1840,7 @@ rpad(str, n[, padding_str])
 
 ### `rtrim`
 
-Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.
+Trims the specified trim string from the end of a string. If no trim string is provided, all spaces are removed from the end of the input string.
 
 ```sql
 rtrim(str[, trim_str])
@@ -1849,7 +1849,7 @@ rtrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+- **trim_str**: String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._
 
 #### Example
 
@@ -1974,7 +1974,7 @@ substr(str, start_pos[, length])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **start_pos**: Character position to start the substring at. The first character in the string has a position of 1.
+- **start_pos**: Character position to start the substring at. The first character in the string has a position of 1. If the start position is less than 1, it is treated as if it is before the start of the string and the (absolute) number of characters before position 1 is subtracted from `length` (if given). For example, `substr('abc', -3, 6)` returns `'ab'`.
 - **length**: Number of characters to extract. If not specified, returns the rest of the string after the start position.
 
 #### Example
@@ -2068,17 +2068,17 @@ to_hex(int)
 
 ### `translate`
 
-Translates characters in a string to specified translation characters.
+Performs character-wise substitution based on a mapping.
 
 ```sql
-translate(str, chars, translation)
+translate(str, from, to)
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **chars**: Characters to translate.
-- **translation**: Translation characters. Translation characters replace only characters at the same position in the **chars** string.
+- **from**: The characters to be replaced.
+- **to**: The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed. If a character appears more than once in **from**, the first occurrence determines the mapping.
 
 #### Example
 
@@ -3183,6 +3183,7 @@ _Alias of [current_date](#current_date)._
 - [array_to_string](#array_to_string)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
+- [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [flatten](#flatten)
@@ -3228,6 +3229,7 @@ _Alias of [current_date](#current_date)._
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
 - [list_union](#list_union)
+- [list_zip](#list_zip)
 - [make_array](#make_array)
 - [make_list](#make_list)
 - [range](#range)
@@ -3543,16 +3545,16 @@ array_has_all(array, sub-array)
 
 ### `array_has_any`
 
-Returns true if any elements exist in both arrays.
+Returns true if the arrays have any elements in common.
 
 ```sql
-array_has_any(array, sub-array)
+array_has_any(array1, array2)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **sub-array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
@@ -3774,7 +3776,7 @@ array_pop_front(array)
 
 ### `array_position`
 
-Returns the position of the first occurrence of the specified element in the array, or NULL if not found.
+Returns the position of the first occurrence of the specified element in the array, or NULL if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL.
 
 ```sql
 array_position(array, element)
@@ -3784,7 +3786,7 @@ array_position(array, element, index)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 - **index**: Index at which to start searching (1-indexed).
 
 #### Example
@@ -3821,7 +3823,7 @@ array_positions(array, element)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 
 #### Example
 
@@ -3878,7 +3880,7 @@ _Alias of [array_prepend](#array_prepend)._
 
 ### `array_remove`
 
-Removes the first element from the array equal to the given value.
+Removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
 array_remove(array, element)
@@ -3898,6 +3900,13 @@ array_remove(array, element)
 +----------------------------------------------+
 | [1, 2, 3, 2, 1, 4]                           |
 +----------------------------------------------+
+
+> select array_remove([1, 2, NULL, 2, 4], 2);
++---------------------------------------------------+
+| array_remove(List([1,2,NULL,2,4]),Int64(2)) |
++---------------------------------------------------+
+| [1, NULL, 2, 4]                              |
++---------------------------------------------------+
 ```
 
 #### Aliases
@@ -3906,7 +3915,7 @@ array_remove(array, element)
 
 ### `array_remove_all`
 
-Removes all elements from the array equal to the given value.
+Removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
 array_remove_all(array, element)
@@ -3926,6 +3935,13 @@ array_remove_all(array, element)
 +--------------------------------------------------+
 | [1, 3, 1, 4]                                     |
 +--------------------------------------------------+
+
+> select array_remove_all([1, 2, NULL, 2, 4], 2);
++-----------------------------------------------------+
+| array_remove_all(List([1,2,NULL,2,4]),Int64(2)) |
++-----------------------------------------------------+
+| [1, NULL, 4]                                     |
++-----------------------------------------------------+
 ```
 
 #### Aliases
@@ -3934,10 +3950,10 @@ array_remove_all(array, element)
 
 ### `array_remove_n`
 
-Removes the first `max` elements from the array equal to the given value.
+Removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
-array_remove_n(array, element, max))
+array_remove_n(array, element, max)
 ```
 
 #### Arguments
@@ -3955,6 +3971,13 @@ array_remove_n(array, element, max))
 +---------------------------------------------------------+
 | [1, 3, 2, 1, 4]                                         |
 +---------------------------------------------------------+
+
+> select array_remove_n([1, 2, NULL, 2, 4], 2, 2);
++----------------------------------------------------------+
+| array_remove_n(List([1,2,NULL,2,4]),Int64(2),Int64(2)) |
++----------------------------------------------------------+
+| [1, NULL, 4]                                            |
++----------------------------------------------------------+
 ```
 
 #### Aliases
@@ -4180,8 +4203,8 @@ array_sort(array, desc, nulls_first)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **desc**: Whether to sort in descending order(`ASC` or `DESC`).
-- **nulls_first**: Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).
+- **desc**: Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`.
+- **nulls_first**: Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`.
 
 #### Example
 
@@ -4210,7 +4233,7 @@ array_to_string(array, delimiter[, null_string])
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **delimiter**: Array element separator.
-- **null_string**: Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.
+- **null_string**: Optional. String to use for null values in the output. If not provided, nulls will be omitted.
 
 #### Example
 
@@ -4266,6 +4289,40 @@ array_union(array1, array2)
 ### `arrays_overlap`
 
 _Alias of [array_has_any](#array_has_any)._
+
+### `arrays_zip`
+
+Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.
+
+```sql
+arrays_zip(array1[, ..., array_n])
+```
+
+#### Arguments
+
+- **array1**: First array expression.
+- **array_n**: Optional additional array expressions.
+
+#### Example
+
+```sql
+> select arrays_zip([1, 2, 3]);
++---------------------------------------------------+
+| arrays_zip([1, 2, 3])                             |
++---------------------------------------------------+
+| [{1: 1}, {1: 2}, {1: 3}]                          |
++---------------------------------------------------+
+> select arrays_zip([1, 2], [3, 4, 5]);
++---------------------------------------------------+
+| arrays_zip([1, 2], [3, 4, 5])                     |
++---------------------------------------------------+
+| [{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]     |
++---------------------------------------------------+
+```
+
+#### Aliases
+
+- list_zip
 
 ### `cardinality`
 
@@ -4535,6 +4592,10 @@ _Alias of [array_to_string](#array_to_string)._
 ### `list_union`
 
 _Alias of [array_union](#array_union)._
+
+### `list_zip`
+
+_Alias of [arrays_zip](#arrays_zip)._
 
 ### `make_array`
 
@@ -5124,6 +5185,7 @@ union_tag(union_expression)
 
 - [arrow_cast](#arrow_cast)
 - [arrow_metadata](#arrow_metadata)
+- [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
 - [get_field](#get_field)
 - [version](#version)
@@ -5194,6 +5256,32 @@ arrow_metadata(expression[, key])
 +-------------------------------+
 | v                             |
 +-------------------------------+
+```
+
+### `arrow_try_cast`
+
+Casts a value to a specific Arrow data type, returning NULL if the cast fails.
+
+```sql
+arrow_try_cast(expression, datatype)
+```
+
+#### Arguments
+
+- **expression**: Expression to cast. The expression can be a constant, column, or function, and any combination of operators.
+- **datatype**: [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]
+
+#### Example
+
+```sql
+> select arrow_try_cast('123', 'Int64') as a,
+         arrow_try_cast('not_a_number', 'Int64') as b;
+
++-----+------+
+| a   | b    |
++-----+------+
+| 123 | NULL |
++-----+------+
 ```
 
 ### `arrow_typeof`

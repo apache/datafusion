@@ -141,6 +141,45 @@ fn create_args(
     ]
 }
 
+/// Create args for trim benchmark where space characters are being trimmed
+fn create_space_trim_args(
+    size: usize,
+    pad_len: usize,
+    remaining_len: usize,
+    string_array_type: StringArrayType,
+    trim_type: TrimType,
+) -> Vec<ColumnarValue> {
+    let rng = &mut StdRng::seed_from_u64(42);
+    let spaces = " ".repeat(pad_len);
+
+    let string_iter = (0..size).map(|_| {
+        if rng.random::<f32>() < 0.1 {
+            None
+        } else {
+            let content: String = rng
+                .sample_iter(&Alphanumeric)
+                .take(remaining_len)
+                .map(char::from)
+                .collect();
+
+            let value = match trim_type {
+                TrimType::Ltrim => format!("{spaces}{content}"),
+                TrimType::Rtrim => format!("{content}{spaces}"),
+                TrimType::Btrim => format!("{spaces}{content}{spaces}"),
+            };
+            Some(value)
+        }
+    });
+
+    let string_array: ArrayRef = match string_array_type {
+        StringArrayType::Utf8View => Arc::new(string_iter.collect::<StringViewArray>()),
+        StringArrayType::Utf8 => Arc::new(string_iter.collect::<StringArray>()),
+        StringArrayType::LargeUtf8 => Arc::new(string_iter.collect::<LargeStringArray>()),
+    };
+
+    vec![ColumnarValue::Array(string_array)]
+}
+
 #[expect(clippy::too_many_arguments)]
 fn run_with_string_type<M: Measurement>(
     group: &mut BenchmarkGroup<'_, M>,
@@ -221,6 +260,60 @@ fn run_trim_benchmark(
     group.finish();
 }
 
+#[expect(clippy::too_many_arguments)]
+fn run_space_trim_benchmark(
+    c: &mut Criterion,
+    group_name: &str,
+    trim_func: &ScalarUDF,
+    trim_type: TrimType,
+    string_types: &[StringArrayType],
+    size: usize,
+    pad_len: usize,
+    remaining_len: usize,
+) {
+    let mut group = c.benchmark_group(group_name);
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(10);
+
+    let total_len = match trim_type {
+        TrimType::Btrim => 2 * pad_len + remaining_len,
+        _ => pad_len + remaining_len,
+    };
+
+    for string_type in string_types {
+        let args =
+            create_space_trim_args(size, pad_len, remaining_len, *string_type, trim_type);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+        let config_options = Arc::new(ConfigOptions::default());
+
+        group.bench_function(
+            format!(
+                "{trim_type} {string_type} [size={size}, len={total_len}, pad={pad_len}]",
+            ),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(trim_func.invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let ltrim = string::ltrim();
     let rtrim = string::rtrim();
@@ -294,6 +387,45 @@ fn criterion_benchmark(c: &mut Criterion) {
                 characters,
                 &trimmed,
                 remaining_len,
+            );
+
+            // Scenario 4: Trim spaces, short strings (len <= 12)
+            // pad_len=4, remaining_len=8
+            run_space_trim_benchmark(
+                c,
+                "trim spaces, short strings (len <= 12)",
+                trim_func,
+                *trim_type,
+                &string_types,
+                size,
+                4,
+                8,
+            );
+
+            // Scenario 5: Trim spaces, long strings (len > 12)
+            // pad_len=4, remaining_len=60
+            run_space_trim_benchmark(
+                c,
+                "trim spaces, long strings",
+                trim_func,
+                *trim_type,
+                &string_types,
+                size,
+                4,
+                60,
+            );
+
+            // Scenario 6: Trim spaces, long strings, heavy padding
+            // pad_len=56, remaining_len=8
+            run_space_trim_benchmark(
+                c,
+                "trim spaces, heavy padding",
+                trim_func,
+                *trim_type,
+                &string_types,
+                size,
+                56,
+                8,
             );
         }
     }

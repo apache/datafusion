@@ -27,7 +27,9 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
@@ -98,7 +100,7 @@ pub struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     order_requirement: Option<OrderingRequirements>,
     dist_requirement: Distribution,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     fetch: Option<usize>,
 }
 
@@ -114,7 +116,7 @@ impl OutputRequirementExec {
             input,
             order_requirement: requirements,
             dist_requirement,
-            cache,
+            cache: Arc::new(cache),
             fetch,
         }
     }
@@ -200,7 +202,7 @@ impl ExecutionPlan for OutputRequirementExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -244,7 +246,7 @@ impl ExecutionPlan for OutputRequirementExec {
         unreachable!();
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 
@@ -295,6 +297,36 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in order_requirement
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(order_reqs) = &self.order_requirement {
+            let lexes = match order_reqs {
+                OrderingRequirements::Hard(alternatives) => alternatives,
+                OrderingRequirements::Soft(alternatives) => alternatives,
+            };
+            for lex in lexes {
+                for sort_expr in lex {
+                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+                }
+            }
+        }
+
+        // Visit expressions in dist_requirement if it's HashPartitioned
+        if let Distribution::HashPartitioned(exprs) = &self.dist_requirement {
+            for expr in exprs {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+        }
+
+        Ok(tnr)
     }
 }
 

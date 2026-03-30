@@ -27,7 +27,9 @@ use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
 use datafusion_physical_plan::metrics::SplitMetrics;
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
@@ -37,6 +39,7 @@ use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
@@ -74,8 +77,8 @@ use datafusion_physical_plan::filter_pushdown::{
 /// ```text
 ///                       ┌─────────────────────┐                              -----► execute path
 ///                       │                     │                              ┄┄┄┄┄► init path
-///                       │   DataSourceExec    │  
-///                       │                     │    
+///                       │   DataSourceExec    │
+///                       │                     │
 ///                       └───────▲─────────────┘
 ///                               ┊  │
 ///                               ┊  │
@@ -156,7 +159,7 @@ pub trait DataSource: Send + Sync + Debug {
 
     /// Returns statistics for a specific partition, or aggregate statistics
     /// across all partitions if `partition` is `None`.
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>>;
 
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
@@ -211,6 +214,38 @@ pub trait DataSource: Send + Sync + Debug {
     fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
         None
     }
+
+    /// Apply a closure to each expression used by this data source.
+    ///
+    /// This includes filter predicates (which may contain dynamic filters) and any
+    /// other expressions used during data scanning.
+    ///
+    /// Implementations must override this method. If the data source has no expressions,
+    /// return `Ok(TreeNodeRecursion::Continue)` immediately.
+    ///
+    /// See [`ExecutionPlan::apply_expressions`] for more details and implementation examples.
+    ///
+    /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion>;
+
+    /// Injects arbitrary run-time state into this DataSource, returning a new instance
+    /// that incorporates that state *if* it is relevant to the concrete DataSource implementation.
+    ///
+    /// This is a generic entry point: the `state` can be any type wrapped in
+    /// `Arc<dyn Any + Send + Sync>`.  A data source that cares about the state should
+    /// down-cast it to the concrete type it expects and, if successful, return a
+    /// modified copy of itself that captures the provided value.  If the state is
+    /// not applicable, the default behaviour is to return `None` so that parent
+    /// nodes can continue propagating the attempt further down the plan tree.
+    fn with_new_state(
+        &self,
+        _state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn DataSource>> {
+        None
+    }
 }
 
 /// [`ExecutionPlan`] that reads one or more files
@@ -230,7 +265,7 @@ pub struct DataSourceExec {
     /// The source of the data -- for example, `FileScanConfig` or `MemorySourceConfig`
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -254,12 +289,20 @@ impl ExecutionPlan for DataSourceExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the underlying data source
+        self.data_source.apply_expressions(f)
     }
 
     fn with_new_children(
@@ -315,16 +358,29 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.data_source.metrics().clone_inner())
+        let mut metrics = self.data_source.metrics().clone_inner();
+
+        // Add `output_rows_skew` metric to the metrics set.
+        // Done here because it's a derived metric from output_rows metric.
+        if let Some(file_scan_config) =
+            self.data_source.as_any().downcast_ref::<FileScanConfig>()
+            && file_scan_config.file_source().file_type() == "parquet"
+            && let Some(output_rows_skew) =
+                BaselineMetrics::output_rows_skew_metric(&metrics)
+        {
+            metrics.push(output_rows_skew);
+        }
+
+        Some(metrics)
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.data_source.partition_statistics(partition)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let data_source = self.data_source.with_fetch(limit)?;
-        let cache = self.cache.clone();
+        let cache = Arc::clone(&self.cache);
 
         Some(Arc::new(Self { data_source, cache }))
     }
@@ -368,7 +424,8 @@ impl ExecutionPlan for DataSourceExec {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
                 // Re-compute properties since we have new filters which will impact equivalence info
-                new_node.cache = Self::compute_properties(&new_node.data_source);
+                new_node.cache =
+                    Arc::new(Self::compute_properties(&new_node.data_source));
 
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
@@ -406,6 +463,18 @@ impl ExecutionPlan for DataSourceExec {
                     as Arc<dyn ExecutionPlan>
             })
     }
+
+    fn with_new_state(
+        &self,
+        state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.data_source
+            .with_new_state(state)
+            .map(|new_data_source| {
+                Arc::new(self.clone().with_data_source(new_data_source))
+                    as Arc<dyn ExecutionPlan>
+            })
+    }
 }
 
 impl DataSourceExec {
@@ -416,7 +485,10 @@ impl DataSourceExec {
     // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(&data_source);
-        Self { data_source, cache }
+        Self {
+            data_source,
+            cache: Arc::new(cache),
+        }
     }
 
     /// Return the source object
@@ -425,20 +497,20 @@ impl DataSourceExec {
     }
 
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(&data_source);
+        self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
         self
     }
 
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.cache = self.cache.with_constraints(constraints);
+        Arc::make_mut(&mut self.cache).set_constraints(constraints);
         self
     }
 
     /// Assign output partitioning
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
-        self.cache = self.cache.with_partitioning(partitioning);
+        Arc::make_mut(&mut self.cache).partitioning = partitioning;
         self
     }
 

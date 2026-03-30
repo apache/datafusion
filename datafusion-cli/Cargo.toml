@@ -37,10 +37,10 @@ backtrace = ["datafusion/backtrace"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.8.13"
-aws-credential-types = "1.2.7"
+aws-config = "1.8.14"
+aws-credential-types = "1.2.13"
 chrono = { workspace = true }
-clap = { version = "4.5.57", features = ["cargo", "derive"] }
+clap = { version = "4.5.60", features = ["cargo", "derive"] }
 datafusion = { workspace = true, features = [
     "avro",
     "compression",
@@ -68,6 +68,9 @@ regex = { workspace = true }
 rustyline = "17.0"
 tokio = { workspace = true, features = ["macros", "parking_lot", "rt", "rt-multi-thread", "signal", "sync"] }
 url = { workspace = true }
+
+[lints]
+workspace = true
 
 [dev-dependencies]
 ctor = { workspace = true }

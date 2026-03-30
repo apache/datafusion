@@ -242,10 +242,6 @@ impl GetFieldFunc {
 
 // get_field(struct_array, field_name)
 impl ScalarUDFImpl for GetFieldFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "get_field"
     }
@@ -444,9 +440,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 func,
                 args: inner_args,
             }) = current_expr
-                && func
-                    .inner()
-                    .as_any()
+                && (func.inner().as_ref() as &dyn Any)
                     .downcast_ref::<GetFieldFunc>()
                     .is_some()
             {
@@ -517,7 +511,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         let all_keys_are_literals = args
             .iter()
             .skip(1)
-            .all(|p| matches!(p, ExpressionPlacement::Literal));
+            .all(|p| *p == ExpressionPlacement::Literal);
 
         if base_is_pushable && all_keys_are_literals {
             ExpressionPlacement::MoveTowardsLeafNodes

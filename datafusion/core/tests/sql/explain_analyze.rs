@@ -22,7 +22,7 @@ use rstest::rstest;
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;
-use datafusion_common::format::ExplainAnalyzeLevel;
+use datafusion_common::format::{ExplainAnalyzeCategories, MetricCategory, MetricType};
 use object_store::path::Path;
 
 #[tokio::test]
@@ -69,7 +69,7 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=Partial, gby=[c1@0 as c1]",
-        "reduction_factor=5.1% (5/99)"
+        "reduction_factor=5.05% (5/99)"
     );
 
     {
@@ -205,7 +205,7 @@ fn nanos_from_timestamp(ts: &Timestamp) -> i64 {
 async fn collect_plan_with_context(
     sql_str: &str,
     ctx: &SessionContext,
-    level: ExplainAnalyzeLevel,
+    level: MetricType,
 ) -> String {
     {
         let state = ctx.state_ref();
@@ -219,7 +219,24 @@ async fn collect_plan_with_context(
         .to_string()
 }
 
-async fn collect_plan(sql_str: &str, level: ExplainAnalyzeLevel) -> String {
+async fn collect_plan_with_categories(
+    sql_str: &str,
+    categories: ExplainAnalyzeCategories,
+) -> String {
+    let ctx = SessionContext::new();
+    {
+        let state = ctx.state_ref();
+        let mut state = state.write();
+        state.config_mut().options_mut().explain.analyze_categories = categories;
+    }
+    let dataframe = ctx.sql(sql_str).await.unwrap();
+    let batches = dataframe.collect().await.unwrap();
+    arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string()
+}
+
+async fn collect_plan(sql_str: &str, level: MetricType) -> String {
     let ctx = SessionContext::new();
     collect_plan_with_context(sql_str, &ctx, level).await
 }
@@ -232,14 +249,14 @@ async fn explain_analyze_level() {
             ORDER BY v1 DESC";
 
     for (level, needle, should_contain) in [
-        (ExplainAnalyzeLevel::Summary, "spill_count", false),
-        (ExplainAnalyzeLevel::Summary, "output_batches", false),
-        (ExplainAnalyzeLevel::Summary, "output_rows", true),
-        (ExplainAnalyzeLevel::Summary, "output_bytes", true),
-        (ExplainAnalyzeLevel::Dev, "spill_count", true),
-        (ExplainAnalyzeLevel::Dev, "output_rows", true),
-        (ExplainAnalyzeLevel::Dev, "output_bytes", true),
-        (ExplainAnalyzeLevel::Dev, "output_batches", true),
+        (MetricType::Summary, "spill_count", false),
+        (MetricType::Summary, "output_batches", false),
+        (MetricType::Summary, "output_rows", true),
+        (MetricType::Summary, "output_bytes", true),
+        (MetricType::Dev, "spill_count", true),
+        (MetricType::Dev, "output_rows", true),
+        (MetricType::Dev, "output_bytes", true),
+        (MetricType::Dev, "output_batches", true),
     ] {
         let plan = collect_plan(sql, level).await;
         assert_eq!(
@@ -263,10 +280,10 @@ async fn explain_analyze_level_datasource_parquet() {
         .expect("register parquet table for explain analyze test");
 
     for (level, needle, should_contain) in [
-        (ExplainAnalyzeLevel::Summary, "metadata_load_time", true),
-        (ExplainAnalyzeLevel::Summary, "page_index_eval_time", false),
-        (ExplainAnalyzeLevel::Dev, "metadata_load_time", true),
-        (ExplainAnalyzeLevel::Dev, "page_index_eval_time", true),
+        (MetricType::Summary, "metadata_load_time", true),
+        (MetricType::Summary, "page_index_eval_time", false),
+        (MetricType::Dev, "metadata_load_time", true),
+        (MetricType::Dev, "page_index_eval_time", true),
     ] {
         let plan = collect_plan_with_context(&sql, &ctx, level).await;
 
@@ -299,8 +316,7 @@ async fn explain_analyze_parquet_pruning_metrics() {
             "explain analyze select * from {table_name} where l_orderkey = {l_orderkey};"
         );
 
-        let plan =
-            collect_plan_with_context(&sql, &ctx, ExplainAnalyzeLevel::Summary).await;
+        let plan = collect_plan_with_context(&sql, &ctx, MetricType::Summary).await;
 
         let expected_metrics =
             format!("files_ranges_pruned_statistics={expected_pruning_metrics}");
@@ -871,7 +887,8 @@ async fn parquet_explain_analyze() {
         &formatted,
         "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
     );
-    assert_contains!(&formatted, "scan_efficiency_ratio=14%");
+    assert_contains!(&formatted, "output_rows_skew=0%");
+    assert_contains!(&formatted, "scan_efficiency_ratio=13.99%");
 
     // The order of metrics is expected to be the same as the actual pruning order
     // (file-> row-group -> page)
@@ -1149,14 +1166,104 @@ async fn explain_analyze_hash_join() {
             ON t1.a=t2.b";
 
     for (level, needle, should_contain) in [
-        (ExplainAnalyzeLevel::Summary, "probe_hit_rate", true),
-        (ExplainAnalyzeLevel::Summary, "avg_fanout", true),
+        (MetricType::Summary, "probe_hit_rate", true),
+        (MetricType::Summary, "avg_fanout", true),
     ] {
         let plan = collect_plan(sql, level).await;
         assert_eq!(
             plan.contains(needle),
             should_contain,
             "plan for level {level:?} unexpected content: {plan}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn explain_analyze_categories() {
+    let sql = "EXPLAIN ANALYZE \
+            SELECT * \
+            FROM generate_series(10) as t1(v1) \
+            ORDER BY v1 DESC";
+
+    for (categories, needle, should_contain) in [
+        // "rows" category: output_rows yes, elapsed_compute no, output_bytes no
+        (
+            ExplainAnalyzeCategories::Only(vec![MetricCategory::Rows]),
+            "output_rows",
+            true,
+        ),
+        (
+            ExplainAnalyzeCategories::Only(vec![MetricCategory::Rows]),
+            "elapsed_compute",
+            false,
+        ),
+        (
+            ExplainAnalyzeCategories::Only(vec![MetricCategory::Rows]),
+            "output_bytes",
+            false,
+        ),
+        // "none" — plan only, no metrics at all
+        (ExplainAnalyzeCategories::Only(vec![]), "output_rows", false),
+        (
+            ExplainAnalyzeCategories::Only(vec![]),
+            "elapsed_compute",
+            false,
+        ),
+        // "all" — everything shown
+        (ExplainAnalyzeCategories::All, "output_rows", true),
+        (ExplainAnalyzeCategories::All, "elapsed_compute", true),
+        (ExplainAnalyzeCategories::All, "output_bytes", true),
+        // "rows,bytes" — row + byte metrics, no timing
+        (
+            ExplainAnalyzeCategories::Only(vec![
+                MetricCategory::Rows,
+                MetricCategory::Bytes,
+            ]),
+            "output_rows",
+            true,
+        ),
+        (
+            ExplainAnalyzeCategories::Only(vec![
+                MetricCategory::Rows,
+                MetricCategory::Bytes,
+            ]),
+            "output_bytes",
+            true,
+        ),
+        (
+            ExplainAnalyzeCategories::Only(vec![
+                MetricCategory::Rows,
+                MetricCategory::Bytes,
+            ]),
+            "elapsed_compute",
+            false,
+        ),
+        // "rows,bytes,uncategorized" — everything except timing
+        (
+            ExplainAnalyzeCategories::Only(vec![
+                MetricCategory::Rows,
+                MetricCategory::Bytes,
+                MetricCategory::Uncategorized,
+            ]),
+            "output_rows",
+            true,
+        ),
+        (
+            ExplainAnalyzeCategories::Only(vec![
+                MetricCategory::Rows,
+                MetricCategory::Bytes,
+                MetricCategory::Uncategorized,
+            ]),
+            "elapsed_compute",
+            false,
+        ),
+    ] {
+        let plan = collect_plan_with_categories(sql, categories.clone()).await;
+        assert_eq!(
+            plan.contains(needle),
+            should_contain,
+            "plan for categories {categories:?} should{} contain '{needle}':\n{plan}",
+            if should_contain { "" } else { " NOT" }
         );
     }
 }

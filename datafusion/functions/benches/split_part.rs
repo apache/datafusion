@@ -19,7 +19,7 @@ use arrow::array::{ArrayRef, Int64Array, StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string::split_part;
 use rand::distr::Alphanumeric;
 use rand::prelude::StdRng;
@@ -29,14 +29,14 @@ use std::sync::Arc;
 
 const N_ROWS: usize = 8192;
 
-/// Generate test data for split_part benchmarks
-/// Creates strings with multiple parts separated by the delimiter
+/// Creates strings with `num_parts` random alphanumeric segments of `part_len`
+/// bytes each, joined by `delimiter`.
 fn gen_split_part_data(
     n_rows: usize,
-    num_parts: usize, // number of parts in each string (separated by delimiter)
-    part_len: usize,  // length of each part
-    delimiter: &str,  // the delimiter to use
-    use_string_view: bool, // false -> StringArray, true -> StringViewArray
+    num_parts: usize,
+    part_len: usize,
+    delimiter: &str,
+    use_string_view: bool,
 ) -> (ColumnarValue, ColumnarValue) {
     let mut rng = StdRng::seed_from_u64(42);
 
@@ -73,303 +73,154 @@ fn gen_split_part_data(
     }
 }
 
-fn gen_positions(n_rows: usize, position: i64) -> ColumnarValue {
-    let positions: Vec<i64> = vec![position; n_rows];
-    ColumnarValue::Array(Arc::new(Int64Array::from(positions)) as ArrayRef)
+#[expect(clippy::too_many_arguments)]
+fn bench_split_part(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    func: &ScalarUDF,
+    config_options: &Arc<ConfigOptions>,
+    name: &str,
+    tag: &str,
+    strings: ColumnarValue,
+    delimiters: ColumnarValue,
+    position: i64,
+) {
+    let positions: ColumnarValue =
+        ColumnarValue::Array(Arc::new(Int64Array::from(vec![position; N_ROWS])));
+    let args = vec![strings, delimiters, positions];
+    let arg_fields: Vec<_> = args
+        .iter()
+        .enumerate()
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
+        .collect();
+    let return_type = match args[0].data_type() {
+        DataType::Utf8View => DataType::Utf8View,
+        _ => DataType::Utf8,
+    };
+    let return_field = Field::new("f", return_type, true).into();
+
+    group.bench_function(BenchmarkId::new(name, tag), |b| {
+        b.iter(|| {
+            black_box(
+                func.invoke_with_args(ScalarFunctionArgs {
+                    args: args.clone(),
+                    arg_fields: arg_fields.clone(),
+                    number_rows: N_ROWS,
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::clone(config_options),
+                })
+                .expect("split_part should work"),
+            )
+        })
+    });
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
     let split_part_func = split_part();
     let config_options = Arc::new(ConfigOptions::default());
-
     let mut group = c.benchmark_group("split_part");
 
-    // Test different scenarios
-    // Scenario 1: Single-char delimiter, first position (should be fastest with optimization)
+    // Utf8, single-char delimiter, first position
     {
         let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", false);
-        let positions = gen_positions(N_ROWS, 1);
-        let args = vec![strings, delimiters, positions];
-        let arg_fields: Vec<_> = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect();
-        let return_field = Field::new("f", DataType::Utf8, true).into();
-
-        group.bench_function(BenchmarkId::new("single_char_delim", "pos_first"), |b| {
-            b.iter(|| {
-                black_box(
-                    split_part_func
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields.clone(),
-                            number_rows: N_ROWS,
-                            return_field: Arc::clone(&return_field),
-                            config_options: Arc::clone(&config_options),
-                        })
-                        .expect("split_part should work"),
-                )
-            })
-        });
-    }
-
-    // Scenario 2: Single-char delimiter, middle position
-    {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", false);
-        let positions = gen_positions(N_ROWS, 5);
-        let args = vec![strings, delimiters, positions];
-        let arg_fields: Vec<_> = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect();
-        let return_field = Field::new("f", DataType::Utf8, true).into();
-
-        group.bench_function(BenchmarkId::new("single_char_delim", "pos_middle"), |b| {
-            b.iter(|| {
-                black_box(
-                    split_part_func
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields.clone(),
-                            number_rows: N_ROWS,
-                            return_field: Arc::clone(&return_field),
-                            config_options: Arc::clone(&config_options),
-                        })
-                        .expect("split_part should work"),
-                )
-            })
-        });
-    }
-
-    // Scenario 3: Single-char delimiter, last position
-    {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", false);
-        let positions = gen_positions(N_ROWS, 10);
-        let args = vec![strings, delimiters, positions];
-        let arg_fields: Vec<_> = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect();
-        let return_field = Field::new("f", DataType::Utf8, true).into();
-
-        group.bench_function(BenchmarkId::new("single_char_delim", "pos_last"), |b| {
-            b.iter(|| {
-                black_box(
-                    split_part_func
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields.clone(),
-                            number_rows: N_ROWS,
-                            return_field: Arc::clone(&return_field),
-                            config_options: Arc::clone(&config_options),
-                        })
-                        .expect("split_part should work"),
-                )
-            })
-        });
-    }
-
-    // Scenario 4: Single-char delimiter, negative position (last element)
-    {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", false);
-        let positions = gen_positions(N_ROWS, -1);
-        let args = vec![strings, delimiters, positions];
-        let arg_fields: Vec<_> = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect();
-        let return_field = Field::new("f", DataType::Utf8, true).into();
-
-        group.bench_function(
-            BenchmarkId::new("single_char_delim", "pos_negative"),
-            |b| {
-                b.iter(|| {
-                    black_box(
-                        split_part_func
-                            .invoke_with_args(ScalarFunctionArgs {
-                                args: args.clone(),
-                                arg_fields: arg_fields.clone(),
-                                number_rows: N_ROWS,
-                                return_field: Arc::clone(&return_field),
-                                config_options: Arc::clone(&config_options),
-                            })
-                            .expect("split_part should work"),
-                    )
-                })
-            },
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "utf8_single_char",
+            "pos_first",
+            strings,
+            delimiters,
+            1,
         );
     }
 
-    // Scenario 5: Multi-char delimiter, first position
+    // Utf8, single-char delimiter, middle position
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, "~@~", false);
-        let positions = gen_positions(N_ROWS, 1);
-        let args = vec![strings, delimiters, positions];
-        let arg_fields: Vec<_> = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect();
-        let return_field = Field::new("f", DataType::Utf8, true).into();
-
-        group.bench_function(BenchmarkId::new("multi_char_delim", "pos_first"), |b| {
-            b.iter(|| {
-                black_box(
-                    split_part_func
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields.clone(),
-                            number_rows: N_ROWS,
-                            return_field: Arc::clone(&return_field),
-                            config_options: Arc::clone(&config_options),
-                        })
-                        .expect("split_part should work"),
-                )
-            })
-        });
+        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", false);
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "utf8_single_char",
+            "pos_middle",
+            strings,
+            delimiters,
+            5,
+        );
     }
 
-    // Scenario 6: Multi-char delimiter, middle position
+    // Utf8, single-char delimiter, negative position
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, "~@~", false);
-        let positions = gen_positions(N_ROWS, 5);
-        let args = vec![strings, delimiters, positions];
-        let arg_fields: Vec<_> = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect();
-        let return_field = Field::new("f", DataType::Utf8, true).into();
-
-        group.bench_function(BenchmarkId::new("multi_char_delim", "pos_middle"), |b| {
-            b.iter(|| {
-                black_box(
-                    split_part_func
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields.clone(),
-                            number_rows: N_ROWS,
-                            return_field: Arc::clone(&return_field),
-                            config_options: Arc::clone(&config_options),
-                        })
-                        .expect("split_part should work"),
-                )
-            })
-        });
+        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", false);
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "utf8_single_char",
+            "pos_negative",
+            strings,
+            delimiters,
+            -1,
+        );
     }
 
-    // Scenario 7: StringViewArray, single-char delimiter, first position
+    // Utf8, multi-char delimiter, middle position
+    {
+        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, "~@~", false);
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "utf8_multi_char",
+            "pos_middle",
+            strings,
+            delimiters,
+            5,
+        );
+    }
+
+    // Utf8View, single-char delimiter, first position
     {
         let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 8, ".", true);
-        let positions = gen_positions(N_ROWS, 1);
-        let args = vec![strings, delimiters, positions];
-        let arg_fields: Vec<_> = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect();
-        let return_field = Field::new("f", DataType::Utf8, true).into();
-
-        group.bench_function(
-            BenchmarkId::new("string_view_single_char", "pos_first"),
-            |b| {
-                b.iter(|| {
-                    black_box(
-                        split_part_func
-                            .invoke_with_args(ScalarFunctionArgs {
-                                args: args.clone(),
-                                arg_fields: arg_fields.clone(),
-                                number_rows: N_ROWS,
-                                return_field: Arc::clone(&return_field),
-                                config_options: Arc::clone(&config_options),
-                            })
-                            .expect("split_part should work"),
-                    )
-                })
-            },
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "utf8view_single_char",
+            "pos_first",
+            strings,
+            delimiters,
+            1,
         );
     }
 
-    // Scenario 8: Many parts (20), position near end - shows benefit of early termination
+    // Utf8, single-char delimiter, many long parts
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 20, 8, ".", false);
-        let positions = gen_positions(N_ROWS, 2);
-        let args = vec![strings, delimiters, positions];
-        let arg_fields: Vec<_> = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect();
-        let return_field = Field::new("f", DataType::Utf8, true).into();
-
-        group.bench_function(BenchmarkId::new("many_parts_20", "pos_second"), |b| {
-            b.iter(|| {
-                black_box(
-                    split_part_func
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields.clone(),
-                            number_rows: N_ROWS,
-                            return_field: Arc::clone(&return_field),
-                            config_options: Arc::clone(&config_options),
-                        })
-                        .expect("split_part should work"),
-                )
-            })
-        });
+        let (strings, delimiters) = gen_split_part_data(N_ROWS, 50, 16, ".", false);
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "utf8_long_strings",
+            "pos_middle",
+            strings,
+            delimiters,
+            25,
+        );
     }
 
-    // Scenario 9: Long strings with many parts - worst case for old implementation
+    // Utf8View, single-char delimiter, middle position, long parts
     {
-        let (strings, delimiters) = gen_split_part_data(N_ROWS, 50, 16, "/", false);
-        let positions = gen_positions(N_ROWS, 1);
-        let args = vec![strings, delimiters, positions];
-        let arg_fields: Vec<_> = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect();
-        let return_field = Field::new("f", DataType::Utf8, true).into();
-
-        group.bench_function(
-            BenchmarkId::new("long_strings_50_parts", "pos_first"),
-            |b| {
-                b.iter(|| {
-                    black_box(
-                        split_part_func
-                            .invoke_with_args(ScalarFunctionArgs {
-                                args: args.clone(),
-                                arg_fields: arg_fields.clone(),
-                                number_rows: N_ROWS,
-                                return_field: Arc::clone(&return_field),
-                                config_options: Arc::clone(&config_options),
-                            })
-                            .expect("split_part should work"),
-                    )
-                })
-            },
+        let (strings, delimiters) = gen_split_part_data(N_ROWS, 10, 32, ".", true);
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "utf8view_long_parts",
+            "pos_middle",
+            strings,
+            delimiters,
+            5,
         );
     }
 

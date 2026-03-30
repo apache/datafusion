@@ -42,7 +42,13 @@ DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
-VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
+SIMULATE_LATENCY=${SIMULATE_LATENCY:-false}
+
+# Build latency arg based on SIMULATE_LATENCY setting
+LATENCY_ARG=""
+if [ "$SIMULATE_LATENCY" = "true" ]; then
+    LATENCY_ARG="--simulate-latency"
+fi
 
 usage() {
     echo "
@@ -53,7 +59,6 @@ $0 data [benchmark]
 $0 run [benchmark] [query]
 $0 compare <branch1> <branch2>
 $0 compare_detail <branch1> <branch2>
-$0 venv
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Examples:
@@ -71,7 +76,6 @@ data:            Generates or downloads data needed for benchmarking
 run:             Runs the named benchmark
 compare:         Compares fastest results from benchmark runs
 compare_detail:  Compares minimum, average (±stddev), and maximum results from benchmark runs
-venv:            Creates new venv (unless already exists) and installs compare's requirements into it
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Benchmarks
@@ -101,6 +105,10 @@ clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against partitioned (100 files) parquet
 clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
+
+# Sort Pushdown Benchmarks
+sort_pushdown:          Sort pushdown baseline (no WITH ORDER) on TPC-H data (SF=1)
+sort_pushdown_sorted:   Sort pushdown with WITH ORDER — tests sort elimination on non-overlapping files
 
 # Sorted Data Benchmarks (ORDER BY Optimization)
 clickbench_sorted:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
@@ -144,7 +152,7 @@ CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
-VENV_PATH           Python venv to use for compare and venv commands (default ./venv, override by <your-venv>/bin/activate)
+SIMULATE_LATENCY    Simulate object store latency to mimic S3 (default false)
 DATAFUSION_*        Set the given datafusion configuration
 "
     exit 1
@@ -305,6 +313,10 @@ main() {
                     # same data as for tpch
                     data_tpch "1" "parquet"
                     ;;
+                sort_pushdown|sort_pushdown_sorted)
+                    # same data as for tpch
+                    data_tpch "1" "parquet"
+                    ;;
                 sort_tpch)
                     # same data as for tpch
                     data_tpch "1" "parquet"
@@ -375,6 +387,7 @@ main() {
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
             echo "PREFER_HASH_JOIN: ${PREFER_HASH_JOIN}"
+            echo "SIMULATE_LATENCY: ${SIMULATE_LATENCY}"
             echo "***************************"
 
             # navigate to the appropriate directory
@@ -504,6 +517,12 @@ main() {
                 external_aggr)
                     run_external_aggr
                     ;;
+                sort_pushdown)
+                    run_sort_pushdown
+                    ;;
+                sort_pushdown_sorted)
+                    run_sort_pushdown_sorted
+                    ;;
                 sort_tpch)
                     run_sort_tpch "1"
                     ;;
@@ -541,9 +560,6 @@ main() {
             ;;
         compare_detail)
             compare_benchmarks "$ARG2" "$ARG3" "--detailed"
-            ;;
-        venv)
-            setup_venv
             ;;
         "")
             usage
@@ -662,7 +678,7 @@ run_tpch() {
     echo "Running tpch benchmark..."
 
     FORMAT=$2
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the tpch in memory (needs tpch parquet data)
@@ -678,7 +694,7 @@ run_tpch_mem() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the tpcds benchmark
@@ -698,7 +714,7 @@ run_tpcds() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpcds benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the compile profile benchmark helper
@@ -708,7 +724,7 @@ run_compile_profile() {
     local data_path="${DATA_DIR}/tpch_sf1"
 
     echo "Running compile profile benchmark..."
-    local cmd=(python3 "${runner}" --data "${data_path}")
+    local cmd=(uv run python3 "${runner}" --data "${data_path}")
     if [ ${#profiles[@]} -gt 0 ]; then
         cmd+=(--profiles "${profiles[@]}")
     fi
@@ -720,7 +736,7 @@ run_cancellation() {
     RESULTS_FILE="${RESULTS_DIR}/cancellation.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running cancellation benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}" ${LATENCY_ARG}
 }
 
 
@@ -774,7 +790,7 @@ run_clickbench_1() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
  # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
@@ -782,7 +798,7 @@ run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
@@ -791,7 +807,7 @@ run_clickbench_pushdown() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_pushdown.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true, reorder_filters=true..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
@@ -800,7 +816,7 @@ run_clickbench_extended() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
@@ -915,7 +931,7 @@ run_imdb() {
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
-    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 data_h2o() {
@@ -923,75 +939,13 @@ data_h2o() {
     SIZE=${1:-"SMALL"}
     DATA_FORMAT=${2:-"CSV"}
 
-    # Function to compare Python versions
-    version_ge() {
-        [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
-    }
-
-    export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
-
-    # Find the highest available Python version (3.10 or higher)
-    REQUIRED_VERSION="3.10"
-    PYTHON_CMD=$(command -v python3 || true)
-
-    if [ -n "$PYTHON_CMD" ]; then
-        PYTHON_VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-            echo "Found Python version $PYTHON_VERSION, which is suitable."
-        else
-            echo "Python version $PYTHON_VERSION found, but version $REQUIRED_VERSION or higher is required."
-            PYTHON_CMD=""
-        fi
-    fi
-
-   # Search for suitable Python versions if the default is unsuitable
-   if [ -z "$PYTHON_CMD" ]; then
-       # Loop through all available Python3 commands on the system
-       for CMD in $(compgen -c | grep -E '^python3(\.[0-9]+)?$'); do
-           if command -v "$CMD" &> /dev/null; then
-               PYTHON_VERSION=$($CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-               if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-                   PYTHON_CMD="$CMD"
-                   echo "Found suitable Python version: $PYTHON_VERSION ($CMD)"
-                   break
-               fi
-           fi
-       done
-   fi
-
-    # If no suitable Python version found, exit with an error
-    if [ -z "$PYTHON_CMD" ]; then
-        echo "Python 3.10 or higher is required. Please install it."
-        return 1
-    fi
-
-    echo "Using Python command: $PYTHON_CMD"
-
-    # Install falsa and other dependencies
-    echo "Installing falsa..."
-
-    # Set virtual environment directory
-    VIRTUAL_ENV="${PWD}/venv"
-
-    # Create a virtual environment using the detected Python command
-    $PYTHON_CMD -m venv "$VIRTUAL_ENV"
-
-    # Activate the virtual environment and install dependencies
-    source "$VIRTUAL_ENV/bin/activate"
-
-    # Ensure 'falsa' is installed (avoid unnecessary reinstall)
-    pip install --quiet --upgrade falsa
-
     # Create directory if it doesn't exist
     H2O_DIR="${DATA_DIR}/h2o"
     mkdir -p "${H2O_DIR}"
 
     # Generate h2o test data
     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
-    falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
-
-    # Deactivate virtual environment after completion
-    deactivate
+    uv run falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
 }
 
 data_h2o_join() {
@@ -999,75 +953,13 @@ data_h2o_join() {
     SIZE=${1:-"SMALL"}
     DATA_FORMAT=${2:-"CSV"}
 
-    # Function to compare Python versions
-    version_ge() {
-        [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
-    }
-
-    export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
-
-    # Find the highest available Python version (3.10 or higher)
-    REQUIRED_VERSION="3.10"
-    PYTHON_CMD=$(command -v python3 || true)
-
-    if [ -n "$PYTHON_CMD" ]; then
-        PYTHON_VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-            echo "Found Python version $PYTHON_VERSION, which is suitable."
-        else
-            echo "Python version $PYTHON_VERSION found, but version $REQUIRED_VERSION or higher is required."
-            PYTHON_CMD=""
-        fi
-    fi
-
-   # Search for suitable Python versions if the default is unsuitable
-   if [ -z "$PYTHON_CMD" ]; then
-       # Loop through all available Python3 commands on the system
-       for CMD in $(compgen -c | grep -E '^python3(\.[0-9]+)?$'); do
-           if command -v "$CMD" &> /dev/null; then
-               PYTHON_VERSION=$($CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-               if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-                   PYTHON_CMD="$CMD"
-                   echo "Found suitable Python version: $PYTHON_VERSION ($CMD)"
-                   break
-               fi
-           fi
-       done
-   fi
-
-    # If no suitable Python version found, exit with an error
-    if [ -z "$PYTHON_CMD" ]; then
-        echo "Python 3.10 or higher is required. Please install it."
-        return 1
-    fi
-
-    echo "Using Python command: $PYTHON_CMD"
-
-    # Install falsa and other dependencies
-    echo "Installing falsa..."
-
-    # Set virtual environment directory
-    VIRTUAL_ENV="${PWD}/venv"
-
-    # Create a virtual environment using the detected Python command
-    $PYTHON_CMD -m venv "$VIRTUAL_ENV"
-
-    # Activate the virtual environment and install dependencies
-    source "$VIRTUAL_ENV/bin/activate"
-
-    # Ensure 'falsa' is installed (avoid unnecessary reinstall)
-    pip install --quiet --upgrade falsa
-
     # Create directory if it doesn't exist
     H2O_DIR="${DATA_DIR}/h2o"
     mkdir -p "${H2O_DIR}"
 
     # Generate h2o test data
     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
-    falsa join --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
-
-    # Deactivate virtual environment after completion
-    deactivate
+    uv run falsa join --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
 }
 
 # Runner for h2o groupby benchmark
@@ -1111,7 +1003,7 @@ run_h2o() {
         --path "${H2O_DIR}/${FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}" \
-         ${QUERY_ARG}
+         ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Utility function to run h2o join/window benchmark
@@ -1163,7 +1055,7 @@ h2o_runner() {
         --join-paths "${H2O_DIR}/${X_TABLE_FILE_NAME},${H2O_DIR}/${SMALL_TABLE_FILE_NAME},${H2O_DIR}/${MEDIUM_TABLE_FILE_NAME},${H2O_DIR}/${LARGE_TABLE_FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}" \
-         ${QUERY_ARG}
+         ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runners for h2o join benchmark
@@ -1192,6 +1084,22 @@ run_external_aggr() {
     debug_run $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
+# Runs the sort pushdown benchmark (without WITH ORDER)
+run_sort_pushdown() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf1"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown.json"
+    echo "Running sort pushdown benchmark (no WITH ORDER)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown benchmark with WITH ORDER (enables sort elimination)
+run_sort_pushdown_sorted() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf1"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_sorted.json"
+    echo "Running sort pushdown benchmark (with WITH ORDER)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
 # Runs the sort integration benchmark
 run_sort_tpch() {
     SCALE_FACTOR=$1
@@ -1204,7 +1112,7 @@ run_sort_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort tpch benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the sort tpch integration benchmark with limit 100 (topk)
@@ -1214,7 +1122,7 @@ run_topk_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running topk tpch benchmark..."
 
-    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG}
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the nlj benchmark
@@ -1222,7 +1130,7 @@ run_nlj() {
     RESULTS_FILE="${RESULTS_DIR}/nlj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running nlj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the hj benchmark
@@ -1231,7 +1139,7 @@ run_hj() {
     RESULTS_FILE="${RESULTS_DIR}/hj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running hj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the smj benchmark
@@ -1239,7 +1147,7 @@ run_smj() {
     RESULTS_FILE="${RESULTS_DIR}/smj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running smj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
@@ -1269,7 +1177,7 @@ compare_benchmarks() {
             echo "--------------------"
             echo "Benchmark ${BENCH}"
             echo "--------------------"
-            PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
+            uv run python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
         else
             echo "Note: Skipping ${RESULTS_FILE1} as ${RESULTS_FILE2} does not exist"
         fi
@@ -1381,13 +1289,9 @@ run_clickbench_sorted() {
         --sorted-by "EventTime" \
         -c datafusion.optimizer.prefer_existing_sort=true \
         -o "${RESULTS_FILE}" \
-        ${QUERY_ARG}
+        ${QUERY_ARG} ${LATENCY_ARG}
 }
 
-setup_venv() {
-    python3 -m venv "$VIRTUAL_ENV"
-    PATH=$VIRTUAL_ENV/bin:$PATH python3 -m pip install -r requirements.txt
-}
 
 # And start the process up
 main

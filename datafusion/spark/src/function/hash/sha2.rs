@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray, new_null_array,
-};
+use arrow::array::{ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::types::{
     NativeType, logical_binary, logical_int32, logical_string,
@@ -30,7 +28,6 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 use sha2::{self, Digest};
-use std::any::Any;
 use std::sync::Arc;
 
 /// Differs from DataFusion version in allowing array input for bit lengths, and
@@ -71,10 +68,6 @@ impl SparkSha2 {
 }
 
 impl ScalarUDFImpl for SparkSha2 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "sha2"
     }
@@ -170,10 +163,7 @@ impl ScalarUDFImpl for SparkSha2 {
             (
                 ColumnarValue::Array(_),
                 ColumnarValue::Scalar(ScalarValue::Int32(None)),
-            ) => Ok(ColumnarValue::Array(new_null_array(
-                &DataType::Utf8,
-                args.number_rows,
-            ))),
+            ) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
             _ => {
                 // Fallback to existing behavior for any array/mixed cases
                 make_scalar_function(sha2_impl, vec![])(&args.args)

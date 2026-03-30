@@ -25,7 +25,6 @@ use datafusion_expr::{
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_functions_nested::extract::array_slice_udf;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark slice function implementation
@@ -64,10 +63,6 @@ impl SparkSlice {
 }
 
 impl ScalarUDFImpl for SparkSlice {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "slice"
     }

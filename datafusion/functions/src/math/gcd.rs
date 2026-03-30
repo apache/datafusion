@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray, new_null_array};
+use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray};
 use arrow::compute::try_binary;
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::error::ArrowError;
-use std::any::Any;
 use std::mem::swap;
 use std::sync::Arc;
 
@@ -69,10 +68,6 @@ impl GcdFunc {
 }
 
 impl ScalarUDFImpl for GcdFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "gcd"
     }
@@ -144,10 +139,7 @@ fn compute_gcd_with_scalar(arr: &ArrayRef, scalar: Option<i64>) -> Result<Column
 
             result.map(|arr| ColumnarValue::Array(Arc::new(arr) as ArrayRef))
         }
-        None => Ok(ColumnarValue::Array(new_null_array(
-            &DataType::Int64,
-            arr.len(),
-        ))),
+        None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
     }
 }
 

@@ -18,15 +18,14 @@
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -83,10 +82,6 @@ impl NowFunc {
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
 impl ScalarUDFImpl for NowFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "now"
     }
@@ -112,10 +107,7 @@ impl ScalarUDFImpl for NowFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn invoke_with_args(
-        &self,
-        _args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("invoke should not be called on a simplified now() function")
     }
 

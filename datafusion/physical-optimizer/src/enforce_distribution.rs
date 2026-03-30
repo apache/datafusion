@@ -49,7 +49,7 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -286,18 +286,15 @@ pub fn adjust_input_keys_ordering(
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
     let plan = Arc::clone(&requirements.plan);
 
-    if let Some(HashJoinExec {
-        left,
-        right,
-        on,
-        filter,
-        join_type,
-        projection,
-        mode,
-        null_equality,
-        null_aware,
-        ..
-    }) = plan.as_any().downcast_ref::<HashJoinExec>()
+    if let Some(
+        exec @ HashJoinExec {
+            left,
+            on,
+            join_type,
+            mode,
+            ..
+        },
+    ) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
         match mode {
             PartitionMode::Partitioned => {
@@ -305,20 +302,10 @@ pub fn adjust_input_keys_ordering(
                     Vec<(PhysicalExprRef, PhysicalExprRef)>,
                     Vec<SortOptions>,
                 )| {
-                    HashJoinExecBuilder::new(
-                        Arc::clone(left),
-                        Arc::clone(right),
-                        new_conditions.0,
-                        *join_type,
-                    )
-                    .with_filter(filter.clone())
-                    // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
-                    .with_projection_ref(projection.clone())
-                    .with_partition_mode(PartitionMode::Partitioned)
-                    .with_null_equality(*null_equality)
-                    .with_null_aware(*null_aware)
-                    .build()
-                    .map(|e| Arc::new(e) as _)
+                    exec.builder()
+                        .with_partition_mode(PartitionMode::Partitioned)
+                        .with_on(new_conditions.0)
+                        .build_exec()
                 };
                 return reorder_partitioned_join_keys(
                     requirements,
@@ -498,7 +485,7 @@ pub fn reorder_aggregate_keys(
         && !physical_exprs_equal(&output_exprs, parent_required)
         && let Some(positions) = expected_expr_positions(&output_exprs, parent_required)
         && let Some(agg_exec) = agg_exec.input().as_any().downcast_ref::<AggregateExec>()
-        && matches!(agg_exec.mode(), &AggregateMode::Partial)
+        && *agg_exec.mode() == AggregateMode::Partial
     {
         let group_exprs = agg_exec.group_expr().expr();
         let new_group_exprs = positions
@@ -612,20 +599,17 @@ pub fn reorder_join_keys_to_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan_any = plan.as_any();
-    if let Some(HashJoinExec {
-        left,
-        right,
-        on,
-        filter,
-        join_type,
-        projection,
-        mode,
-        null_equality,
-        null_aware,
-        ..
-    }) = plan_any.downcast_ref::<HashJoinExec>()
+    if let Some(
+        exec @ HashJoinExec {
+            left,
+            right,
+            on,
+            mode,
+            ..
+        },
+    ) = plan_any.downcast_ref::<HashJoinExec>()
     {
-        if matches!(mode, PartitionMode::Partitioned) {
+        if *mode == PartitionMode::Partitioned {
             let (join_keys, positions) = reorder_current_join_keys(
                 extract_join_keys(on),
                 Some(left.output_partitioning()),
@@ -639,20 +623,11 @@ pub fn reorder_join_keys_to_inputs(
                     right_keys,
                 } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
-                return Ok(Arc::new(
-                    HashJoinExecBuilder::new(
-                        Arc::clone(left),
-                        Arc::clone(right),
-                        new_join_on,
-                        *join_type,
-                    )
-                    .with_filter(filter.clone())
-                    .with_projection_ref(projection.clone())
+                return exec
+                    .builder()
                     .with_partition_mode(PartitionMode::Partitioned)
-                    .with_null_equality(*null_equality)
-                    .with_null_aware(*null_aware)
-                    .build()?,
-                ));
+                    .with_on(new_join_on)
+                    .build_exec();
             }
         }
     } else if let Some(SortMergeJoinExec {
@@ -953,6 +928,43 @@ fn add_hash_on_top(
 ///
 /// * `input`: Current node.
 ///
+/// Checks whether preserving the child's ordering enables the parent to
+/// run in streaming mode. Compares the parent's pipeline behavior with
+/// the ordered child vs. an unordered (coalesced) child. If removing the
+/// ordering would cause the parent to switch from streaming to blocking,
+/// keeping the order-preserving variant is beneficial.
+///
+/// Only applicable to single-child operators; returns `Ok(false)` for
+/// multi-child operators (e.g. joins) where child substitution semantics are
+/// ambiguous.
+fn preserving_order_enables_streaming(
+    parent: &Arc<dyn ExecutionPlan>,
+    ordered_child: &Arc<dyn ExecutionPlan>,
+) -> Result<bool> {
+    // Only applicable to single-child operators that maintain input order
+    // (e.g. AggregateExec in PartiallySorted mode). Operators that don't
+    // maintain input order (e.g. SortExec) handle ordering themselves —
+    // preserving SPM for them is unnecessary.
+    if parent.children().len() != 1 {
+        return Ok(false);
+    }
+    if !parent.maintains_input_order()[0] {
+        return Ok(false);
+    }
+    // Build parent with the ordered child
+    let with_ordered =
+        Arc::clone(parent).with_new_children(vec![Arc::clone(ordered_child)])?;
+    if with_ordered.pipeline_behavior() == EmissionType::Final {
+        // Parent is blocking even with ordering — no benefit
+        return Ok(false);
+    }
+    // Build parent with an unordered child via CoalescePartitionsExec.
+    let unordered_child: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(Arc::clone(ordered_child)));
+    let without_ordered = Arc::clone(parent).with_new_children(vec![unordered_child])?;
+    Ok(without_ordered.pipeline_behavior() == EmissionType::Final)
+}
+
 /// # Returns
 ///
 /// Updated node with an execution plan, where the desired single distribution
@@ -1264,7 +1276,7 @@ pub fn ensure_distribution(
     let is_partitioned_join = plan
         .as_any()
         .downcast_ref::<HashJoinExec>()
-        .is_some_and(|join| matches!(join.mode, PartitionMode::Partitioned))
+        .is_some_and(|join| join.mode == PartitionMode::Partitioned)
         || plan.as_any().is::<SortMergeJoinExec>();
 
     let repartition_status_flags =
@@ -1365,6 +1377,12 @@ pub fn ensure_distribution(
                 }
             };
 
+            let streaming_benefit = if child.data {
+                preserving_order_enables_streaming(&plan, &child.plan)?
+            } else {
+                false
+            };
+
             // There is an ordering requirement of the operator:
             if let Some(required_input_ordering) = required_input_ordering {
                 // Either:
@@ -1377,6 +1395,7 @@ pub fn ensure_distribution(
                     .ordering_satisfy_requirement(sort_req.clone())?;
 
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
+                    && !streaming_benefit
                     && child.data
                 {
                     child = replace_order_preserving_variants(child)?;
@@ -1397,12 +1416,22 @@ pub fn ensure_distribution(
                 // Stop tracking distribution changing operators
                 child.data = false;
             } else {
+                let streaming_benefit = if child.data {
+                    preserving_order_enables_streaming(&plan, &child.plan)?
+                } else {
+                    false
+                };
                 // no ordering requirement
                 match requirement {
                     // Operator requires specific distribution.
                     Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
-                        // Since there is no ordering requirement, preserving ordering is pointless
-                        child = replace_order_preserving_variants(child)?;
+                        // If the parent doesn't maintain input order, preserving
+                        // ordering is pointless. However, if it does maintain
+                        // input order, we keep order-preserving variants so
+                        // ordering can flow through to ancestors that need it.
+                        if !maintains && !streaming_benefit {
+                            child = replace_order_preserving_variants(child)?;
+                        }
                     }
                     Distribution::UnspecifiedDistribution => {
                         // Since ordering is lost, trying to preserve ordering is pointless

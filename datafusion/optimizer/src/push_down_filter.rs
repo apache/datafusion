@@ -23,7 +23,9 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
+use log::{Level, debug, log_enabled};
 
+use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -176,27 +178,9 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     }
 }
 
-/// For a given JOIN type, determine whether each input of the join is preserved
-/// for the join condition (`ON` clause filters).
-///
-/// It is only correct to push filters below a join for preserved inputs.
-///
-/// # Return Value
-/// A tuple of booleans - (left_preserved, right_preserved).
-///
-/// See [`lr_is_preserved`] for a definition of "preserved".
+/// See [`JoinType::on_lr_is_preserved`] for details.
 pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
-    match join_type {
-        JoinType::Inner => (true, true),
-        JoinType::Left => (false, true),
-        JoinType::Right => (true, false),
-        JoinType::Full => (false, false),
-        JoinType::LeftSemi | JoinType::RightSemi => (true, true),
-        JoinType::LeftAnti => (false, true),
-        JoinType::RightAnti => (true, false),
-        JoinType::LeftMark => (false, true),
-        JoinType::RightMark => (true, false),
-    }
+    join_type.on_lr_is_preserved()
 }
 
 /// Evaluates the columns referenced in the given expression to see if they refer
@@ -543,8 +527,19 @@ fn push_down_join(
         .map_or_else(Vec::new, |filter| split_conjunction_owned(filter.clone()));
 
     // Are there any new join predicates that can be inferred from the filter expressions?
-    let inferred_join_predicates =
-        infer_join_predicates(&join, &predicates, &on_filters)?;
+    let inferred_join_predicates = with_debug_timing("infer_join_predicates", || {
+        infer_join_predicates(&join, &predicates, &on_filters)
+    })?;
+
+    if log_enabled!(Level::Debug) {
+        debug!(
+            "push_down_filter: join_type={:?}, parent_predicates={}, on_filters={}, inferred_join_predicates={}",
+            join.join_type,
+            predicates.len(),
+            on_filters.len(),
+            inferred_join_predicates.len()
+        );
+    }
 
     if on_filters.is_empty()
         && predicates.is_empty()
@@ -618,7 +613,7 @@ impl InferredPredicates {
     fn new(join_type: JoinType) -> Self {
         Self {
             predicates: vec![],
-            is_inner_join: matches!(join_type, JoinType::Inner),
+            is_inner_join: join_type == JoinType::Inner,
         }
     }
 
@@ -783,7 +778,15 @@ impl OptimizerRule for PushDownFilter {
 
         let predicate = split_conjunction_owned(filter.predicate.clone());
         let old_predicate_len = predicate.len();
-        let new_predicates = simplify_predicates(predicate)?;
+        let new_predicates =
+            with_debug_timing("simplify_predicates", || simplify_predicates(predicate))?;
+        if log_enabled!(Level::Debug) {
+            debug!(
+                "push_down_filter: simplify_predicates old_count={}, new_count={}",
+                old_predicate_len,
+                new_predicates.len()
+            );
+        }
         if old_predicate_len != new_predicates.len() {
             let Some(new_predicate) = conjunction(new_predicates) else {
                 // new_predicates is empty - remove the filter entirely
@@ -791,6 +794,13 @@ impl OptimizerRule for PushDownFilter {
                 return Ok(Transformed::yes(Arc::unwrap_or_clone(filter.input)));
             };
             filter.predicate = new_predicate;
+        }
+
+        // If the child has a fetch (limit) or skip (offset), pushing a filter
+        // below it would change semantics: the limit/offset should apply before
+        // the filter, not after.
+        if filter.input.fetch()?.is_some() || filter.input.skip()?.is_some() {
+            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
         }
 
         match Arc::unwrap_or_clone(filter.input) {
@@ -1395,6 +1405,22 @@ impl PushDownFilter {
     }
 }
 
+fn with_debug_timing<T, F>(label: &'static str, f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    if !log_enabled!(Level::Debug) {
+        return f();
+    }
+    let start = Instant::now();
+    let result = f();
+    debug!(
+        "push_down_filter_timing: section={label}, elapsed_us={}",
+        start.elapsed().as_micros()
+    );
+    result
+}
+
 /// replaces columns by its name on the projection.
 pub fn replace_cols_by_name(
     e: Expr,
@@ -1439,11 +1465,11 @@ mod tests {
     use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{Field, Schema, SchemaRef};
     use async_trait::async_trait;
 
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-    use datafusion_expr::expr::{ScalarFunction, WindowFunction};
+    use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
@@ -3934,9 +3960,6 @@ mod tests {
     }
 
     impl ScalarUDFImpl for TestScalarUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "TestScalarUDF"
         }
@@ -4293,6 +4316,65 @@ mod tests {
         Filter: val > Int64(150)
           Projection: leaf_udf(test.a) AS val, test.b, test.c
             TableScan: test, full_filters=[test.b > Int64(5)]
+        "
+        )
+    }
+
+    #[test]
+    fn filter_not_pushed_down_through_table_scan_with_fetch() -> Result<()> {
+        let scan = test_table_scan()?;
+        let scan_with_fetch = match scan {
+            LogicalPlan::TableScan(scan) => LogicalPlan::TableScan(TableScan {
+                fetch: Some(10),
+                ..scan
+            }),
+            _ => unreachable!(),
+        };
+        let plan = LogicalPlanBuilder::from(scan_with_fetch)
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        // Filter must NOT be pushed into the table scan when it has a fetch (limit)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > Int64(10)
+          TableScan: test, fetch=10
+        "
+        )
+    }
+
+    #[test]
+    fn filter_push_down_through_sort_without_fetch() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![col("a").sort(true, true)])?
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        // Filter should be pushed below the sort
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS FIRST
+          TableScan: test, full_filters=[test.a > Int64(10)]
+        "
+        )
+    }
+
+    #[test]
+    fn filter_not_pushed_down_through_sort_with_fetch() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort_with_limit(vec![col("a").sort(true, true)], Some(5))?
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        // Filter must NOT be pushed below the sort when it has a fetch (limit),
+        // because the limit should apply before the filter.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > Int64(10)
+          Sort: test.a ASC NULLS FIRST, fetch=5
+            TableScan: test
         "
         )
     }

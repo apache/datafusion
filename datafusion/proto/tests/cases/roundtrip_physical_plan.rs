@@ -36,8 +36,9 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, FileGroup, FileOutputMode, FileScanConfigBuilder, FileSinkConfig,
-    ParquetSource, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
+    ArrowSource, FileGroup, FileOutputMode, FileScanConfig, FileScanConfigBuilder,
+    FileSinkConfig, ParquetSource, wrap_partition_type_in_dict,
+    wrap_partition_value_in_dict,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
@@ -795,6 +796,19 @@ fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_filter_with_fetch() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let predicate = col("a", &schema)?;
+    let filter = FilterExecBuilder::new(predicate, Arc::new(EmptyExec::new(schema)))
+        .with_fetch(Some(10))
+        .build()?;
+    assert_eq!(filter.fetch(), Some(10));
+    roundtrip_test(Arc::new(filter))
+}
+
+#[test]
 fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
@@ -927,6 +941,59 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             .build();
 
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
+}
+
+#[test]
+fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .with_statistics(Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(1024),
+                column_statistics: Statistics::unknown_column(&file_schema),
+            })
+            .build();
+    let exec_plan = DataSourceExec::from_data_source(scan_config);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtripped =
+        roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
+
+    let data_source = roundtripped
+        .as_any()
+        .downcast_ref::<DataSourceExec>()
+        .ok_or_else(|| {
+            internal_datafusion_err!("Expected DataSourceExec after roundtrip")
+        })?;
+    let file_scan = data_source
+        .data_source()
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .ok_or_else(|| {
+            internal_datafusion_err!("Expected FileScanConfig after roundtrip")
+        })?;
+    let parquet_source = file_scan
+        .file_source()
+        .as_any()
+        .downcast_ref::<ParquetSource>()
+        .ok_or_else(|| {
+            internal_datafusion_err!("Expected ParquetSource after roundtrip")
+        })?;
+
+    assert!(
+        parquet_source.parquet_file_reader_factory().is_some(),
+        "Parquet reader factory should be attached after decoding from protobuf"
+    );
+    Ok(())
 }
 
 #[test]
@@ -1213,7 +1280,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        if let Some(udf) = binding.as_any().downcast_ref::<MyRegexUdf>() {
+        if let Some(udf) = (binding.as_ref() as &dyn Any).downcast_ref::<MyRegexUdf>() {
             let proto = MyRegexUdfNode {
                 pattern: udf.pattern.clone(),
             };
@@ -1491,7 +1558,8 @@ fn roundtrip_analyze() -> Result<()> {
     roundtrip_test(Arc::new(AnalyzeExec::new(
         false,
         false,
-        vec![MetricType::SUMMARY, MetricType::DEV],
+        vec![MetricType::Summary, MetricType::Dev],
+        None,
         input,
         Arc::new(schema),
     )))
@@ -1712,6 +1780,35 @@ fn roundtrip_union() -> Result<()> {
     let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
     let union = UnionExec::try_new(inputs)?;
     roundtrip_test(union)
+}
+
+#[test]
+fn roundtrip_repartition_preserve_order() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+    let sort_exprs: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    // Create two sorted single-partition inputs, then union them to get
+    // a sorted input with 2 partitions.
+    let source1 = SortExec::new(
+        sort_exprs.clone(),
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+    );
+    let source2 = SortExec::new(sort_exprs, Arc::new(EmptyExec::new(schema)));
+    let union = UnionExec::try_new(vec![
+        Arc::new(source1) as Arc<dyn ExecutionPlan>,
+        Arc::new(source2) as Arc<dyn ExecutionPlan>,
+    ])?;
+
+    let repartition = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
+        .with_preserve_order();
+    assert!(repartition.preserve_order());
+
+    roundtrip_test(Arc::new(repartition))
 }
 
 #[test]
@@ -2340,10 +2437,6 @@ async fn roundtrip_async_func_exec() -> Result<()> {
     }
 
     impl ScalarUDFImpl for TestAsyncUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "test_async_udf"
         }
@@ -2405,7 +2498,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     let on_columns = vec![datafusion::physical_plan::expressions::col("col", &schema)?];
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
         on_columns,
-        datafusion::physical_plan::joins::SeededRandomState::with_seeds(0, 0, 0, 0),
+        datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
         hash_map,
         "test_lookup".to_string(),
     ));
@@ -2449,7 +2542,7 @@ fn roundtrip_hash_expr() -> Result<()> {
     let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
     let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(HashExpr::new(
         on_columns,
-        SeededRandomState::with_seeds(0, 1, 2, 3), // arbitrary random seeds for testing
+        SeededRandomState::with_seed(0), // arbitrary random seed for testing
         "test_hash".to_string(),
     ));
 
@@ -2463,7 +2556,7 @@ fn roundtrip_hash_expr() -> Result<()> {
 
     // Confirm that the debug string contains the random state seeds
     assert!(
-        format!("{filter:?}").contains("test_hash(a@0, b@1, [0,1,2,3])"),
+        format!("{filter:?}").contains("test_hash(a@0, b@1, [0])"),
         "Debug string missing seeds: {filter:?}"
     );
     roundtrip_test(filter)
@@ -3054,4 +3147,49 @@ fn test_session_id_rotation_with_execution_plans() -> Result<()> {
     assert_eq!(plan1.schema(), plan2.schema());
 
     Ok(())
+}
+
+/// Tests that `lead` window function with offset and default value args
+/// survives a protobuf round-trip. This is a regression test for a bug
+/// where `expressions()` (used during serialization) returns only the
+/// column expression for lead/lag, silently dropping the offset and
+/// default value literal args.
+#[test]
+fn roundtrip_lead_with_default_value() -> Result<()> {
+    use datafusion::functions_window::lead_lag::lead_udwf;
+
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    // lead(a, 2, 42) — column a, offset 2, default value 42
+    let lead_window = create_udwf_window_expr(
+        &lead_udwf(),
+        &[col("a", &schema)?, lit(2i64), lit(42i64)],
+        schema.as_ref(),
+        "test lead with default".to_string(),
+        false,
+    )?;
+
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
+        lead_window,
+        &[col("b", &schema)?],
+        &[PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }],
+        Arc::new(WindowFrame::new(None)),
+    ));
+
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    roundtrip_test(Arc::new(BoundedWindowAggExec::try_new(
+        vec![udwf_expr],
+        input,
+        InputOrderMode::Sorted,
+        true,
+    )?))
 }

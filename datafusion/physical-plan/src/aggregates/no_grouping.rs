@@ -161,6 +161,8 @@ impl AggregateStreamInner {
             return Ok(());
         };
 
+        let mut bounds_changed = false;
+
         for acc_info in &filter_state.supported_accumulators_info {
             let acc =
                 self.accumulators
@@ -176,20 +178,27 @@ impl AggregateStreamInner {
             let current_bound = acc.evaluate()?;
             {
                 let mut bound = acc_info.shared_bound.lock();
-                match acc_info.aggr_type {
+                let new_bound = match acc_info.aggr_type {
                     DynamicFilterAggregateType::Max => {
-                        *bound = scalar_max(&bound, &current_bound)?;
+                        scalar_max(&bound, &current_bound)?
                     }
                     DynamicFilterAggregateType::Min => {
-                        *bound = scalar_min(&bound, &current_bound)?;
+                        scalar_min(&bound, &current_bound)?
                     }
+                };
+                if new_bound != *bound {
+                    *bound = new_bound;
+                    bounds_changed = true;
                 }
             }
         }
 
-        // Step 2: Sync the dynamic filter physical expression with reader
-        let predicate = self.build_dynamic_filter_from_accumulator_bounds()?;
-        filter_state.filter.update(predicate)?;
+        // Step 2: Sync the dynamic filter physical expression with reader,
+        // but only if any bound actually changed.
+        if bounds_changed {
+            let predicate = self.build_dynamic_filter_from_accumulator_bounds()?;
+            filter_state.filter.update(predicate)?;
+        }
 
         Ok(())
     }

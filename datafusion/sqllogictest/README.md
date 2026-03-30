@@ -70,6 +70,37 @@ cargo test --test sqllogictests -- ddl --complete
 RUST_LOG=debug cargo test --test sqllogictests -- ddl
 ```
 
+### Per-file timing summary
+
+The sqllogictest runner can emit deterministic per-file elapsed timings to help
+identify slow test files.
+
+Timing summary output is disabled by default and enabled with
+`--timing-summary` (or `SLT_TIMING_SUMMARY=true`).
+
+When timing summary is enabled, periodic `Progress:` lines are suppressed by
+default to keep output stable.
+
+```shell
+# Show deterministic per-file elapsed timings (sorted slowest first)
+cargo test --test sqllogictests -- --timing-summary
+```
+
+```shell
+# Keep only the top 10 lines using standard shell tooling
+cargo test --test sqllogictests -- --timing-summary | head -n 10
+```
+
+```shell
+# Enable via environment variable
+SLT_TIMING_SUMMARY=1 cargo test --test sqllogictests
+```
+
+```shell
+# Optional debug logging for per-task slow files (>30s), disabled by default
+SLT_TIMING_DEBUG_SLOW_FILES=1 cargo test --test sqllogictests
+```
+
 ## Cookbook: Adding Tests
 
 1. Add queries

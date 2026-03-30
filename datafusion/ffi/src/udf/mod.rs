@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use abi_stable::StableAbi;
-use abi_stable::std_types::{RResult, RString, RVec};
-use arrow::array::ArrayRef;
+use abi_stable::std_types::{RString, RVec};
+use arrow::array::Array;
 use arrow::datatypes::{DataType, Field};
 use arrow::error::ArrowError;
 use arrow::ffi::{FFI_ArrowSchema, from_ffi, to_ffi};
@@ -38,6 +39,8 @@ use return_type_args::{
 };
 
 use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
+use crate::config::FFI_ConfigOptions;
+use crate::expr::columnar_value::FFI_ColumnarValue;
 use crate::util::{
     FFIResult, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
 };
@@ -73,7 +76,8 @@ pub struct FFI_ScalarUDF {
         arg_fields: RVec<WrappedSchema>,
         num_rows: usize,
         return_field: WrappedSchema,
-    ) -> FFIResult<WrappedArray>,
+        config_options: FFI_ConfigOptions,
+    ) -> FFIResult<FFI_ColumnarValue>,
 
     /// See [`ScalarUDFImpl`] for details on short_circuits
     pub short_circuits: bool,
@@ -159,7 +163,8 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
     arg_fields: RVec<WrappedSchema>,
     number_rows: usize,
     return_field: WrappedSchema,
-) -> FFIResult<WrappedArray> {
+    config_options: FFI_ConfigOptions,
+) -> FFIResult<FFI_ColumnarValue> {
     unsafe {
         let args = args
             .into_iter()
@@ -181,28 +186,22 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
             })
             .collect::<Result<Vec<FieldRef>>>();
         let arg_fields = rresult_return!(arg_fields);
+        let config_options = rresult_return!(ConfigOptions::try_from(config_options));
+        let config_options = Arc::new(config_options);
 
         let args = ScalarFunctionArgs {
             args,
             arg_fields,
             number_rows,
             return_field,
-            // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options,
         };
 
-        let result = rresult_return!(
+        rresult!(
             udf.inner()
                 .invoke_with_args(args)
-                .and_then(|r| r.to_array(number_rows))
-        );
-
-        let (result_array, result_schema) = rresult_return!(to_ffi(&result.to_data()));
-
-        RResult::ROk(WrappedArray {
-            array: result_array,
-            schema: WrappedSchema(result_schema),
-        })
+                .and_then(FFI_ColumnarValue::try_from)
+        )
     }
 }
 
@@ -232,6 +231,12 @@ impl Clone for FFI_ScalarUDF {
 
 impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
     fn from(udf: Arc<ScalarUDF>) -> Self {
+        if let Some(udf) =
+            (udf.inner().as_ref() as &dyn Any).downcast_ref::<ForeignScalarUDF>()
+        {
+            return udf.udf.clone();
+        }
+
         let name = udf.name().into();
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();
@@ -330,10 +335,6 @@ impl From<&FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
 }
 
 impl ScalarUDFImpl for ForeignScalarUDF {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -366,8 +367,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             arg_fields,
             number_rows,
             return_field,
-            // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
-            config_options: _config_options,
+            config_options,
         } = invoke_args;
 
         let args = args
@@ -396,6 +396,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 
         let return_field = return_field.as_ref().clone();
         let return_field = WrappedSchema(FFI_ArrowSchema::try_from(return_field)?);
+        let config_options = config_options.as_ref().into();
 
         let result = unsafe {
             (self.udf.invoke_with_args)(
@@ -404,13 +405,12 @@ impl ScalarUDFImpl for ForeignScalarUDF {
                 arg_fields,
                 number_rows,
                 return_field,
+                config_options,
             )
         };
 
         let result = df_result!(result)?;
-        let result_array: ArrayRef = result.try_into()?;
-
-        Ok(ColumnarValue::Array(result_array))
+        result.try_into()
     }
 
     fn aliases(&self) -> &[String] {
@@ -433,6 +433,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::any::Any;
 
     #[test]
     fn test_round_trip_scalar_udf() -> Result<()> {
@@ -459,14 +460,17 @@ mod tests {
 
         // Verify local libraries can be downcast to their original
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
-        assert!(foreign_udf.as_any().downcast_ref::<AbsFunc>().is_some());
+        assert!(
+            (foreign_udf.as_ref() as &dyn Any)
+                .downcast_ref::<AbsFunc>()
+                .is_some()
+        );
 
         // Verify different library markers generate foreign providers
         ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
         assert!(
-            foreign_udf
-                .as_any()
+            (foreign_udf.as_ref() as &dyn Any)
                 .downcast_ref::<ForeignScalarUDF>()
                 .is_some()
         );

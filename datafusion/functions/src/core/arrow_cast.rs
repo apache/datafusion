@@ -19,12 +19,11 @@
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
-use datafusion_common::types::logical_string;
 use datafusion_common::{
-    Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err,
+    Result, ScalarValue, arrow_datafusion_err, datatype::DataTypeExt,
+    exec_datafusion_err, exec_err, internal_err, types::logical_string,
+    utils::take_function_args,
 };
-use datafusion_common::{exec_datafusion_err, utils::take_function_args};
-use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
@@ -115,10 +114,6 @@ impl ArrowCastFunc {
 }
 
 impl ScalarUDFImpl for ArrowCastFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "arrow_cast"
     }
@@ -163,7 +158,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // convert this into a real cast
-        let target_type = data_type_from_args(&args)?;
+        let target_type = data_type_from_args(self.name(), &args)?;
         // remove second (type) argument
         args.pop().unwrap();
         let arg = args.pop().unwrap();
@@ -176,7 +171,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
-                data_type: target_type,
+                field: target_type.into_nullable_field_ref(),
             })
         };
         // return the newly written argument to DataFusion
@@ -189,12 +184,12 @@ impl ScalarUDFImpl for ArrowCastFunc {
 }
 
 /// Returns the requested type from the arguments
-fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
-    let [_, type_arg] = take_function_args("arrow_cast", args)?;
+pub(crate) fn data_type_from_args(name: &str, args: &[Expr]) -> Result<DataType> {
+    let [_, type_arg] = take_function_args(name, args)?;
 
     let Expr::Literal(ScalarValue::Utf8(Some(val)), _) = type_arg else {
         return exec_err!(
-            "arrow_cast requires its second argument to be a constant string, got {:?}",
+            "{name} requires its second argument to be a constant string, got {:?}",
             type_arg
         );
     };

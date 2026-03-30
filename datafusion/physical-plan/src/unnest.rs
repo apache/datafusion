@@ -22,18 +22,19 @@ use std::task::{Poll, ready};
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{
-    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
-    RecordOutput,
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    MetricsSet, RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, check_if_same_properties,
 };
 
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray, Int64Array,
-    LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray, new_null_array,
+    LargeListArray, LargeListViewArray, ListArray, ListViewArray, PrimitiveArray, Scalar,
+    StructArray, new_null_array,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -42,6 +43,7 @@ use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
     internal_err,
@@ -74,7 +76,7 @@ pub struct UnnestExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl UnnestExec {
@@ -100,7 +102,7 @@ impl UnnestExec {
             struct_column_indices,
             options,
             metrics: Default::default(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -193,6 +195,17 @@ impl UnnestExec {
     pub fn options(&self) -> &UnnestOptions {
         &self.options
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for UnnestExec {
@@ -221,7 +234,7 @@ impl ExecutionPlan for UnnestExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -229,12 +242,20 @@ impl ExecutionPlan for UnnestExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(UnnestExec::new(
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
             self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
             Arc::clone(&self.schema),
@@ -281,10 +302,13 @@ struct UnnestMetrics {
 
 impl UnnestMetrics {
     fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
+        let input_batches = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_batches", partition);
 
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+        let input_rows = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_rows", partition);
 
         Self {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
@@ -406,9 +430,7 @@ fn flatten_struct_cols(
                     Ok(struct_arr.columns().to_vec())
                 }
                 data_type => internal_err!(
-                    "expecting column {} from input plan to be a struct, got {:?}",
-                    idx,
-                    data_type
+                    "expecting column {idx} from input plan to be a struct, got {data_type}"
                 ),
             },
             None => Ok(vec![Arc::clone(column_data)]),
@@ -827,6 +849,30 @@ impl ListArrayType for FixedSizeListArray {
     }
 }
 
+impl ListArrayType for ListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row] as i64;
+        let size = self.value_sizes()[row] as i64;
+        (offset, offset + size)
+    }
+}
+
+impl ListArrayType for LargeListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row];
+        let size = self.value_sizes()[row];
+        (offset, offset + size)
+    }
+}
+
 /// Unnest multiple list arrays according to the length array.
 fn unnest_list_arrays(
     list_arrays: &[ArrayRef],
@@ -842,6 +888,12 @@ fn unnest_list_arrays(
             }
             DataType::FixedSizeList(_, _) => {
                 Ok(list_array.as_fixed_size_list() as &dyn ListArrayType)
+            }
+            DataType::ListView(_) => {
+                Ok(list_array.as_list_view::<i32>() as &dyn ListArrayType)
+            }
+            DataType::LargeListView(_) => {
+                Ok(list_array.as_list_view::<i64>() as &dyn ListArrayType)
             }
             other => exec_err!("Invalid unnest datatype {other }"),
         })

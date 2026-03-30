@@ -56,9 +56,6 @@ impl MyRegexUdf {
 
 /// Implement the ScalarUDFImpl trait for MyRegexUdf
 impl ScalarUDFImpl for MyRegexUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "regex_udf"
     }
@@ -108,6 +105,7 @@ impl AggregateUDFImpl for MyAggregateUDF {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "aggregate_udf"
     }

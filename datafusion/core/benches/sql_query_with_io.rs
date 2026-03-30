@@ -31,7 +31,7 @@ use datafusion::{
 use datafusion_execution::runtime_env::RuntimeEnv;
 use itertools::Itertools;
 use object_store::{
-    ObjectStore,
+    ObjectStore, ObjectStoreExt,
     memory::InMemory,
     path::Path,
     throttle::{ThrottleConfig, ThrottledStore},

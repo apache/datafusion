@@ -18,17 +18,19 @@
 //! [`ParquetOpener`] for opening Parquet files
 
 use crate::page_filter::PagePruningAccessPlanFilter;
+use crate::row_filter::build_projection_read_plan;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Schema};
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
+use parquet::errors::ParquetError;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -47,24 +49,26 @@ use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
+    MetricCategory, PruningMetrics,
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
-use crate::sort::reverse_row_selection;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::{Stream, StreamExt, TryStreamExt, ready};
+use futures::{Stream, StreamExt, ready};
 use log::debug;
+use parquet::DecodeResult;
+use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -122,64 +126,6 @@ pub(super) struct ParquetOpener {
     pub reverse_row_groups: bool,
 }
 
-/// Represents a prepared access plan with optional row selection
-pub(crate) struct PreparedAccessPlan {
-    /// Row group indexes to read
-    pub(crate) row_group_indexes: Vec<usize>,
-    /// Optional row selection for filtering within row groups
-    pub(crate) row_selection: Option<parquet::arrow::arrow_reader::RowSelection>,
-}
-
-impl PreparedAccessPlan {
-    /// Create a new prepared access plan from a ParquetAccessPlan
-    pub(crate) fn from_access_plan(
-        access_plan: ParquetAccessPlan,
-        rg_metadata: &[RowGroupMetaData],
-    ) -> Result<Self> {
-        let row_group_indexes = access_plan.row_group_indexes();
-        let row_selection = access_plan.into_overall_row_selection(rg_metadata)?;
-
-        Ok(Self {
-            row_group_indexes,
-            row_selection,
-        })
-    }
-
-    /// Reverse the access plan for reverse scanning
-    pub(crate) fn reverse(
-        mut self,
-        file_metadata: &parquet::file::metadata::ParquetMetaData,
-    ) -> Result<Self> {
-        // Get the row group indexes before reversing
-        let row_groups_to_scan = self.row_group_indexes.clone();
-
-        // Reverse the row group indexes
-        self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
-
-        // If we have a row selection, reverse it to match the new row group order
-        if let Some(row_selection) = self.row_selection {
-            self.row_selection = Some(reverse_row_selection(
-                &row_selection,
-                file_metadata,
-                &row_groups_to_scan, // Pass the original (non-reversed) row group indexes
-            )?);
-        }
-
-        Ok(self)
-    }
-
-    /// Apply this access plan to a ParquetRecordBatchStreamBuilder
-    fn apply_to_builder(
-        self,
-        mut builder: ParquetRecordBatchStreamBuilder<Box<dyn AsyncFileReader>>,
-    ) -> ParquetRecordBatchStreamBuilder<Box<dyn AsyncFileReader>> {
-        if let Some(row_selection) = self.row_selection {
-            builder = builder.with_row_selection(row_selection);
-        }
-        builder.with_row_groups(self.row_group_indexes)
-    }
-}
-
 impl FileOpener for ParquetOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         // -----------------------------------
@@ -191,6 +137,7 @@ impl FileOpener for ParquetOpener {
         let file_name = file_location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, self.partition_index);
 
         let metadata_size_hint = partitioned_file
             .metadata_size_hint
@@ -267,8 +214,12 @@ impl FileOpener for ParquetOpener {
         let enable_bloom_filter = self.enable_bloom_filter;
         let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
         let limit = self.limit;
+        let parquet_file_reader_factory = Arc::clone(&self.parquet_file_reader_factory);
+        let partition_index = self.partition_index;
+        let metrics = self.metrics.clone();
 
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
             .global_counter("num_predicate_creation_errors");
 
         let expr_adapter_factory = Arc::clone(&self.expr_adapter_factory);
@@ -348,7 +299,8 @@ impl FileOpener for ParquetOpener {
             // unnecessary I/O. We decide later if it is needed to evaluate the
             // pruning predicates. Thus default to not requesting it from the
             // underlying reader.
-            let mut options = ArrowReaderOptions::new().with_page_index(false);
+            let mut options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
                 options = options.with_file_decryption_properties(Arc::clone(&fd_val));
@@ -409,17 +361,27 @@ impl FileOpener for ParquetOpener {
             // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
             // Additionally, if any casts were inserted we can move casts from the column to the literal side:
             // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
-            let rewriter = expr_adapter_factory.create(
-                Arc::clone(&logical_file_schema),
-                Arc::clone(&physical_file_schema),
-            )?;
-            let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
-            predicate = predicate
-                .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
-                .transpose()?;
-            // Adapt projections to the physical file schema as well
-            projection = projection
-                .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
+            //
+            // When the schemas are identical and there is no predicate, the
+            // rewriter is a no-op: column indices already match (partition
+            // columns are appended after file columns in the table schema),
+            // types are the same, and there are no missing columns. Skip the
+            // tree walk entirely in that case.
+            let needs_rewrite =
+                predicate.is_some() || logical_file_schema != physical_file_schema;
+            if needs_rewrite {
+                let rewriter = expr_adapter_factory.create(
+                    Arc::clone(&logical_file_schema),
+                    Arc::clone(&physical_file_schema),
+                )?;
+                let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
+                predicate = predicate
+                    .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
+                    .transpose()?;
+                // Adapt projections to the physical file schema as well
+                projection = projection
+                    .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
+            }
 
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
@@ -443,57 +405,14 @@ impl FileOpener for ParquetOpener {
 
             metadata_timer.stop();
 
-            // ---------------------------------------------------------
-            // Step: construct builder for the final RecordBatch stream
-            // ---------------------------------------------------------
-
-            let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
-                async_file_reader,
-                reader_metadata,
-            );
-
-            // ---------------------------------------------------------------------
-            // Step: optionally add row filter to the builder
-            //
-            // Row filter is used for late materialization in parquet decoding, see
-            // `row_filter` for details.
-            // ---------------------------------------------------------------------
-
-            // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
-                let row_filter = row_filter::build_row_filter(
-                    &predicate,
-                    &physical_file_schema,
-                    builder.metadata(),
-                    reorder_predicates,
-                    &file_metrics,
-                );
-
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{predicate:?}': {e}"
-                        );
-                    }
-                };
-            };
-            if force_filter_selections {
-                builder =
-                    builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
-            }
-
             // ------------------------------------------------------------
             // Step: prune row groups by range, predicate and bloom filter
             // ------------------------------------------------------------
 
             // Determine which row groups to actually read. The idea is to skip
             // as many row groups as possible based on the metadata and query
-            let file_metadata = Arc::clone(builder.metadata());
-            let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
+            let file_metadata = Arc::clone(reader_metadata.metadata());
+            let pruning_pred = pruning_predicate.as_ref().map(|p| p.as_ref());
             let rg_metadata = file_metadata.row_groups();
             // track which row groups to actually read
             let access_plan =
@@ -505,13 +424,13 @@ impl FileOpener for ParquetOpener {
             }
 
             // If there is a predicate that can be evaluated against the metadata
-            if let Some(predicate) = predicate.as_ref() {
+            if let Some(pruning_pred) = pruning_pred.as_ref() {
                 if enable_row_group_stats_pruning {
                     row_groups.prune_by_statistics(
                         &physical_file_schema,
-                        builder.parquet_schema(),
+                        reader_metadata.parquet_schema(),
                         rg_metadata,
-                        predicate,
+                        pruning_pred,
                         &file_metrics,
                     );
                 } else {
@@ -523,11 +442,27 @@ impl FileOpener for ParquetOpener {
                 }
 
                 if enable_bloom_filter && !row_groups.is_empty() {
+                    // Use the existing reader for bloom filter I/O;
+                    // replace with a fresh reader for decoding below.
+                    let bf_reader = std::mem::replace(
+                        &mut async_file_reader,
+                        parquet_file_reader_factory.create_reader(
+                            partition_index,
+                            partitioned_file.clone(),
+                            metadata_size_hint,
+                            &metrics,
+                        )?,
+                    );
+                    let mut bf_builder =
+                        ParquetRecordBatchStreamBuilder::new_with_metadata(
+                            bf_reader,
+                            reader_metadata.clone(),
+                        );
                     row_groups
                         .prune_by_bloom_filters(
                             &physical_file_schema,
-                            &mut builder,
-                            predicate,
+                            &mut bf_builder,
+                            pruning_pred,
                             &file_metrics,
                         )
                         .await;
@@ -569,15 +504,14 @@ impl FileOpener for ParquetOpener {
                 access_plan = p.prune_plan_with_page_index(
                     access_plan,
                     &physical_file_schema,
-                    builder.parquet_schema(),
+                    reader_metadata.parquet_schema(),
                     file_metadata.as_ref(),
                     &file_metrics,
                 );
             }
 
             // Prepare the access plan (extract row groups and row selection)
-            let mut prepared_plan =
-                PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)?;
+            let mut prepared_plan = access_plan.prepare(rg_metadata)?;
 
             // ----------------------------------------------------------
             // Step: potentially reverse the access plan for performance.
@@ -587,8 +521,59 @@ impl FileOpener for ParquetOpener {
                 prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
             }
 
+            if prepared_plan.row_group_indexes.is_empty() {
+                return Ok(futures::stream::empty().boxed());
+            }
+
+            // ---------------------------------------------------------
+            // Step: construct builder for the final RecordBatch stream
+            // ---------------------------------------------------------
+
+            let mut builder =
+                ParquetPushDecoderBuilder::new_with_metadata(reader_metadata.clone())
+                    .with_batch_size(batch_size);
+
+            // ---------------------------------------------------------------------
+            // Step: optionally add row filter to the builder
+            //
+            // Row filter is used for late materialization in parquet decoding, see
+            // `row_filter` for details.
+            // ---------------------------------------------------------------------
+
+            // Filter pushdown: evaluate predicates during scan
+            if let Some(predicate) =
+                pushdown_filters.then_some(predicate.as_ref()).flatten()
+            {
+                let row_filter = row_filter::build_row_filter(
+                    predicate,
+                    &physical_file_schema,
+                    file_metadata.as_ref(),
+                    reorder_predicates,
+                    &file_metrics,
+                );
+
+                match row_filter {
+                    Ok(Some(filter)) => {
+                        builder = builder.with_row_filter(filter);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        debug!(
+                            "Ignoring error building row filter for '{predicate:?}': {e}"
+                        );
+                    }
+                };
+            };
+            if force_filter_selections {
+                builder =
+                    builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
+            }
+
             // Apply the prepared plan to the builder
-            builder = prepared_plan.apply_to_builder(builder);
+            if let Some(row_selection) = prepared_plan.row_selection {
+                builder = builder.with_row_selection(row_selection);
+            }
+            builder = builder.with_row_groups(prepared_plan.row_group_indexes);
 
             if let Some(limit) = limit {
                 builder = builder.with_limit(limit)
@@ -601,12 +586,14 @@ impl FileOpener for ParquetOpener {
             // metrics from the arrow reader itself
             let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
-            let indices = projection.column_indices();
-            let mask = ProjectionMask::roots(builder.parquet_schema(), indices);
+            let read_plan = build_projection_read_plan(
+                projection.expr_iter(),
+                &physical_file_schema,
+                reader_metadata.parquet_schema(),
+            );
 
-            let stream = builder
-                .with_projection(mask)
-                .with_batch_size(batch_size)
+            let decoder = builder
+                .with_projection(read_plan.projection_mask)
                 .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
 
@@ -616,57 +603,40 @@ impl FileOpener for ParquetOpener {
                 file_metrics.predicate_cache_inner_records.clone();
             let predicate_cache_records = file_metrics.predicate_cache_records.clone();
 
-            let stream_schema = Arc::clone(stream.schema());
-            // Check if we need to replace the schema to handle things like differing nullability or metadata.
-            // See note below about file vs. output schema.
-            let replace_schema = !stream_schema.eq(&output_schema);
-
             // Rebase column indices to match the narrowed stream schema.
             // The projection expressions have indices based on physical_file_schema,
             // but the stream only contains the columns selected by the ProjectionMask.
+            let stream_schema = read_plan.projected_schema;
+            let replace_schema = stream_schema != output_schema;
             let projection = projection
                 .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
-
             let projector = projection.make_projector(&stream_schema)?;
-
-            let stream = stream.map_err(DataFusionError::from).map(move |b| {
-                b.and_then(|mut b| {
-                    copy_arrow_reader_metrics(
-                        &arrow_reader_metrics,
-                        &predicate_cache_inner_records,
-                        &predicate_cache_records,
-                    );
-                    b = projector.project_batch(&b)?;
-                    if replace_schema {
-                        // Ensure the output batch has the expected schema.
-                        // This handles things like schema level and field level metadata, which may not be present
-                        // in the physical file schema.
-                        // It is also possible for nullability to differ; some writers create files with
-                        // OPTIONAL fields even when there are no nulls in the data.
-                        // In these cases it may make sense for the logical schema to be `NOT NULL`.
-                        // RecordBatch::try_new_with_options checks that if the schema is NOT NULL
-                        // the array cannot contain nulls, amongst other checks.
-                        let (_stream_schema, arrays, num_rows) = b.into_parts();
-                        let options =
-                            RecordBatchOptions::new().with_row_count(Some(num_rows));
-                        RecordBatch::try_new_with_options(
-                            Arc::clone(&output_schema),
-                            arrays,
-                            &options,
-                        )
-                        .map_err(Into::into)
-                    } else {
-                        Ok(b)
-                    }
-                })
-            });
+            let stream = futures::stream::unfold(
+                PushDecoderStreamState {
+                    decoder,
+                    reader: async_file_reader,
+                    projector,
+                    output_schema,
+                    replace_schema,
+                    arrow_reader_metrics,
+                    predicate_cache_inner_records,
+                    predicate_cache_records,
+                    baseline_metrics,
+                },
+                |mut state| async move {
+                    let result = state.transition().await;
+                    result.map(|r| (r, state))
+                },
+            )
+            .fuse();
 
             // ----------------------------------------------------------------------
             // Step: wrap the stream so a dynamic filter can stop the file scan early
             // ----------------------------------------------------------------------
             if let Some(file_pruner) = file_pruner {
+                let boxed_stream = stream.boxed();
                 Ok(EarlyStoppingStream::new(
-                    stream,
+                    boxed_stream,
                     file_pruner,
                     files_ranges_pruned_statistics,
                 )
@@ -678,19 +648,86 @@ impl FileOpener for ParquetOpener {
     }
 }
 
-/// Copies metrics from ArrowReaderMetrics (the metrics collected by the
-/// arrow-rs parquet reader) to the parquet file metrics for DataFusion
-fn copy_arrow_reader_metrics(
-    arrow_reader_metrics: &ArrowReaderMetrics,
-    predicate_cache_inner_records: &Gauge,
-    predicate_cache_records: &Gauge,
-) {
-    if let Some(v) = arrow_reader_metrics.records_read_from_inner() {
-        predicate_cache_inner_records.set(v);
+/// State for a stream that decodes a single Parquet file using a push-based decoder.
+///
+/// The [`transition`](Self::transition) method drives the decoder in a loop: it requests
+/// byte ranges from the [`AsyncFileReader`], pushes the fetched data into the
+/// [`ParquetPushDecoder`], and yields projected [`RecordBatch`]es until the file is
+/// fully consumed.
+struct PushDecoderStreamState {
+    decoder: ParquetPushDecoder,
+    reader: Box<dyn AsyncFileReader>,
+    projector: Projector,
+    output_schema: Arc<Schema>,
+    replace_schema: bool,
+    arrow_reader_metrics: ArrowReaderMetrics,
+    predicate_cache_inner_records: Gauge,
+    predicate_cache_records: Gauge,
+    baseline_metrics: BaselineMetrics,
+}
+
+impl PushDecoderStreamState {
+    /// Advances the decoder state machine until the next [`RecordBatch`] is
+    /// produced, the file is fully consumed, or an error occurs.
+    ///
+    /// On each iteration the decoder is polled via [`ParquetPushDecoder::try_decode`]:
+    /// - [`NeedsData`](DecodeResult::NeedsData) – the requested byte ranges are
+    ///   fetched from the [`AsyncFileReader`] and fed back into the decoder.
+    /// - [`Data`](DecodeResult::Data) – a decoded batch is projected and returned.
+    /// - [`Finished`](DecodeResult::Finished) – signals end-of-stream (`None`).
+    async fn transition(&mut self) -> Option<Result<RecordBatch>> {
+        loop {
+            match self.decoder.try_decode() {
+                Ok(DecodeResult::NeedsData(ranges)) => {
+                    let fetch = async {
+                        let data = self.reader.get_byte_ranges(ranges.clone()).await?;
+                        self.decoder.push_ranges(ranges, data)?;
+                        Ok::<_, ParquetError>(())
+                    };
+                    if let Err(e) = fetch.await {
+                        return Some(Err(DataFusionError::from(e)));
+                    }
+                }
+                Ok(DecodeResult::Data(batch)) => {
+                    let mut timer = self.baseline_metrics.elapsed_compute().timer();
+                    self.copy_arrow_reader_metrics();
+                    let result = self.project_batch(&batch);
+                    timer.stop();
+                    return Some(result);
+                }
+                Ok(DecodeResult::Finished) => {
+                    return None;
+                }
+                Err(e) => {
+                    return Some(Err(DataFusionError::from(e)));
+                }
+            }
+        }
     }
 
-    if let Some(v) = arrow_reader_metrics.records_read_from_cache() {
-        predicate_cache_records.set(v);
+    /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
+    /// arrow-rs parquet reader) to the parquet file metrics for DataFusion
+    fn copy_arrow_reader_metrics(&self) {
+        if let Some(v) = self.arrow_reader_metrics.records_read_from_inner() {
+            self.predicate_cache_inner_records.set(v);
+        }
+        if let Some(v) = self.arrow_reader_metrics.records_read_from_cache() {
+            self.predicate_cache_records.set(v);
+        }
+    }
+
+    fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let mut batch = self.projector.project_batch(batch)?;
+        if self.replace_schema {
+            let (_schema, arrays, num_rows) = batch.into_parts();
+            let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
+            batch = RecordBatch::try_new_with_options(
+                Arc::clone(&self.output_schema),
+                arrays,
+                &options,
+            )?;
+        }
+        Ok(batch)
     }
 }
 
@@ -1037,7 +1074,7 @@ mod test {
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
-    use object_store::{ObjectStore, memory::InMemory, path::Path};
+    use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
 
@@ -1734,7 +1771,7 @@ mod test {
         // Write parquet file with multiple row groups
         // Force small row groups by setting max_row_group_size
         let props = WriterProperties::builder()
-            .set_max_row_group_size(3) // Force each batch into its own row group
+            .set_max_row_group_row_count(Some(3)) // Force each batch into its own row group
             .build();
 
         let data_len = write_parquet_batches(
@@ -1834,7 +1871,7 @@ mod test {
                 .unwrap(); // 4 rows
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(4)
+            .set_max_row_group_row_count(Some(4))
             .build();
 
         let data_len = write_parquet_batches(
@@ -1921,7 +1958,7 @@ mod test {
         let batch3 = record_batch!(("a", Int32, vec![Some(7), Some(8)])).unwrap();
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
 
         let data_len = write_parquet_batches(

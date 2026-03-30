@@ -117,7 +117,7 @@ use datafusion::{
 };
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    plan_datafusion_err, plan_err, tree_node::TreeNodeRecursion,
 };
 use datafusion_expr::{
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
@@ -618,7 +618,7 @@ pub struct SampleExec {
     upper_bound: f64,
     seed: u64,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SampleExec {
@@ -656,7 +656,7 @@ impl SampleExec {
             upper_bound,
             seed,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -686,7 +686,7 @@ impl ExecutionPlan for SampleExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -727,8 +727,8 @@ impl ExecutionPlan for SampleExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let mut stats = self.input.partition_statistics(partition)?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let ratio = self.upper_bound - self.lower_bound;
 
         // Scale statistics by sampling ratio (inexact due to randomness)
@@ -741,7 +741,23 @@ impl ExecutionPlan for SampleExec {
             .map(|n| (n as f64 * ratio) as usize)
             .to_inexact();
 
-        Ok(stats)
+        Ok(Arc::new(stats))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.cache.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 

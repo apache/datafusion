@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::utf8_to_str_type;
@@ -83,10 +82,6 @@ impl RepeatFunc {
 }
 
 impl ScalarUDFImpl for RepeatFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "repeat"
     }

@@ -137,10 +137,9 @@ fn try_unwrap_cast_comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{ScalarValue, tree_node::TreeNode};
-    use datafusion_expr::Operator;
+    use crate::expressions::col;
+    use arrow::datatypes::Field;
+    use datafusion_common::tree_node::TreeNode;
 
     /// Check if an expression is a cast expression
     fn is_cast_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {

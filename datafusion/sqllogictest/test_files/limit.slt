@@ -385,6 +385,25 @@ SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 1
 
+# Verify that EXPLAIN FORMAT TREE shows fetch on FilterExec
+query TT
+EXPLAIN FORMAT TREE SELECT a FROM t1 WHERE a > 3 LIMIT 5;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│         FilterExec        │
+03)│    --------------------   │
+04)│          fetch: 5         │
+05)│      predicate: a > 3     │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│       DataSourceExec      │
+09)│    --------------------   │
+10)│         bytes: 160        │
+11)│       format: memory      │
+12)│          rows: 1          │
+13)└───────────────────────────┘
+
 # generate BIGINT data from 1 to 1000 in multiple partitions
 statement ok
 CREATE TABLE t1000 (i BIGINT) AS
@@ -679,19 +698,19 @@ ON t1.b = t2.b
 ORDER BY t1.b desc, c desc, c2 desc;
 ----
 3 98 96
-3 98 89
+3 98 87
 3 98 82
 3 98 79
 3 97 96
-3 97 89
+3 97 87
 3 97 82
 3 97 79
 3 96 96
-3 96 89
+3 96 87
 3 96 82
 3 96 79
 3 95 96
-3 95 89
+3 95 87
 3 95 82
 3 95 79
 
@@ -865,10 +884,108 @@ limit 1000;
 ----
 1
 
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.explain.show_sizes;
+
+statement ok
+reset datafusion.explain.logical_plan_only;
+
+statement ok
+reset datafusion.optimizer.repartition_file_min_size;
+
 # Tear down test_filter_with_limit table:
 statement ok
 DROP TABLE test_limit_with_partitions;
 
+# Tests for filter pushdown behavior with Sort + LIMIT (fetch).
+
+statement ok
+CREATE TABLE t(id INT, value INT) AS VALUES
+(1, 100),
+(2, 200),
+(3, 300),
+(4, 400),
+(5, 500);
+
+# Take the 3 smallest values (100, 200, 300), then filter value > 200.
+query II
+SELECT * FROM (SELECT * FROM t ORDER BY value LIMIT 3) sub WHERE sub.value > 200;
+----
+3 300
+
+# Take the 3 largest values (500, 400, 300), then filter value < 400.
+query II
+SELECT * FROM (SELECT * FROM t ORDER BY value DESC LIMIT 3) sub WHERE sub.value < 400;
+----
+3 300
+
+# The filter stays above the sort+fetch in the plan.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM t ORDER BY value LIMIT 3) sub WHERE sub.value > 200;
+----
+logical_plan
+01)SubqueryAlias: sub
+02)--Filter: t.value > Int32(200)
+03)----Sort: t.value ASC NULLS LAST, fetch=3
+04)------TableScan: t projection=[id, value]
+physical_plan
+01)FilterExec: value@1 > 200
+02)--SortExec: TopK(fetch=3), expr=[value@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t;
+
 # Tear down src_table table:
 statement ok
 DROP TABLE src_table;
+
+# LIMIT must work when SELECT projects columns in different order than table schema
+
+statement ok
+CREATE TABLE t21176 (col_a TEXT, col_b DOUBLE, col_c TEXT) AS VALUES
+  ('a-0', 0, 'c-0'), ('a-1', 1, 'c-1'), ('a-2', 2, 'c-2'), ('a-3', 3, 'c-3'),
+  ('a-4', 4, 'c-4'), ('a-5', 5, 'c-5'), ('a-6', 6, 'c-6'), ('a-7', 7, 'c-7'),
+  ('a-8', 8, 'c-8'), ('a-9', 9, 'c-9'), ('a-10', 10, 'c-10'), ('a-11', 11, 'c-11'),
+  ('a-12', 12, 'c-12'), ('a-13', 13, 'c-13'), ('a-14', 14, 'c-14'), ('a-15', 15, 'c-15'),
+  ('a-16', 16, 'c-16'), ('a-17', 17, 'c-17'), ('a-18', 18, 'c-18'), ('a-19', 19, 'c-19');
+
+# Schema-order SELECT with LIMIT should return 5 rows
+query RT rowsort
+SELECT col_b, col_c FROM t21176 LIMIT 5;
+----
+0 c-0
+1 c-1
+2 c-2
+3 c-3
+4 c-4
+
+# Reverse-order SELECT with LIMIT should also return 5 rows (not 20)
+query TR rowsort
+SELECT col_c, col_b FROM t21176 LIMIT 5;
+----
+c-0 0
+c-1 1
+c-2 2
+c-3 3
+c-4 4
+
+# Single column reverse SELECT with LIMIT
+query T rowsort
+SELECT col_c FROM t21176 LIMIT 5;
+----
+c-0
+c-1
+c-2
+c-3
+c-4
+
+statement ok
+DROP TABLE t21176;

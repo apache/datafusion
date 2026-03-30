@@ -331,6 +331,8 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
         Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
         Value::UnicodeStringLiteral(s) => Some(s.to_string()),
         Value::EscapedStringLiteral(s) => Some(s.to_string()),
+        Value::QuoteDelimitedStringLiteral(s)
+        | Value::NationalQuoteDelimitedStringLiteral(s) => Some(s.value.to_string()),
         Value::DoubleQuotedString(_)
         | Value::NationalStringLiteral(_)
         | Value::SingleQuotedByteStringLiteral(_)
@@ -464,7 +466,9 @@ impl RecursiveUnnestRewriter<'_> {
             }
             DataType::List(_)
             | DataType::FixedSizeList(_, _)
-            | DataType::LargeList(_) => {
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => {
                 push_projection_dedupl(
                     self.inner_projection_exprs,
                     expr_in_unnest.clone().alias(placeholder_name.clone()),

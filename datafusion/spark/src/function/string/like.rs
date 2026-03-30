@@ -24,7 +24,6 @@ use datafusion_expr::{
     ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// LIKE function for case-sensitive pattern matching
@@ -49,10 +48,6 @@ impl SparkLike {
 }
 
 impl ScalarUDFImpl for SparkLike {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "like"
     }
@@ -94,9 +89,8 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, BooleanArray};
-    use arrow::datatypes::{DataType::Boolean, Field};
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarUDFImpl};
+    use arrow::datatypes::DataType::Boolean;
+    use datafusion_common::ScalarValue;
 
     macro_rules! test_like_string_invoke {
         ($INPUT1:expr, $INPUT2:expr, $EXPECTED:expr) => {

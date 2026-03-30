@@ -23,7 +23,6 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
 use std::sync::Arc;
 
 static CSC_FUNCTION_NAME: &str = "csc";
@@ -49,10 +48,6 @@ impl SparkCsc {
 }
 
 impl ScalarUDFImpl for SparkCsc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         CSC_FUNCTION_NAME
     }
@@ -119,10 +114,6 @@ impl SparkSec {
 }
 
 impl ScalarUDFImpl for SparkSec {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         SEC_FUNCTION_NAME
     }

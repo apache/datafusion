@@ -71,6 +71,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 /// Stream of files get listed from object store
+#[deprecated(
+    since = "54.0.0",
+    note = "This type is unused and will be removed in a future release"
+)]
 pub type PartitionedFileStream =
     Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
@@ -573,7 +577,7 @@ mod tests {
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
-    use object_store::{local::LocalFileSystem, path::Path};
+    use object_store::{ObjectStoreExt, local::LocalFileSystem, path::Path};
     use std::{collections::HashMap, ops::Not, sync::Arc};
     use url::Url;
 

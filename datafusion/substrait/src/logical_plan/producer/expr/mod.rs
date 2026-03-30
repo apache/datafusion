@@ -60,9 +60,6 @@ use substrait::version;
 ///
 /// Substrait also requires the input schema of the expressions to be included in the
 /// message.  The field names of the input schema will be serialized.
-// Silence deprecation warnings for `extension_uris` during the uri -> urn migration
-// See: https://github.com/substrait-io/substrait/issues/856
-#[expect(deprecated)]
 pub fn to_substrait_extended_expr(
     exprs: &[(&Expr, &Field)],
     schema: &DFSchemaRef,
@@ -87,7 +84,6 @@ pub fn to_substrait_extended_expr(
     Ok(Box::new(ExtendedExpression {
         advanced_extensions: None,
         expected_type_urls: vec![],
-        extension_uris: vec![],
         extension_urns: vec![],
         extensions: extensions.into(),
         version: Some(version::version_with_producer("datafusion")),
@@ -139,17 +135,17 @@ pub fn to_substrait_rex(
         }
         Expr::WindowFunction(expr) => producer.handle_window_function(expr, schema),
         Expr::InList(expr) => producer.handle_in_list(expr, schema),
-        Expr::Exists(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::Exists(expr) => producer.handle_exists(expr, schema),
         Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
         Expr::SetComparison(expr) => producer.handle_set_comparison(expr, schema),
-        Expr::ScalarSubquery(expr) => {
-            not_impl_err!("Cannot convert {expr:?} to Substrait")
-        }
+        Expr::ScalarSubquery(expr) => producer.handle_scalar_subquery(expr, schema),
         #[expect(deprecated)]
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::OuterReferenceColumn(_, _) => {
+            // OuterReferenceColumn requires tracking outer query schema context for correlated
+            // subqueries. This is a complex feature that is not yet implemented.
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),

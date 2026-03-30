@@ -27,7 +27,9 @@ mod test {
     use datafusion_catalog::TableProvider;
     use datafusion_common::Result;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+    use datafusion_common::{
+        ColumnStatistics, JoinType, NullEquality, ScalarValue, Statistics,
+    };
     use datafusion_execution::TaskContext;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
@@ -45,7 +47,9 @@ mod test {
     use datafusion_physical_plan::common::compute_record_batch_statistics;
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::filter::FilterExec;
-    use datafusion_physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
+    use datafusion_physical_plan::joins::{
+        CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
+    };
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
     use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -150,13 +154,15 @@ mod test {
             // - null_count = 0 (partition values from paths are never null)
             // - min/max are the merged partition values across files in the group
             // - byte_size = num_rows * 4 (Date32 is 4 bytes per row)
+            // - distinct_count = Inexact(1) per partition file (single partition value per file),
+            //   preserved via max() when merging stats across partitions
             let date32_byte_size = num_rows * 4;
             column_stats.push(ColumnStatistics {
                 null_count: Precision::Exact(0),
                 max_value: Precision::Exact(ScalarValue::Date32(Some(max_date))),
                 min_value: Precision::Exact(ScalarValue::Date32(Some(min_date))),
                 sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
+                distinct_count: Precision::Inexact(1),
                 byte_size: Precision::Exact(date32_byte_size),
             });
         }
@@ -255,8 +261,8 @@ mod test {
         );
         // Check the statistics of each partition
         assert_eq!(statistics.len(), 2);
-        assert_eq!(statistics[0], expected_statistic_partition_1);
-        assert_eq!(statistics[1], expected_statistic_partition_2);
+        assert_eq!(*statistics[0], expected_statistic_partition_1);
+        assert_eq!(*statistics[1], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
         let expected_stats = vec![
@@ -288,8 +294,8 @@ mod test {
             create_partition_statistics(2, 8, 1, 2, None);
         // Check the statistics of each partition
         assert_eq!(statistics.len(), 2);
-        assert_eq!(statistics[0], expected_statistic_partition_1);
-        assert_eq!(statistics[1], expected_statistic_partition_2);
+        assert_eq!(*statistics[0], expected_statistic_partition_1);
+        assert_eq!(*statistics[1], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
         let expected_stats = vec![
@@ -322,7 +328,7 @@ mod test {
             Some((DATE_2025_03_01, DATE_2025_03_04)),
         );
         assert_eq!(statistics.len(), 1);
-        assert_eq!(statistics[0], expected_statistic_partition);
+        assert_eq!(*statistics[0], expected_statistic_partition);
         // Check the statistics_by_partition with real results
         let expected_stats = vec![ExpectedStatistics::NonEmpty(1, 4, 4)];
         validate_statistics_with_data(sort_exec.clone(), expected_stats, 0).await?;
@@ -353,8 +359,8 @@ mod test {
             .map(|idx| sort_exec.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
-        assert_eq!(statistics[0], expected_statistic_partition_1);
-        assert_eq!(statistics[1], expected_statistic_partition_2);
+        assert_eq!(*statistics[0], expected_statistic_partition_1);
+        assert_eq!(*statistics[1], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
         let expected_stats = vec![
@@ -386,23 +392,23 @@ mod test {
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
-                    max_value: Precision::Exact(ScalarValue::Null),
-                    min_value: Precision::Exact(ScalarValue::Null),
-                    sum_value: Precision::Exact(ScalarValue::Null),
+                    max_value: Precision::Exact(ScalarValue::Int32(None)),
+                    min_value: Precision::Exact(ScalarValue::Int32(None)),
+                    sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
                     byte_size: Precision::Exact(16),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
-                    max_value: Precision::Exact(ScalarValue::Null),
-                    min_value: Precision::Exact(ScalarValue::Null),
-                    sum_value: Precision::Exact(ScalarValue::Null),
+                    max_value: Precision::Exact(ScalarValue::Date32(None)),
+                    min_value: Precision::Exact(ScalarValue::Date32(None)),
+                    sum_value: Precision::Exact(ScalarValue::Date32(None)),
                     distinct_count: Precision::Exact(0),
                     byte_size: Precision::Exact(16), // 4 rows * 4 bytes (Date32)
                 },
             ],
         };
-        assert_eq!(full_statistics, expected_full_statistic);
+        assert_eq!(*full_statistics, expected_full_statistic);
 
         let statistics = (0..filter.output_partitioning().partition_count())
             .map(|idx| filter.partition_statistics(Some(idx)))
@@ -415,24 +421,24 @@ mod test {
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
-                    max_value: Precision::Exact(ScalarValue::Null),
-                    min_value: Precision::Exact(ScalarValue::Null),
-                    sum_value: Precision::Exact(ScalarValue::Null),
+                    max_value: Precision::Exact(ScalarValue::Int32(None)),
+                    min_value: Precision::Exact(ScalarValue::Int32(None)),
+                    sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
                     byte_size: Precision::Exact(8),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
-                    max_value: Precision::Exact(ScalarValue::Null),
-                    min_value: Precision::Exact(ScalarValue::Null),
-                    sum_value: Precision::Exact(ScalarValue::Null),
+                    max_value: Precision::Exact(ScalarValue::Date32(None)),
+                    min_value: Precision::Exact(ScalarValue::Date32(None)),
+                    sum_value: Precision::Exact(ScalarValue::Date32(None)),
                     distinct_count: Precision::Exact(0),
                     byte_size: Precision::Exact(8), // 2 rows * 4 bytes (Date32)
                 },
             ],
         };
-        assert_eq!(statistics[0], expected_partition_statistic);
-        assert_eq!(statistics[1], expected_partition_statistic);
+        assert_eq!(*statistics[0], expected_partition_statistic);
+        assert_eq!(*statistics[1], expected_partition_statistic);
         Ok(())
     }
 
@@ -463,13 +469,13 @@ mod test {
             Some((DATE_2025_03_03, DATE_2025_03_04)),
         );
         // Verify first partition (from first scan)
-        assert_eq!(statistics[0], expected_statistic_partition_1);
+        assert_eq!(*statistics[0], expected_statistic_partition_1);
         // Verify second partition (from first scan)
-        assert_eq!(statistics[1], expected_statistic_partition_2);
+        assert_eq!(*statistics[1], expected_statistic_partition_2);
         // Verify third partition (from second scan - same as first partition)
-        assert_eq!(statistics[2], expected_statistic_partition_1);
+        assert_eq!(*statistics[2], expected_statistic_partition_1);
         // Verify fourth partition (from second scan - same as second partition)
-        assert_eq!(statistics[3], expected_statistic_partition_2);
+        assert_eq!(*statistics[3], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
         let expected_stats = vec![
@@ -518,8 +524,8 @@ mod test {
                 ColumnStatistics::new_unknown(),
             ],
         };
-        assert_eq!(stats[0], expected_stats);
-        assert_eq!(stats[1], expected_stats);
+        assert_eq!(*stats[0], expected_stats);
+        assert_eq!(*stats[1], expected_stats);
 
         // Verify the execution results
         let partitions = execute_stream_partitioned(
@@ -577,7 +583,7 @@ mod test {
                     max_value: Precision::Exact(ScalarValue::Date32(Some(20151))),
                     min_value: Precision::Exact(ScalarValue::Date32(Some(20148))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 0: ids [3,4]
@@ -611,7 +617,7 @@ mod test {
                     max_value: Precision::Exact(ScalarValue::Date32(Some(20151))),
                     min_value: Precision::Exact(ScalarValue::Date32(Some(20148))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 1: ids [1,2]
@@ -625,8 +631,8 @@ mod test {
                 },
             ],
         };
-        assert_eq!(statistics[0], expected_statistic_partition_1);
-        assert_eq!(statistics[1], expected_statistic_partition_2);
+        assert_eq!(*statistics[0], expected_statistic_partition_1);
+        assert_eq!(*statistics[1], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
         let expected_stats = vec![
@@ -670,7 +676,7 @@ mod test {
         );
         expected_full_statistics.num_rows = Precision::Inexact(4);
         expected_full_statistics.total_byte_size = Precision::Absent;
-        assert_eq!(full_statistics, expected_full_statistics);
+        assert_eq!(*full_statistics, expected_full_statistics);
 
         // Test partition_statistics(Some(idx)) - returns partition-specific statistics
         // Partition 1: ids [3,4], dates [2025-03-01, 2025-03-02]
@@ -699,8 +705,8 @@ mod test {
             .map(|idx| nested_loop_join.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
-        assert_eq!(statistics[0], expected_statistic_partition_1);
-        assert_eq!(statistics[1], expected_statistic_partition_2);
+        assert_eq!(*statistics[0], expected_statistic_partition_1);
+        assert_eq!(*statistics[1], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
         let expected_stats = vec![
@@ -729,7 +735,7 @@ mod test {
             .map(|idx| coalesce_partitions.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 1);
-        assert_eq!(statistics[0], expected_statistic_partition);
+        assert_eq!(*statistics[0], expected_statistic_partition);
 
         // Check the statistics_by_partition with real results
         let expected_stats = vec![ExpectedStatistics::NonEmpty(1, 4, 4)];
@@ -746,20 +752,20 @@ mod test {
             .map(|idx| local_limit.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
-        let mut expected_0 = statistics[0].clone();
+        let mut expected_0 = Statistics::clone(&statistics[0]);
         expected_0.column_statistics = expected_0
             .column_statistics
             .into_iter()
             .map(|c| c.to_inexact())
             .collect();
-        let mut expected_1 = statistics[1].clone();
+        let mut expected_1 = Statistics::clone(&statistics[1]);
         expected_1.column_statistics = expected_1
             .column_statistics
             .into_iter()
             .map(|c| c.to_inexact())
             .collect();
-        assert_eq!(statistics[0], expected_0);
-        assert_eq!(statistics[1], expected_1);
+        assert_eq!(*statistics[0], expected_0);
+        assert_eq!(*statistics[1], expected_1);
         Ok(())
     }
 
@@ -781,7 +787,7 @@ mod test {
             4,
             Some((DATE_2025_03_01, DATE_2025_03_02)),
         );
-        assert_eq!(statistics[0], expected_statistic_partition);
+        assert_eq!(*statistics[0], expected_statistic_partition);
         Ok(())
     }
 
@@ -849,7 +855,7 @@ mod test {
             ],
         };
 
-        assert_eq!(&p0_statistics, &expected_p0_statistics);
+        assert_eq!(*p0_statistics, expected_p0_statistics);
 
         let expected_p1_statistics = Statistics {
             num_rows: Precision::Inexact(2),
@@ -869,7 +875,7 @@ mod test {
         };
 
         let p1_statistics = aggregate_exec_partial.partition_statistics(Some(1))?;
-        assert_eq!(&p1_statistics, &expected_p1_statistics);
+        assert_eq!(*p1_statistics, expected_p1_statistics);
 
         validate_statistics_with_data(
             aggregate_exec_partial.clone(),
@@ -891,10 +897,10 @@ mod test {
         )?);
 
         let p0_statistics = agg_final.partition_statistics(Some(0))?;
-        assert_eq!(&p0_statistics, &expected_p0_statistics);
+        assert_eq!(*p0_statistics, expected_p0_statistics);
 
         let p1_statistics = agg_final.partition_statistics(Some(1))?;
-        assert_eq!(&p1_statistics, &expected_p1_statistics);
+        assert_eq!(*p1_statistics, expected_p1_statistics);
 
         validate_statistics_with_data(
             agg_final.clone(),
@@ -935,8 +941,8 @@ mod test {
             ],
         };
 
-        assert_eq!(&empty_stat, &agg_partial.partition_statistics(Some(0))?);
-        assert_eq!(&empty_stat, &agg_partial.partition_statistics(Some(1))?);
+        assert_eq!(empty_stat, *agg_partial.partition_statistics(Some(0))?);
+        assert_eq!(empty_stat, *agg_partial.partition_statistics(Some(1))?);
         validate_statistics_with_data(
             agg_partial.clone(),
             vec![ExpectedStatistics::Empty, ExpectedStatistics::Empty],
@@ -962,8 +968,8 @@ mod test {
             agg_partial.schema(),
         )?);
 
-        assert_eq!(&empty_stat, &agg_final.partition_statistics(Some(0))?);
-        assert_eq!(&empty_stat, &agg_final.partition_statistics(Some(1))?);
+        assert_eq!(empty_stat, *agg_final.partition_statistics(Some(0))?);
+        assert_eq!(empty_stat, *agg_final.partition_statistics(Some(1))?);
 
         validate_statistics_with_data(
             agg_final,
@@ -999,7 +1005,7 @@ mod test {
             column_statistics: vec![ColumnStatistics::new_unknown()],
         };
 
-        assert_eq!(&expect_stat, &agg_final.partition_statistics(Some(0))?);
+        assert_eq!(expect_stat, *agg_final.partition_statistics(Some(0))?);
 
         // Verify that the aggregate final result has exactly one partition with one row
         let mut partitions = execute_stream_partitioned(
@@ -1033,13 +1039,13 @@ mod test {
                 &schema,
                 None,
             );
-            assert_eq!(actual, expected);
+            assert_eq!(*actual, expected);
             all_batches.push(batches);
         }
 
         let actual = plan.partition_statistics(None)?;
         let expected = compute_record_batch_statistics(&all_batches, &schema, None);
-        assert_eq!(actual, expected);
+        assert_eq!(*actual, expected);
 
         Ok(())
     }
@@ -1070,7 +1076,7 @@ mod test {
 
         // All partitions should have the same statistics
         for stat in statistics.iter() {
-            assert_eq!(stat, &expected_stats);
+            assert_eq!(**stat, expected_stats);
         }
 
         // Verify that the result has exactly 3 partitions
@@ -1135,7 +1141,7 @@ mod test {
         )?);
 
         let result = repartition.partition_statistics(Some(0))?;
-        assert_eq!(result, Statistics::new_unknown(&scan_schema));
+        assert_eq!(*result, Statistics::new_unknown(&scan_schema));
 
         // Verify that the result has exactly 0 partitions
         let partitions = execute_stream_partitioned(
@@ -1174,8 +1180,8 @@ mod test {
                 ColumnStatistics::new_unknown(),
             ],
         };
-        assert_eq!(stats[0], expected_stats);
-        assert_eq!(stats[1], expected_stats);
+        assert_eq!(*stats[0], expected_stats);
+        assert_eq!(*stats[1], expected_stats);
 
         // Verify the repartition execution results
         let partitions =
@@ -1247,7 +1253,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
                 },
                 ColumnStatistics::new_unknown(), // window column
@@ -1275,15 +1281,15 @@ mod test {
                         DATE_2025_03_03,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
                 },
                 ColumnStatistics::new_unknown(), // window column
             ],
         };
 
-        assert_eq!(statistics[0], expected_statistic_partition_1);
-        assert_eq!(statistics[1], expected_statistic_partition_2);
+        assert_eq!(*statistics[0], expected_statistic_partition_1);
+        assert_eq!(*statistics[1], expected_statistic_partition_2);
 
         // Verify the statistics match actual execution results
         let expected_stats = vec![
@@ -1352,6 +1358,254 @@ mod test {
         )
         .await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hash_join_partition_statistics() -> Result<()> {
+        // Create left table scan and coalesce to 1 partition for CollectLeft mode
+        let left_scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        let left_scan_coalesced = Arc::new(CoalescePartitionsExec::new(left_scan.clone()))
+            as Arc<dyn ExecutionPlan>;
+
+        // Create right table scan with different table name
+        let right_create_table_sql = "CREATE EXTERNAL TABLE t2 (id INT NOT NULL, date DATE) \
+                                     STORED AS PARQUET LOCATION './tests/data/test_statistics_per_partition'\
+                                     PARTITIONED BY (date) \
+                                     WITH ORDER (id ASC);";
+        let right_scan =
+            create_scan_exec_with_statistics(Some(right_create_table_sql), Some(2)).await;
+
+        // Create join condition: t1.id = t2.id
+        let on = vec![(
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+
+        // Test CollectLeft mode - left child must have 1 partition
+        let collect_left_join = Arc::new(HashJoinExec::try_new(
+            left_scan_coalesced,
+            Arc::clone(&right_scan),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        // Test partition statistics for CollectLeft mode
+        let statistics = (0..collect_left_join.output_partitioning().partition_count())
+            .map(|idx| collect_left_join.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Check that we have the expected number of partitions
+        assert_eq!(statistics.len(), 2);
+
+        // For collect left mode, the min/max values are from the entire left table and the specific partition of the right table.
+        let expected_p0_statistics = Statistics {
+            num_rows: Precision::Inexact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                // Left id column: all partitions (id 1..4)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(16),
+                },
+                // Left date column: all partitions (2025-03-01..2025-03-04)
+                // NDV is Inexact(1) because each Hive partition has exactly 1 distinct date value,
+                // and merging takes max as a conservative lower bound
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_04,
+                    ))),
+                    min_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_01,
+                    ))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
+                    byte_size: Precision::Exact(16),
+                },
+                // Right id column: partition 0 only (id 3..4)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(8),
+                },
+                // Right date column: partition 0 only (2025-03-01..2025-03-02)
+                // NDV is Inexact(1) from the single Hive partition's date value
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_02,
+                    ))),
+                    min_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_01,
+                    ))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
+                    byte_size: Precision::Exact(8),
+                },
+            ],
+        };
+        assert_eq!(*statistics[0], expected_p0_statistics);
+
+        // Test Partitioned mode
+        let partitioned_join = Arc::new(HashJoinExec::try_new(
+            Arc::clone(&left_scan),
+            Arc::clone(&right_scan),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        // Test partition statistics for Partitioned mode
+        let statistics = (0..partitioned_join.output_partitioning().partition_count())
+            .map(|idx| partitioned_join.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Check that we have the expected number of partitions
+        assert_eq!(statistics.len(), 2);
+
+        // For partitioned mode, the min/max values are from the specific partition for each side.
+        let expected_p0_statistics = Statistics {
+            num_rows: Precision::Inexact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                // Left id column: partition 0 only (id 3..4)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(8),
+                },
+                // Left date column: partition 0 only (2025-03-01..2025-03-02)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_02,
+                    ))),
+                    min_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_01,
+                    ))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
+                    byte_size: Precision::Exact(8),
+                },
+                // Right id column: partition 0 only (id 3..4)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(8),
+                },
+                // Right date column: partition 0 only (2025-03-01..2025-03-02)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_02,
+                    ))),
+                    min_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_01,
+                    ))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
+                    byte_size: Precision::Exact(8),
+                },
+            ],
+        };
+        assert_eq!(*statistics[0], expected_p0_statistics);
+
+        // Test Auto mode - should fall back to getting all partition statistics
+        let auto_join = Arc::new(HashJoinExec::try_new(
+            Arc::clone(&left_scan),
+            Arc::clone(&right_scan),
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        // Test partition statistics for Auto mode
+        let statistics = (0..auto_join.output_partitioning().partition_count())
+            .map(|idx| auto_join.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Check that we have the expected number of partitions
+        assert_eq!(statistics.len(), 2);
+
+        // For auto mode, the min/max values are from the entire left and right tables.
+        let expected_p0_statistics = Statistics {
+            num_rows: Precision::Inexact(4),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                // Left id column: all partitions (id 1..4)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(16),
+                },
+                // Left date column: all partitions (2025-03-01..2025-03-04)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_04,
+                    ))),
+                    min_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_01,
+                    ))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
+                    byte_size: Precision::Exact(16),
+                },
+                // Right id column: all partitions (id 1..4)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(16),
+                },
+                // Right date column: all partitions (2025-03-01..2025-03-04)
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_04,
+                    ))),
+                    min_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_01,
+                    ))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
+                    byte_size: Precision::Exact(16),
+                },
+            ],
+        };
+        assert_eq!(*statistics[0], expected_p0_statistics);
         Ok(())
     }
 }
