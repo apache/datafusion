@@ -15,16 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion benchmark runner
-pub mod cancellation;
-pub mod clickbench;
-pub mod h2o;
-pub mod hj;
-pub mod imdb;
-pub mod nlj;
-pub mod smj;
-pub mod sort_pushdown;
-pub mod sort_tpch;
-pub mod tpcds;
-pub mod tpch;
-pub mod util;
+//! This module contains code that enables DataFusion's extension type capabilities.
+
+mod array_formatter_factory;
+
+pub use array_formatter_factory::*;
