@@ -97,7 +97,7 @@ impl<'a> FileStreamBuilder<'a> {
         Ok(FileStream {
             file_iter: file_group.into_inner().into_iter().collect(),
             projected_schema,
-            remain: self.config.limit,
+            remain: config.limit,
             file_opener,
             state: FileStreamState::Idle,
             file_stream_metrics: FileStreamMetrics::new(metrics, partition),

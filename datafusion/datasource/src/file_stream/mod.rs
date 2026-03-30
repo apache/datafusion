@@ -878,17 +878,17 @@ mod tests {
         let config = builder_test_config();
 
         let err = builder_error(FileStreamBuilder::new(&config));
-        assert!(err.contains("FileStreamBuilder missing required field: partition"));
+        assert!(err.contains("FileStreamBuilder missing required partition"));
 
         let err = builder_error(FileStreamBuilder::new(&config).with_partition(0));
-        assert!(err.contains("FileStreamBuilder missing required field: file_opener"));
+        assert!(err.contains("FileStreamBuilder missing required file_opener"));
 
         let err = builder_error(
             FileStreamBuilder::new(&config)
                 .with_partition(0)
                 .with_file_opener(Arc::new(TestOpener::default())),
         );
-        assert!(err.contains("FileStreamBuilder missing required field: metrics"));
+        assert!(err.contains("FileStreamBuilder missing required metrics"));
     }
 
     #[test]
