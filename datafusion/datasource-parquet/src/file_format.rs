@@ -56,7 +56,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::metrics::{
-    ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+    ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet,
 };
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
@@ -1339,13 +1339,15 @@ impl FileSink for ParquetSink {
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
-        let rows_written_counter =
-            MetricBuilder::new(&self.metrics).global_counter("rows_written");
+        let rows_written_counter = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
+            .global_counter("rows_written");
         // Note: bytes_written is the sum of compressed row group sizes, which
         // may differ slightly from the actual on-disk file size (excludes footer,
         // page indexes, and other Parquet metadata overhead).
-        let bytes_written_counter =
-            MetricBuilder::new(&self.metrics).global_counter("bytes_written");
+        let bytes_written_counter = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Bytes)
+            .global_counter("bytes_written");
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
 
         let write_start = datafusion_common::instant::Instant::now();

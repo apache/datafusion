@@ -126,6 +126,16 @@ cargo run --example dataframe -- dataframe
 | mem_pool_tracking  | [`execution_monitoring/memory_pool_tracking.rs`](examples/execution_monitoring/memory_pool_tracking.rs)             | Demonstrates memory tracking             |
 | tracing            | [`execution_monitoring/tracing.rs`](examples/execution_monitoring/tracing.rs)                                       | Demonstrates tracing integration         |
 
+## Extension Types Examples
+
+### Group: `extension_types`
+
+#### Category: Single Process
+
+| Subcommand  | File Path                                                                   | Description                          |
+| ----------- | --------------------------------------------------------------------------- | ------------------------------------ |
+| temperature | [`extension_types/temperature.rs`](examples/extension_types/temperature.rs) | Extension type for temperature data. |
+
 ## External Dependency Examples
 
 ### Group: `external_dependency`

@@ -1860,8 +1860,9 @@ mod tests {
     use sqlparser::ast::ExactNumberInfo;
 
     use crate::unparser::dialect::{
-        CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
-        DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
+        BigQueryDialect, CharacterLengthStyle, CustomDialect, CustomDialectBuilder,
+        DateFieldExtractStyle, DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect,
+        ScalarFnToSqlHandler,
     };
 
     use super::*;
@@ -3349,6 +3350,7 @@ mod tests {
             Arc::new(CustomDialectBuilder::new().build());
 
         let duckdb_dialect: Arc<dyn Dialect> = Arc::new(DuckDBDialect::new());
+        let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
 
         for (dialect, scalar, expected) in [
             (
@@ -3403,6 +3405,36 @@ mod tests {
             ),
             (
                 Arc::clone(&duckdb_dialect),
+                ScalarValue::TimestampNanosecond(
+                    Some(1757934000123456789),
+                    Some("+00:00".into()),
+                ),
+                "CAST('2025-09-15 11:00:00.123456789+00:00' AS TIMESTAMP)",
+            ),
+            // BigQuery: should be no space between timestamp and timezone
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
+                "CAST('2025-09-15 11:00:00+00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampMillisecond(
+                    Some(1757934000123),
+                    Some("+01:00".into()),
+                ),
+                "CAST('2025-09-15 12:00:00.123+01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampMicrosecond(
+                    Some(1757934000123456),
+                    Some("-01:00".into()),
+                ),
+                "CAST('2025-09-15 10:00:00.123456-01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
                 ScalarValue::TimestampNanosecond(
                     Some(1757934000123456789),
                     Some("+00:00".into()),
