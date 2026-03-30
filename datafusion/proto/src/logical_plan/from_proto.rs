@@ -26,7 +26,9 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
+use datafusion_expr::expr::{
+    Alias, Lambda, LambdaVariable, NullTreatment, Placeholder, Sort,
+};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
@@ -623,7 +625,6 @@ pub fn parse_expr(
                 null_treatment,
             )))
         }
-
         ExprType::GroupingSet(GroupingSetNode { expr }) => {
             Ok(Expr::GroupingSet(GroupingSets(
                 expr.iter()
@@ -666,6 +667,31 @@ pub fn parse_expr(
                 codec,
             )?;
             Ok(Expr::ScalarSubquery(subquery))
+        ExprType::HigherOrderUdfExpr(protobuf::HigherOrderUdfExprNode {
+            fun_name,
+            args,
+            fun_definition,
+        }) => {
+            let hof_fn = match fun_definition {
+                Some(buf) => codec.try_decode_udhof(fun_name, buf)?,
+                None => registry
+                    .udhof(fun_name.as_str())
+                    .or_else(|_| codec.try_decode_udhof(fun_name, &[]))?,
+            };
+            Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+                hof_fn,
+                parse_exprs(args, registry, codec)?,
+            )))
+        }
+        ExprType::Lambda(lambda) => Ok(Expr::Lambda(Lambda::new(
+            lambda.params.clone(),
+            parse_required_expr(lambda.body.as_deref(), registry, "body", codec)?,
+        ))),
+        ExprType::LambdaVariable(lambda_variable) => {
+            Ok(Expr::LambdaVariable(LambdaVariable::new(
+                lambda_variable.name.clone(),
+                Arc::new(lambda_variable.field.clone().as_ref().required("field")?),
+            )))
         }
     }
 }
