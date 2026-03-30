@@ -65,6 +65,11 @@ impl LambdaVariable {
         &self.name
     }
 
+    /// Get the variable's index
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
     /// Get the variable's field
     pub fn field(&self) -> &FieldRef {
         &self.field

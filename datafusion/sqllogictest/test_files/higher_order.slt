@@ -152,6 +152,35 @@ select array_transform(arrow_cast(t.list, 'ListView(Int32)'), a -> a+1) from t;
 [5, 51]
 [8, 51]
 
+# higher order function with inner case using lambda variables only
+query ?
+select array_transform([3, 5, 0], v -> case when v > 1 then 2 when v > 4 then 6 else 8 end);
+----
+[2, 2, 8]
+
+#case with inner higher order function
+query I??
+select 
+    t.number,
+    t.list,
+    case 
+        when t.number > 30 then array_transform(t.list, v -> v+1)
+        else array_transform(t.list, v -> v*2)
+    end
+from t
+order by t.number;
+----
+10 [1, 50] [2, 100]
+40 [4, 50] [5, 51]
+60 [7, 50] [8, 51]
+
+# higher order function with inner case using lambda variables and captured column(capture not supported yet)
+query error DataFusion error: Error during planning: lambda doesn't support column capture
+select array_transform([3, 5, 9], v -> case when v > 1 then t.number when v > 4 then 6 else 8 end) from t;
+
+# higher order function with inner case using captured column only(capture not supported yet)
+query error DataFusion error: Error during planning: lambda doesn't support column capture
+select array_transform([3, 5, 9], v -> case when t.number > 1 then 2 when t.number > 4 then 6 else 8 end) from t;
 
 query error
 select array_transform();
