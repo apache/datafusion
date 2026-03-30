@@ -323,8 +323,7 @@ ORDER BY dept;
 The following patterns are not yet supported:
 
 - `LEFT JOIN LATERAL` (lateral join with outer join semantics).
-- Outer references in the `SELECT` list of the lateral subquery (e.g., `LATERAL
-  (SELECT outer.col + 1)`).
+- Outer references in the `SELECT` list of the lateral subquery (e.g., `LATERAL (SELECT outer.col + 1)`).
 - `HAVING` in lateral subqueries.
 
 ## GROUP BY clause

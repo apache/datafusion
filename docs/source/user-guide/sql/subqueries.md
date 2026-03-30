@@ -150,8 +150,7 @@ operated on by the outer query.
 SELECT expression1[, expression2, ..., expressionN] FROM (<subquery>)
 ```
 
-To reference columns from other tables in the same `FROM` clause, use [`LATERAL
-JOIN`](select.md#lateral-join).
+To reference columns from other tables in the same `FROM` clause, use [`LATERAL JOIN`](select.md#lateral-join).
 
 ### Example
 
