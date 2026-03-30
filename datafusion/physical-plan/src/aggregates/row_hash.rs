@@ -29,7 +29,7 @@ use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
     create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
 };
-use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
+use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::{PhysicalExpr, aggregates, metrics};
@@ -613,6 +613,7 @@ impl GroupedHashAggregateStream {
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
+                .with_category(MetricCategory::Bytes)
                 .gauge("peak_mem_used", partition),
             spill_manager,
         };
@@ -637,6 +638,7 @@ impl GroupedHashAggregateStream {
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
             let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+                .with_category(MetricCategory::Rows)
                 .counter("skipped_aggregation_rows", partition);
             Some(SkipAggregationProbe::new(
                 probe_rows_threshold,
@@ -650,7 +652,7 @@ impl GroupedHashAggregateStream {
         let reduction_factor = if agg.mode == AggregateMode::Partial {
             Some(
                 MetricBuilder::new(&agg.metrics)
-                    .with_type(metrics::MetricType::SUMMARY)
+                    .with_type(metrics::MetricType::Summary)
                     .ratio_metrics("reduction_factor", partition),
             )
         } else {
