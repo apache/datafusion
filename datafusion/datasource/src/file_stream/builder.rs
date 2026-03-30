@@ -79,24 +79,19 @@ impl<'a> FileStreamBuilder<'a> {
         } = self;
 
         let Some(partition) = partition else {
-            return internal_err!("FileStreamBuilder missing required field: partition");
+            return internal_err!("FileStreamBuilder missing required partition");
         };
         let Some(file_opener) = file_opener else {
-            return internal_err!(
-                "FileStreamBuilder missing required field: file_opener"
-            );
+            return internal_err!("FileStreamBuilder missing required file_opener");
         };
         let Some(metrics) = metrics else {
-            return internal_err!("FileStreamBuilder missing required field: metrics");
+            return internal_err!("FileStreamBuilder missing required metrics");
         };
         let projected_schema = config.projected_schema()?;
-        let file_group = match config.file_groups.get(partition).cloned() {
-            Some(file_group) => file_group,
-            None => {
-                return internal_err!(
-                    "FileStreamBuilder invalid partition index: {partition}"
-                );
-            }
+        let Some(file_group) = config.file_groups.get(partition).cloned() else {
+            return internal_err!(
+                "FileStreamBuilder invalid partition index: {partition}"
+            );
         };
 
         Ok(FileStream {
