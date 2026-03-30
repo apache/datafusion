@@ -17,13 +17,24 @@
 
 //! [`HigherOrderUDF`]: User Defined Higher Order Functions
 
-use crate::expr::schema_name_from_exprs_comma_separated_without_space;
+use crate::expr::{
+    HigherOrderFunction, display_comma_separated,
+    schema_name_from_exprs_comma_separated_without_space,
+};
 use crate::{ColumnarValue, Documentation, Expr};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, ScalarValue, not_impl_err};
+use datafusion_common::datatype::FieldExt;
+use datafusion_common::hash_map::EntryRef;
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+};
+use datafusion_common::{
+    DFSchema, HashMap, HashSet, Result, ScalarValue, internal_datafusion_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
+};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::signature::Volatility;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -31,6 +42,7 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
+use std::mem;
 use std::sync::Arc;
 
 /// The types of arguments for which a function has implementations.
@@ -689,12 +701,189 @@ pub trait HigherOrderUDF: Debug + DynEq + DynHash + Send + Sync + Any {
     }
 }
 
+pub(crate) fn resolve_lambda_variables(
+    expr: Expr,
+    schema: &DFSchema,
+    // a map of lambda variable name => a never empty stack of fields [ [..shadowed], in_scope ]
+    vars: &mut HashMap<String, Vec<FieldRef>>,
+) -> Result<Transformed<Expr>> {
+    expr.transform_down(|expr| match expr {
+        Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+            // not inlined to reduce nesting
+            resolve_higher_order_function(func, args, schema, vars)
+        }
+        Expr::LambdaVariable(mut var) => {
+            let fields_chain = vars.get(&var.name).ok_or_else(|| {
+                plan_datafusion_err!(
+                    "missing field of lambda variable {} while resolving",
+                    var.name
+                )
+            })?;
+
+            let field = fields_chain.last().ok_or_else(|| {
+                internal_datafusion_err!("every entry should have at least one field")
+            })?;
+
+            let field = Arc::clone(field).renamed(&var.name);
+
+            let transformed = var.field.as_ref().is_none_or(|old| old != &field);
+
+            var.field = Some(field);
+
+            Ok(Transformed::new_transformed(
+                Expr::LambdaVariable(var),
+                transformed,
+            ))
+        }
+        _ => Ok(Transformed::no(expr)),
+    })
+}
+
+fn resolve_higher_order_function(
+    func: Arc<dyn HigherOrderUDF>,
+    args: Vec<Expr>,
+    schema: &DFSchema,
+    // a map of lambda variable name => a never empty stack of fields [ [..shadowed], in_scope ]
+    vars: &mut HashMap<String, Vec<FieldRef>>,
+) -> Result<Transformed<Expr>> {
+    let args = if !vars.is_empty() {
+        /*  if this is a nested lambda, we must resolve non-lambda args before invoking
+            lambda_parameters because it will invoke ExprSchemable::to_field for every
+            non-lambda parameter, and if one them contains a lambda variable, it will fail
+            due to it being unresolved. Example query:
+
+            array_transform([[1, 2]], a -> array_transform(a, b -> b+1))
+
+            the nested array_transform's lambda_parameters will call Lambdavariable::to_field
+            on it's first argument, the variable `a`, which must be resolved
+        */
+        args.map_elements(|arg| match arg {
+            Expr::Lambda(_) => Ok(Transformed::no(arg)),
+            _ => resolve_lambda_variables(arg, schema, vars),
+        })?
+    } else {
+        Transformed::no(args)
+    };
+
+    let transformed = args.transformed;
+    let func = HigherOrderFunction::new(func, args.data);
+
+    let mut lambdas_params = func.lambda_parameters(schema)?.into_iter();
+
+    let num_lambdas = func
+        .args
+        .iter()
+        .filter(|arg| matches!(arg, Expr::Lambda(_)))
+        .count();
+
+    if num_lambdas != lambdas_params.len() {
+        return plan_err!(
+            "{} lambda_parameters returned {} values for {num_lambdas} lambdas",
+            func.name(),
+            lambdas_params.len()
+        );
+    }
+
+    let args = func.args.map_elements(|arg| match arg {
+        Expr::Lambda(mut lambda) => {
+            let lambda_params = lambdas_params.next().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "lambdas_params len should have been checked above"
+                )
+            })?;
+
+            if lambda.params.len() > lambda_params.len() {
+                return plan_err!(
+                    "{} lambda defined {} params ({}), but only {} supported",
+                    func.func.name(),
+                    lambda.params.len(),
+                    display_comma_separated(&lambda.params),
+                    lambda_params.len()
+                );
+            }
+
+            if !all_unique(&lambda.params) {
+                return plan_err!(
+                    "lambda params must be unique, got ({})",
+                    lambda.params.join(", ")
+                );
+            }
+
+            for (param, field) in std::iter::zip(&lambda.params, lambda_params) {
+                vars.entry_ref(param).or_default().push(field);
+            }
+
+            let transformed =
+                resolve_lambda_variables(mem::take(lambda.body.as_mut()), schema, vars)?;
+
+            *lambda.body = transformed.data;
+
+            for param in &lambda.params {
+                match vars.entry_ref(param) {
+                    EntryRef::Occupied(mut v) => {
+                        if v.get().len() == 1 {
+                            v.remove();
+                        } else {
+                            v.get_mut().pop().ok_or_else(|| {
+                                internal_datafusion_err!(
+                                    "every entry should have at least one field"
+                                )
+                            })?;
+                        }
+                    }
+                    EntryRef::Vacant(_v) => {
+                        return internal_err!(
+                            "the loop above should have inserted a value for every param"
+                        );
+                    }
+                }
+            }
+
+            Ok(Transformed::new(
+                Expr::Lambda(lambda),
+                transformed.transformed,
+                TreeNodeRecursion::Jump,
+            ))
+        }
+        arg => Ok(Transformed::no(arg)), // resolved above
+    })?;
+
+    Ok(Transformed::new(
+        Expr::HigherOrderFunction(HigherOrderFunction::new(func.func, args.data)),
+        transformed || args.transformed,
+        TreeNodeRecursion::Jump,
+    ))
+}
+
+fn all_unique(params: &[String]) -> bool {
+    match params.len() {
+        0 | 1 => true,
+        2 => params[0] != params[1],
+        _ => {
+            let mut set = HashSet::with_capacity(params.len());
+
+            params.iter().all(|p| set.insert(p.as_str()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use datafusion_expr_common::signature::Volatility;
-
     use super::*;
     use std::hash::DefaultHasher;
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, FieldRef, Schema};
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr_common::columnar_value::ColumnarValue;
+    use datafusion_expr_common::signature::Volatility;
+
+    use crate::{
+        Expr, HigherOrderSignature, HigherOrderUDF, LambdaParametersProgress,
+        ValueOrLambda, col,
+        expr::{HigherOrderFunction, LambdaVariable},
+        lambda, lambda_var,
+    };
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestHigherOrderUDF {
@@ -777,5 +966,124 @@ mod tests {
         let hasher = &mut DefaultHasher::new();
         value.hash(hasher);
         hasher.finish()
+    }
+
+    #[test]
+    fn test_resolve_lambda_variables() {
+        let schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "c",
+            DataType::new_list(DataType::new_list(DataType::Int32, true), true),
+            true,
+        )]))
+        .unwrap();
+
+        #[derive(Debug, Hash, PartialEq, Eq)]
+        struct MockHigherOrderUDF {
+            signature: HigherOrderSignature,
+        }
+
+        impl HigherOrderUDF for MockHigherOrderUDF {
+            fn name(&self) -> &str {
+                "array_transform"
+            }
+
+            fn signature(&self) -> &HigherOrderSignature {
+                &self.signature
+            }
+
+            fn lambda_parameters(
+                &self,
+                _step: usize,
+                fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+            ) -> Result<LambdaParametersProgress> {
+                let ValueOrLambda::Value(list) = &fields[0] else {
+                    unreachable!()
+                };
+
+                let (item, index_type) = match list.data_type() {
+                    DataType::List(field) => (field, DataType::Int32),
+                    _ => unreachable!(),
+                };
+
+                let index = Arc::new(Field::new("", index_type, false));
+
+                Ok(LambdaParametersProgress::Complete(vec![vec![
+                    Arc::clone(item),
+                    index,
+                ]]))
+            }
+
+            fn return_field_from_args(
+                &self,
+                _args: HigherOrderReturnFieldArgs,
+            ) -> Result<FieldRef> {
+                Ok(Arc::new(Field::new("", DataType::Null, true)))
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: HigherOrderFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                unimplemented!()
+            }
+        }
+
+        let func = Arc::new(MockHigherOrderUDF {
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
+        }) as _;
+
+        // array_transform(c, v -> array_transform(v, (v, i) -> v+i))
+        let expr = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::clone(&func),
+            vec![
+                col("c"),
+                lambda(
+                    ["v"],
+                    Expr::HigherOrderFunction(HigherOrderFunction::new(
+                        Arc::clone(&func),
+                        vec![
+                            lambda_var("v"),
+                            lambda(["v", "i"], lambda_var("v") + lambda_var("i")),
+                        ],
+                    )),
+                ),
+            ],
+        ));
+
+        let resolved_expr = expr.resolve_lambda_variables(&schema).unwrap().data;
+
+        let expected = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::clone(&func),
+            vec![
+                col("c"),
+                lambda(
+                    ["v"],
+                    Expr::HigherOrderFunction(HigherOrderFunction::new(
+                        func,
+                        vec![
+                            resolved_lambda_var(
+                                "v",
+                                DataType::new_list(DataType::Int32, true),
+                                true,
+                            ),
+                            lambda(
+                                ["v", "i"],
+                                resolved_lambda_var("v", DataType::Int32, true)
+                                    + resolved_lambda_var("i", DataType::Int32, false),
+                            ),
+                        ],
+                    )),
+                ),
+            ],
+        ));
+
+        assert_eq!(resolved_expr, expected);
+    }
+
+    fn resolved_lambda_var(name: &str, dt: DataType, nullable: bool) -> Expr {
+        Expr::LambdaVariable(LambdaVariable::new(
+            name.into(),
+            Some(Arc::new(Field::new(name, dt, nullable))),
+        ))
     }
 }

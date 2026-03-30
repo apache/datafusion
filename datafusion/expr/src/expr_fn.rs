@@ -728,10 +728,14 @@ pub fn lambda(params: impl IntoIterator<Item = impl Into<String>>, body: Expr) -
     ))
 }
 
-/// Create a lambda variable expression
-// todo: make this pub when support for optional field lands
-#[expect(unused)]
-fn lambda_var(name: impl Into<String>) -> Expr {
+/// Create an unresolved lambda variable expression
+///
+/// The expression tree or [`LogicalPlan`] which
+/// owns this variable must be resolved before usage with either
+/// [`Expr::resolve_lambdas_variables`] or [`LogicalPlan::resolve_lambdas_variables`].
+///
+/// [`LogicalPlan::resolve_lambdas_variables`]: crate::LogicalPlan::resolve_lambdas_variables
+pub fn lambda_var(name: impl Into<String>) -> Expr {
     Expr::LambdaVariable(LambdaVariable::new(name.into(), None))
 }
 

@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
-use crate::higher_order_function::HigherOrderUDF;
+use crate::higher_order_function::{HigherOrderUDF, resolve_lambda_variables};
 use crate::logical_plan::Subquery;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::{AggregateUDF, LambdaParametersProgress, ValueOrLambda, Volatility};
@@ -493,6 +493,22 @@ impl PartialEq for HigherOrderFunction {
 /// which is used to implement [`ExprSchemable`], for example. Note the field must
 /// be set in order to create a physical lambda variable. A helper to automatically
 /// set them will be added in the future
+///
+/// A named reference to a lambda parameter which includes it's own [`FieldRef`],
+/// which is used to implement [`ExprSchemable`], for example. It is an option only to make
+/// easier for `expr_api` users to construct lambda variables, but any expression
+/// tree or [`LogicalPlan`] containing unresolved variables must be resolved before
+/// usage with either [`Expr::resolve_lambda_variables`] or
+/// [`LogicalPlan::resolve_lambda_variables`]. The default SQL planner produces
+/// already resolved variables and no further resolving is required.
+///
+/// After resolving, if any non-lambda argument from the lambda function
+/// which this variables originates from have it's type, nullability or
+/// metadata changed, the resolved field may became outdated and must be
+/// resolved again.
+///
+/// [`LogicalPlan`]: crate::LogicalPlan
+/// [`LogicalPlan::resolve_lambda_variables`]: crate::LogicalPlan::resolve_lambda_variables
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub struct LambdaVariable {
     pub name: String,
@@ -501,7 +517,12 @@ pub struct LambdaVariable {
 }
 
 impl LambdaVariable {
-    /// Create a lambda variable from a name and a Field.
+    /// Create a lambda variable from a name and an optional field.
+    /// If the field is none, the expression tree or LogicalPlan which
+    /// owns this variable must be resolved before usage with either
+    /// [`Expr::resolve_lambda_variables`] or [`LogicalPlan::resolve_lambda_variables`].
+    ///
+    /// [`LogicalPlan::resolve_lambda_variables`]: crate::LogicalPlan::resolve_lambda_variables
     pub fn new(name: String, field: Option<FieldRef>) -> Self {
         Self {
             name,
@@ -2338,6 +2359,16 @@ impl Expr {
             None
         }
     }
+
+    /// Return a `Expr` with all [`LambdaVariable`] resolved only if all of them
+    /// are contained in the subtree of the [`HigherOrderFunction`] it originates from,
+    /// otherwise returns an error
+    pub fn resolve_lambda_variables(
+        self,
+        schema: &DFSchema,
+    ) -> Result<Transformed<Expr>> {
+        resolve_lambda_variables(self, schema, &mut HashMap::new())
+    }
 }
 
 impl Normalizeable for Expr {
@@ -3809,6 +3840,8 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use crate::expr_fn::col;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
