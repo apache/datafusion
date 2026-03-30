@@ -64,7 +64,7 @@ use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
-    collect_predicate_constants, conjunction, split_conjunction,
+    conjunction, split_conjunction,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -387,7 +387,7 @@ impl FilterExec {
         eq_properties.add_constants(constants)?;
         // This is for logical constant (for example: a = '1', then a could be marked as a constant)
         // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
-        eq_properties.add_constants(collect_predicate_constants(
+        eq_properties.add_constants(ConstExpr::collect_predicate_constants(
             input.equivalence_properties(),
             predicate,
         ))?;
