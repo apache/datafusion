@@ -28,7 +28,8 @@ use std::task::{Context, Poll};
 
 use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{
-    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricType,
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    MetricType,
 };
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
@@ -1420,26 +1421,32 @@ impl BuildProbeJoinMetrics {
 
         let build_time = MetricBuilder::new(metrics).subset_time("build_time", partition);
 
-        let build_input_batches =
-            MetricBuilder::new(metrics).counter("build_input_batches", partition);
+        let build_input_batches = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("build_input_batches", partition);
 
-        let build_input_rows =
-            MetricBuilder::new(metrics).counter("build_input_rows", partition);
+        let build_input_rows = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("build_input_rows", partition);
 
-        let build_mem_used =
-            MetricBuilder::new(metrics).gauge("build_mem_used", partition);
+        let build_mem_used = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Bytes)
+            .gauge("build_mem_used", partition);
 
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
+        let input_batches = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_batches", partition);
 
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+        let input_rows = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_rows", partition);
 
         let probe_hit_rate = MetricBuilder::new(metrics)
-            .with_type(MetricType::SUMMARY)
+            .with_type(MetricType::Summary)
             .ratio_metrics("probe_hit_rate", partition);
 
         let avg_fanout = MetricBuilder::new(metrics)
-            .with_type(MetricType::SUMMARY)
+            .with_type(MetricType::Summary)
             .ratio_metrics("avg_fanout", partition);
 
         Self {

@@ -30,7 +30,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Default time formats to try when parsing without an explicit format
@@ -101,10 +100,6 @@ impl ToTimeFunc {
 }
 
 impl ScalarUDFImpl for ToTimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_time"
     }

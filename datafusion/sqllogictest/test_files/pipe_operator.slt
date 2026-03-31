@@ -195,3 +195,7 @@ query TII
 ----
 apples 2 123
 bananas 5 NULL
+
+# Config reset
+statement ok
+RESET datafusion.sql_parser.dialect;

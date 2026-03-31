@@ -31,7 +31,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
     Signature, TypeSignatureClass, Volatility,
 };
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 /// AVG aggregate expression
 /// Spark average aggregate expression. Differs from standard DataFusion average aggregate
@@ -68,10 +68,6 @@ impl SparkAvg {
 }
 
 impl AggregateUDFImpl for SparkAvg {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }

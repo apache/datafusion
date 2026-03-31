@@ -32,7 +32,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::error::Result;
 use datafusion_execution::RecordBatchStream;
 use datafusion_physical_plan::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, Time,
 };
 
 use arrow::record_batch::RecordBatch;
@@ -369,16 +369,21 @@ impl FileStreamMetrics {
             start: None,
         };
 
-        let file_open_errors =
-            MetricBuilder::new(metrics).counter("file_open_errors", partition);
+        let file_open_errors = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("file_open_errors", partition);
 
-        let file_scan_errors =
-            MetricBuilder::new(metrics).counter("file_scan_errors", partition);
+        let file_scan_errors = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("file_scan_errors", partition);
 
-        let files_opened = MetricBuilder::new(metrics).counter("files_opened", partition);
+        let files_opened = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("files_opened", partition);
 
-        let files_processed =
-            MetricBuilder::new(metrics).counter("files_processed", partition);
+        let files_processed = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("files_processed", partition);
 
         Self {
             time_opening,

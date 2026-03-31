@@ -1551,6 +1551,44 @@ NULL
 query error DataFusion error: Error during planning: 'array_max' does not support zero arguments
 select array_max();
 
+# array_max over multiple rows (exercises the offsets-based iteration)
+query I
+select array_max(column1) from (values
+    (make_array(1, 5, 3)),
+    (make_array(10, 2, 8)),
+    (NULL),
+    (make_array(NULL, 7, NULL)),
+    (make_array(100))
+) as t(column1);
+----
+5
+10
+NULL
+7
+100
+
+# array_max with NaN values (NaN should not be returned as max)
+query R
+select array_max(make_array(1.0, 'NaN'::double, 3.0));
+----
+NaN
+
+query R
+select array_max(make_array('NaN'::double, 'NaN'::double));
+----
+NaN
+
+query R
+select array_max(make_array('NaN'::double, NULL));
+----
+NaN
+
+# array_max with Int32 (exercises a different primitive type than Int64)
+query I
+select array_max(arrow_cast(make_array(10, -5, 3), 'List(Int32)'));
+----
+10
+
 ## array_min
 
 query I
@@ -1640,6 +1678,83 @@ NULL
 # Testing with empty arguments should result in an error
 query error DataFusion error: Error during planning: 'array_min' does not support zero arguments
 select array_min();
+
+# array_min over multiple rows (exercises the offsets-based iteration)
+query I
+select array_min(column1) from (values
+    (make_array(1, 5, 3)),
+    (make_array(10, 2, 8)),
+    (NULL),
+    (make_array(NULL, 7, NULL)),
+    (make_array(100))
+) as t(column1);
+----
+1
+2
+NULL
+7
+100
+
+# array_min with NaN values (NaN should not be returned as min)
+query R
+select array_min(make_array(1.0, 'NaN'::double, 3.0));
+----
+1
+
+query R
+select array_min(make_array('NaN'::double, 'NaN'::double));
+----
+NaN
+
+query R
+select array_min(make_array('NaN'::double, NULL));
+----
+NaN
+
+# array_min with Int32 (exercises a different primitive type than Int64)
+query I
+select array_min(arrow_cast(make_array(10, -5, 3), 'List(Int32)'));
+----
+-5
+
+# array_min/array_max preserve parameterized primitive metadata
+query PPTT
+select
+  array_min(ts_list),
+  array_max(ts_list),
+  arrow_typeof(array_min(ts_list)),
+  arrow_typeof(array_max(ts_list))
+from (
+  select arrow_cast(
+    make_array(
+      arrow_cast(20, 'Timestamp(Nanosecond, Some("UTC"))'),
+      arrow_cast(10, 'Timestamp(Nanosecond, Some("UTC"))'),
+      arrow_cast(30, 'Timestamp(Nanosecond, Some("UTC"))')
+    ),
+    'List(Timestamp(Nanosecond, Some("UTC")))'
+  ) as ts_list
+) t;
+----
+1970-01-01T00:00:00.000000010Z 1970-01-01T00:00:00.000000030Z Timestamp(ns, "UTC") Timestamp(ns, "UTC")
+
+query RRTT
+select
+  array_min(dec_list),
+  array_max(dec_list),
+  arrow_typeof(array_min(dec_list)),
+  arrow_typeof(array_max(dec_list))
+from (
+  select arrow_cast(
+    make_array(
+      arrow_cast(200, 'Decimal128(20, 4)'),
+      arrow_cast(100, 'Decimal128(20, 4)'),
+      arrow_cast(300, 'Decimal128(20, 4)')
+    ),
+    'List(Decimal128(20, 4))'
+  ) as dec_list
+) t;
+----
+100 300 Decimal128(20, 4) Decimal128(20, 4)
 
 
 ## array_pop_back (aliases: `list_pop_back`)
@@ -9108,6 +9223,26 @@ query ?
 SELECT string_to_array('abcxxxdef', 'xxx')
 ----
 [abc, def]
+
+query I
+SELECT cardinality(string_to_array('', ','))
+----
+0
+
+query I
+SELECT cardinality(string_to_array('', ''))
+----
+0
+
+query I
+SELECT cardinality(string_to_array('', ',', 'x'))
+----
+0
+
+query I
+SELECT cardinality(string_to_array('', '', 'x'))
+----
+0
 
 query ?
 SELECT string_to_array('abc', '')

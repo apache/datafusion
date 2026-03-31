@@ -15,6 +15,24 @@ Before committing any changes, you MUST follow the instructions in
 and ensure the required checks listed there pass. Do not commit code that
 fails any of those checks.
 
+At a minimum, you MUST run and fix any errors from these commands before
+committing:
+
+```bash
+# Format code
+cargo fmt --all
+
+# Lint (must pass with no warnings)
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+You can also run the full lint suite used by CI:
+
+```bash
+./dev/rust_lint.sh
+# or auto-fix: ./dev/rust_lint.sh --write --allow-dirty
+```
+
 When creating a PR, you MUST follow the [PR template](.github/pull_request_template.md).
 
 ## Testing

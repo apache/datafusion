@@ -41,7 +41,6 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use regex::Regex;
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -113,10 +112,6 @@ impl RegexpReplaceFunc {
 }
 
 impl ScalarUDFImpl for RegexpReplaceFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regexp_replace"
     }

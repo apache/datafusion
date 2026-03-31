@@ -17,7 +17,6 @@
 
 //! [`ScalarUDFImpl`] definitions for `array_append`, `array_prepend` and `array_concat` functions.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::make_array::make_array_inner;
@@ -97,10 +96,6 @@ impl ArrayAppend {
 }
 
 impl ScalarUDFImpl for ArrayAppend {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_append"
     }
@@ -183,10 +178,6 @@ impl ArrayPrepend {
 }
 
 impl ScalarUDFImpl for ArrayPrepend {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_prepend"
     }
@@ -271,10 +262,6 @@ impl ArrayConcat {
 }
 
 impl ScalarUDFImpl for ArrayConcat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_concat"
     }
