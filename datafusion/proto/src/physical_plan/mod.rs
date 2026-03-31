@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -78,7 +79,7 @@ use datafusion_physical_plan::joins::{
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
-use datafusion_physical_plan::metrics::MetricType;
+use datafusion_physical_plan::metrics::{MetricCategory, MetricType};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -1830,10 +1831,21 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&analyze.input, ctx, codec, proto_converter)?;
+        let metric_categories = if analyze.has_metric_categories {
+            let cats: Result<Vec<MetricCategory>> = analyze
+                .metric_categories
+                .iter()
+                .map(|s| s.parse::<MetricCategory>())
+                .collect();
+            Some(cats?)
+        } else {
+            None
+        };
         Ok(Arc::new(AnalyzeExec::new(
             analyze.verbose,
             analyze.show_statistics,
-            vec![MetricType::SUMMARY, MetricType::DEV],
+            vec![MetricType::Summary, MetricType::Dev],
+            metric_categories,
             input,
             Arc::new(convert_required!(analyze.schema)?),
         )))
@@ -2301,6 +2313,10 @@ impl protobuf::PhysicalPlanNode {
             codec,
             proto_converter,
         )?;
+        let (has_metric_categories, metric_categories) = match exec.metric_categories() {
+            Some(cats) => (true, cats.iter().map(|c| c.to_string()).collect()),
+            None => (false, vec![]),
+        };
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Analyze(Box::new(
                 protobuf::AnalyzeExecNode {
@@ -2308,6 +2324,8 @@ impl protobuf::PhysicalPlanNode {
                     show_statistics: exec.show_statistics(),
                     input: Some(Box::new(input)),
                     schema: Some(exec.schema().as_ref().try_into()?),
+                    has_metric_categories,
+                    metric_categories,
                 },
             ))),
         })
@@ -3654,7 +3672,7 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
-pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     fn try_decode(
         &self,
         buf: &[u8],

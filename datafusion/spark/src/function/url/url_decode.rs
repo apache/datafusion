@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -130,10 +129,6 @@ impl UrlDecode {
 }
 
 impl ScalarUDFImpl for UrlDecode {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "url_decode"
     }
@@ -208,8 +203,6 @@ pub fn spark_handled_url_decode(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StringArray;
-    use datafusion_common::Result;
 
     use super::*;
 

@@ -19,7 +19,6 @@ use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray};
 use arrow::compute::try_binary;
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::error::ArrowError;
-use std::any::Any;
 use std::mem::swap;
 use std::sync::Arc;
 
@@ -69,10 +68,6 @@ impl GcdFunc {
 }
 
 impl ScalarUDFImpl for GcdFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "gcd"
     }

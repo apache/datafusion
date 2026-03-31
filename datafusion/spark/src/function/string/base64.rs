@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -59,10 +58,6 @@ impl SparkBase64 {
 }
 
 impl ScalarUDFImpl for SparkBase64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "base64"
     }
@@ -136,10 +131,6 @@ impl SparkUnBase64 {
 }
 
 impl ScalarUDFImpl for SparkUnBase64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "unbase64"
     }

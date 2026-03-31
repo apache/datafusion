@@ -222,6 +222,12 @@ impl Clone for FFI_WindowUDF {
 
 impl From<Arc<WindowUDF>> for FFI_WindowUDF {
     fn from(udf: Arc<WindowUDF>) -> Self {
+        if let Some(udwf) = (udf.inner().as_ref() as &dyn std::any::Any)
+            .downcast_ref::<ForeignWindowUDF>()
+        {
+            return udwf.udf.clone();
+        }
+
         let name = udf.name().into();
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();
@@ -302,10 +308,6 @@ impl From<&FFI_WindowUDF> for Arc<dyn WindowUDFImpl> {
 }
 
 impl WindowUDFImpl for ForeignWindowUDF {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -473,8 +475,7 @@ mod tests {
         // Verify local libraries can be downcast to their original
         let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
         assert!(
-            foreign_udwf
-                .as_any()
+            (foreign_udwf.as_ref() as &dyn std::any::Any)
                 .downcast_ref::<WindowShift>()
                 .is_some()
         );
@@ -483,8 +484,7 @@ mod tests {
         ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
         assert!(
-            foreign_udwf
-                .as_any()
+            (foreign_udwf.as_ref() as &dyn std::any::Any)
                 .downcast_ref::<ForeignWindowUDF>()
                 .is_some()
         );

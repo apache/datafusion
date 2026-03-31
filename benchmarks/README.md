@@ -95,7 +95,7 @@ Generate the data required for the compile profile helper (TPC-H SF=1):
 ./bench.sh data compile_profile
 ```
 
-Run the benchmark across all default Cargo profiles (`dev`, `release`, `ci`, `release-nonlto`):
+Run the benchmark across all default Cargo profiles (`dev`, `release`, `ci`, `ci-optimized`, `release-nonlto`, `profiling`):
 
 ```shell
 ./bench.sh run compile_profile

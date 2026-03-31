@@ -84,10 +84,6 @@ impl VarianceSample {
 }
 
 impl AggregateUDFImpl for VarianceSample {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "var"
     }
@@ -184,10 +180,6 @@ impl VariancePopulation {
 }
 
 impl AggregateUDFImpl for VariancePopulation {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "var_pop"
     }

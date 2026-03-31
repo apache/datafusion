@@ -1565,12 +1565,6 @@ pub struct PhysicalHashExprNode {
     pub on_columns: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(uint64, tag = "2")]
     pub seed0: u64,
-    #[prost(uint64, tag = "3")]
-    pub seed1: u64,
-    #[prost(uint64, tag = "4")]
-    pub seed2: u64,
-    #[prost(uint64, tag = "5")]
-    pub seed3: u64,
     #[prost(string, tag = "6")]
     pub description: ::prost::alloc::string::String,
 }
@@ -1791,6 +1785,12 @@ pub struct AnalyzeExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, tag = "4")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// Optional metric category filter.
+    /// Empty means "plan only". Absent (has_metric_categories=false) means "all".
+    #[prost(bool, tag = "5")]
+    pub has_metric_categories: bool,
+    #[prost(string, repeated, tag = "6")]
+    pub metric_categories: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CrossJoinExecNode {

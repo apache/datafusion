@@ -32,12 +32,12 @@ use datafusion_common::cast::{
 use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
 use datafusion_common::{Result, exec_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use itertools::Itertools;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -91,10 +91,6 @@ impl ArrayDistance {
 }
 
 impl ScalarUDFImpl for ArrayDistance {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_distance"
     }
@@ -125,10 +121,7 @@ impl ScalarUDFImpl for ArrayDistance {
         arg_types.try_collect()
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_distance_inner)(&args.args)
     }
 

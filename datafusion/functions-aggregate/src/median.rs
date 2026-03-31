@@ -105,10 +105,6 @@ impl Median {
 }
 
 impl AggregateUDFImpl for Median {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "median"
     }

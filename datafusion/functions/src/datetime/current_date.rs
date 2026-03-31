@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
@@ -25,7 +23,8 @@ use chrono::{Datelike, NaiveDate, TimeZone};
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -68,10 +67,6 @@ impl CurrentDateFunc {
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
 impl ScalarUDFImpl for CurrentDateFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "current_date"
     }
@@ -84,10 +79,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
         Ok(Date32)
     }
 
-    fn invoke_with_args(
-        &self,
-        _args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!(
             "invoke should not be called on a simplified current_date() function"
         )

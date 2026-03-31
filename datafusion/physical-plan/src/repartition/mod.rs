@@ -436,8 +436,7 @@ enum BatchPartitionerState {
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
 /// executions and runs.
-pub const REPARTITION_RANDOM_STATE: SeededRandomState =
-    SeededRandomState::with_seeds(0, 0, 0, 0);
+pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
@@ -2632,7 +2631,6 @@ mod test {
     use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     /// Asserts that the plan is as expected
     ///
@@ -2710,7 +2708,6 @@ mod test {
 
     #[tokio::test]
     async fn test_preserve_order_with_spilling() -> Result<()> {
-        use datafusion_execution::TaskContext;
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
         // Create sorted input data across multiple partitions
@@ -2837,7 +2834,6 @@ mod test {
 
     #[tokio::test]
     async fn test_hash_partitioning_with_spilling() -> Result<()> {
-        use datafusion_execution::TaskContext;
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
         // Create input data similar to the round-robin test

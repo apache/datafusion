@@ -533,6 +533,240 @@ fn test_filter_with_projection() {
 }
 
 #[test]
+fn test_filter_collapse_outer_fetch_preserved() {
+    // When the outer filter has fetch and inner does not, the merged filter should preserve fetch
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let predicate1 = col_lit_predicate("a", "foo", &schema());
+    let filter1 = Arc::new(FilterExec::try_new(predicate1, scan).unwrap());
+    let predicate2 = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate2, filter1)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar, fetch=10
+        -   FilterExec: a@0 = foo
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - FilterExec: b@1 = bar AND a@0 = foo, fetch=10
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_collapse_inner_fetch_preserved() {
+    // When the inner filter has fetch and outer does not, the merged filter should preserve fetch
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let predicate1 = col_lit_predicate("a", "foo", &schema());
+    let filter1 = Arc::new(
+        FilterExecBuilder::new(predicate1, scan)
+            .with_fetch(Some(5))
+            .build()
+            .unwrap(),
+    );
+    let predicate2 = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate2, filter1).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar
+        -   FilterExec: a@0 = foo, fetch=5
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - FilterExec: b@1 = bar AND a@0 = foo, fetch=5
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_collapse_both_fetch_uses_minimum() {
+    // When both filters have fetch, the merged filter should use the smaller (tighter) fetch.
+    // Inner fetch=5 is tighter than outer fetch=10, so the result should be fetch=5.
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let predicate1 = col_lit_predicate("a", "foo", &schema());
+    let filter1 = Arc::new(
+        FilterExecBuilder::new(predicate1, scan)
+            .with_fetch(Some(5))
+            .build()
+            .unwrap(),
+    );
+    let predicate2 = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate2, filter1)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar, fetch=10
+        -   FilterExec: a@0 = foo, fetch=5
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - FilterExec: b@1 = bar AND a@0 = foo, fetch=5
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_fully_pushed_to_scan() {
+    // When a FilterExec has a fetch limit and all predicates are pushed down
+    // to a supportive DataSourceExec, the FilterExec is removed and the fetch
+    // must be propagated to the DataSourceExec.
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, scan)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=10
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], limit=10, file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_and_projection_fully_pushed_to_scan() {
+    // When a FilterExec has both fetch and projection, and all predicates are
+    // pushed down, the filter is replaced by a ProjectionExec and the fetch
+    // must still be propagated to the DataSourceExec.
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let projection = vec![1, 0];
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, scan)
+            .with_fetch(Some(5))
+            .apply_projection(Some(projection))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, projection=[b@1, a@0], fetch=5
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - ProjectionExec: expr=[b@1 as b, a@0 as a]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], limit=5, file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_partially_pushed_to_scan() {
+    // When a FilterExec has fetch and only some predicates are pushed down,
+    // the FilterExec remains with the unpushed predicate and keeps its fetch.
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let pushed_predicate = col_lit_predicate("a", "foo", &schema());
+    let volatile_predicate = {
+        let cfg = Arc::new(ConfigOptions::default());
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()),
+            Operator::Eq,
+            Arc::new(
+                ScalarFunctionExpr::try_new(
+                    Arc::new(ScalarUDF::from(RandomFunc::new())),
+                    vec![],
+                    &schema(),
+                    cfg,
+                )
+                .unwrap(),
+            ),
+        )) as Arc<dyn PhysicalExpr>
+    };
+    // Combine: a = 'foo' AND a = random()
+    let combined = Arc::new(BinaryExpr::new(
+        pushed_predicate,
+        Operator::And,
+        volatile_predicate,
+    )) as Arc<dyn PhysicalExpr>;
+    let plan = Arc::new(
+        FilterExecBuilder::new(combined, scan)
+            .with_fetch(Some(7))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo AND a@0 = random(), fetch=7
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: a@0 = random(), fetch=7
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_not_pushed_to_unsupportive_scan() {
+    // When the DataSourceExec does not support pushdown, the FilterExec
+    // remains unchanged with its fetch intact.
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, scan)
+            .with_fetch(Some(3))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=3
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - FilterExec: a@0 = foo, fetch=3
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
 fn test_push_down_through_transparent_nodes() {
     // expect the predicate to be pushed down into the DataSource
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
@@ -1253,7 +1487,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 2 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 4 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
     "
     );
 
@@ -2083,6 +2317,116 @@ fn test_filter_pushdown_through_union_does_not_support() {
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
           -   FilterExec: a@0 = foo
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_fully_pushed_through_union() {
+    // When a FilterExec with fetch wraps a UnionExec and all predicates are
+    // pushed down, UnionExec does not support with_fetch, so a LocalLimitExec
+    // should be inserted to preserve the fetch limit.
+    let scan1 = TestScanBuilder::new(schema()).with_support(true).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(true).build();
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, union)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=10
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - LocalLimitExec: fetch=10
+          -   UnionExec
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_and_projection_fully_pushed_through_union() {
+    // When a FilterExec with both fetch and projection wraps a UnionExec and
+    // all predicates are pushed down, we should get a ProjectionExec on top of
+    // a LocalLimitExec wrapping the UnionExec.
+    let scan1 = TestScanBuilder::new(schema()).with_support(true).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(true).build();
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+    let projection = vec![1, 0];
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, union)
+            .with_fetch(Some(5))
+            .apply_projection(Some(projection))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, projection=[b@1, a@0], fetch=5
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - ProjectionExec: expr=[b@1 as b, a@0 as a]
+          -   LocalLimitExec: fetch=5
+          -     UnionExec
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_not_fully_pushed_through_union() {
+    // When a FilterExec with fetch wraps a UnionExec but children don't support
+    // pushdown, the FilterExec remains with its fetch — no LocalLimitExec needed.
+    let scan1 = TestScanBuilder::new(schema()).with_support(false).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(false).build();
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, union)
+            .with_fetch(Some(8))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=8
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - LocalLimitExec: fetch=8
+          -   UnionExec
+          -     FilterExec: a@0 = foo
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     FilterExec: a@0 = foo
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
