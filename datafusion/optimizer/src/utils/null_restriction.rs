@@ -27,8 +27,9 @@
 //! out — the predicate "restricts" them.
 //!
 //! The syntactic check is deliberately conservative:
-//! - It returns `Some(true)` or `Some(false)` only when it can prove the outcome
-//!   from the expression shape alone.
+//! - It returns `Some(SyntacticNullRestriction::Restricts)` or
+//!   `Some(SyntacticNullRestriction::DoesNotRestrict)` only when it can prove
+//!   the outcome from the expression shape alone.
 //! - It returns `None` for unrecognised patterns, signalling the caller to fall
 //!   back to the authoritative physical-expression evaluator.
 

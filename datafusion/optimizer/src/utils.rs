@@ -87,11 +87,6 @@ pub fn is_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
-    // Fast path for a bare column reference.
-    if matches!(predicate, Expr::Column(_)) {
-        return Ok(true);
-    }
-
     let join_cols: HashSet<Column> =
         join_cols_of_predicate.into_iter().cloned().collect();
 
@@ -299,6 +294,14 @@ mod tests {
     fn expr_mixed_reference_predicate_does_not_restrict() -> Result<()> {
         let column_a = Column::from_name("a");
 
+        // col("b") — "b" is not a join column → non-restricting
+        let predicate = col("b");
+        let actual = is_restrict_null_predicate(predicate, std::iter::once(&column_a))?;
+        assert!(
+            !actual,
+            "bare non-join column predicate must be non-restricting"
+        );
+
         // col("b") > 5 — "b" is not a join column → non-restricting
         let predicate = binary_expr(col("b"), Operator::Gt, lit(5i64));
         let actual = is_restrict_null_predicate(predicate, std::iter::once(&column_a))?;
@@ -326,6 +329,34 @@ mod tests {
     /// comparison operators).
     #[test]
     fn expr_syntactic_fast_path_agrees_with_authoritative() -> Result<()> {
+        fn authoritative_restrict_null_predicate(
+            predicate: Expr,
+            join_cols: impl IntoIterator<Item = Column>,
+        ) -> Result<bool> {
+            let join_cols = join_cols.into_iter().collect::<Vec<_>>();
+
+            if matches!(predicate, Expr::Column(_)) {
+                return evaluates_to_null(predicate, join_cols.iter());
+            }
+
+            Ok(
+                match evaluate_expr_with_null_column(predicate, join_cols.iter())? {
+                    ColumnarValue::Array(array) => {
+                        if array.len() == 1 {
+                            let boolean_array = as_boolean_array(&array)?;
+                            boolean_array.is_null(0) || !boolean_array.value(0)
+                        } else {
+                            false
+                        }
+                    }
+                    ColumnarValue::Scalar(scalar) => matches!(
+                        scalar,
+                        ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
+                    ),
+                },
+            )
+        }
+
         let column_a = Column::from_name("a");
         let join_cols_set: HashSet<Column> = std::iter::once(column_a.clone()).collect();
 
@@ -349,11 +380,11 @@ mod tests {
                 &predicate,
                 &join_cols_set,
             );
-            // Authoritative result (both evaluators should agree when syntactic decides).
+            // Authoritative result computed without going through the wrapper under test.
             if let Some(syn_result) = syntactic {
-                let authoritative = is_restrict_null_predicate(
+                let authoritative = authoritative_restrict_null_predicate(
                     predicate.clone(),
-                    std::iter::once(&column_a),
+                    std::iter::once(column_a.clone()),
                 )?;
                 let syn_bool =
                     syn_result == null_restriction::SyntacticNullRestriction::Restricts;
