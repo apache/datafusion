@@ -321,12 +321,7 @@ pub fn cast_with_options(
         Ok(Arc::clone(&expr))
     } else if requires_nested_struct_cast(&expr_type, &cast_type) {
         if can_cast_named_struct_types(&expr_type, &cast_type) {
-            // Allow casts involving structs (including nested inside Lists, Dictionaries,
-            // etc.) that pass name-based compatibility validation. This validation is
-            // applied at planning time (now) to fail fast, rather than deferring errors
-            // to execution time. Keep this predicate in sync with the runtime check in
-            // ColumnarValue::cast_to so planning only accepts casts that nested_struct::
-            // cast_column can actually adapt.
+            // Keep this planner check in sync with ColumnarValue::cast_to runtime routing.
             Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
         } else {
             not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
@@ -976,22 +971,18 @@ mod tests {
 
     #[test]
     fn fixed_size_list_struct_size_mismatch_fails_at_planning() -> Result<()> {
-        let source_type = FixedSizeList(
-            Arc::new(Field::new(
-                "item",
-                Struct(Fields::from(vec![Arc::new(Field::new("x", Int32, true))])),
-                true,
-            )),
+        let fixed_size_list = |inner_type, size| {
+            FixedSizeList(Arc::new(Field::new("item", inner_type, true)), size)
+        };
+
+        let source_type = fixed_size_list(
+            Struct(Fields::from(vec![Arc::new(Field::new("x", Int32, true))])),
             1,
         );
         let schema = Schema::new(vec![Field::new("a", source_type, true)]);
 
-        let invalid_target = FixedSizeList(
-            Arc::new(Field::new(
-                "item",
-                Struct(Fields::from(vec![Arc::new(Field::new("x", Int64, true))])),
-                true,
-            )),
+        let invalid_target = fixed_size_list(
+            Struct(Fields::from(vec![Arc::new(Field::new("x", Int64, true))])),
             2,
         );
 
