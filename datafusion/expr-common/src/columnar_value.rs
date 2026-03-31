@@ -317,6 +317,8 @@ fn cast_array_by_name(
         array.data_type(),
         cast_type,
     ) {
+        // Planning uses the same predicate before building the physical cast,
+        // so this branch must remain the runtime mirror of that validation.
         datafusion_common::nested_struct::cast_column(array, cast_type, cast_options)
     } else {
         ensure_date_array_timestamp_bounds(array, cast_type)?;

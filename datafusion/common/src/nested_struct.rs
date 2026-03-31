@@ -227,11 +227,8 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
             ))
         })?;
 
-    let cast_values = cast_column(
-        source_list.values(),
-        target_inner_field.data_type(),
-        cast_options,
-    )?;
+    let cast_values =
+        cast_nested_list_values(source_list.values(), target_inner_field, cast_options)?;
 
     let result = GenericListArray::<O>::new(
         Arc::clone(target_inner_field),
@@ -257,11 +254,8 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
             ))
         })?;
 
-    let cast_values = cast_column(
-        source_list.values(),
-        target_inner_field.data_type(),
-        cast_options,
-    )?;
+    let cast_values =
+        cast_nested_list_values(source_list.values(), target_inner_field, cast_options)?;
 
     let result = GenericListViewArray::<O>::try_new(
         Arc::clone(target_inner_field),
@@ -291,11 +285,17 @@ fn cast_fixed_size_list_column(
             ))
         })?;
 
-    let cast_values = cast_column(
-        source_list.values(),
-        target_inner_field.data_type(),
-        cast_options,
-    )?;
+    let source_size = source_list.value_length();
+    if source_size != target_size {
+        return _plan_err!(
+            "Cannot cast FixedSizeList column with size {} to size {}",
+            source_size,
+            target_size
+        );
+    }
+
+    let cast_values =
+        cast_nested_list_values(source_list.values(), target_inner_field, cast_options)?;
 
     let result = FixedSizeListArray::new(
         Arc::clone(target_inner_field),
@@ -304,6 +304,14 @@ fn cast_fixed_size_list_column(
         source_list.nulls().cloned(),
     );
     Ok(Arc::new(result))
+}
+
+fn cast_nested_list_values(
+    source_values: &ArrayRef,
+    target_inner_field: &FieldRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    cast_column(source_values, target_inner_field.data_type(), cast_options)
 }
 
 fn cast_dictionary_column(
@@ -477,6 +485,8 @@ pub fn validate_data_type_compatibility(
             DataType::FixedSizeList(s, source_size),
             DataType::FixedSizeList(t, target_size),
         ) => {
+            // FixedSizeList shape must match before validating child compatibility,
+            // as a size mismatch is not recoverable by any nested field adaptation.
             if source_size != target_size {
                 return _plan_err!(
                     "Cannot cast FixedSizeList field '{}' with size {} to size {}",
@@ -531,8 +541,12 @@ pub fn requires_nested_struct_cast(
         (DataType::List(s), DataType::List(t))
         | (DataType::LargeList(s), DataType::LargeList(t))
         | (DataType::ListView(s), DataType::ListView(t))
-        | (DataType::LargeListView(s), DataType::LargeListView(t))
-        | (DataType::FixedSizeList(s, _), DataType::FixedSizeList(t, _)) => {
+        | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
+            requires_nested_struct_cast(s.data_type(), t.data_type())
+        }
+        // FixedSizeList length does not affect whether name-based nested struct
+        // adaptation is needed, only whether the runtime cast is valid.
+        (DataType::FixedSizeList(s, _), DataType::FixedSizeList(t, _)) => {
             requires_nested_struct_cast(s.data_type(), t.data_type())
         }
         (DataType::Dictionary(_, s_val), DataType::Dictionary(_, t_val)) => {
@@ -1451,6 +1465,26 @@ mod tests {
         assert!(
             error_msg.contains("cannot fill with NULL")
                 || error_msg.contains("non-nullable")
+        );
+    }
+
+    #[test]
+    fn test_cast_fixed_size_list_size_mismatch_fails() {
+        use arrow::array::FixedSizeListArray;
+
+        let values = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
+        let source_list =
+            FixedSizeListArray::new(arc_field("item", DataType::Int32), 1, values, None);
+        let source_col: ArrayRef = Arc::new(source_list);
+
+        let target_type = DataType::FixedSizeList(arc_field("item", DataType::Int32), 2);
+
+        let result = cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert_contains!(
+            error_msg,
+            "Cannot cast FixedSizeList column with size 1 to size 2"
         );
     }
 

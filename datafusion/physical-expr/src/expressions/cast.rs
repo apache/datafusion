@@ -324,8 +324,9 @@ pub fn cast_with_options(
             // Allow casts involving structs (including nested inside Lists, Dictionaries,
             // etc.) that pass name-based compatibility validation. This validation is
             // applied at planning time (now) to fail fast, rather than deferring errors
-            // to execution time. The name-based casting logic will be executed at runtime
-            // via ColumnarValue::cast_to.
+            // to execution time. Keep this predicate in sync with the runtime check in
+            // ColumnarValue::cast_to so planning only accepts casts that nested_struct::
+            // cast_column can actually adapt.
             Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
         } else {
             not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
