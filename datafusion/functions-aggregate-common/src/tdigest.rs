@@ -434,6 +434,10 @@ impl TDigest {
             return 0.0;
         }
 
+        // No compression happened since each centroid = one data point, so use exact percentile instead of interpolation
+        if self.count as usize == self.centroids.len() {
+            return self.exact_quantile(q);
+        }
         let rank = q * self.count;
 
         let mut pos: usize;
@@ -507,6 +511,20 @@ impl TDigest {
         }
 
         Self::clamp(value, min, max)
+    }
+
+    fn exact_quantile(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return self.min();
+        }
+        if q >= 1.0 {
+            return self.max();
+        }
+
+        let n = self.centroids.len();
+        let idx = (q * n as f64).ceil() as usize;
+        let idx = idx.saturating_sub(1).min(n - 1);
+        self.centroids[idx].mean()
     }
 
     /// This method decomposes the [`TDigest`] and its [`Centroid`] instances
