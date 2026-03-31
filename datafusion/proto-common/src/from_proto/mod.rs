@@ -1275,7 +1275,6 @@ pub(crate) fn csv_writer_options_from_proto(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion_common::config::{CdcOptions, ParquetOptions, TableParquetOptions};
 
     fn parquet_options_proto_round_trip(opts: ParquetOptions) -> ParquetOptions {

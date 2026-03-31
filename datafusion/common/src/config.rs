@@ -715,6 +715,7 @@ pub struct CdcOptions {
 // Use `CdcOptions::default()` (the inherent method) instead of `Default::default()`.
 impl CdcOptions {
     /// Returns a new `CdcOptions` with default values.
+    #[expect(clippy::should_implement_trait)]
     pub fn default() -> Self {
         Self {
             min_chunk_size: 256 * 1024,
@@ -731,10 +732,7 @@ impl ConfigField for CdcOptions {
             "min_chunk_size" => self.min_chunk_size.set(rem, value),
             "max_chunk_size" => self.max_chunk_size.set(rem, value),
             "norm_level" => self.norm_level.set(rem, value),
-            _ => _config_err!(
-                "Config value \"{}\" not found on CdcOptions",
-                key
-            ),
+            _ => _config_err!("Config value \"{}\" not found on CdcOptions", key),
         }
     }
 
@@ -774,10 +772,7 @@ impl ConfigField for CdcOptions {
                     self.norm_level.reset(rem)
                 }
             }
-            _ => _config_err!(
-                "Config value \"{}\" not found on CdcOptions",
-                key
-            ),
+            _ => _config_err!("Config value \"{}\" not found on CdcOptions", key),
         }
     }
 }
@@ -809,8 +804,7 @@ impl ConfigField for Option<CdcOptions> {
                 ),
             }
         } else {
-            self.get_or_insert_with(CdcOptions::default)
-                .set(key, value)
+            self.get_or_insert_with(CdcOptions::default).set(key, value)
         }
     }
 
@@ -819,8 +813,7 @@ impl ConfigField for Option<CdcOptions> {
             *self = None;
             Ok(())
         } else {
-            self.get_or_insert_with(CdcOptions::default)
-                .reset(key)
+            self.get_or_insert_with(CdcOptions::default).reset(key)
         }
     }
 }
@@ -3731,11 +3724,13 @@ mod tests {
         use crate::config::ConfigOptions;
 
         let mut config = ConfigOptions::default();
-        assert!(config
-            .execution
-            .parquet
-            .use_content_defined_chunking
-            .is_none());
+        assert!(
+            config
+                .execution
+                .parquet
+                .use_content_defined_chunking
+                .is_none()
+        );
 
         // Setting to "true" should enable CDC with default options
         config
@@ -3761,11 +3756,13 @@ mod tests {
                 "false",
             )
             .unwrap();
-        assert!(config
-            .execution
-            .parquet
-            .use_content_defined_chunking
-            .is_none());
+        assert!(
+            config
+                .execution
+                .parquet
+                .use_content_defined_chunking
+                .is_none()
+        );
     }
 
     #[cfg(feature = "parquet")]
