@@ -1527,12 +1527,21 @@ impl FileScanConfig {
 
     /// Last-resort optimization when FileSource returns `Unsupported`.
     ///
-    /// Even without within-file ordering guarantees, reordering files by
-    /// min/max statistics still helps: TopK queries with dynamic filters
-    /// can prune files earlier when files are read in approximate order.
+    /// FileSource may return `Unsupported` because `eq_properties` had no
+    /// ordering — which happens when `validated_output_ordering()` stripped
+    /// the ordering because files were in the wrong order. After sorting
+    /// files by statistics, the ordering may become valid again.
     ///
-    /// Returns `Inexact` (SortExec stays) since we cannot guarantee ordering.
-    /// Returns `Unsupported` if no files were actually reordered.
+    /// This method:
+    /// 1. Sorts files within groups by min/max statistics
+    /// 2. Re-checks if the sorted file order makes `output_ordering` valid
+    /// 3. If valid AND non-overlapping → `Exact` (SortExec eliminated!)
+    /// 4. If files were reordered but ordering not valid → `Inexact`
+    /// 5. If no files were reordered → `Unsupported`
+    ///
+    /// This handles the key case where files have correct within-file ordering
+    /// (e.g., Parquet sorting_columns metadata) but were listed in wrong order
+    /// (e.g., alphabetical order doesn't match sort key order).
     fn try_sort_file_groups_by_statistics(
         &self,
         order: &[PhysicalSortExpr],
@@ -1561,6 +1570,23 @@ impl FileScanConfig {
 
         let mut new_config = self.clone();
         new_config.file_groups = result.file_groups;
+
+        // Re-check: now that files are sorted, does output_ordering become valid?
+        // This handles the case where validated_output_ordering() previously
+        // stripped the ordering because files were in the wrong order.
+        if result.all_non_overlapping && !self.output_ordering.is_empty() {
+            // Files are now non-overlapping and we have declared output_ordering.
+            // Re-ask the FileSource if this ordering satisfies the request,
+            // using eq_properties computed from the NEW (sorted) file groups.
+            let new_eq_props = new_config.eq_properties();
+            if new_eq_props.ordering_satisfy(order.iter().cloned())? {
+                // The sorted file order makes the ordering valid → Exact!
+                return Ok(SortOrderPushdownResult::Exact {
+                    inner: Arc::new(new_config),
+                });
+            }
+        }
+
         new_config.output_ordering = vec![];
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_config),
