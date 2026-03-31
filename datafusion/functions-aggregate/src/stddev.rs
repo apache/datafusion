@@ -17,7 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::align_of_val;
@@ -85,11 +84,6 @@ impl Stddev {
 }
 
 impl AggregateUDFImpl for Stddev {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "stddev"
     }
@@ -192,11 +186,6 @@ impl StddevPop {
 }
 
 impl AggregateUDFImpl for StddevPop {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "stddev_pop"
     }

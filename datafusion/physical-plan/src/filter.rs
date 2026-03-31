@@ -59,12 +59,12 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, lit};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{
-    AcrossPartitions, AnalysisContext, ConstExpr, EquivalenceProperties, ExprBoundaries,
-    PhysicalExpr, analyze, conjunction, split_conjunction,
+    AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
+    conjunction, split_conjunction,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -350,55 +350,6 @@ impl FilterExec {
         })
     }
 
-    /// Returns the `AcrossPartitions` value for `expr` if it is constant:
-    /// either already known constant in `input_eqs`, or a `Literal`
-    /// (which is inherently constant across all partitions).
-    fn expr_constant_or_literal(
-        expr: &Arc<dyn PhysicalExpr>,
-        input_eqs: &EquivalenceProperties,
-    ) -> Option<AcrossPartitions> {
-        input_eqs.is_expr_constant(expr).or_else(|| {
-            expr.as_any()
-                .downcast_ref::<Literal>()
-                .map(|l| AcrossPartitions::Uniform(Some(l.value().clone())))
-        })
-    }
-
-    fn extend_constants(
-        input: &Arc<dyn ExecutionPlan>,
-        predicate: &Arc<dyn PhysicalExpr>,
-    ) -> Vec<ConstExpr> {
-        let mut res_constants = Vec::new();
-        let input_eqs = input.equivalence_properties();
-
-        let conjunctions = split_conjunction(predicate);
-        for conjunction in conjunctions {
-            if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>()
-                && binary.op() == &Operator::Eq
-            {
-                // Check if either side is constant — either already known
-                // constant from the input equivalence properties, or a literal
-                // value (which is inherently constant across all partitions).
-                let left_const = Self::expr_constant_or_literal(binary.left(), input_eqs);
-                let right_const =
-                    Self::expr_constant_or_literal(binary.right(), input_eqs);
-
-                if let Some(left_across) = left_const {
-                    // LEFT is constant, so RIGHT must also be constant.
-                    // Use RIGHT's known across value if available, otherwise
-                    // propagate LEFT's (e.g. Uniform from a literal).
-                    let across = right_const.unwrap_or(left_across);
-                    res_constants
-                        .push(ConstExpr::new(Arc::clone(binary.right()), across));
-                } else if let Some(right_across) = right_const {
-                    // RIGHT is constant, so LEFT must also be constant.
-                    res_constants
-                        .push(ConstExpr::new(Arc::clone(binary.left()), right_across));
-                }
-            }
-        }
-        res_constants
-    }
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
@@ -436,7 +387,10 @@ impl FilterExec {
         eq_properties.add_constants(constants)?;
         // This is for logical constant (for example: a = '1', then a could be marked as a constant)
         // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
-        eq_properties.add_constants(Self::extend_constants(input, predicate))?;
+        eq_properties.add_constants(ConstExpr::collect_predicate_constants(
+            input.equivalence_properties(),
+            predicate,
+        ))?;
 
         let mut output_partitioning = input.output_partitioning().clone();
         // If contains projection, update the PlanProperties.
