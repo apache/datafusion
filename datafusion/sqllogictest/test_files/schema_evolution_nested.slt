@@ -122,3 +122,61 @@ FROM large_list_messages;
 ----
 1 10 NULL
 2 30 eth
+
+statement ok
+CREATE EXTERNAL TABLE fixed_size_list_messages (
+  row_id INT,
+  messages STRUCT<id BIGINT, name VARCHAR, chain VARCHAR>[2]
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_nested/fixed_size_list_messages/';
+
+statement ok
+COPY (
+  SELECT
+    1 AS row_id,
+    arrow_cast(
+      [
+        named_struct('id', 10, 'name', 'alpha'),
+        named_struct('id', 20, 'name', 'beta')
+      ],
+      'FixedSizeList(2, Struct("id": Int64, "name": Utf8View))'
+    ) AS messages
+) TO 'test_files/scratch/schema_evolution_nested/fixed_size_list_messages/old.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT
+    2 AS row_id,
+    arrow_cast(
+      [
+        named_struct('id', 30, 'name', 'gamma', 'chain', 'eth'),
+        named_struct('id', 40, 'name', 'delta', 'chain', 'doge')
+      ],
+      'FixedSizeList(2, Struct("id": Int64, "name": Utf8View, "chain": Utf8View))'
+    ) AS messages
+) TO 'test_files/scratch/schema_evolution_nested/fixed_size_list_messages/new.parquet'
+STORED AS PARQUET;
+
+query TTT
+DESCRIBE fixed_size_list_messages;
+----
+row_id Int32 YES
+messages FixedSizeList(2 x Struct("id": Int64, "name": Utf8View, "chain": Utf8View)) YES
+
+query I?
+SELECT row_id, messages FROM fixed_size_list_messages ORDER BY row_id;
+----
+1 [{id: 10, name: alpha, chain: NULL}, {id: 20, name: beta, chain: NULL}]
+2 [{id: 30, name: gamma, chain: eth}, {id: 40, name: delta, chain: doge}]
+
+query IIT rowsort
+SELECT
+  row_id,
+  get_field(messages[1], 'id') AS msg_id,
+  get_field(messages[1], 'chain') AS chain
+FROM fixed_size_list_messages;
+----
+1 10 NULL
+2 30 eth
