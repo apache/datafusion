@@ -18,7 +18,6 @@
 use super::*;
 use insta::assert_snapshot;
 use rstest::rstest;
-use std::any::Any;
 
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -140,15 +139,14 @@ async fn explain_analyze_baseline_metrics() {
         use datafusion::physical_plan;
         use datafusion::physical_plan::sorts;
 
-        (plan as &dyn Any).is::<sorts::sort::SortExec>()
-            || (plan as &dyn Any).is::<physical_plan::aggregates::AggregateExec>()
-            || (plan as &dyn Any).is::<physical_plan::filter::FilterExec>()
-            || (plan as &dyn Any).is::<physical_plan::limit::LocalLimitExec>()
-            || (plan as &dyn Any).is::<physical_plan::projection::ProjectionExec>()
-            || (plan as &dyn Any)
-                .is::<physical_plan::coalesce_partitions::CoalescePartitionsExec>()
-            || (plan as &dyn Any).is::<physical_plan::union::UnionExec>()
-            || (plan as &dyn Any).is::<physical_plan::windows::WindowAggExec>()
+        plan.is::<sorts::sort::SortExec>()
+            || plan.is::<physical_plan::aggregates::AggregateExec>()
+            || plan.is::<physical_plan::filter::FilterExec>()
+            || plan.is::<physical_plan::limit::LocalLimitExec>()
+            || plan.is::<physical_plan::projection::ProjectionExec>()
+            || plan.is::<physical_plan::coalesce_partitions::CoalescePartitionsExec>()
+            || plan.is::<physical_plan::union::UnionExec>()
+            || plan.is::<physical_plan::windows::WindowAggExec>()
     }
 
     // Validate that the recorded elapsed compute time was more than

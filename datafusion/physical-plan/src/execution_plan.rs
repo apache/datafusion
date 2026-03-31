@@ -791,6 +791,26 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 }
 
+impl dyn ExecutionPlan {
+    /// Returns `true` if the plan is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn ExecutionPlan>` via auto-deref.
+    pub fn is<T: ExecutionPlan>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this plan to a concrete type `T`, returning `None`
+    /// if the plan is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn ExecutionPlan>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: ExecutionPlan>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// [`ExecutionPlan`] Invariant Level
 ///
 /// What set of assertions ([Invariant]s)  holds for a particular `ExecutionPlan`
