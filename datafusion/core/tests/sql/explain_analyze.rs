@@ -140,14 +140,15 @@ async fn explain_analyze_baseline_metrics() {
         use datafusion::physical_plan;
         use datafusion::physical_plan::sorts;
 
-        (plan as &dyn Any).downcast_ref::<sorts::sort::SortExec>().is_some()
-            || (plan as &dyn Any).downcast_ref::<physical_plan::aggregates::AggregateExec>().is_some()
-            || (plan as &dyn Any).downcast_ref::<physical_plan::filter::FilterExec>().is_some()
-            || (plan as &dyn Any).downcast_ref::<physical_plan::limit::LocalLimitExec>().is_some()
-            || (plan as &dyn Any).downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
-            || (plan as &dyn Any).downcast_ref::<physical_plan::coalesce_partitions::CoalescePartitionsExec>().is_some()
-            || (plan as &dyn Any).downcast_ref::<physical_plan::union::UnionExec>().is_some()
-            || (plan as &dyn Any).downcast_ref::<physical_plan::windows::WindowAggExec>().is_some()
+        (plan as &dyn Any).is::<sorts::sort::SortExec>()
+            || (plan as &dyn Any).is::<physical_plan::aggregates::AggregateExec>()
+            || (plan as &dyn Any).is::<physical_plan::filter::FilterExec>()
+            || (plan as &dyn Any).is::<physical_plan::limit::LocalLimitExec>()
+            || (plan as &dyn Any).is::<physical_plan::projection::ProjectionExec>()
+            || (plan as &dyn Any)
+                .is::<physical_plan::coalesce_partitions::CoalescePartitionsExec>()
+            || (plan as &dyn Any).is::<physical_plan::union::UnionExec>()
+            || (plan as &dyn Any).is::<physical_plan::windows::WindowAggExec>()
     }
 
     // Validate that the recorded elapsed compute time was more than

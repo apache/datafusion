@@ -331,10 +331,7 @@ async fn optimizers_catch_all_statistics() {
 
 #[expect(clippy::needless_pass_by_value)]
 fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if (plan.as_ref() as &dyn Any)
-        .downcast_ref::<PlaceholderRowExec>()
-        .is_some()
-    {
+    if (plan.as_ref() as &dyn Any).is::<PlaceholderRowExec>() {
         true
     } else if plan.children().len() != 1 {
         false
