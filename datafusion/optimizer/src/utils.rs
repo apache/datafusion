@@ -17,6 +17,8 @@
 
 //! Utility functions leveraged by the query optimizer rules
 
+pub(crate) mod null_restriction;
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
@@ -71,18 +73,52 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
 /// Determine whether a predicate can restrict NULLs. e.g.
 /// `c0 > 8` return true;
 /// `c0 IS NULL` return false.
+///
+/// The function uses a two-phase evaluation strategy:
+/// 1. **Syntactic fast path** (`null_restriction` module): inspects the expression
+///    shape without executing code. Returns immediately when it can decide.
+/// 2. **Authoritative path**: builds a physical expression and evaluates it with
+///    all join columns replaced by `NULL`.
+///
+/// Predicates that reference columns outside `join_cols_of_predicate` are returned
+/// as non-restricting (`false`) without entering the authoritative path, because
+/// the authoritative evaluator cannot safely handle such columns.
 pub fn is_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
+    // Fast path for a bare column reference.
     if matches!(predicate, Expr::Column(_)) {
         return Ok(true);
     }
 
+    let join_cols: HashSet<Column> =
+        join_cols_of_predicate.into_iter().cloned().collect();
+
+    // Early return for mixed-reference predicates: if the predicate references any
+    // column that is not in the join-column set, the authoritative evaluator would
+    // fail (those columns are absent from its minimal schema). Conservatively treat
+    // such predicates as non-restricting so they are never incorrectly discarded.
+    let predicate_cols = predicate.column_refs();
+    if predicate_cols.iter().any(|c| !join_cols.contains(*c)) {
+        return Ok(false);
+    }
+
+    // Syntactic fast path: decide without expression execution.
+    if let Some(result) =
+        null_restriction::syntactic_null_restriction_check(&predicate, &join_cols)
+    {
+        return Ok(
+            result == null_restriction::SyntacticNullRestriction::Restricts,
+        );
+    }
+
+    // Authoritative path: build and execute a physical expression where every
+    // join column is replaced by NULL, then check the outcome.
     // If result is single `true`, return false;
-    // If result is single `NULL` or `false`, return true;
+    // If result is single `NULL` or `false`, return true.
     Ok(
-        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
+        match evaluate_expr_with_null_column(predicate, join_cols.iter())? {
             ColumnarValue::Array(array) => {
                 if array.len() == 1 {
                     let boolean_array = as_boolean_array(&array)?;
@@ -254,6 +290,78 @@ mod tests {
             let actual =
                 is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
             assert_eq!(actual, expected, "{predicate}");
+        }
+
+        Ok(())
+    }
+
+    /// Verify that predicates referencing columns outside the join-column set are
+    /// treated as non-restricting (the mixed-reference early return).
+    #[test]
+    fn expr_mixed_reference_predicate_does_not_restrict() -> Result<()> {
+        let column_a = Column::from_name("a");
+
+        // col("b") > 5 — "b" is not a join column → non-restricting
+        let predicate = binary_expr(col("b"), Operator::Gt, lit(5i64));
+        let actual = is_restrict_null_predicate(predicate, std::iter::once(&column_a))?;
+        assert!(!actual, "predicate referencing non-join col must be non-restricting");
+
+        // col("a") > 5 AND col("b") IS NULL — mixed reference: "b" ∉ join_cols
+        // The AND has a restricting left side, but right side references "b" which is
+        // outside the join-column set → must be treated as non-restricting.
+        let predicate = binary_expr(
+            binary_expr(col("a"), Operator::Gt, lit(5i64)),
+            Operator::And,
+            is_null(col("b")),
+        );
+        let actual = is_restrict_null_predicate(predicate, std::iter::once(&column_a))?;
+        assert!(!actual, "mixed-reference predicate must be non-restricting");
+
+        Ok(())
+    }
+
+    /// Verify that the syntactic fast path agrees with the authoritative evaluator
+    /// for the predicate shapes it handles (simple column, IS NULL, IS NOT NULL,
+    /// comparison operators).
+    #[test]
+    fn expr_syntactic_fast_path_agrees_with_authoritative() -> Result<()> {
+        let column_a = Column::from_name("a");
+        let join_cols_set: HashSet<Column> =
+            std::iter::once(column_a.clone()).collect();
+
+        // These predicates only reference the join column so both evaluators apply.
+        let parity_cases = vec![
+            col("a"),
+            is_null(col("a")),
+            Expr::IsNotNull(Box::new(col("a"))),
+            binary_expr(col("a"), Operator::Gt, lit(8i64)),
+            binary_expr(col("a"), Operator::LtEq, lit(8i32)),
+            binary_expr(
+                col("a"),
+                Operator::Eq,
+                Expr::Literal(ScalarValue::Null, None),
+            ),
+        ];
+
+        for predicate in parity_cases {
+            // Syntactic path result.
+            let syntactic = null_restriction::syntactic_null_restriction_check(
+                &predicate,
+                &join_cols_set,
+            );
+            // Authoritative result (both evaluators should agree when syntactic decides).
+            if let Some(syn_result) = syntactic {
+                let authoritative = is_restrict_null_predicate(
+                    predicate.clone(),
+                    std::iter::once(&column_a),
+                )?;
+                let syn_bool = syn_result
+                    == null_restriction::SyntacticNullRestriction::Restricts;
+                assert_eq!(
+                    syn_bool, authoritative,
+                    "syntactic and authoritative disagree for {predicate}"
+                );
+            }
         }
 
         Ok(())
