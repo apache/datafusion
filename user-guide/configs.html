@@ -988,6 +988,19 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tbody>
 </table>
 </div>
+<p>You can also reset configuration options to default settings via SQL using the <code class="docutils literal notranslate"><span class="pre">RESET</span></code> command. For
+example, to set and reset <code class="docutils literal notranslate"><span class="pre">datafusion.execution.batch_size</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;10000&#39;</span><span class="p">;</span>
+
+<span class="k">SHOW</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="p">;</span>
+<span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w"> </span><span class="mi">10000</span>
+
+<span class="k">RESET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="p">;</span>
+
+<span class="k">SHOW</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="p">;</span>
+<span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w"> </span><span class="mi">8192</span>
+</pre></div>
+</div>
 </section>
 </section>
 </section>
