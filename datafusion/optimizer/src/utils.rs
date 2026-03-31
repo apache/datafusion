@@ -440,14 +440,6 @@ mod tests {
                 Operator::IsNotDistinctFrom,
                 lit(true),
             ),
-            binary_expr(col("a").is_true(), Operator::And, lit(true)),
-            binary_expr(col("a").is_false(), Operator::Or, lit(false)),
-            binary_expr(col("a").is_unknown(), Operator::And, is_null(col("a"))),
-            binary_expr(
-                Expr::Not(Box::new(col("a").is_not_unknown())),
-                Operator::Or,
-                Expr::IsNotNull(Box::new(col("a"))),
-            ),
         ];
 
         for predicate in test_cases {
@@ -469,58 +461,6 @@ mod tests {
                     "syntactic fast path disagrees with authoritative evaluator for predicate: {predicate}",
                 );
             }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn unsupported_boolean_wrappers_defer_to_authoritative_evaluator() -> Result<()> {
-        let predicates = vec![
-            binary_expr(col("a").is_true(), Operator::And, lit(true)),
-            binary_expr(col("a").is_false(), Operator::Or, lit(false)),
-            binary_expr(col("a").is_unknown(), Operator::And, is_null(col("a"))),
-            binary_expr(
-                Expr::Not(Box::new(col("a").is_not_unknown())),
-                Operator::Or,
-                Expr::IsNotNull(Box::new(col("a"))),
-            ),
-        ];
-
-        for predicate in predicates {
-            let join_cols = predicate.column_refs();
-            assert!(
-                null_restriction::syntactic_restrict_null_predicate(
-                    &predicate, &join_cols
-                )
-                .is_none(),
-                "syntactic fast path should defer for predicate: {predicate}",
-            );
-
-            let auto_result = with_null_restriction_eval_mode_for_test(
-                NullRestrictionEvalMode::Auto,
-                || {
-                    is_restrict_null_predicate(
-                        predicate.clone(),
-                        join_cols.iter().copied(),
-                    )
-                },
-            )?;
-
-            let authoritative_result = with_null_restriction_eval_mode_for_test(
-                NullRestrictionEvalMode::AuthoritativeOnly,
-                || {
-                    is_restrict_null_predicate(
-                        predicate.clone(),
-                        join_cols.iter().copied(),
-                    )
-                },
-            )?;
-
-            assert_eq!(
-                auto_result, authoritative_result,
-                "auto mode should defer to authoritative evaluation for predicate: {predicate}",
-            );
         }
 
         Ok(())

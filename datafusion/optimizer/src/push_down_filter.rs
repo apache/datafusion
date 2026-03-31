@@ -285,30 +285,53 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     Ok(is_evaluate)
 }
 
-fn classify_join_input(plan: &LogicalPlan) -> (bool, bool) {
+fn strip_plan_wrappers(plan: &LogicalPlan) -> (&LogicalPlan, bool) {
     match plan {
         LogicalPlan::SubqueryAlias(subquery_alias) => {
-            let (is_scalar_aggregate, _) =
-                classify_join_input(subquery_alias.input.as_ref());
-            (is_scalar_aggregate, true)
+            let (plan, _) = strip_plan_wrappers(subquery_alias.input.as_ref());
+            (plan, true)
         }
         LogicalPlan::Projection(projection) => {
-            classify_join_input(projection.input.as_ref())
+            let (plan, is_derived_relation) =
+                strip_plan_wrappers(projection.input.as_ref());
+            (plan, is_derived_relation)
         }
-        LogicalPlan::Aggregate(aggregate) => (aggregate.group_expr.is_empty(), false),
-        _ => (false, false),
+        _ => (plan, false),
     }
 }
 
+fn is_scalar_aggregate_subquery(plan: &LogicalPlan) -> bool {
+    matches!(
+        strip_plan_wrappers(plan).0,
+        LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()
+    )
+}
+
+fn is_derived_relation(plan: &LogicalPlan) -> bool {
+    strip_plan_wrappers(plan).1
+}
+
 fn is_scalar_subquery_cross_join(join: &Join) -> bool {
-    let (left_scalar_aggregate, left_is_derived_relation) =
-        classify_join_input(join.left.as_ref());
-    let (right_scalar_aggregate, right_is_derived_relation) =
-        classify_join_input(join.right.as_ref());
     join.on.is_empty()
         && join.filter.is_none()
-        && ((left_scalar_aggregate && right_is_derived_relation)
-            || (right_scalar_aggregate && left_is_derived_relation))
+        && ((is_scalar_aggregate_subquery(join.left.as_ref())
+            && is_derived_relation(join.right.as_ref()))
+            || (is_scalar_aggregate_subquery(join.right.as_ref())
+                && is_derived_relation(join.left.as_ref())))
+}
+
+// Keep post-join filters above certain scalar-subquery cross joins to preserve
+// behavior for the window-over-scalar-subquery regression shape.
+fn should_keep_filter_above_scalar_subquery_cross_join(
+    join: &Join,
+    predicate: &Expr,
+) -> bool {
+    if !is_scalar_subquery_cross_join(join) {
+        return false;
+    }
+
+    let mut checker = ColumnChecker::new(join.left.schema(), join.right.schema());
+    !checker.is_left_only(predicate) && !checker.is_right_only(predicate)
 }
 
 /// examine OR clause to see if any useful clauses can be extracted and push down.
@@ -452,15 +475,13 @@ fn push_down_all_join(
     let mut keep_predicates = vec![];
     let mut join_conditions = vec![];
     let mut checker = ColumnChecker::new(left_schema, right_schema);
-    let keep_mixed_scalar_subquery_filters =
-        is_inner_join && is_scalar_subquery_cross_join(&join);
     for predicate in predicates {
         if left_preserved && checker.is_left_only(&predicate) {
             left_push.push(predicate);
         } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
         } else if is_inner_join
-            && !keep_mixed_scalar_subquery_filters
+            && !should_keep_filter_above_scalar_subquery_cross_join(&join, &predicate)
             && can_evaluate_as_join_condition(&predicate)?
         {
             // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
@@ -754,33 +775,36 @@ fn infer_join_predicates_impl<
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
     for predicate in input_predicates {
-        let mut join_cols_to_replace = HashMap::new();
-        let mut saw_non_replaceable_ref = false;
+        let column_refs = predicate.column_refs();
+        let join_col_replacements: Vec<_> = column_refs
+            .iter()
+            .filter_map(|&col| {
+                join_col_keys.iter().find_map(|(l, r)| {
+                    if ENABLE_LEFT_TO_RIGHT && col == *l {
+                        Some((col, *r))
+                    } else if ENABLE_RIGHT_TO_LEFT && col == *r {
+                        Some((col, *l))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
 
-        for &col in &predicate.column_refs() {
-            let replacement = join_col_keys.iter().find_map(|(l, r)| {
-                if ENABLE_LEFT_TO_RIGHT && col == *l {
-                    Some((col, *r))
-                } else if ENABLE_RIGHT_TO_LEFT && col == *r {
-                    Some((col, *l))
-                } else {
-                    None
-                }
-            });
-
-            if let Some((source, target)) = replacement {
-                join_cols_to_replace.insert(source, target);
-            } else {
-                saw_non_replaceable_ref = true;
-            }
+        if join_col_replacements.is_empty() {
+            continue;
         }
 
-        if join_cols_to_replace.is_empty()
-            || (!inferred_predicates.is_inner_join && saw_non_replaceable_ref)
+        // For non-inner joins, predicates that reference any non-replaceable
+        // columns cannot be inferred on the other side. Skip the null-restriction
+        // helper entirely in that common mixed-reference case.
+        if !inferred_predicates.is_inner_join
+            && join_col_replacements.len() != column_refs.len()
         {
             continue;
         }
 
+        let join_cols_to_replace = join_col_replacements.into_iter().collect();
         inferred_predicates
             .try_build_predicate(predicate.clone(), &join_cols_to_replace)?;
     }
@@ -1528,53 +1552,6 @@ mod tests {
     use insta::assert_snapshot;
 
     use super::*;
-
-    fn scalar_subquery_right_plan() -> Result<LogicalPlan> {
-        LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
-            .project(vec![col("a").alias("acctbal")])?
-            .aggregate(
-                Vec::<Expr>::new(),
-                vec![avg(col("acctbal")).alias("avg_acctbal")],
-            )?
-            .alias("__scalar_sq_1")?
-            .build()
-    }
-
-    fn row_number_window_expr() -> Expr {
-        Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::row_number::row_number_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("s.nation")])
-        .order_by(vec![col("s.acctbal").sort(false, true)])
-        .build()
-        .unwrap()
-    }
-
-    fn window_over_scalar_subquery_cross_join_plan(
-        with_project_wrapper: bool,
-    ) -> Result<LogicalPlan> {
-        let left = {
-            let builder = LogicalPlanBuilder::from(test_table_scan()?)
-                .project(vec![col("a").alias("nation"), col("b").alias("acctbal")])?
-                .alias("s")?;
-            let builder = if with_project_wrapper {
-                builder.project(vec![col("s.nation"), col("s.acctbal")])?
-            } else {
-                builder
-            };
-            builder.build()?
-        };
-
-        LogicalPlanBuilder::from(left)
-            .cross_join(scalar_subquery_right_plan()?)?
-            .filter(col("s.acctbal").gt(col("__scalar_sq_1.avg_acctbal")))?
-            .project(vec![col("s.nation"), col("s.acctbal")])?
-            .window(vec![row_number_window_expr()])?
-            .build()
-    }
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
@@ -2497,7 +2474,36 @@ mod tests {
 
     #[test]
     fn window_over_scalar_subquery_cross_join_keeps_filter_above_join() -> Result<()> {
-        let plan = window_over_scalar_subquery_cross_join_plan(false)?;
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("nation"), col("b").alias("acctbal")])?
+            .alias("s")?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .project(vec![col("a").alias("acctbal")])?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![avg(col("acctbal")).alias("avg_acctbal")],
+            )?
+            .alias("__scalar_sq_1")?
+            .build()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::row_number::row_number_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("s.nation")])
+        .order_by(vec![col("s.acctbal").sort(false, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(right)?
+            .filter(col("s.acctbal").gt(col("__scalar_sq_1.avg_acctbal")))?
+            .project(vec![col("s.nation"), col("s.acctbal")])?
+            .window(vec![window])?
+            .build()?;
 
         assert_optimized_plan_equal!(
             plan,
@@ -2520,7 +2526,37 @@ mod tests {
     #[test]
     fn window_over_scalar_subquery_cross_join_with_project_wrapper_keeps_filter_above_join()
     -> Result<()> {
-        let plan = window_over_scalar_subquery_cross_join_plan(true)?;
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("nation"), col("b").alias("acctbal")])?
+            .alias("s")?
+            .project(vec![col("s.nation"), col("s.acctbal")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .project(vec![col("a").alias("acctbal")])?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![avg(col("acctbal")).alias("avg_acctbal")],
+            )?
+            .alias("__scalar_sq_1")?
+            .build()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::row_number::row_number_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("s.nation")])
+        .order_by(vec![col("s.acctbal").sort(false, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(right)?
+            .filter(col("s.acctbal").gt(col("__scalar_sq_1.avg_acctbal")))?
+            .project(vec![col("s.nation"), col("s.acctbal")])?
+            .window(vec![window])?
+            .build()?;
 
         assert_optimized_plan_equal!(
             plan,
