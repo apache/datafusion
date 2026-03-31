@@ -197,6 +197,21 @@ The following configuration settings are available:
 | datafusion.format.duration_format                                       | pretty                    | Duration format. Can be either `"pretty"` or `"ISO8601"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | datafusion.format.types_info                                            | false                     | Show types in visual representation batches                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
+You can also reset configuration options to default settings via SQL using the `RESET` command. For
+example, to set and reset `datafusion.execution.batch_size`:
+
+```sql
+SET datafusion.execution.batch_size = '10000';
+
+SHOW datafusion.execution.batch_size;
+datafusion.execution.batch_size 10000
+
+RESET datafusion.execution.batch_size;
+
+SHOW datafusion.execution.batch_size;
+datafusion.execution.batch_size 8192
+```
+
 # Runtime Configuration Settings
 
 DataFusion runtime configurations can be set via SQL using the `SET` command.
