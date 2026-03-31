@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::mem::size_of_val;
 use std::sync::Arc;
@@ -239,10 +238,6 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
 }
 
 impl AggregateUDFImpl for ApproxPercentileCont {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
