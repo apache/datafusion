@@ -212,6 +212,9 @@ needless_pass_by_value = "warn"
 # https://github.com/apache/datafusion/issues/18881
 allow_attributes = "warn"
 assigning_clones = "warn"
+# ScalarValue and Expr contain Arc<..> with interior mutability but are
+# intentionally used as hash keys throughout the codebase.
+mutable_key_type = "allow"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
