@@ -208,6 +208,3 @@ STORED AS PARQUET;
 
 query error DataFusion error: Execution error:[\s\S]*Cannot cast struct field 'id' from type BinaryView to type Int64
 SELECT row_id, items FROM fsl_incompatible;
-
-# This file does not mutate DataFusion config with SET statements, so there is
-# no configuration state to restore at teardown.
