@@ -107,7 +107,6 @@ impl ListingTableConfigExt for ListingTableConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
 
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
@@ -406,7 +405,7 @@ mod tests {
             .await
             .expect("Empty execution plan");
 
-        assert!((scan.as_ref() as &dyn Any).is::<EmptyExec>());
+        assert!(scan.is::<EmptyExec>());
         assert_eq!(
             columns(&scan.schema()),
             vec!["a".to_owned(), "p1".to_owned()]

@@ -83,8 +83,7 @@ impl PhysicalOptimizerRule for TopKRepartition {
         }
         plan.transform_down(|node| {
             // Match SortExec with fetch (TopK)
-            let Some(sort_exec) = (node.as_ref() as &dyn Any).downcast_ref::<SortExec>()
-            else {
+            let Some(sort_exec) = node.downcast_ref::<SortExec>() else {
                 return Ok(Transformed::no(node));
             };
             let Some(fetch) = sort_exec.fetch() else {
@@ -103,9 +102,7 @@ impl PhysicalOptimizerRule for TopKRepartition {
                 // There's a CoalesceBatchesExec between TopK & RepartitionExec
                 // in this case we will need to reconstruct both nodes
                 let cb_input = cb_exec.input();
-                let Some(rp) =
-                    (cb_input.as_ref() as &dyn Any).downcast_ref::<RepartitionExec>()
-                else {
+                let Some(rp) = cb_input.downcast_ref::<RepartitionExec>() else {
                     return Ok(Transformed::no(node));
                 };
                 (Some(Arc::clone(sort_input)), rp)

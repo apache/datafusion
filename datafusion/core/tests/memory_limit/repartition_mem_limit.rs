@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
@@ -75,7 +74,7 @@ async fn test_repartition_memory_limit() {
     let mut metrics = None;
     Arc::clone(&plan)
         .transform_down(|node| {
-            if (node.as_ref() as &dyn Any).is::<RepartitionExec>() {
+            if node.is::<RepartitionExec>() {
                 metrics = node.metrics();
             }
             Ok(Transformed::no(node))

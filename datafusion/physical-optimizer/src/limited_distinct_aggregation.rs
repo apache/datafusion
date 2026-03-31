@@ -18,7 +18,6 @@
 //! A special-case optimizer rule that pushes limit into a grouped aggregation
 //! which has no aggregate expressions or sorting requirements
 
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
@@ -70,14 +69,10 @@ impl LimitedDistinctAggregation {
         let mut global_skip: usize = 0;
         let children: Vec<Arc<dyn ExecutionPlan>>;
         let mut is_global_limit = false;
-        if let Some(local_limit) =
-            (plan.as_ref() as &dyn Any).downcast_ref::<LocalLimitExec>()
-        {
+        if let Some(local_limit) = plan.downcast_ref::<LocalLimitExec>() {
             limit = local_limit.fetch();
             children = local_limit.children().into_iter().cloned().collect();
-        } else if let Some(global_limit) =
-            (plan.as_ref() as &dyn Any).downcast_ref::<GlobalLimitExec>()
-        {
+        } else if let Some(global_limit) = plan.downcast_ref::<GlobalLimitExec>() {
             global_fetch = global_limit.fetch();
             global_fetch?;
             global_skip = global_limit.skip();
@@ -108,12 +103,9 @@ impl LimitedDistinctAggregation {
             if !rewrite_applicable {
                 return Ok(Transformed::no(plan));
             }
-            if let Some(aggr) =
-                (plan.as_ref() as &dyn Any).downcast_ref::<AggregateExec>()
-            {
+            if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
                 if found_match_aggr
-                    && let Some(parent_aggr) =
-                        (match_aggr.as_ref() as &dyn Any).downcast_ref::<AggregateExec>()
+                    && let Some(parent_aggr) = match_aggr.downcast_ref::<AggregateExec>()
                     && !parent_aggr.group_expr().eq(aggr.group_expr())
                 {
                     // a partial and final aggregation with different groupings disqualifies

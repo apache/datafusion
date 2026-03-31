@@ -386,8 +386,7 @@ fn require_top_ordering_helper(
     // Global ordering defines desired ordering in the final result.
     if children.len() != 1 {
         Ok((plan, false))
-    } else if let Some(sort_exec) = (plan.as_ref() as &dyn Any).downcast_ref::<SortExec>()
-    {
+    } else if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
         // In case of constant columns, output ordering of the `SortExec` would
         // be an empty set. Therefore; we check the sort expression field to
         // assign the requirements.
@@ -405,9 +404,7 @@ fn require_top_ordering_helper(
             )) as _,
             true,
         ))
-    } else if let Some(spm) =
-        (plan.as_ref() as &dyn Any).downcast_ref::<SortPreservingMergeExec>()
-    {
+    } else if let Some(spm) = plan.downcast_ref::<SortPreservingMergeExec>() {
         let reqs = OrderingRequirements::from(spm.expr().clone());
         let fetch = spm.fetch();
         Ok((

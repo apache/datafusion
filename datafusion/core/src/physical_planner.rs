@@ -3786,7 +3786,7 @@ mod tests {
             .unwrap();
 
         let plan = plan(&logical_plan).await.unwrap();
-        if let Some(plan) = (plan.as_ref() as &dyn Any).downcast_ref::<ExplainExec>() {
+        if let Some(plan) = plan.downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert!(stringified_plans.len() >= 4);
             assert!(
@@ -3854,7 +3854,7 @@ mod tests {
             .handle_explain(&explain, &ctx.state())
             .await
             .unwrap();
-        if let Some(plan) = (plan.as_ref() as &dyn Any).downcast_ref::<ExplainExec>() {
+        if let Some(plan) = plan.downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert_eq!(stringified_plans.len(), 1);
             assert_eq!(stringified_plans[0].plan.as_str(), "Test Err");
@@ -4743,6 +4743,6 @@ digraph {
             .unwrap();
 
         assert_eq!(plan.schema(), schema);
-        assert!((plan.as_ref() as &dyn Any).is::<EmptyExec>());
+        assert!(plan.is::<EmptyExec>());
     }
 }

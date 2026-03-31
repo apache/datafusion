@@ -89,7 +89,7 @@ async fn check_stats_precision_with_filter_pushdown() {
         .unwrap();
 
     assert!(
-        (optimized_exec.as_ref() as &dyn Any).is::<DataSourceExec>(),
+        optimized_exec.is::<DataSourceExec>(),
         "Sanity check that the pushdown did what we expected"
     );
     // Scan with filter pushdown, stats are inexact

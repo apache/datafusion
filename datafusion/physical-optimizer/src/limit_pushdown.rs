@@ -326,9 +326,7 @@ pub(crate) fn pushdown_limits(
 /// Extracts limit information from the [`ExecutionPlan`] if it is a
 /// [`GlobalLimitExec`] or a [`LocalLimitExec`].
 fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
-    if let Some(global_limit) =
-        (plan.as_ref() as &dyn Any).downcast_ref::<GlobalLimitExec>()
-    {
+    if let Some(global_limit) = plan.downcast_ref::<GlobalLimitExec>() {
         Some(LimitInfo {
             input: Arc::clone(global_limit.input()),
             fetch: global_limit.fetch(),

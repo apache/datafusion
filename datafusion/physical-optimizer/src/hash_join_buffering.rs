@@ -65,8 +65,7 @@ impl PhysicalOptimizerRule for HashJoinBuffering {
         }
 
         plan.transform_down(|plan| {
-            let Some(node) = (plan.as_ref() as &dyn Any).downcast_ref::<HashJoinExec>()
-            else {
+            let Some(node) = plan.downcast_ref::<HashJoinExec>() else {
                 return Ok(Transformed::no(plan));
             };
             let plan = Arc::clone(&plan);

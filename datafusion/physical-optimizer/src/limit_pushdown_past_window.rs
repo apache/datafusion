@@ -31,7 +31,6 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use std::any::Any;
 use std::cmp;
 use std::sync::Arc;
 
@@ -105,9 +104,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // grow the limit if we hit a window function
-            if let Some(window) =
-                (node.as_ref() as &dyn Any).downcast_ref::<BoundedWindowAggExec>()
-            {
+            if let Some(window) = node.as_ref().downcast_ref::<BoundedWindowAggExec>() {
                 phase = Phase::Apply;
                 if !grow_limit(window, &mut ctx) {
                     return reset(node, &mut ctx);
@@ -126,9 +123,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             if !node.supports_limit_pushdown() {
                 return reset(node, &mut ctx);
             }
-            if let Some(part) =
-                (node.as_ref() as &dyn Any).downcast_ref::<RepartitionExec>()
-            {
+            if let Some(part) = node.as_ref().downcast_ref::<RepartitionExec>() {
                 let output = part.partitioning().partition_count();
                 let input = part.input().output_partitioning().partition_count();
                 if output < input {
@@ -190,9 +185,7 @@ fn apply_limit(
     node: &Arc<dyn ExecutionPlan>,
     ctx: &mut TraverseState,
 ) -> Option<Transformed<Arc<dyn ExecutionPlan>>> {
-    if !(node.as_ref() as &dyn Any).is::<SortExec>()
-        && !(node.as_ref() as &dyn Any).is::<SortPreservingMergeExec>()
-    {
+    if !node.as_ref().is::<SortExec>() && !node.as_ref().is::<SortPreservingMergeExec>() {
         return None;
     }
     let latest = ctx.limit.take();
@@ -209,19 +202,17 @@ fn apply_limit(
 }
 
 fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
-    if let Some(limit) = (node.as_ref() as &dyn Any).downcast_ref::<GlobalLimitExec>() {
+    if let Some(limit) = node.as_ref().downcast_ref::<GlobalLimitExec>() {
         ctx.reset_limit(limit.fetch().map(|fetch| fetch + limit.skip()));
         return true;
     }
     // In distributed execution, GlobalLimitExec becomes LocalLimitExec
     // per partition. Handle it the same way (LocalLimitExec has no skip).
-    if let Some(limit) = (node.as_ref() as &dyn Any).downcast_ref::<LocalLimitExec>() {
+    if let Some(limit) = node.as_ref().downcast_ref::<LocalLimitExec>() {
         ctx.reset_limit(Some(limit.fetch()));
         return true;
     }
-    if let Some(limit) =
-        (node.as_ref() as &dyn Any).downcast_ref::<SortPreservingMergeExec>()
-    {
+    if let Some(limit) = node.as_ref().downcast_ref::<SortPreservingMergeExec>() {
         ctx.reset_limit(limit.fetch());
         return true;
     }

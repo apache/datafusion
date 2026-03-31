@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::Result;
@@ -80,39 +79,37 @@ pub fn add_sort_above_with_check<T: Clone + Default>(
 
 /// Checks whether the given operator is a [`SortExec`].
 pub fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    (plan.as_ref() as &dyn Any).is::<SortExec>()
+    plan.as_ref().is::<SortExec>()
 }
 
 /// Checks whether the given operator is a window;
 /// i.e. either a [`WindowAggExec`] or a [`BoundedWindowAggExec`].
 pub fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    (plan.as_ref() as &dyn Any).is::<WindowAggExec>()
-        || (plan.as_ref() as &dyn Any).is::<BoundedWindowAggExec>()
+    plan.as_ref().is::<WindowAggExec>() || plan.as_ref().is::<BoundedWindowAggExec>()
 }
 
 /// Checks whether the given operator is a [`UnionExec`].
 pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    (plan.as_ref() as &dyn Any).is::<UnionExec>()
+    plan.as_ref().is::<UnionExec>()
 }
 
 /// Checks whether the given operator is a [`SortPreservingMergeExec`].
 pub fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    (plan.as_ref() as &dyn Any).is::<SortPreservingMergeExec>()
+    plan.as_ref().is::<SortPreservingMergeExec>()
 }
 
 /// Checks whether the given operator is a [`CoalescePartitionsExec`].
 pub fn is_coalesce_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    (plan.as_ref() as &dyn Any).is::<CoalescePartitionsExec>()
+    plan.as_ref().is::<CoalescePartitionsExec>()
 }
 
 /// Checks whether the given operator is a [`RepartitionExec`].
 pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    (plan.as_ref() as &dyn Any).is::<RepartitionExec>()
+    plan.as_ref().is::<RepartitionExec>()
 }
 
 /// Checks whether the given operator is a limit;
 /// i.e. either a [`LocalLimitExec`] or a [`GlobalLimitExec`].
 pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    (plan.as_ref() as &dyn Any).is::<GlobalLimitExec>()
-        || (plan.as_ref() as &dyn Any).is::<LocalLimitExec>()
+    plan.as_ref().is::<GlobalLimitExec>() || plan.as_ref().is::<LocalLimitExec>()
 }

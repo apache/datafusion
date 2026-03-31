@@ -38,7 +38,6 @@ use datafusion_physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use std::any::Any;
 use std::sync::Arc;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
@@ -287,9 +286,7 @@ fn statistical_join_selection_subrule(
     plan: Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let transformed = if let Some(hash_join) =
-        (plan.as_ref() as &dyn Any).downcast_ref::<HashJoinExec>()
-    {
+    let transformed = if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
         match hash_join.partition_mode() {
             PartitionMode::Auto => try_collect_left(hash_join, false, config)?
                 .map_or_else(
@@ -317,9 +314,7 @@ fn statistical_join_selection_subrule(
                 }
             }
         }
-    } else if let Some(cross_join) =
-        (plan.as_ref() as &dyn Any).downcast_ref::<CrossJoinExec>()
-    {
+    } else if let Some(cross_join) = plan.downcast_ref::<CrossJoinExec>() {
         let left = cross_join.left();
         let right = cross_join.right();
         if should_swap_join_order(&**left, &**right, config)? {
@@ -327,9 +322,7 @@ fn statistical_join_selection_subrule(
         } else {
             None
         }
-    } else if let Some(nl_join) =
-        (plan.as_ref() as &dyn Any).downcast_ref::<NestedLoopJoinExec>()
-    {
+    } else if let Some(nl_join) = plan.downcast_ref::<NestedLoopJoinExec>() {
         let left = nl_join.left();
         let right = nl_join.right();
         if nl_join.join_type().supports_swap()
@@ -375,7 +368,7 @@ fn hash_join_convert_symmetric_subrule(
     config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Check if the current plan node is a HashJoinExec.
-    if let Some(hash_join) = (input.as_ref() as &dyn Any).downcast_ref::<HashJoinExec>() {
+    if let Some(hash_join) = input.downcast_ref::<HashJoinExec>() {
         let left_unbounded = hash_join.left.boundedness().is_unbounded();
         let left_incremental = matches!(
             hash_join.left.pipeline_behavior(),
@@ -514,7 +507,7 @@ pub fn hash_join_swap_subrule(
     mut input: Arc<dyn ExecutionPlan>,
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(hash_join) = (input.as_ref() as &dyn Any).downcast_ref::<HashJoinExec>()
+    if let Some(hash_join) = input.downcast_ref::<HashJoinExec>()
         && hash_join.left.boundedness().is_unbounded()
         && !hash_join.right.boundedness().is_unbounded()
         && !hash_join.null_aware // Don't swap null-aware anti joins

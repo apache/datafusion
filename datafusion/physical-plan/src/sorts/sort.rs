@@ -19,7 +19,6 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -1242,7 +1241,8 @@ impl ExecutionPlan for SortExec {
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let children = self.children().into_iter().cloned().collect();
         let new_sort = self.with_new_children(children)?;
-        let mut new_sort = (new_sort.as_ref() as &dyn Any)
+        let mut new_sort = new_sort
+            .as_ref()
             .downcast_ref::<SortExec>()
             .expect("cloned 1 lines above this line, we know the type")
             .clone();

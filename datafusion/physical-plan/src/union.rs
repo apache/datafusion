@@ -898,8 +898,6 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-
     use super::*;
     use crate::collect;
     use crate::test::{self, TestMemoryExec};
@@ -1404,7 +1402,8 @@ mod tests {
         let union_plan = UnionExec::try_new(vec![memory_exec1, memory_exec2])?;
 
         // Downcast to verify it's a UnionExec
-        let union = (union_plan.as_ref() as &dyn Any)
+        let union = union_plan
+            .as_ref()
             .downcast_ref::<UnionExec>()
             .expect("Expected UnionExec");
 
@@ -1444,7 +1443,8 @@ mod tests {
             Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
 
         let union = UnionExec::try_new(vec![input1, input2])?;
-        let union = (union.as_ref() as &dyn Any)
+        let union = union
+            .as_ref()
             .downcast_ref::<UnionExec>()
             .expect("expected UnionExec for multiple inputs");
 

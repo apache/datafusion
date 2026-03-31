@@ -1261,7 +1261,6 @@ pub(crate) fn get_last_row_batch(batch: &RecordBatch) -> Result<RecordBatch> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
@@ -1860,7 +1859,8 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
         let plan = bounded_window_exec_pb_latent_range(input, 1, "hash", "sn")?;
-        let plan = (plan.as_ref() as &dyn Any)
+        let plan = plan
+            .as_ref()
             .downcast_ref::<BoundedWindowAggExec>()
             .expect("expected BoundedWindowAggExec");
 
