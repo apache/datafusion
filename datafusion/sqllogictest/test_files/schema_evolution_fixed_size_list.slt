@@ -107,10 +107,25 @@ COPY (
 ) TO 'test_files/scratch/schema_evolution_fixed_size_list/fsl_null/old.parquet'
 STORED AS PARQUET;
 
+statement ok
+COPY (
+  SELECT
+    2 AS row_id,
+    arrow_cast(
+      [
+        NULL,
+        NULL
+      ],
+      'FixedSizeList(2, Struct("val": Int64, "tag": Utf8View))'
+    ) AS items
+) TO 'test_files/scratch/schema_evolution_fixed_size_list/fsl_null/all_null.parquet'
+STORED AS PARQUET;
+
 query I?
 SELECT row_id, items FROM fsl_null_test ORDER BY row_id;
 ----
 1 [{val: 100, tag: x}, NULL]
+2 [NULL, NULL]
 
 # Test 3: FixedSizeList struct - field reordering with evolution
 statement ok
@@ -170,6 +185,32 @@ FROM fsl_reorder;
 ----
 1 NULL
 2 active
+
+# Test 4: FixedSizeList struct with incompatible nested type change should fail
+statement ok
+CREATE EXTERNAL TABLE fsl_incompatible (
+  row_id INT,
+  items STRUCT<id BIGINT, name VARCHAR>[2]
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_fixed_size_list/fsl_incompatible/';
+
+statement ok
+COPY (
+  SELECT
+    1 AS row_id,
+    arrow_cast(
+      [
+        named_struct('id', X'01', 'name', 'alpha'),
+        named_struct('id', X'02', 'name', 'beta')
+      ],
+      'FixedSizeList(2, Struct("id": BinaryView, "name": Utf8View))'
+    ) AS items
+) TO 'test_files/scratch/schema_evolution_fixed_size_list/fsl_incompatible/new.parquet'
+STORED AS PARQUET;
+
+query error DataFusion error: Execution error:[\s\S]*Cannot cast struct field 'id' from type BinaryView to type Int64
+SELECT row_id, items FROM fsl_incompatible;
 
 # This file does not mutate DataFusion config with SET statements, so there is
 # no configuration state to restore at teardown.

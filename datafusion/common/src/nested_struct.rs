@@ -217,15 +217,8 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
     target_inner_field: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    let source_list = source_col
-        .as_any()
-        .downcast_ref::<GenericListArray<O>>()
-        .ok_or_else(|| {
-            crate::error::DataFusionError::Plan(format!(
-                "Expected list array but got {}",
-                source_col.data_type()
-            ))
-        })?;
+    let source_list =
+        downcast_list_array::<GenericListArray<O>>(source_col, "list array")?;
 
     let cast_values =
         cast_nested_list_values(source_list.values(), target_inner_field, cast_options)?;
@@ -244,15 +237,8 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
     target_inner_field: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    let source_list = source_col
-        .as_any()
-        .downcast_ref::<GenericListViewArray<O>>()
-        .ok_or_else(|| {
-            crate::error::DataFusionError::Plan(format!(
-                "Expected list view array but got {}",
-                source_col.data_type()
-            ))
-        })?;
+    let source_list =
+        downcast_list_array::<GenericListViewArray<O>>(source_col, "list view array")?;
 
     let cast_values =
         cast_nested_list_values(source_list.values(), target_inner_field, cast_options)?;
@@ -275,15 +261,8 @@ fn cast_fixed_size_list_column(
 ) -> Result<ArrayRef> {
     use arrow::array::FixedSizeListArray;
 
-    let source_list = source_col
-        .as_any()
-        .downcast_ref::<FixedSizeListArray>()
-        .ok_or_else(|| {
-            crate::error::DataFusionError::Plan(format!(
-                "Expected fixed size list array but got {}",
-                source_col.data_type()
-            ))
-        })?;
+    let source_list =
+        downcast_list_array::<FixedSizeListArray>(source_col, "fixed size list array")?;
 
     let source_size = source_list.value_length();
     if source_size != target_size {
@@ -312,6 +291,18 @@ fn cast_nested_list_values(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     cast_column(source_values, target_inner_field.data_type(), cast_options)
+}
+
+fn downcast_list_array<'a, A: Array + 'static>(
+    source_col: &'a ArrayRef,
+    expected: &str,
+) -> Result<&'a A> {
+    source_col.as_any().downcast_ref::<A>().ok_or_else(|| {
+        crate::error::DataFusionError::Plan(format!(
+            "Expected {expected} but got {}",
+            source_col.data_type()
+        ))
+    })
 }
 
 fn cast_dictionary_column(

@@ -975,6 +975,34 @@ mod tests {
     }
 
     #[test]
+    fn fixed_size_list_struct_size_mismatch_fails_at_planning() -> Result<()> {
+        let source_type = FixedSizeList(
+            Arc::new(Field::new(
+                "item",
+                Struct(Fields::from(vec![Arc::new(Field::new("x", Int32, true))])),
+                true,
+            )),
+            1,
+        );
+        let schema = Schema::new(vec![Field::new("a", source_type, true)]);
+
+        let invalid_target = FixedSizeList(
+            Arc::new(Field::new(
+                "item",
+                Struct(Fields::from(vec![Arc::new(Field::new("x", Int64, true))])),
+                true,
+            )),
+            2,
+        );
+
+        let err = cast_with_options(col("a", &schema)?, &schema, invalid_target, None)
+            .expect_err("fixed-size-list size mismatch should fail during planning");
+        assert!(err.to_string().contains("Unsupported CAST"));
+
+        Ok(())
+    }
+
+    #[test]
     #[ignore] // TODO: https://github.com/apache/datafusion/issues/5396
     fn test_cast_decimal() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", Int64, false)]);
