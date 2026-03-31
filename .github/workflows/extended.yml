@@ -44,15 +44,10 @@ on:
       - 'datafusion/physical*/**/*.rs'
       - 'datafusion/expr*/**/*.rs'
       - 'datafusion/optimizer/**/*.rs'
+      - 'datafusion/sql/**/*.rs'
       - 'datafusion-testing'
   workflow_dispatch:
     inputs:
-      pr_number:
-        description: 'Pull request number'
-        type: string
-      check_run_id:
-        description: 'Check run ID for status updates'
-        type: string
       pr_head_sha:
         description: 'PR head SHA'
         type: string

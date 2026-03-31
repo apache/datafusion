@@ -33,7 +33,6 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::hash::Hash;
@@ -237,10 +236,6 @@ fn get_lead_doc() -> &'static Documentation {
 }
 
 impl WindowUDFImpl for WindowShift {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.kind.name()
     }
