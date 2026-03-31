@@ -1,0 +1,158 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# End-user-facing coverage for FixedSizeList<Struct> Parquet schema evolution.
+# Tests additive schema evolution (adding nullable fields) to FixedSizeList
+# containing struct values.
+##########
+
+# Test 1: FixedSizeList struct with additive nullable field
+statement ok
+CREATE EXTERNAL TABLE fsl_messages (
+  row_id INT,
+  messages ARRAY<STRUCT<id BIGINT, name VARCHAR, chain VARCHAR>>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_fixed_size_list/fsl_additive/';
+
+statement ok
+COPY (
+  SELECT
+    1 AS row_id,
+    arrow_cast(
+      [
+        named_struct('id', 10, 'name', 'alpha'),
+        named_struct('id', 20, 'name', 'beta')
+      ],
+      'FixedSizeList(2, Struct("id": Int64, "name": Utf8View))'
+    ) AS messages
+) TO 'test_files/scratch/schema_evolution_fixed_size_list/fsl_additive/old.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT
+    2 AS row_id,
+    arrow_cast(
+      [
+        named_struct('id', 30, 'name', 'gamma', 'chain', 'eth'),
+        named_struct('id', 40, 'name', 'delta', 'chain', 'doge')
+      ],
+      'FixedSizeList(2, Struct("id": Int64, "name": Utf8View, "chain": Utf8View))'
+    ) AS messages
+) TO 'test_files/scratch/schema_evolution_fixed_size_list/fsl_additive/new.parquet'
+STORED AS PARQUET;
+
+# Query evolved schema - old rows should have NULL for new field, new rows should have values
+query I?
+SELECT row_id, messages FROM fsl_messages ORDER BY row_id;
+----
+1 [{id: 10, name: alpha, chain: NULL}, {id: 20, name: beta, chain: NULL}]
+2 [{id: 30, name: gamma, chain: eth}, {id: 40, name: delta, chain: doge}]
+
+# Access specific fields
+query IIT rowsort
+SELECT
+  row_id,
+  get_field(messages[1], 'id') AS msg_id,
+  get_field(messages[1], 'chain') AS chain
+FROM fsl_messages;
+----
+1 10 NULL
+2 30 eth
+
+# Test 2: FixedSizeList struct with null values
+statement ok
+CREATE EXTERNAL TABLE fsl_null_test (
+  row_id INT,
+  items ARRAY<STRUCT<val INT, tag VARCHAR>>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_fixed_size_list/fsl_null/';
+
+statement ok
+COPY (
+  SELECT
+    1 AS row_id,
+    arrow_cast(
+      [
+        named_struct('val', 100, 'tag', 'x'),
+        NULL
+      ],
+      'FixedSizeList(2, Struct("val": Int64, "tag": Utf8View))'
+    ) AS items
+) TO 'test_files/scratch/schema_evolution_fixed_size_list/fsl_null/old.parquet'
+STORED AS PARQUET;
+
+query I?
+SELECT row_id, items FROM fsl_null_test ORDER BY row_id;
+----
+1 [{val: 100, tag: x}, NULL]
+
+# Test 3: FixedSizeList struct - field reordering with evolution
+statement ok
+CREATE EXTERNAL TABLE fsl_reorder (
+  row_id INT,
+  data ARRAY<STRUCT<id BIGINT, name VARCHAR, status VARCHAR>>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_fixed_size_list/fsl_reorder/';
+
+statement ok
+COPY (
+  SELECT
+    1 AS row_id,
+    arrow_cast(
+      [
+        named_struct('id', 1, 'name', 'first'),
+        named_struct('id', 2, 'name', 'second')
+      ],
+      'FixedSizeList(2, Struct("id": Int64, "name": Utf8View))'
+    ) AS data
+) TO 'test_files/scratch/schema_evolution_fixed_size_list/fsl_reorder/old.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT
+    2 AS row_id,
+    arrow_cast(
+      [
+        named_struct('status', 'active', 'id', 3, 'name', 'third'),
+        named_struct('status', 'inactive', 'id', 4, 'name', 'fourth')
+      ],
+      'FixedSizeList(2, Struct("status": Utf8View, "id": Int64, "name": Utf8View))'
+    ) AS data
+) TO 'test_files/scratch/schema_evolution_fixed_size_list/fsl_reorder/new.parquet'
+STORED AS PARQUET;
+
+query I?
+SELECT row_id, data FROM fsl_reorder ORDER BY row_id;
+----
+1 [{id: 1, name: first, status: NULL}, {id: 2, name: second, status: NULL}]
+2 [{status: active, id: 3, name: third}, {status: inactive, id: 4, name: fourth}]
+
+# Verify field access works after reordering
+query IT rowsort
+SELECT
+  row_id,
+  get_field(data[1], 'status') AS status
+FROM fsl_reorder;
+----
+1 NULL
+2 active
