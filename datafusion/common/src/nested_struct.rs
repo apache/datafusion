@@ -190,6 +190,15 @@ pub fn cast_column(
             cast_list_view_column::<i64>(source_col, target_inner, cast_options)
         }
         (
+            DataType::FixedSizeList(_, _),
+            DataType::FixedSizeList(target_inner, target_size),
+        ) => cast_fixed_size_list_column(
+            source_col,
+            target_inner,
+            *target_size,
+            cast_options,
+        ),
+        (
             DataType::Dictionary(source_key_type, _),
             DataType::Dictionary(target_key_type, target_value_type),
         ) => cast_dictionary_column(
@@ -261,6 +270,39 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
         cast_values,
         source_list.nulls().cloned(),
     )?;
+    Ok(Arc::new(result))
+}
+
+fn cast_fixed_size_list_column(
+    source_col: &ArrayRef,
+    target_inner_field: &FieldRef,
+    target_size: i32,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    use arrow::array::FixedSizeListArray;
+
+    let source_list = source_col
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| {
+            crate::error::DataFusionError::Plan(format!(
+                "Expected fixed size list array but got {}",
+                source_col.data_type()
+            ))
+        })?;
+
+    let cast_values = cast_column(
+        source_list.values(),
+        target_inner_field.data_type(),
+        cast_options,
+    )?;
+
+    let result = FixedSizeListArray::new(
+        Arc::clone(target_inner_field),
+        target_size,
+        cast_values,
+        source_list.nulls().cloned(),
+    );
     Ok(Arc::new(result))
 }
 
@@ -431,6 +473,20 @@ pub fn validate_data_type_compatibility(
         | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
             validate_field_compatibility(s, t)?;
         }
+        (
+            DataType::FixedSizeList(s, source_size),
+            DataType::FixedSizeList(t, target_size),
+        ) => {
+            if source_size != target_size {
+                return _plan_err!(
+                    "Cannot cast FixedSizeList field '{}' with size {} to size {}",
+                    field_name,
+                    source_size,
+                    target_size
+                );
+            }
+            validate_field_compatibility(s, t)?;
+        }
         (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
             if !can_cast_types(s_key, t_key) {
                 return _plan_err!(
@@ -460,7 +516,7 @@ pub fn validate_data_type_compatibility(
 /// name-based nested struct casting logic, rather than Arrow's standard cast.
 ///
 /// This is the case when both types are struct types, or both are the same
-/// container type (List, LargeList, ListView, LargeListView, Dictionary) wrapping
+/// container type (List, LargeList, ListView, LargeListView, FixedSizeList, Dictionary) wrapping
 /// types that recursively contain structs.
 ///
 /// Use this predicate at both planning time (to decide whether to apply struct
@@ -475,7 +531,8 @@ pub fn requires_nested_struct_cast(
         (DataType::List(s), DataType::List(t))
         | (DataType::LargeList(s), DataType::LargeList(t))
         | (DataType::ListView(s), DataType::ListView(t))
-        | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
+        | (DataType::LargeListView(s), DataType::LargeListView(t))
+        | (DataType::FixedSizeList(s, _), DataType::FixedSizeList(t, _)) => {
             requires_nested_struct_cast(s.data_type(), t.data_type())
         }
         (DataType::Dictionary(_, s_val), DataType::Dictionary(_, t_val)) => {
@@ -1334,6 +1391,167 @@ mod tests {
         assert!(!requires_nested_struct_cast(
             &DataType::List(arc_field("item", DataType::Int32)),
             &DataType::List(arc_field("item", DataType::Int64)),
+        ));
+    }
+
+    #[test]
+    fn test_cast_fixed_size_list_struct_additive_nullable_field() {
+        // Build a FixedSizeList<Struct{a: Int32}> and cast to
+        // FixedSizeList<Struct{a: Int32, b: Utf8}> (additive nullable field).
+        let struct_arr = StructArray::from(vec![(
+            arc_field("a", DataType::Int32),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+        )]);
+
+        let source_field =
+            arc_field("item", struct_type(vec![field("a", DataType::Int32)]));
+        let target_field = arc_field(
+            "item",
+            struct_type(vec![
+                field("a", DataType::Int32),
+                field("b", DataType::Utf8),
+            ]),
+        );
+
+        // Create FixedSizeList with list_size=2
+        use arrow::array::FixedSizeListArray;
+        let source_list =
+            FixedSizeListArray::new(source_field, 2, Arc::new(struct_arr), None);
+        let source_col: ArrayRef = Arc::new(source_list);
+
+        let target_type = DataType::FixedSizeList(target_field, 2);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result_fsl = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(result_fsl.len(), 2);
+
+        let struct_values = result_fsl
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let a_col = get_column_as!(&struct_values, "a", Int32Array);
+        assert_eq!(a_col.values(), &[1, 2, 3, 4]);
+        let b_col = get_column_as!(&struct_values, "b", StringArray);
+        assert!(b_col.iter().all(|v| v.is_none()));
+    }
+
+    #[test]
+    fn test_cast_fixed_size_list_struct_null_column() {
+        // Build a FixedSizeList with null inner struct and cast to
+        // FixedSizeList<Struct{a: Int32, b: Utf8}>.
+        let null_struct = Arc::new(NullArray::new(2)) as ArrayRef;
+        let source_field = arc_field("item", DataType::Null);
+        use arrow::array::FixedSizeListArray;
+        let source_list = FixedSizeListArray::new(source_field, 2, null_struct, None);
+        let source_col: ArrayRef = Arc::new(source_list);
+
+        let target_field = arc_field(
+            "item",
+            struct_type(vec![
+                field("a", DataType::Int32),
+                field("b", DataType::Utf8),
+            ]),
+        );
+        let target_type = DataType::FixedSizeList(target_field, 2);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result_fsl = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(result_fsl.len(), 1);
+
+        let struct_values = result_fsl
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        // Verify struct has 2 fields (a and b)
+        assert_eq!(struct_values.fields().len(), 2);
+        // Should have 2 entries (1 fixed-size list entry with size 2)
+        assert_eq!(struct_values.len(), 2);
+    }
+
+    #[test]
+    fn test_cast_fixed_size_list_struct_incompatible_type_fails() {
+        // Build a FixedSizeList<Struct{a: String}> and try to cast to
+        // FixedSizeList<Struct{a: Int32}> (incompatible types).
+        let struct_arr = StructArray::from(vec![(
+            arc_field("a", DataType::Utf8),
+            Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef,
+        )]);
+
+        let source_field =
+            arc_field("item", struct_type(vec![field("a", DataType::Utf8)]));
+        use arrow::array::FixedSizeListArray;
+        let source_list =
+            FixedSizeListArray::new(source_field, 1, Arc::new(struct_arr), None);
+        let source_col: ArrayRef = Arc::new(source_list);
+
+        let target_field =
+            arc_field("item", struct_type(vec![field("a", DataType::Int32)]));
+        let target_type = DataType::FixedSizeList(target_field, 1);
+
+        let result = cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Cannot cast"));
+    }
+
+    #[test]
+    fn test_cast_fixed_size_list_struct_non_nullable_field_fails() {
+        // Build a FixedSizeList<Struct{a: Int32}> and try to cast to
+        // FixedSizeList<Struct{a: Int32, b: Int32 non-nullable}> (should fail).
+        let struct_arr = StructArray::from(vec![(
+            arc_field("a", DataType::Int32),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )]);
+
+        let source_field =
+            arc_field("item", struct_type(vec![field("a", DataType::Int32)]));
+        use arrow::array::FixedSizeListArray;
+        let source_list =
+            FixedSizeListArray::new(source_field, 1, Arc::new(struct_arr), None);
+        let source_col: ArrayRef = Arc::new(source_list);
+
+        let target_field = arc_field(
+            "item",
+            struct_type(vec![
+                field("a", DataType::Int32),
+                non_null_field("b", DataType::Int32),
+            ]),
+        );
+        let target_type = DataType::FixedSizeList(target_field, 1);
+
+        let result = cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("cannot fill with NULL")
+                || error_msg.contains("non-nullable")
+        );
+    }
+
+    #[test]
+    fn test_requires_nested_struct_cast_fixed_size_list() {
+        let s1 = struct_type(vec![field("a", DataType::Int32)]);
+        let s2 = struct_type(vec![field("a", DataType::Int64)]);
+
+        assert!(requires_nested_struct_cast(
+            &DataType::FixedSizeList(arc_field("item", s1.clone()), 2),
+            &DataType::FixedSizeList(arc_field("item", s2.clone()), 2),
+        ));
+
+        // FixedSizeList with non-struct inner types should return false
+        assert!(!requires_nested_struct_cast(
+            &DataType::FixedSizeList(arc_field("item", DataType::Int32), 2),
+            &DataType::FixedSizeList(arc_field("item", DataType::Int64), 2),
         ));
     }
 }
