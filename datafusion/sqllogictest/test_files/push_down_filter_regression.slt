@@ -207,9 +207,6 @@ reset datafusion.optimizer.enable_dynamic_filter_pushdown;
 statement ok
 reset datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown;
 
-statement ok
-set datafusion.execution.target_partitions = 1;
-
 # Regression test for https://github.com/apache/datafusion/issues/21065
 # Ensure filter pushdown through AggregateExec still works when a ProjectionExec
 # reorders aggregate input columns.
