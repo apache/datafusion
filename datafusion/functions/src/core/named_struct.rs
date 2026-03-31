@@ -23,7 +23,6 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
@@ -78,10 +77,6 @@ impl NamedStructFunc {
 }
 
 impl ScalarUDFImpl for NamedStructFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "named_struct"
     }

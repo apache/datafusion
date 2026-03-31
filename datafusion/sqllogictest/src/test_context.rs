@@ -566,10 +566,6 @@ fn register_async_abs_udf(ctx: &SessionContext) {
         }
     }
     impl ScalarUDFImpl for AsyncAbs {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "async_abs"
         }

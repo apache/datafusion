@@ -28,7 +28,6 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{DataFusionError, Result, not_impl_err};
 
-use std::any::Any;
 use std::fmt::{self, Write};
 
 use crate::utils::make_scalar_function;
@@ -131,10 +130,6 @@ impl ArrayToString {
 }
 
 impl ScalarUDFImpl for ArrayToString {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_to_string"
     }
@@ -222,10 +217,6 @@ impl StringToArray {
 }
 
 impl ScalarUDFImpl for StringToArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "string_to_array"
     }

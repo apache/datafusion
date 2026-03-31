@@ -20,7 +20,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use crate::metrics::{
-    MetricType,
+    MetricCategory, MetricType,
     value::{PruningMetrics, RatioMergeStrategy, RatioMetrics},
 };
 
@@ -60,6 +60,10 @@ pub struct MetricBuilder<'a> {
     /// The type controlling the verbosity/category for this builder
     /// See comments in [`MetricType`] for details
     metric_type: MetricType,
+
+    /// Semantic category (rows / bytes / timing).
+    /// `None` means "always include" (the default for custom metrics).
+    metric_category: Option<MetricCategory>,
 }
 
 impl<'a> MetricBuilder<'a> {
@@ -72,7 +76,8 @@ impl<'a> MetricBuilder<'a> {
             metrics,
             partition: None,
             labels: vec![],
-            metric_type: MetricType::DEV,
+            metric_type: MetricType::Dev,
+            metric_category: None,
         }
     }
 
@@ -85,6 +90,15 @@ impl<'a> MetricBuilder<'a> {
     /// Set the metric type to the metric being constructed
     pub fn with_type(mut self, metric_type: MetricType) -> Self {
         self.metric_type = metric_type;
+        self
+    }
+
+    /// Set the semantic category for the metric being constructed.
+    ///
+    /// See [`MetricCategory`] for details on the determinism properties
+    /// of each category.
+    pub fn with_category(mut self, category: MetricCategory) -> Self {
+        self.metric_category = Some(category);
         self
     }
 
@@ -111,17 +125,21 @@ impl<'a> MetricBuilder<'a> {
             partition,
             metrics,
             metric_type,
+            metric_category,
         } = self;
-        let metric = Arc::new(
-            Metric::new_with_labels(value, partition, labels).with_type(metric_type),
-        );
-        metrics.register(metric);
+        let mut metric =
+            Metric::new_with_labels(value, partition, labels).with_type(metric_type);
+        if let Some(category) = metric_category {
+            metric = metric.with_category(category);
+        }
+        metrics.register(Arc::new(metric));
     }
 
     /// Consume self and create a new counter for recording output rows
     pub fn output_rows(self, partition: usize) -> Count {
         let count = Count::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Rows)
+            .with_partition(partition)
             .build(MetricValue::OutputRows(count.clone()));
         count
     }
@@ -130,7 +148,8 @@ impl<'a> MetricBuilder<'a> {
     /// triggered by an operator
     pub fn spill_count(self, partition: usize) -> Count {
         let count = Count::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Rows)
+            .with_partition(partition)
             .build(MetricValue::SpillCount(count.clone()));
         count
     }
@@ -139,7 +158,8 @@ impl<'a> MetricBuilder<'a> {
     /// triggered by an operator
     pub fn spilled_bytes(self, partition: usize) -> Count {
         let count = Count::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
             .build(MetricValue::SpilledBytes(count.clone()));
         count
     }
@@ -148,7 +168,8 @@ impl<'a> MetricBuilder<'a> {
     /// triggered by an operator
     pub fn spilled_rows(self, partition: usize) -> Count {
         let count = Count::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Rows)
+            .with_partition(partition)
             .build(MetricValue::SpilledRows(count.clone()));
         count
     }
@@ -156,7 +177,8 @@ impl<'a> MetricBuilder<'a> {
     /// Consume self and create a new counter for recording total output bytes
     pub fn output_bytes(self, partition: usize) -> Count {
         let count = Count::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
             .build(MetricValue::OutputBytes(count.clone()));
         count
     }
@@ -164,7 +186,8 @@ impl<'a> MetricBuilder<'a> {
     /// Consume self and create a new counter for recording total output batches
     pub fn output_batches(self, partition: usize) -> Count {
         let count = Count::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Rows)
+            .with_partition(partition)
             .build(MetricValue::OutputBatches(count.clone()));
         count
     }
@@ -172,7 +195,8 @@ impl<'a> MetricBuilder<'a> {
     /// Consume self and create a new gauge for reporting current memory usage
     pub fn mem_used(self, partition: usize) -> Gauge {
         let gauge = Gauge::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
             .build(MetricValue::CurrentMemoryUsage(gauge.clone()));
         gauge
     }
@@ -223,7 +247,8 @@ impl<'a> MetricBuilder<'a> {
     /// CPU time spent by an operator
     pub fn elapsed_compute(self, partition: usize) -> Time {
         let time = Time::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Timing)
+            .with_partition(partition)
             .build(MetricValue::ElapsedCompute(time.clone()));
         time
     }
@@ -236,10 +261,12 @@ impl<'a> MetricBuilder<'a> {
         partition: usize,
     ) -> Time {
         let time = Time::new();
-        self.with_partition(partition).build(MetricValue::Time {
-            name: subset_name.into(),
-            time: time.clone(),
-        });
+        self.with_category(MetricCategory::Timing)
+            .with_partition(partition)
+            .build(MetricValue::Time {
+                name: subset_name.into(),
+                time: time.clone(),
+            });
         time
     }
 
@@ -247,7 +274,8 @@ impl<'a> MetricBuilder<'a> {
     /// starting time of execution for a partition
     pub fn start_timestamp(self, partition: usize) -> Timestamp {
         let timestamp = Timestamp::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Timing)
+            .with_partition(partition)
             .build(MetricValue::StartTimestamp(timestamp.clone()));
         timestamp
     }
@@ -256,7 +284,8 @@ impl<'a> MetricBuilder<'a> {
     /// ending time of execution for a partition
     pub fn end_timestamp(self, partition: usize) -> Timestamp {
         let timestamp = Timestamp::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Timing)
+            .with_partition(partition)
             .build(MetricValue::EndTimestamp(timestamp.clone()));
         timestamp
     }
@@ -268,7 +297,8 @@ impl<'a> MetricBuilder<'a> {
         partition: usize,
     ) -> PruningMetrics {
         let pruning_metrics = PruningMetrics::new();
-        self.with_partition(partition)
+        self.with_category(MetricCategory::Rows)
+            .with_partition(partition)
             .build(MetricValue::PruningMetrics {
                 name: name.into(),
                 // inner values will be `Arc::clone()`
@@ -294,10 +324,12 @@ impl<'a> MetricBuilder<'a> {
         merge_strategy: RatioMergeStrategy,
     ) -> RatioMetrics {
         let ratio_metrics = RatioMetrics::new().with_merge_strategy(merge_strategy);
-        self.with_partition(partition).build(MetricValue::Ratio {
-            name: name.into(),
-            ratio_metrics: ratio_metrics.clone(),
-        });
+        self.with_category(MetricCategory::Rows)
+            .with_partition(partition)
+            .build(MetricValue::Ratio {
+                name: name.into(),
+                ratio_metrics: ratio_metrics.clone(),
+            });
         ratio_metrics
     }
 }

@@ -36,7 +36,6 @@ use datafusion_macros::user_doc;
 use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
-use std::any::Any;
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
@@ -113,10 +112,6 @@ impl ArrayReplace {
 }
 
 impl ScalarUDFImpl for ArrayReplace {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_replace"
     }
@@ -192,10 +187,6 @@ impl ArrayReplaceN {
 }
 
 impl ScalarUDFImpl for ArrayReplaceN {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_replace_n"
     }
@@ -269,10 +260,6 @@ impl ArrayReplaceAll {
 }
 
 impl ScalarUDFImpl for ArrayReplaceAll {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_replace_all"
     }

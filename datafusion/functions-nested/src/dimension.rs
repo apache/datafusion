@@ -23,7 +23,6 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Null, UInt64},
     UInt64Type,
 };
-use std::any::Any;
 
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
@@ -87,9 +86,6 @@ impl ArrayDims {
 }
 
 impl ScalarUDFImpl for ArrayDims {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_dims"
     }
@@ -156,9 +152,6 @@ impl ArrayNdims {
 }
 
 impl ScalarUDFImpl for ArrayNdims {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_ndims"
     }

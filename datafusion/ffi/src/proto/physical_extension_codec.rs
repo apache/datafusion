@@ -410,6 +410,7 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::any::Any;
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
@@ -492,7 +493,7 @@ pub(crate) mod tests {
             buf.push(Self::MAGIC_NUMBER);
 
             let udf = node.inner();
-            if !udf.as_any().is::<AbsFunc>() {
+            if !(udf.as_ref() as &dyn Any).is::<AbsFunc>() {
                 return exec_err!("TestExtensionCodec only expects Abs UDF");
             };
 
@@ -519,7 +520,7 @@ pub(crate) mod tests {
             buf.push(Self::MAGIC_NUMBER);
 
             let udf = node.inner();
-            let Some(_udf) = udf.as_any().downcast_ref::<Sum>() else {
+            let Some(_udf) = (udf.as_ref() as &dyn Any).downcast_ref::<Sum>() else {
                 return exec_err!("TestExtensionCodec only expects Sum UDAF");
             };
 
@@ -549,7 +550,7 @@ pub(crate) mod tests {
             buf.push(Self::MAGIC_NUMBER);
 
             let udf = node.inner();
-            let Some(udf) = udf.as_any().downcast_ref::<Rank>() else {
+            let Some(udf) = (udf.as_ref() as &dyn Any).downcast_ref::<Rank>() else {
                 return exec_err!("TestExtensionCodec only expects Rank UDWF");
             };
 
@@ -608,7 +609,7 @@ pub(crate) mod tests {
 
         let returned_udf = foreign_codec.try_decode_udf(udf.name(), &bytes)?;
 
-        assert!(returned_udf.inner().as_any().is::<AbsFunc>());
+        assert!((returned_udf.inner().as_ref() as &dyn Any).is::<AbsFunc>());
 
         Ok(())
     }
@@ -629,7 +630,7 @@ pub(crate) mod tests {
 
         let returned_udf = foreign_codec.try_decode_udaf(udf.name(), &bytes)?;
 
-        assert!(returned_udf.inner().as_any().is::<Sum>());
+        assert!((returned_udf.inner().as_ref() as &dyn Any).is::<Sum>());
 
         Ok(())
     }
@@ -653,7 +654,7 @@ pub(crate) mod tests {
 
         let returned_udf = foreign_codec.try_decode_udwf(udf.name(), &bytes)?;
 
-        assert!(returned_udf.inner().as_any().is::<Rank>());
+        assert!((returned_udf.inner().as_ref() as &dyn Any).is::<Rank>());
 
         Ok(())
     }

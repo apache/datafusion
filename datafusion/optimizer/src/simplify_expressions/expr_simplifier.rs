@@ -4961,10 +4961,6 @@ mod tests {
     }
 
     impl AggregateUDFImpl for SimplifyMockUdaf {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "mock_simplify"
         }
@@ -5042,10 +5038,6 @@ mod tests {
     }
 
     impl WindowUDFImpl for SimplifyMockUdwf {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "mock_simplify"
         }
@@ -5090,10 +5082,6 @@ mod tests {
         }
     }
     impl ScalarUDFImpl for VolatileUdf {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "VolatileUdf"
         }

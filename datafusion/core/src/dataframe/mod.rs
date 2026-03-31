@@ -71,6 +71,7 @@ use datafusion_functions_aggregate::expr_fn::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::extension_types::DFArrayFormatterFactory;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -1515,6 +1516,11 @@ impl DataFrame {
     pub async fn to_string(self) -> Result<String> {
         let options = self.session_state.config().options().format.clone();
         let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
+
+        let registry = self.session_state.extension_type_registry();
+        let formatter_factory = DFArrayFormatterFactory::new(Arc::clone(registry));
+        let arrow_options =
+            arrow_options.with_formatter_factory(Some(&formatter_factory));
 
         let results = self.collect().await?;
         Ok(

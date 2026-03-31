@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use crate::unicode::common::{RightSlicer, general_left_right};
 use crate::utils::make_scalar_function;
 use arrow::datatypes::DataType;
@@ -73,10 +71,6 @@ impl RightFunc {
 }
 
 impl ScalarUDFImpl for RightFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "right"
     }
