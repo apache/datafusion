@@ -108,9 +108,7 @@ pub fn is_restrict_null_predicate<'a>(
     if let Some(result) =
         null_restriction::syntactic_null_restriction_check(&predicate, &join_cols)
     {
-        return Ok(
-            result == null_restriction::SyntacticNullRestriction::Restricts,
-        );
+        return Ok(result == null_restriction::SyntacticNullRestriction::Restricts);
     }
 
     // Authoritative path: build and execute a physical expression where every
@@ -304,7 +302,10 @@ mod tests {
         // col("b") > 5 — "b" is not a join column → non-restricting
         let predicate = binary_expr(col("b"), Operator::Gt, lit(5i64));
         let actual = is_restrict_null_predicate(predicate, std::iter::once(&column_a))?;
-        assert!(!actual, "predicate referencing non-join col must be non-restricting");
+        assert!(
+            !actual,
+            "predicate referencing non-join col must be non-restricting"
+        );
 
         // col("a") > 5 AND col("b") IS NULL — mixed reference: "b" ∉ join_cols
         // The AND has a restricting left side, but right side references "b" which is
@@ -326,8 +327,7 @@ mod tests {
     #[test]
     fn expr_syntactic_fast_path_agrees_with_authoritative() -> Result<()> {
         let column_a = Column::from_name("a");
-        let join_cols_set: HashSet<Column> =
-            std::iter::once(column_a.clone()).collect();
+        let join_cols_set: HashSet<Column> = std::iter::once(column_a.clone()).collect();
 
         // These predicates only reference the join column so both evaluators apply.
         let parity_cases = vec![
@@ -355,8 +355,8 @@ mod tests {
                     predicate.clone(),
                     std::iter::once(&column_a),
                 )?;
-                let syn_bool = syn_result
-                    == null_restriction::SyntacticNullRestriction::Restricts;
+                let syn_bool =
+                    syn_result == null_restriction::SyntacticNullRestriction::Restricts;
                 assert_eq!(
                     syn_bool, authoritative,
                     "syntactic and authoritative disagree for {predicate}"

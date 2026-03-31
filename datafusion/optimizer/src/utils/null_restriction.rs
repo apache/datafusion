@@ -129,7 +129,8 @@ fn syntactic_binary(
         | Operator::LtEq
         | Operator::Gt
         | Operator::GtEq => {
-            if is_direct_join_col(left, join_cols) || is_direct_join_col(right, join_cols) {
+            if is_direct_join_col(left, join_cols) || is_direct_join_col(right, join_cols)
+            {
                 Some(Restricts)
             } else {
                 None
@@ -197,8 +198,8 @@ fn is_direct_join_col(expr: &Expr, join_cols: &HashSet<Column>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::{Operator, binary_expr, col, in_list, is_null, lit};
     use datafusion_common::ScalarValue;
+    use datafusion_expr::{Operator, binary_expr, col, in_list, is_null, lit};
 
     fn join_cols(names: &[&str]) -> HashSet<Column> {
         names.iter().map(|n| Column::from_name(*n)).collect()
