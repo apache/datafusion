@@ -90,8 +90,7 @@ pub fn check_finiteness_requirements(
     input: &dyn ExecutionPlan,
     optimizer_options: &OptimizerOptions,
 ) -> Result<()> {
-    if let Some(exec) =
-        (input.as_ref() as &dyn Any).downcast_ref::<SymmetricHashJoinExec>()
+    if let Some(exec) = (input as &dyn Any).downcast_ref::<SymmetricHashJoinExec>()
         && !(optimizer_options.allow_symmetric_joins_without_pruning
             || (exec.check_if_order_information_available()? && is_prunable(exec)))
     {
