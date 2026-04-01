@@ -20,7 +20,7 @@
 use arrow::compute::can_cast_types;
 use datafusion_expr::binary::BinaryTypeCoercer;
 use itertools::{Itertools as _, izip};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::analyzer::AnalyzerRule;
 use crate::utils::NamePreserver;
@@ -91,11 +91,11 @@ impl AnalyzerRule for TypeCoercion {
     }
 
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
-        let empty_schema = DFSchema::empty();
+        static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
 
         // recurse
         let transformed_plan = plan
-            .transform_up_with_subqueries(|plan| analyze_internal(&empty_schema, plan))?
+            .transform_up_with_subqueries(|plan| analyze_internal(&EMPTY_SCHEMA, plan))?
             .data;
 
         // finish

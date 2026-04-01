@@ -61,6 +61,7 @@ hashbrown = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 itoa = { workspace = true }
 log = { workspace = true }
+memchr = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
@@ -117,3 +118,7 @@ name = "array_position"
 [[bench]]
 harness = false
 name = "array_sort"
+
+[[bench]]
+harness = false
+name = "string_to_array"

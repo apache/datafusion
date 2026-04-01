@@ -17,7 +17,6 @@
 
 //! [`StringAgg`] accumulator for the `string_agg` function
 
-use std::any::Any;
 use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
@@ -152,10 +151,6 @@ impl Default for StringAgg {
 /// - No DISTINCT / ORDER BY without GROUP BY: `SimpleStringAggAccumulator`
 /// - With DISTINCT or ORDER BY: `StringAggAccumulator` (delegates to `ArrayAgg`)
 impl AggregateUDFImpl for StringAgg {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "string_agg"
     }

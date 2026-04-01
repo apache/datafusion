@@ -38,6 +38,9 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{NullEquality, ScalarValue};
+use datafusion_execution::TaskContext;
+use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::Literal;
 
@@ -1122,6 +1125,138 @@ impl JoinFuzzTestCase {
             }
         }
         Ok(batches)
+    }
+}
+
+/// Fuzz test: compare SMJ (with spilling) against HJ (no spill) for filtered
+/// outer joins under memory pressure. This exercises the deferred filtering +
+/// spill read-back path that unit tests can't easily cover with random data.
+#[tokio::test]
+async fn test_filtered_join_spill_fuzz() {
+    let join_types = [JoinType::Left, JoinType::Right, JoinType::Full];
+
+    let runtime_spill = RuntimeEnvBuilder::new()
+        .with_memory_limit(4096, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()
+        .unwrap();
+
+    for join_type in &join_types {
+        for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+            let input1 = make_staggered_batches_i32(1000, left_extra);
+            let input2 = make_staggered_batches_i32(1000, right_extra);
+
+            let schema1 = input1[0].schema();
+            let schema2 = input2[0].schema();
+            let filter = col_lt_col_filter(schema1.clone(), schema2.clone());
+
+            let on = vec![
+                (
+                    Arc::new(Column::new_with_schema("a", &schema1).unwrap()) as _,
+                    Arc::new(Column::new_with_schema("a", &schema2).unwrap()) as _,
+                ),
+                (
+                    Arc::new(Column::new_with_schema("b", &schema1).unwrap()) as _,
+                    Arc::new(Column::new_with_schema("b", &schema2).unwrap()) as _,
+                ),
+            ];
+
+            for batch_size in [2, 49, 100] {
+                let session_config = SessionConfig::new().with_batch_size(batch_size);
+
+                // HJ baseline (no memory limit)
+                let left_hj = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&input1),
+                    schema1.clone(),
+                    None,
+                )
+                .unwrap();
+                let right_hj = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&input2),
+                    schema2.clone(),
+                    None,
+                )
+                .unwrap();
+                let hj = Arc::new(
+                    HashJoinExec::try_new(
+                        left_hj,
+                        right_hj,
+                        on.clone(),
+                        Some(filter.clone()),
+                        join_type,
+                        None,
+                        PartitionMode::Partitioned,
+                        NullEquality::NullEqualsNothing,
+                        false,
+                    )
+                    .unwrap(),
+                );
+                let ctx_hj = SessionContext::new_with_config(session_config.clone());
+                let hj_collected = collect(hj, ctx_hj.task_ctx()).await.unwrap();
+
+                // SMJ with spilling
+                let left_smj = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&input1),
+                    schema1.clone(),
+                    None,
+                )
+                .unwrap();
+                let right_smj = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&input2),
+                    schema2.clone(),
+                    None,
+                )
+                .unwrap();
+                let smj = Arc::new(
+                    SortMergeJoinExec::try_new(
+                        left_smj,
+                        right_smj,
+                        on.clone(),
+                        Some(filter.clone()),
+                        *join_type,
+                        vec![SortOptions::default(); on.len()],
+                        NullEquality::NullEqualsNothing,
+                    )
+                    .unwrap(),
+                );
+                let task_ctx_spill = Arc::new(
+                    TaskContext::default()
+                        .with_session_config(session_config)
+                        .with_runtime(Arc::clone(&runtime_spill)),
+                );
+                let smj_collected = collect(smj, task_ctx_spill).await.unwrap();
+
+                let hj_rows: usize = hj_collected.iter().map(|b| b.num_rows()).sum();
+                let smj_rows: usize = smj_collected.iter().map(|b| b.num_rows()).sum();
+
+                assert_eq!(
+                    hj_rows, smj_rows,
+                    "Row count mismatch for {join_type:?} batch_size={batch_size} \
+                     left_extra={left_extra} right_extra={right_extra}: \
+                     HJ={hj_rows} SMJ={smj_rows}"
+                );
+
+                if hj_rows > 0 {
+                    let hj_fmt =
+                        pretty_format_batches(&hj_collected).unwrap().to_string();
+                    let smj_fmt =
+                        pretty_format_batches(&smj_collected).unwrap().to_string();
+
+                    let mut hj_sorted: Vec<&str> = hj_fmt.trim().lines().collect();
+                    hj_sorted.sort_unstable();
+                    let mut smj_sorted: Vec<&str> = smj_fmt.trim().lines().collect();
+                    smj_sorted.sort_unstable();
+
+                    assert_eq!(
+                        hj_sorted, smj_sorted,
+                        "Content mismatch for {join_type:?} batch_size={batch_size} \
+                         left_extra={left_extra} right_extra={right_extra}"
+                    );
+                }
+            }
+        }
     }
 }
 
