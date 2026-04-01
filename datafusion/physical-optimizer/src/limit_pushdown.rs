@@ -60,7 +60,6 @@
 //!
 //! Reference implementation in Hash Join: <https://github.com/apache/datafusion/pull/20228>
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -346,7 +345,6 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
 
 /// Checks if the given plan combines input partitions.
 fn combines_input_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let plan = plan.as_ref() as &dyn Any;
     plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
 }
 

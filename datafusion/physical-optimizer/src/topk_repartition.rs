@@ -48,7 +48,6 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use std::any::Any;
 use std::sync::Arc;
 // CoalesceBatchesExec is deprecated on main (replaced by arrow-rs BatchCoalescer),
 // but older DataFusion versions may still insert it between SortExec and RepartitionExec.
@@ -92,13 +91,13 @@ impl PhysicalOptimizerRule for TopKRepartition {
 
             // The child might be a CoalesceBatchesExec; look through it
             let sort_input = sort_exec.input();
-            let sort_any = sort_input.as_ref() as &dyn Any;
             let (repart_parent, repart_exec) = if let Some(rp) =
-                sort_any.downcast_ref::<RepartitionExec>()
+                sort_input.downcast_ref::<RepartitionExec>()
             {
                 // found a RepartitionExec, use it
                 (None, rp)
-            } else if let Some(cb_exec) = sort_any.downcast_ref::<CoalesceBatchesExec>() {
+            } else if let Some(cb_exec) = sort_input.downcast_ref::<CoalesceBatchesExec>()
+            {
                 // There's a CoalesceBatchesExec between TopK & RepartitionExec
                 // in this case we will need to reconstruct both nodes
                 let cb_input = cb_exec.input();
