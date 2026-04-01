@@ -7009,7 +7009,7 @@ async fn test_dataframe_api_select_semantics() -> Result<()> {
             "| e  | 21  | 50812717684 | 2419653223.047619  |",
             "+----+-----+-------------+--------------------+",
         ],
-        &vec![
+        &[
             batch.slice(0, 1),  // a
             batch.slice(21, 1), // b
             batch.slice(40, 1), // c
@@ -7197,7 +7197,7 @@ async fn test_dataframe_api_select_semantics() -> Result<()> {
             "| e  | 22       |",
             "+----+----------+",
         ],
-        &vec![
+        &[
             batch.slice(0, 1),  // a
             batch.slice(21, 1), // b
             batch.slice(40, 1), // c
@@ -7258,7 +7258,7 @@ async fn test_dataframe_api_select_semantics() -> Result<()> {
             "| a  | 222089770060 | 21  |",
             "+----+--------------+-----+"
         ],
-        &vec![batch.slice(0, 1)]
+        &[batch.slice(0, 1)]
     );
 
     Ok(())
