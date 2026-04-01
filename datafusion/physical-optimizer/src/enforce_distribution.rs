@@ -295,7 +295,7 @@ pub fn adjust_input_keys_ordering(
             mode,
             ..
         },
-    ) = plan.as_ref().downcast_ref::<HashJoinExec>()
+    ) = plan.downcast_ref::<HashJoinExec>()
     {
         match mode {
             PartitionMode::Partitioned => {
@@ -339,8 +339,7 @@ pub fn adjust_input_keys_ordering(
                 requirements.data.clear();
             }
         }
-    } else if let Some(CrossJoinExec { left, .. }) =
-        plan.as_ref().downcast_ref::<CrossJoinExec>()
+    } else if let Some(CrossJoinExec { left, .. }) = plan.downcast_ref::<CrossJoinExec>()
     {
         let left_columns_len = left.schema().fields().len();
         // Push down requirements to the right side
@@ -356,7 +355,7 @@ pub fn adjust_input_keys_ordering(
         sort_options,
         null_equality,
         ..
-    }) = plan.as_ref().downcast_ref::<SortMergeJoinExec>()
+    }) = plan.downcast_ref::<SortMergeJoinExec>()
     {
         let join_constructor = |new_conditions: (
             Vec<(PhysicalExprRef, PhysicalExprRef)>,
@@ -380,7 +379,7 @@ pub fn adjust_input_keys_ordering(
             &join_constructor,
         )
         .map(Transformed::yes);
-    } else if let Some(aggregate_exec) = plan.as_ref().downcast_ref::<AggregateExec>() {
+    } else if let Some(aggregate_exec) = plan.downcast_ref::<AggregateExec>() {
         if !requirements.data.is_empty() {
             if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
                 return reorder_aggregate_keys(requirements, aggregate_exec)
@@ -392,7 +391,7 @@ pub fn adjust_input_keys_ordering(
             // Keep everything unchanged
             return Ok(Transformed::no(requirements));
         }
-    } else if let Some(proj) = plan.as_ref().downcast_ref::<ProjectionExec>() {
+    } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
         let expr = proj.expr();
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
@@ -408,9 +407,9 @@ pub fn adjust_input_keys_ordering(
             // Can not satisfy, clear the current requirements and generate new empty requirements
             requirements.data.clear();
         }
-    } else if plan.as_ref().is::<RepartitionExec>()
-        || plan.as_ref().is::<CoalescePartitionsExec>()
-        || plan.as_ref().is::<WindowAggExec>()
+    } else if plan.is::<RepartitionExec>()
+        || plan.is::<CoalescePartitionsExec>()
+        || plan.is::<WindowAggExec>()
     {
         requirements.data.clear();
     } else {
@@ -482,7 +481,7 @@ pub fn reorder_aggregate_keys(
         && agg_exec.group_expr().null_expr().is_empty()
         && !physical_exprs_equal(&output_exprs, parent_required)
         && let Some(positions) = expected_expr_positions(&output_exprs, parent_required)
-        && let Some(agg_exec) = agg_exec.input().as_ref().downcast_ref::<AggregateExec>()
+        && let Some(agg_exec) = agg_exec.input().downcast_ref::<AggregateExec>()
         && *agg_exec.mode() == AggregateMode::Partial
     {
         let group_exprs = agg_exec.group_expr().expr();
@@ -606,7 +605,7 @@ pub fn reorder_join_keys_to_inputs(
             mode,
             ..
         },
-    ) = plan.as_ref().downcast_ref::<HashJoinExec>()
+    ) = plan.downcast_ref::<HashJoinExec>()
     {
         if *mode == PartitionMode::Partitioned {
             let (join_keys, positions) = reorder_current_join_keys(
@@ -638,7 +637,7 @@ pub fn reorder_join_keys_to_inputs(
         sort_options,
         null_equality,
         ..
-    }) = plan.as_ref().downcast_ref::<SortMergeJoinExec>()
+    }) = plan.downcast_ref::<SortMergeJoinExec>()
     {
         let (join_keys, positions) = reorder_current_join_keys(
             extract_join_keys(on),
@@ -1065,8 +1064,7 @@ pub fn replace_order_preserving_variants(
             CoalescePartitionsExec::new(child_plan).with_fetch(context.plan.fetch()),
         );
         return Ok(context);
-    } else if let Some(repartition) =
-        context.plan.as_ref().downcast_ref::<RepartitionExec>()
+    } else if let Some(repartition) = context.plan.downcast_ref::<RepartitionExec>()
         && repartition.preserve_order()
     {
         context.plan = Arc::new(RepartitionExec::try_new(
@@ -1225,7 +1223,7 @@ pub fn ensure_distribution(
         children,
     } = remove_dist_changing_operators(dist_context)?;
 
-    if let Some(exec) = plan.as_ref().downcast_ref::<WindowAggExec>() {
+    if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
         if let Some(updated_window) = get_best_fitting_window(
             exec.window_expr(),
             exec.input(),
@@ -1233,7 +1231,7 @@ pub fn ensure_distribution(
         )? {
             plan = updated_window;
         }
-    } else if let Some(exec) = plan.as_ref().downcast_ref::<BoundedWindowAggExec>()
+    } else if let Some(exec) = plan.downcast_ref::<BoundedWindowAggExec>()
         && let Some(updated_window) = get_best_fitting_window(
             exec.window_expr(),
             exec.input(),
@@ -1273,10 +1271,9 @@ pub fn ensure_distribution(
     // CollectLeft/CollectRight modes are safe because one side is collected
     // to a single partition which eliminates partition-to-partition mapping.
     let is_partitioned_join = plan
-        .as_ref()
         .downcast_ref::<HashJoinExec>()
         .is_some_and(|join| join.mode == PartitionMode::Partitioned)
-        || plan.as_ref().is::<SortMergeJoinExec>();
+        || plan.is::<SortMergeJoinExec>();
 
     let repartition_status_flags =
         get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
@@ -1405,8 +1402,7 @@ pub fn ensure_distribution(
                         child = add_sort_above_with_check(
                             child,
                             sort_req,
-                            plan.as_ref()
-                                .downcast_ref::<OutputRequirementExec>()
+                            plan.downcast_ref::<OutputRequirementExec>()
                                 .map(|output| output.fetch())
                                 .unwrap_or(None),
                         )?;
@@ -1434,7 +1430,7 @@ pub fn ensure_distribution(
                     }
                     Distribution::UnspecifiedDistribution => {
                         // Since ordering is lost, trying to preserve ordering is pointless
-                        if !maintains || plan.as_ref().is::<OutputRequirementExec>() {
+                        if !maintains || plan.is::<OutputRequirementExec>() {
                             child = replace_order_preserving_variants(child)?;
                         }
                     }
@@ -1450,7 +1446,7 @@ pub fn ensure_distribution(
         .map(|c| Arc::clone(&c.plan))
         .collect::<Vec<_>>();
 
-    plan = if plan.as_ref().is::<UnionExec>()
+    plan = if plan.is::<UnionExec>()
         && !config.optimizer.prefer_existing_union
         && can_interleave(children_plans.iter())
     {
@@ -1495,18 +1491,16 @@ pub type DistributionContext = PlanContext<bool>;
 
 fn update_children(mut dist_context: DistributionContext) -> Result<DistributionContext> {
     for child_context in dist_context.children.iter_mut() {
-        child_context.data = if let Some(repartition) = child_context
-            .plan
-            .as_ref()
-            .downcast_ref::<RepartitionExec>()
+        child_context.data = if let Some(repartition) =
+            child_context.plan.downcast_ref::<RepartitionExec>()
         {
             !matches!(
                 repartition.partitioning(),
                 Partitioning::UnknownPartitioning(_)
             )
         } else {
-            child_context.plan.as_ref().is::<SortPreservingMergeExec>()
-                || child_context.plan.as_ref().is::<CoalescePartitionsExec>()
+            child_context.plan.is::<SortPreservingMergeExec>()
+                || child_context.plan.is::<CoalescePartitionsExec>()
                 || child_context.plan.children().is_empty()
                 || child_context.children[0].data
                 || child_context

@@ -134,10 +134,7 @@ impl PhysicalOptimizerRule for TopKRepartition {
             // Don't push if the input to the repartition is already bounded
             // (e.g., another TopK), as it would be redundant.
             let repart_input = repart_exec.input();
-            if (repart_input.as_ref() as &dyn Any)
-                .downcast_ref::<SortExec>()
-                .is_some()
-            {
+            if repart_input.is::<SortExec>() {
                 return Ok(Transformed::no(node));
             }
 

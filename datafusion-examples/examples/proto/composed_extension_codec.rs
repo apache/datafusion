@@ -32,7 +32,6 @@
 //!           DeltaScan
 //! ```
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -157,10 +156,7 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        if (node.as_ref() as &dyn Any)
-            .downcast_ref::<ParentExec>()
-            .is_some()
-        {
+        if node.is::<ParentExec>() {
             buf.extend_from_slice("ParentExec".as_bytes());
             Ok(())
         } else {
@@ -239,10 +235,7 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        if (node.as_ref() as &dyn Any)
-            .downcast_ref::<ChildExec>()
-            .is_some()
-        {
+        if node.is::<ChildExec>() {
             buf.extend_from_slice("ChildExec".as_bytes());
             Ok(())
         } else {

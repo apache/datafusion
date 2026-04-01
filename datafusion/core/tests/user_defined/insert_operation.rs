@@ -58,9 +58,7 @@ async fn insert_operation_is_passed_correctly_to_table_provider() {
 async fn assert_insert_op(ctx: &SessionContext, sql: &str, insert_op: InsertOp) {
     let df = ctx.sql(sql).await.unwrap();
     let plan = df.create_physical_plan().await.unwrap();
-    let exec = (plan.as_ref() as &dyn Any)
-        .downcast_ref::<TestInsertExec>()
-        .unwrap();
+    let exec = plan.downcast_ref::<TestInsertExec>().unwrap();
     assert_eq!(exec.op, insert_op);
 }
 

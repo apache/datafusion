@@ -25,7 +25,6 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
 use datafusion_physical_plan::{ExecutionPlan, expressions};
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
@@ -51,7 +50,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
-            let partial_agg_exec = (partial_agg_exec.as_ref() as &dyn Any)
+            let partial_agg_exec = partial_agg_exec
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
             let stats = partial_agg_exec.input().partition_statistics(None)?;

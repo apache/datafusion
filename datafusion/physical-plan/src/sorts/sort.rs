@@ -1242,7 +1242,6 @@ impl ExecutionPlan for SortExec {
         let children = self.children().into_iter().cloned().collect();
         let new_sort = self.with_new_children(children)?;
         let mut new_sort = new_sort
-            .as_ref()
             .downcast_ref::<SortExec>()
             .expect("cloned 1 lines above this line, we know the type")
             .clone();

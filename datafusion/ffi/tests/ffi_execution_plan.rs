@@ -58,7 +58,7 @@ mod tests {
         let child_plan: Arc<dyn ExecutionPlan> = (&child_plan)
             .try_into()
             .expect("should be able create plan");
-        assert!((child_plan.as_ref() as &dyn std::any::Any).is::<ForeignExecutionPlan>());
+        assert!(child_plan.is::<ForeignExecutionPlan>());
 
         let grandchild_plan = generate_local_plan();
 

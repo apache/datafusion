@@ -1860,7 +1860,6 @@ mod tests {
             Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
         let plan = bounded_window_exec_pb_latent_range(input, 1, "hash", "sn")?;
         let plan = plan
-            .as_ref()
             .downcast_ref::<BoundedWindowAggExec>()
             .expect("expected BoundedWindowAggExec");
 

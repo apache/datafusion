@@ -3624,7 +3624,7 @@ mod tests {
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        let final_hash_agg = (execution_plan.as_ref() as &dyn Any)
+        let final_hash_agg = execution_plan
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
@@ -3651,7 +3651,7 @@ mod tests {
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        let final_hash_agg = (execution_plan.as_ref() as &dyn Any)
+        let final_hash_agg = execution_plan
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(

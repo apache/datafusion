@@ -22,7 +22,6 @@
 //!   Since the `OutputRequirementExec` operator is only a helper operator, it
 //!   shouldn't occur in the final plan (i.e. the executed plan).
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
@@ -337,9 +336,7 @@ impl PhysicalOptimizerRule for OutputRequirements {
             RuleMode::Add => require_top_ordering(plan),
             RuleMode::Remove => plan
                 .transform_up(|plan| {
-                    if let Some(sort_req) = (plan.as_ref() as &dyn Any)
-                        .downcast_ref::<OutputRequirementExec>()
-                    {
+                    if let Some(sort_req) = plan.downcast_ref::<OutputRequirementExec>() {
                         Ok(Transformed::yes(sort_req.input()))
                     } else {
                         Ok(Transformed::no(plan))

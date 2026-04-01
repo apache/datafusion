@@ -232,7 +232,6 @@ async fn test_join_with_swap() {
         .unwrap();
 
     let swapping_projection = optimized_join
-        .as_ref()
         .downcast_ref::<ProjectionExec>()
         .expect("A proj is required to swap columns back to their original order");
 
@@ -246,7 +245,6 @@ async fn test_join_with_swap() {
 
     let swapped_join = swapping_projection
         .input()
-        .as_ref()
         .downcast_ref::<HashJoinExec>()
         .expect("The type of the plan should not be changed");
 
@@ -295,7 +293,6 @@ async fn test_left_join_no_swap() {
         .unwrap();
 
     let swapped_join = optimized_join
-        .as_ref()
         .downcast_ref::<HashJoinExec>()
         .expect("The type of the plan should not be changed");
 
@@ -345,12 +342,9 @@ async fn test_join_with_swap_semi() {
             .optimize(Arc::new(join), &ConfigOptions::new())
             .unwrap();
 
-        let swapped_join = optimized_join
-            .as_ref()
-            .downcast_ref::<HashJoinExec>()
-            .expect(
-                "A proj is not required to swap columns back to their original order",
-            );
+        let swapped_join = optimized_join.downcast_ref::<HashJoinExec>().expect(
+            "A proj is not required to swap columns back to their original order",
+        );
 
         assert_eq!(swapped_join.schema().fields().len(), 1);
         assert_eq!(
@@ -401,12 +395,9 @@ async fn test_join_with_swap_mark() {
             .optimize(Arc::new(join), &ConfigOptions::new())
             .unwrap();
 
-        let swapped_join = optimized_join
-            .as_ref()
-            .downcast_ref::<HashJoinExec>()
-            .expect(
-                "A proj is not required to swap columns back to their original order",
-            );
+        let swapped_join = optimized_join.downcast_ref::<HashJoinExec>().expect(
+            "A proj is not required to swap columns back to their original order",
+        );
 
         assert_eq!(swapped_join.schema().fields().len(), 2);
         assert_eq!(
@@ -534,7 +525,6 @@ async fn test_join_no_swap() {
         .unwrap();
 
     let swapped_join = optimized_join
-        .as_ref()
         .downcast_ref::<HashJoinExec>()
         .expect("The type of the plan should not be changed");
 
@@ -583,7 +573,6 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
         .unwrap();
 
     let swapping_projection = optimized_join
-        .as_ref()
         .downcast_ref::<ProjectionExec>()
         .expect("A proj is required to swap columns back to their original order");
 
@@ -597,7 +586,6 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
 
     let swapped_join = swapping_projection
         .input()
-        .as_ref()
         .downcast_ref::<NestedLoopJoinExec>()
         .expect("The type of the plan should not be changed");
 
@@ -664,7 +652,6 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
         .unwrap();
 
     let swapped_join = optimized_join
-        .as_ref()
         .downcast_ref::<NestedLoopJoinExec>()
         .expect("The type of the plan should not be changed");
 
@@ -759,7 +746,6 @@ async fn test_hash_join_swap_on_joins_with_projections(
         .swap_inputs(PartitionMode::Partitioned)
         .expect("swap_hash_join must support joins with projections");
     let swapped_join = swapped
-        .as_ref()
         .downcast_ref::<HashJoinExec>()
         .expect(
             "ProjectionExec won't be added above if HashJoinExec contains embedded projection",
@@ -928,18 +914,15 @@ fn check_join_partition_mode(
 
     if !is_swapped {
         let swapped_join = optimized_join
-            .as_ref()
             .downcast_ref::<HashJoinExec>()
             .expect("The type of the plan should not be changed");
         assert_eq!(*swapped_join.partition_mode(), expected_mode);
     } else {
         let swapping_projection = optimized_join
-            .as_ref()
             .downcast_ref::<ProjectionExec>()
             .expect("A proj is required to swap columns back to their original order");
         let swapped_join = swapping_projection
             .input()
-            .as_ref()
             .downcast_ref::<HashJoinExec>()
             .expect("The type of the plan should not be changed");
 
@@ -1589,10 +1572,9 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         JoinSelection::new().optimize(Arc::clone(&join), &ConfigOptions::new())?;
 
     // If swap did happen
-    let projection_added = optimized_join_plan.as_ref().is::<ProjectionExec>();
+    let projection_added = optimized_join_plan.is::<ProjectionExec>();
     let plan = if projection_added {
         let proj = optimized_join_plan
-            .as_ref()
             .downcast_ref::<ProjectionExec>()
             .expect("A proj is required to swap columns back to their original order");
         Arc::<dyn ExecutionPlan>::clone(proj.input())
@@ -1606,7 +1588,7 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         join_type,
         mode,
         ..
-    }) = plan.as_ref().downcast_ref::<HashJoinExec>()
+    }) = plan.downcast_ref::<HashJoinExec>()
     {
         let left_changed = Arc::ptr_eq(left, &right_exec);
         let right_changed = Arc::ptr_eq(right, &left_exec);

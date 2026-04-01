@@ -1403,7 +1403,6 @@ mod tests {
 
         // Downcast to verify it's a UnionExec
         let union = union_plan
-            .as_ref()
             .downcast_ref::<UnionExec>()
             .expect("Expected UnionExec");
 
@@ -1444,7 +1443,6 @@ mod tests {
 
         let union = UnionExec::try_new(vec![input1, input2])?;
         let union = union
-            .as_ref()
             .downcast_ref::<UnionExec>()
             .expect("expected UnionExec for multiple inputs");
 

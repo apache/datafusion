@@ -334,8 +334,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
             preserve_order: global_limit.required_ordering().is_some(),
         })
     } else {
-        (plan.as_ref() as &dyn Any)
-            .downcast_ref::<LocalLimitExec>()
+        plan.downcast_ref::<LocalLimitExec>()
             .map(|local_limit| LimitInfo {
                 input: Arc::clone(local_limit.input()),
                 fetch: Some(local_limit.fetch()),
