@@ -406,7 +406,7 @@ impl DataFrame {
     ///     "| 1 | 6                     |",
     ///     "+---+-----------------------+",
     /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &df.clone().collect().await?);
     ///
     /// // Aggregate expressions are also supported
     /// let df = df.select(vec![count(col("a")), sum(col("b"))])?;
