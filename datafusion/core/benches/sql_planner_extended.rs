@@ -357,12 +357,8 @@ fn build_non_case_left_join_df_with_push_down_filter(
 fn find_filter_predicates(plan: &LogicalPlan) -> Vec<datafusion_expr::Expr> {
     match plan {
         LogicalPlan::Filter(filter) => split_conjunction_owned(filter.predicate.clone()),
-        LogicalPlan::Projection(projection) => {
-            find_filter_predicates(projection.input.as_ref())
-        }
-        other => {
-            panic!("expected benchmark query plan to contain a Filter, found {other:?}")
-        }
+        LogicalPlan::Projection(projection) => find_filter_predicates(projection.input.as_ref()),
+        other => panic!("expected benchmark query plan to contain a Filter, found {other:?}"),
     }
 }
 
@@ -379,8 +375,7 @@ fn assert_case_heavy_left_join_inference_candidates(
     for predicate in predicates {
         let column_refs = predicate.column_refs();
         assert!(
-            column_refs.contains(&&left_join_key)
-                || column_refs.contains(&&right_join_key),
+            column_refs.contains(&&left_join_key) || column_refs.contains(&&right_join_key),
             "benchmark predicate should reference a join key: {predicate}"
         );
         assert!(
