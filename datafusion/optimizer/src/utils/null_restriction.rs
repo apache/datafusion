@@ -193,7 +193,7 @@ fn syntactic_binary(
 
 /// Returns true if `expr` is a direct column reference that belongs to `join_cols`.
 fn is_direct_join_col(expr: &Expr, join_cols: &HashSet<Column>) -> bool {
-    matches!(expr.as_ref(), Expr::Column(col) if join_cols.contains(col))
+    matches!(expr, Expr::Column(col) if join_cols.contains(col))
 }
 
 #[cfg(test)]
