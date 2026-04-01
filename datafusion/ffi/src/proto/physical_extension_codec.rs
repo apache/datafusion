@@ -410,7 +410,6 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::any::Any;
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
@@ -550,7 +549,7 @@ pub(crate) mod tests {
             buf.push(Self::MAGIC_NUMBER);
 
             let udf = node.inner();
-            let Some(udf) = (udf.as_ref() as &dyn Any).downcast_ref::<Rank>() else {
+            let Some(udf) = udf.downcast_ref::<Rank>() else {
                 return exec_err!("TestExtensionCodec only expects Rank UDWF");
             };
 
@@ -654,7 +653,7 @@ pub(crate) mod tests {
 
         let returned_udf = foreign_codec.try_decode_udwf(udf.name(), &bytes)?;
 
-        assert!((returned_udf.inner().as_ref() as &dyn Any).is::<Rank>());
+        assert!(returned_udf.inner().is::<Rank>());
 
         Ok(())
     }
