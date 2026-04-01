@@ -398,7 +398,7 @@ impl DataFrame {
     ///     .await?;
     ///
     /// // Expressions are evaluated per row
-    /// let df = df.select(vec![col("a"), col("b") * col("c")])?;
+    /// let res = df.clone().select(vec![col("a"), col("b") * col("c")])?;
     /// let expected = vec![
     ///     "+---+-----------------------+",
     ///     "| a | ?table?.b * ?table?.c |",
@@ -406,18 +406,18 @@ impl DataFrame {
     ///     "| 1 | 6                     |",
     ///     "+---+-----------------------+",
     /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.clone().collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &res.collect().await?);
     ///
     /// // Aggregate expressions are also supported
-    /// let df = df.select(vec![count(col("a")), sum(col("b"))])?;
+    /// let res = df.select(vec![count(col("a")), sum(col("b"))])?;
     /// let expected = vec![
-    ///     "+----------------+----------------+",
-    ///     "| COUNT(a)       | SUM(b)         |",
-    ///     "+----------------+----------------+",
-    ///     "| 1              | 2              |",
-    ///     "+----------------+----------------+",
+    ///     "+----------+--------+",
+    ///     "| count(a) | sum(b) |",
+    ///     "+----------+--------+",
+    ///     "| 1        | 2      |",
+    ///     "+----------+--------+",
     /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &res.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
