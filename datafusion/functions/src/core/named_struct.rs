@@ -27,7 +27,9 @@ use std::sync::Arc;
 
 #[user_doc(
     doc_section(label = "Struct Functions"),
-    description = "Returns an Arrow struct using the specified name and input expressions pairs.",
+    description = "Returns an Arrow struct using the specified name and input expressions pairs.
+For information on comparing and ordering struct values (including `NULL` handling),
+see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).",
     syntax_example = "named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])",
     sql_example = r#"
 For example, this query converts two columns `a` and `b` to a single column with
