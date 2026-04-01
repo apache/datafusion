@@ -912,36 +912,25 @@ fn precision_add_for_sum_in_place(
     lhs: &mut Precision<ScalarValue>,
     rhs: &Precision<ScalarValue>,
 ) {
-    match rhs {
-        Precision::Exact(value) => {
-            let source_type = value.data_type();
-            let target_type = Precision::<ScalarValue>::sum_data_type(&source_type);
-            if source_type == target_type {
-                precision_add(lhs, rhs);
-            } else {
-                let rhs = value
-                    .cast_to(&target_type)
-                    .map(Precision::Exact)
-                    .unwrap_or(Precision::Absent);
-                precision_add(lhs, &rhs);
+    let (value, wrap_fn): (&ScalarValue, fn(ScalarValue) -> Precision<ScalarValue>) =
+        match rhs {
+            Precision::Exact(v) => (v, Precision::Exact),
+            Precision::Inexact(v) => (v, Precision::Inexact),
+            Precision::Absent => {
+                *lhs = Precision::Absent;
+                return;
             }
-        }
-        Precision::Inexact(value) => {
-            let source_type = value.data_type();
-            let target_type = Precision::<ScalarValue>::sum_data_type(&source_type);
-            if source_type == target_type {
-                precision_add(lhs, rhs);
-            } else {
-                let rhs = value
-                    .cast_to(&target_type)
-                    .map(Precision::Inexact)
-                    .unwrap_or(Precision::Absent);
-                precision_add(lhs, &rhs);
-            }
-        }
-        Precision::Absent => {
-            *lhs = Precision::Absent;
-        }
+        };
+    let source_type = value.data_type();
+    let target_type = Precision::<ScalarValue>::sum_data_type(&source_type);
+    if source_type == target_type {
+        precision_add(lhs, rhs);
+    } else {
+        let rhs = value
+            .cast_to(&target_type)
+            .map(wrap_fn)
+            .unwrap_or(Precision::Absent);
+        precision_add(lhs, &rhs);
     }
 }
 
