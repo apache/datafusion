@@ -29,10 +29,12 @@ use datafusion::common::config::CsvOptions;
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
-use datafusion::functions_aggregate::average::avg;
-use datafusion::functions_aggregate::min_max::max;
+use datafusion::functions_aggregate::average::{self, avg};
+use datafusion::functions_aggregate::min_max::{self, max};
 use datafusion::prelude::*;
 use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
+use datafusion_expr::expr::WindowFunction;
+use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use tempfile::{TempDir, tempdir};
 use tokio::fs::create_dir_all;
 
@@ -53,8 +55,10 @@ use tokio::fs::create_dir_all;
 ///
 /// * [write_out]: write out a DataFrame to a table, parquet file, csv file, or json file
 ///
-/// # Executing subqueries
+/// # Querying data
 ///
+/// * [aggregate_global_and_grouped]: global vs grouped aggregation (`select` vs `aggregate`)
+/// * [window_vs_grouped_aggregation]: GROUP BY vs window functions (`aggregate`, `window`, `select`)
 /// * [where_scalar_subquery]: execute a scalar subquery
 /// * [where_in_subquery]: execute a subquery with an IN clause
 /// * [where_exist_subquery]: execute a subquery with an EXISTS clause
@@ -69,6 +73,8 @@ pub async fn dataframe_example() -> Result<()> {
     write_out(&ctx).await?;
     register_cars_test_data("t1", &ctx).await?;
     register_cars_test_data("t2", &ctx).await?;
+    aggregate_global_and_grouped(&ctx).await?;
+    window_vs_grouped_aggregation(&ctx).await?;
     where_scalar_subquery(&ctx).await?;
     where_in_subquery(&ctx).await?;
     where_exist_subquery(&ctx).await?;
@@ -265,6 +271,94 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
             None,
         )
         .await?;
+
+    Ok(())
+}
+
+/// Global vs grouped aggregation using `select` and `aggregate`
+async fn aggregate_global_and_grouped(ctx: &SessionContext) -> Result<()> {
+    let df = ctx.table("t1").await?;
+
+    // SELECT AVG(speed) FROM t1
+    df.clone()
+        .aggregate(vec![], vec![avg(col("speed"))])?
+        .show()
+        .await?;
+
+    // SELECT AVG(speed) FROM t1 (same result via `select`)
+    df.clone().select(vec![avg(col("speed"))])?.show().await?;
+
+    // SELECT car, AVG(speed) FROM t1 GROUP BY car
+    df.aggregate(vec![col("car")], vec![avg(col("speed"))])?
+        .show()
+        .await?;
+
+    Ok(())
+}
+
+/// GROUP BY vs window functions using `aggregate`, `window`, and `select`
+async fn window_vs_grouped_aggregation(ctx: &SessionContext) -> Result<()> {
+    let df = ctx.table("t1").await?;
+
+    // SELECT car,
+    //        AVG(speed),
+    //        MAX(speed)
+    // FROM t1
+    // GROUP BY car
+    df.clone()
+        .aggregate(
+            vec![col("car")],
+            vec![
+                avg(col("speed")).alias("avg_speed"),
+                max(col("speed")).alias("max_speed"),
+            ],
+        )?
+        .show()
+        .await?;
+
+    // SELECT car, speed,
+    //        AVG(speed) OVER (PARTITION BY car),
+    //        MAX(speed) OVER (PARTITION BY car)
+    // FROM t1
+
+    // Window expressions:
+    let avg_win = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(average::avg_udaf()),
+        vec![col("speed")],
+    )))
+    .partition_by(vec![col("car")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let max_win = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(min_max::max_udaf()),
+        vec![col("speed")],
+    )))
+    .partition_by(vec![col("car")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    // Two equivalent ways to compute window expressions:
+    // Using `window` then selecting columns
+    let res = df
+        .clone()
+        .window(vec![
+            avg_win.clone().alias("avg_speed"),
+            max_win.clone().alias("max_speed"),
+        ])?
+        .select_columns(&["car", "speed", "avg_speed", "max_speed"])?;
+    res.show().await?;
+
+    // Using window expressions directly in `select`
+    let res = df.select(vec![
+        col("car"),
+        col("speed"),
+        avg_win.alias("avg_speed"),
+        max_win.alias("max_speed"),
+    ])?;
+    res.show().await?;
 
     Ok(())
 }

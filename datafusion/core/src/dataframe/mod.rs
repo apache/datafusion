@@ -395,6 +395,8 @@ impl DataFrame {
     /// let df = ctx
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
+    ///
+    /// // Expressions are evaluated per row
     /// let df = df.select(vec![col("a"), col("b") * col("c")])?;
     /// let expected = vec![
     ///     "+---+-----------------------+",
@@ -404,6 +406,17 @@ impl DataFrame {
     ///     "+---+-----------------------+",
     /// ];
     /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    ///
+    /// // Aggregate expressions are also supported
+    /// let df = df.select(vec![count(col("a")), sum(col("b"))])?;
+    /// let expected = vec![
+    ///     "+----------------+----------------+",
+    ///     "| COUNT(a)       | SUM(b)         |",
+    ///     "+----------------+----------------+",
+    ///     "| 1              | 2              |",
+    ///     "+----------------+----------------+",
+    /// ];
+    /// # aassert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -433,14 +446,20 @@ impl DataFrame {
         let aggr_exprs = find_aggregate_exprs(expressions.clone());
 
         // Check for non-aggregate expressions
-        let has_non_aggregate_expr = expressions
-            .clone()
-            .any(|expr| find_aggregate_exprs(std::iter::once(expr)).is_empty());
+        let has_non_aggregate_expr = expr_list.iter().any(|e| match e {
+            SelectExpr::Expression(expr) => {
+                find_aggregate_exprs(std::iter::once(expr)).is_empty()
+            }
+            SelectExpr::Wildcard(_) | SelectExpr::QualifiedWildcard(_, _) => true,
+        });
 
-        // Fallback to projection:
-        // - already aggregated
-        // - contains non-aggregate expressions
-        // - no aggregates
+        if has_non_aggregate_expr && !aggr_exprs.is_empty() {
+            return plan_err!(
+                "Column in SELECT must be in GROUP BY or an aggregate function"
+            );
+        }
+
+        // Fallback to projection
         if matches!(plan, LogicalPlan::Aggregate(_))
             || has_non_aggregate_expr
             || aggr_exprs.is_empty()
@@ -455,23 +474,32 @@ impl DataFrame {
             });
         }
 
-        // Assign aliases to aggregate expressions
+        // Unique name generator
+        let make_unique_name =
+            |base: String, used: &mut HashSet<String>, start: usize| {
+                let mut name = base.clone();
+                let mut counter = start;
+                while used.contains(&name) {
+                    name = format!("{base}_{counter}");
+                    counter += 1;
+                }
+                used.insert(name.clone());
+
+                name
+            };
+
+        // Aggregate stage
         let mut aggr_map: HashMap<Expr, Expr> = HashMap::new();
-        let mut used_names = HashSet::new();
+        let mut aggr_used_names = HashSet::new();
         let aggr_exprs_with_alias: Vec<Expr> = aggr_exprs
             .into_iter()
             .map(|expr| {
                 let base_name = expr.name_for_alias()?;
-                let mut name = base_name.clone();
-                let mut counter = 1;
-                while used_names.contains(&name) {
-                    name = format!("{base_name}_{counter}");
-                    counter += 1;
-                }
-                used_names.insert(name.clone());
+                let name = make_unique_name(base_name, &mut aggr_used_names, 1);
                 let aliased = expr.clone().alias(name.clone());
                 let col = Expr::Column(Column::from_name(name));
                 aggr_map.insert(expr, col);
+
                 Ok(aliased)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -481,7 +509,7 @@ impl DataFrame {
             .aggregate(Vec::<Expr>::new(), aggr_exprs_with_alias)?
             .build()?;
 
-        // Rewrite expressions to use aggregate outputs
+        // Rewrite expressions
         let rewrite_expr = |expr: Expr, aggr_map: &HashMap<Expr, Expr>| -> Result<Expr> {
             expr.transform(|e| {
                 Ok(match aggr_map.get(&e) {
@@ -492,13 +520,19 @@ impl DataFrame {
             .map(|t| t.data)
         };
 
+        // Projection stage
         let mut rewritten_exprs = Vec::with_capacity(expr_list.len());
+        let mut projection_used_names = HashSet::new();
         for select_expr in expr_list.into_iter() {
             match select_expr {
                 SelectExpr::Expression(expr) => {
-                    let rewritten = rewrite_expr(expr.clone(), &aggr_map)?;
-                    let alias = expr.name_for_alias()?;
-                    rewritten_exprs.push(SelectExpr::Expression(rewritten.alias(alias)));
+                    let base_alias = expr.name_for_alias()?;
+                    let rewritten = rewrite_expr(expr, &aggr_map)?;
+                    let name =
+                        make_unique_name(base_alias, &mut projection_used_names, 1);
+                    let final_expr = rewritten.alias(name);
+
+                    rewritten_exprs.push(SelectExpr::Expression(final_expr));
                 }
                 other => rewritten_exprs.push(other),
             }

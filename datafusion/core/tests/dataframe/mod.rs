@@ -32,7 +32,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{SortOptions, TimeUnit};
-use datafusion::{assert_batches_eq, dataframe};
+use datafusion::{assert_batches_eq, dataframe, functions_window};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
@@ -1049,26 +1049,28 @@ async fn test_aggregate_with_union() -> Result<()> {
 
     let df1 = df
         .clone()
-        // GROUP BY `c1`
-        .aggregate(vec![col("c1")], vec![min(col("c2"))])?
-        // SELECT `c1` , min(c2) as `result`
-        .select(vec![col("c1"), min(col("c2")).alias("result")])?;
+        // GROUP BY c1, compute min(c2) as result
+        .aggregate(vec![col("c1")], vec![min(col("c2")).alias("result")])?
+        // SELECT c1, result
+        .select(vec![col("c1"), col("result")])?;
+
     let df2 = df
         .clone()
-        // GROUP BY `c1`
-        .aggregate(vec![col("c1")], vec![max(col("c3"))])?
-        // SELECT `c1` , max(c3) as `result`
-        .select(vec![col("c1"), max(col("c3")).alias("result")])?;
+        // GROUP BY c1, compute max(c3) as result
+        .aggregate(vec![col("c1")], vec![max(col("c3")).alias("result")])?
+        // SELECT c1, result
+        .select(vec![col("c1"), col("result")])?;
 
     let df_union = df1.union(df2)?;
+
     let df = df_union
-        // GROUP BY `c1`
+        // GROUP BY c1, sum(result) as sum_result
         .aggregate(
             vec![col("c1")],
             vec![sum(col("result")).alias("sum_result")],
         )?
-        // SELECT `c1`, sum(result) as `sum_result`
-        .select(vec![(col("c1")), col("sum_result")])?;
+        // SELECT c1, sum_result
+        .select(vec![col("c1"), col("sum_result")])?;
 
     let df_results = df.collect().await?;
 
@@ -1098,28 +1100,28 @@ async fn test_aggregate_subexpr() -> Result<()> {
 
     let df = df
         // GROUP BY `c2 + 1`
-        .aggregate(vec![group_expr.clone()], vec![aggr_expr.clone()])?
+        .aggregate(
+            vec![group_expr.clone().alias("g")],
+            vec![aggr_expr.clone().alias("a")],
+        )?
         // SELECT `c2 + 1` as c2 + 10, sum(c3 + 2) + 20
         // SELECT expressions contain aggr_expr and group_expr as subexpressions
-        .select(vec![
-            group_expr.alias("c2") + lit(10),
-            (aggr_expr + lit(20)).alias("sum"),
-        ])?;
+        .select(vec![col("g") + lit(10), (col("a") + lit(20)).alias("sum")])?;
 
     let df_results = df.collect().await?;
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
         @r"
-    +----------------+------+
-    | c2 + Int32(10) | sum  |
-    +----------------+------+
-    | 12             | 431  |
-    | 13             | 248  |
-    | 14             | 453  |
-    | 15             | 95   |
-    | 16             | -146 |
-    +----------------+------+
+    +---------------+------+
+    | g + Int32(10) | sum  |
+    +---------------+------+
+    | 12            | 431  |
+    | 13            | 248  |
+    | 14            | 453  |
+    | 15            | 95   |
+    | 16            | -146 |
+    +---------------+------+
     "
     );
 
@@ -6859,10 +6861,12 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_dataframe_api_aggregate_fn_in_select() -> Result<()> {
+async fn test_dataframe_api_select_semantics() -> Result<()> {
     let df = test_table().await?;
 
-    // Multiple aggregates
+    // ----------------------------------------------------------------------
+    // Aggregate functions in SELECT (no GROUP BY)
+    // ----------------------------------------------------------------------
     let res = df.clone().select(vec![
         count(col("c9")).alias("count_c9"),
         count(cast(col("c9"), DataType::Utf8View)).alias("count_c9_str"),
@@ -6884,16 +6888,18 @@ async fn test_dataframe_api_aggregate_fn_in_select() -> Result<()> {
         &res.collect().await?
     );
 
-    // Test duplicate aggregate aliases
+    // ----------------------------------------------------------------------
+    // Alias deduplication
+    // ----------------------------------------------------------------------
     let res = df.clone().select(vec![
         count(col("c9")).alias("count_c9"),
-        count(col("c9")).alias("count_c9_2"),
+        count(col("c9")).alias("count_c9"),
     ])?;
 
     assert_batches_eq!(
         &[
             "+----------+------------+",
-            "| count_c9 | count_c9_2 |",
+            "| count_c9 | count_c9_1 |",
             "+----------+------------+",
             "| 100      | 100        |",
             "+----------+------------+",
@@ -6901,7 +6907,11 @@ async fn test_dataframe_api_aggregate_fn_in_select() -> Result<()> {
         &res.collect().await?
     );
 
-    // Wildcard
+    // ----------------------------------------------------------------------
+    // Wildcard handling
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT *, 42 FROM t
     let res = df
         .clone()
         .select(vec![
@@ -6911,8 +6921,9 @@ async fn test_dataframe_api_aggregate_fn_in_select() -> Result<()> {
         .limit(0, None)?;
 
     let batches = res.collect().await?;
-    assert_eq!(batches[0].num_rows(), 100);
-    assert_eq!(batches[0].num_columns(), 14);
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 14));
 
     let res = df.clone().select(vec![
         SelectExpr::QualifiedWildcard(
@@ -6923,8 +6934,370 @@ async fn test_dataframe_api_aggregate_fn_in_select() -> Result<()> {
     ])?;
 
     let batches = res.collect().await?;
-    assert_eq!(batches[0].num_rows(), 100);
-    assert_eq!(batches[0].num_columns(), 14);
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 14));
+
+    // ----------------------------------------------------------------------
+    // Window functions
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT
+    //     c1,
+    //     COUNT(c9) OVER (PARTITION BY c1) AS cnt,
+    //     SUM(c9) OVER (PARTITION BY c1) AS sum_c9,
+    //     AVG(c9) OVER (PARTITION BY c1) AS avg_c9
+    // FROM t
+    // ORDER BY c1
+    let count_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::count::count_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let sum_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::sum::sum_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let avg_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::average::avg_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let res = df
+        .clone()
+        .select(vec![
+            col("c1"),
+            count_window_function.alias("cnt"),
+            sum_window_function.alias("sum_c9"),
+            avg_window_function.alias("avg_c9"),
+        ])?
+        .sort(vec![col("c1").sort(true, true)])?;
+
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 4));
+    let batch = &batches[0];
+    assert_batches_eq!(
+        &[
+            "+----+-----+-------------+--------------------+",
+            "| c1 | cnt | sum_c9      | avg_c9             |",
+            "+----+-----+-------------+--------------------+",
+            "| a  | 21  | 42619217323 | 2029486539.1904762 |",
+            "| b  | 19  | 42365566310 | 2229766647.894737  |",
+            "| c  | 21  | 46381998762 | 2208666607.714286  |",
+            "| d  | 18  | 39910269981 | 2217237221.1666665 |",
+            "| e  | 21  | 50812717684 | 2419653223.047619  |",
+            "+----+-----+-------------+--------------------+",
+        ],
+        &vec![
+            batch.slice(0, 1),  // a
+            batch.slice(21, 1), // b
+            batch.slice(40, 1), // c
+            batch.slice(61, 1), // d
+            batch.slice(79, 1)  // e
+        ]
+    );
+
+    // Window with ORDER BY
+    // SQL:
+    // SELECT
+    //     c1,
+    //     ROW_NUMBER() OVER (PARTITION BY c1 ORDER BY c9) AS rn
+    // FROM t
+    // ORDER BY c1
+    let row_number_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(
+            functions_window::row_number::row_number_udwf(),
+        ),
+        vec![],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![col("c9").sort(true, true)])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let res = df
+        .clone()
+        .select(vec![col("c1"), row_number_window_function.alias("rn")])?
+        .sort(vec![col("c1").sort(true, true)])?;
+
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 2));
+    assert_batches_eq!(
+        &[
+            "+----+----+",
+            "| c1 | rn |",
+            "+----+----+",
+            "| a  | 1  |",
+            "| a  | 2  |",
+            "| a  | 3  |",
+            "| a  | 4  |",
+            "| a  | 5  |",
+            "| a  | 6  |",
+            "| a  | 7  |",
+            "| a  | 8  |",
+            "| a  | 9  |",
+            "| a  | 10 |",
+            "| a  | 11 |",
+            "| a  | 12 |",
+            "| a  | 13 |",
+            "| a  | 14 |",
+            "| a  | 15 |",
+            "| a  | 16 |",
+            "| a  | 17 |",
+            "| a  | 18 |",
+            "| a  | 19 |",
+            "| a  | 20 |",
+            "| a  | 21 |",
+            "| b  | 1  |",
+            "| b  | 2  |",
+            "| b  | 3  |",
+            "| b  | 4  |",
+            "| b  | 5  |",
+            "| b  | 6  |",
+            "| b  | 7  |",
+            "| b  | 8  |",
+            "| b  | 9  |",
+            "| b  | 10 |",
+            "| b  | 11 |",
+            "| b  | 12 |",
+            "| b  | 13 |",
+            "| b  | 14 |",
+            "| b  | 15 |",
+            "| b  | 16 |",
+            "| b  | 17 |",
+            "| b  | 18 |",
+            "| b  | 19 |",
+            "| c  | 1  |",
+            "| c  | 2  |",
+            "| c  | 3  |",
+            "| c  | 4  |",
+            "| c  | 5  |",
+            "| c  | 6  |",
+            "| c  | 7  |",
+            "| c  | 8  |",
+            "| c  | 9  |",
+            "| c  | 10 |",
+            "| c  | 11 |",
+            "| c  | 12 |",
+            "| c  | 13 |",
+            "| c  | 14 |",
+            "| c  | 15 |",
+            "| c  | 16 |",
+            "| c  | 17 |",
+            "| c  | 18 |",
+            "| c  | 19 |",
+            "| c  | 20 |",
+            "| c  | 21 |",
+            "| d  | 1  |",
+            "| d  | 2  |",
+            "| d  | 3  |",
+            "| d  | 4  |",
+            "| d  | 5  |",
+            "| d  | 6  |",
+            "| d  | 7  |",
+            "| d  | 8  |",
+            "| d  | 9  |",
+            "| d  | 10 |",
+            "| d  | 11 |",
+            "| d  | 12 |",
+            "| d  | 13 |",
+            "| d  | 14 |",
+            "| d  | 15 |",
+            "| d  | 16 |",
+            "| d  | 17 |",
+            "| d  | 18 |",
+            "| e  | 1  |",
+            "| e  | 2  |",
+            "| e  | 3  |",
+            "| e  | 4  |",
+            "| e  | 5  |",
+            "| e  | 6  |",
+            "| e  | 7  |",
+            "| e  | 8  |",
+            "| e  | 9  |",
+            "| e  | 10 |",
+            "| e  | 11 |",
+            "| e  | 12 |",
+            "| e  | 13 |",
+            "| e  | 14 |",
+            "| e  | 15 |",
+            "| e  | 16 |",
+            "| e  | 17 |",
+            "| e  | 18 |",
+            "| e  | 19 |",
+            "| e  | 20 |",
+            "| e  | 21 |",
+            "+----+----+",
+        ],
+        &batches
+    );
+
+    // Window inside expression
+    // SQL:
+    // SELECT
+    //     c1,
+    //     COUNT(c9) OVER (PARTITION BY c1) + 1 AS cnt_plus
+    // FROM t
+    // ORDER BY c1
+    let count_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::count::count_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let cnt_plus_expr = count_window_function + lit(1);
+
+    let res = df
+        .clone()
+        .select(vec![col("c1"), cnt_plus_expr.alias("cnt_plus")])?
+        .sort(vec![col("c1").sort(true, true)])?;
+
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 2));
+    let batch = &batches[0];
+    assert_batches_eq!(
+        &[
+            "+----+----------+",
+            "| c1 | cnt_plus |",
+            "+----+----------+",
+            "| a  | 22       |",
+            "| b  | 20       |",
+            "| c  | 22       |",
+            "| d  | 19       |",
+            "| e  | 22       |",
+            "+----+----------+",
+        ],
+        &vec![
+            batch.slice(0, 1),  // a
+            batch.slice(21, 1), // b
+            batch.slice(40, 1), // c
+            batch.slice(61, 1), // d
+            batch.slice(79, 1), // e
+        ]
+    );
+
+    // Mixed aggregate + window
+    // SQL:
+    // SELECT
+    //     c1,
+    //     SUM(c9) OVER () AS total_sum,
+    //     COUNT(c9) OVER (PARTITION BY c1) AS cnt
+    // FROM t
+    let sum_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::sum::sum_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let count_window_function = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(
+            datafusion_functions_aggregate::count::count_udaf(),
+        ),
+        vec![col("c9")],
+    )))
+    .partition_by(vec![col("c1")])
+    .order_by(vec![])
+    .window_frame(WindowFrame::new(None))
+    .build()?;
+
+    let res = df
+        .clone()
+        .select(vec![
+            col("c1"),
+            sum_window_function.alias("total_sum"),
+            count_window_function.alias("cnt"),
+        ])?
+        .sort(vec![col("c1").sort(true, true)])?;
+
+    let batches = res.collect().await?;
+    assert!(!batches.is_empty());
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
+    assert!(batches.iter().all(|b| b.num_columns() == 3));
+    let batch = &batches[0];
+
+    assert_batches_eq!(
+        &[
+            "+----+--------------+-----+",
+            "| c1 | total_sum    | cnt |",
+            "+----+--------------+-----+",
+            "| a  | 222089770060 | 21  |",
+            "+----+--------------+-----+"
+        ],
+        &vec![batch.slice(0, 1)]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_api_select_semantics_err() -> Result<()> {
+    let df = test_table().await?;
+
+    // Wildcard + aggregate without GROUP BY
+    // Equivalent SQL: SELECT *, COUNT(c9) FROM t
+    // Should fail: non-aggregate columns require GROUP BY
+    let res = df.clone().select(vec![
+        SelectExpr::Wildcard(WildcardOptions::default()),
+        count(col("c9")).alias("cnt").into(),
+    ]);
+    let err = res.expect_err("query should fail");
+    let msg = err.to_string();
+    assert!(msg.contains("must be in GROUP BY"), "actual error: {msg}");
+
+    // Aggregate with subexpressions in SELECT without proper GROUP BY
+    // Equivalent SQL: SELECT c2 + 10, SUM(c3 + 2) + 20 FROM t GROUP BY c2 + 1
+    // Should fail: subexpressions not allowed outside GROUP BY
+    // Hint: see `test_aggregate_subexpr` for a working example
+    let group_expr = col("c2") + lit(1);
+    let aggr_expr = sum(col("c3") + lit(2));
+    let res = df
+        .clone()
+        .aggregate(vec![group_expr.clone()], vec![aggr_expr.clone()])?
+        .select(vec![
+            group_expr.alias("c2") + lit(10),
+            (aggr_expr + lit(20)).alias("sum"),
+        ]);
+    let err = res.expect_err("query should fail for subexpr outside GROUP BY");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("must be in GROUP BY"),
+        "unexpected error for subexpr + aggregate: {msg}"
+    );
 
     Ok(())
 }
