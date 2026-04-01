@@ -56,6 +56,7 @@ use crate::physical_plan::{
     WindowExpr, displayable, windows,
 };
 use crate::schema_equivalence::schema_satisfied_by;
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 
 use arrow::array::{RecordBatch, builder::StringBuilder};
 use arrow::compute::SortOptions;
@@ -1102,17 +1103,11 @@ impl DefaultPhysicalPlanner {
                             physical_input,
                         )
                         .with_batch_size(session_state.config().batch_size());
-                        let builder = if session_state
-                            .config_options()
-                            .optimizer
-                            .enable_expression_analyzer
-                        {
-                            builder.with_expression_analyzer_registry(Arc::clone(
-                                session_state.expression_analyzer_registry(),
-                            ))
-                        } else {
-                            builder
-                        };
+                        let builder =
+                            match Self::expression_analyzer_registry(session_state) {
+                                Some(r) => builder.with_expression_analyzer_registry(r),
+                                None => builder,
+                            };
                         builder.build()?
                     }
                     PlanAsyncExpr::Async(
@@ -1133,17 +1128,11 @@ impl DefaultPhysicalPlanner {
                             (0..input.schema().fields().len()).collect::<Vec<_>>(),
                         ))?
                         .with_batch_size(session_state.config().batch_size());
-                        let builder = if session_state
-                            .config_options()
-                            .optimizer
-                            .enable_expression_analyzer
-                        {
-                            builder.with_expression_analyzer_registry(Arc::clone(
-                                session_state.expression_analyzer_registry(),
-                            ))
-                        } else {
-                            builder
-                        };
+                        let builder =
+                            match Self::expression_analyzer_registry(session_state) {
+                                Some(r) => builder.with_expression_analyzer_registry(r),
+                                None => builder,
+                            };
                         builder.build()?
                     }
                     _ => {
@@ -2861,6 +2850,17 @@ impl DefaultPhysicalPlanner {
         Ok(mem_exec)
     }
 
+    /// Returns the expression analyzer registry if the config option is enabled.
+    fn expression_analyzer_registry(
+        session_state: &SessionState,
+    ) -> Option<Arc<ExpressionAnalyzerRegistry>> {
+        session_state
+            .config_options()
+            .optimizer
+            .enable_expression_analyzer
+            .then(|| Arc::clone(session_state.expression_analyzer_registry()))
+    }
+
     fn create_project_physical_exec(
         &self,
         session_state: &SessionState,
@@ -2921,14 +2921,8 @@ impl DefaultPhysicalPlanner {
                     .map(|(expr, alias)| ProjectionExpr { expr, alias })
                     .collect();
                 let mut proj_exec = ProjectionExec::try_new(proj_exprs, input_exec)?;
-                if session_state
-                    .config_options()
-                    .optimizer
-                    .enable_expression_analyzer
-                {
-                    proj_exec = proj_exec.with_expression_analyzer_registry(Arc::clone(
-                        session_state.expression_analyzer_registry(),
-                    ));
+                if let Some(r) = Self::expression_analyzer_registry(session_state) {
+                    proj_exec = proj_exec.with_expression_analyzer_registry(r);
                 }
                 Ok(Arc::new(proj_exec))
             }

@@ -190,12 +190,12 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
+    /// Registry for expression-level statistics analyzers (NDV, selectivity, etc.)
+    expression_analyzer_registry: Arc<ExpressionAnalyzerRegistry>,
     /// [FunctionFactory] to support pluggable user defined function handler.
     ///
     /// It will be invoked on `CREATE FUNCTION` statements.
     /// thus, changing dialect o PostgreSql is required
-    /// Registry for expression-level statistics analyzers (NDV, selectivity, etc.)
-    expression_analyzer_registry: Arc<ExpressionAnalyzerRegistry>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
     /// Optional statistics registry for pluggable statistics providers.

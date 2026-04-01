@@ -40,7 +40,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use datafusion_physical_plan::expression_analyzer::*;
+//! use datafusion_physical_expr::expression_analyzer::*;
 //!
 //! // Create registry with default analyzer
 //! let mut registry = ExpressionAnalyzerRegistry::new();

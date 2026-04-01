@@ -72,18 +72,34 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
     ) -> AnalysisResult<f64> {
         // Binary expressions: AND, OR, comparisons
         if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            let left_sel =
-                self.estimate_selectivity_recursive(binary.left(), input_stats, registry);
-            let right_sel = self.estimate_selectivity_recursive(
-                binary.right(),
-                input_stats,
-                registry,
-            );
-
             let sel = match binary.op() {
-                // Logical operators
-                Operator::And => left_sel * right_sel,
-                Operator::Or => left_sel + right_sel - (left_sel * right_sel),
+                // Logical operators: need child selectivities
+                Operator::And => {
+                    let left_sel = self.estimate_selectivity_recursive(
+                        binary.left(),
+                        input_stats,
+                        registry,
+                    );
+                    let right_sel = self.estimate_selectivity_recursive(
+                        binary.right(),
+                        input_stats,
+                        registry,
+                    );
+                    left_sel * right_sel
+                }
+                Operator::Or => {
+                    let left_sel = self.estimate_selectivity_recursive(
+                        binary.left(),
+                        input_stats,
+                        registry,
+                    );
+                    let right_sel = self.estimate_selectivity_recursive(
+                        binary.right(),
+                        input_stats,
+                        registry,
+                    );
+                    left_sel + right_sel - (left_sel * right_sel)
+                }
 
                 // Equality: selectivity = 1/NDV
                 Operator::Eq => {
