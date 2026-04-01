@@ -2184,6 +2184,7 @@ impl Expr {
     pub fn spans(&self) -> Option<&Spans> {
         match self {
             Expr::Column(col) => Some(&col.spans),
+            Expr::Not(inner) | Expr::Negative(inner) => inner.spans(),
             _ => None,
         }
     }

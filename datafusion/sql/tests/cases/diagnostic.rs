@@ -370,6 +370,56 @@ fn test_unary_op_plus_with_non_column() -> Result<()> {
 }
 
 #[test]
+fn test_unary_op_minus_with_column() -> Result<()> {
+    let query = "SELECT -/*whole*/first_name/*whole*/ FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"- cannot be used with Utf8");
+    assert_eq!(diag.span, Some(spans["whole"]));
+    assert_snapshot!(diag.notes[0].message, @"- can only be used with signed numeric types, intervals, and timestamps");
+    assert_snapshot!(diag.helps[0].message, @"perhaps you need to cast person.first_name");
+    Ok(())
+}
+
+#[test]
+fn test_unary_op_minus_with_non_column() -> Result<()> {
+    let query = "SELECT -'a'";
+    let diag = do_query(query);
+    assert_eq!(diag.message, "- cannot be used with Utf8");
+    assert_snapshot!(diag.notes[0].message, @"- can only be used with signed numeric types, intervals, and timestamps");
+    assert_eq!(diag.notes[0].span, None);
+    assert_snapshot!(diag.helps[0].message, @r#"perhaps you need to cast Utf8("a")"#);
+    assert_eq!(diag.helps[0].span, None);
+    assert_eq!(diag.span, None);
+    Ok(())
+}
+
+#[test]
+fn test_unary_op_not_with_column() -> Result<()> {
+    let query = "SELECT NOT /*whole*/first_name/*whole*/ FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"NOT cannot be used with Utf8");
+    assert_eq!(diag.span, Some(spans["whole"]));
+    assert_snapshot!(diag.notes[0].message, @"NOT can only be used with boolean expressions");
+    assert_snapshot!(diag.helps[0].message, @"perhaps you need to cast person.first_name");
+    Ok(())
+}
+
+#[test]
+fn test_unary_op_not_with_non_column() -> Result<()> {
+    let query = "SELECT NOT 'a'";
+    let diag = do_query(query);
+    assert_eq!(diag.message, "NOT cannot be used with Utf8");
+    assert_snapshot!(diag.notes[0].message, @"NOT can only be used with boolean expressions");
+    assert_eq!(diag.notes[0].span, None);
+    assert_snapshot!(diag.helps[0].message, @r#"perhaps you need to cast Utf8("a")"#);
+    assert_eq!(diag.helps[0].span, None);
+    assert_eq!(diag.span, None);
+    Ok(())
+}
+
+#[test]
 fn test_syntax_error() -> Result<()> {
     // create a table with a column of type varchar
     let query = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 /*int*/int/*int*/) LOCATION 'foo.csv'";
