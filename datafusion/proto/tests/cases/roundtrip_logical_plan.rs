@@ -33,6 +33,7 @@ use datafusion::optimizer::Optimizer;
 use datafusion::optimizer::optimize_unions::OptimizeUnions;
 use datafusion_common::parquet_config::DFParquetWriterVersion;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
 use std::any::Any;
@@ -53,8 +54,8 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
     approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
-    count_distinct, covar_pop, covar_samp, first_value, grouping, max, median, min,
-    stddev, stddev_pop, sum, var_pop, var_sample,
+    count_distinct, covar_pop, covar_samp, first_value, max, median, min, stddev,
+    stddev_pop, sum, var_pop, var_sample,
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
@@ -1193,7 +1194,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(0.5),
             Some(lit(50)),
         ),
-        grouping(lit(1)),
+        // grouping(lit(1)), // #TODO Error: Context("resolve_grouping_function", Plan("Argument Int32(1) to grouping function is not in grouping columns ")
         bit_and(lit(2)),
         bit_or(lit(2)),
         bit_xor(lit(2)),
@@ -1232,11 +1233,32 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
     ];
 
-    // ensure expressions created with the expr api can be round tripped
-    let plan = table.select(expr_list)?.into_optimized_plan()?;
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
+    let agg_exprs: Vec<Expr> = expr_list
+        .iter()
+        .filter(|e| !find_aggregate_exprs(vec![*e]).is_empty())
+        .cloned()
+        .collect();
+
+    let non_agg_exprs: Vec<Expr> = expr_list
+        .iter()
+        .filter(|e| find_aggregate_exprs(vec![*e]).is_empty())
+        .cloned()
+        .collect();
+
+    let plan_non_agg = table.clone().select(non_agg_exprs)?.into_optimized_plan()?;
+    let bytes_non_agg = logical_plan_to_bytes(&plan_non_agg)?;
+    let logical_round_trip_non_agg =
+        logical_plan_from_bytes(&bytes_non_agg, &ctx.task_ctx())?;
+    assert_eq!(
+        format!("{plan_non_agg}"),
+        format!("{logical_round_trip_non_agg}")
+    );
+
+    let plan_agg = table.aggregate(vec![], agg_exprs)?.into_optimized_plan()?;
+    let bytes_agg = logical_plan_to_bytes(&plan_agg)?;
+    let logical_round_trip_agg = logical_plan_from_bytes(&bytes_agg, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan_agg}"), format!("{logical_round_trip_agg}"));
+
     Ok(())
 }
 

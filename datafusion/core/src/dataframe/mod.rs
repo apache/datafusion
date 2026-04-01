@@ -389,6 +389,7 @@ impl DataFrame {
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
     /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # use datafusion_functions_aggregate::expr_fn::{count, sum};
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
@@ -416,7 +417,7 @@ impl DataFrame {
     ///     "| 1              | 2              |",
     ///     "+----------------+----------------+",
     /// ];
-    /// # aassert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
