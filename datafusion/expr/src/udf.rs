@@ -360,7 +360,7 @@ impl ScalarUDF {
 
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
-        (self.inner().as_ref() as &dyn Any).downcast_ref::<AsyncScalarUDF>()
+        self.inner().downcast_ref::<AsyncScalarUDF>()
     }
 
     /// Returns placement information for this function.
