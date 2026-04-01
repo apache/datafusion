@@ -365,6 +365,16 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                         alias_name: alias_name.clone(),
                     });
 
+                // Rewrite already-collected Filter node predicates to use the
+                // table alias so they can be properly deduplicated against the
+                // rewritten TableScan filters below.
+                if let Some(ref mut rewriter) = filter_alias_rewriter {
+                    filters = filters
+                        .into_iter()
+                        .map(|expr| expr.rewrite(rewriter).data())
+                        .collect::<Result<IndexSet<_>, _>>()?;
+                }
+
                 // rewrite filters to use table alias if present
                 let table_scan_filters = table_scan
                     .filters
