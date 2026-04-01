@@ -657,6 +657,55 @@ impl Dialect for BigQueryDialect {
         true
     }
 
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        false
+    }
+
+    fn float64_ast_dtype(&self) -> ast::DataType {
+        ast::DataType::Float64
+    }
+
+    fn utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::String(None)
+    }
+
+    fn large_utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::String(None)
+    }
+
+    fn int64_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Int64
+    }
+
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        _tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        ast::DataType::Timestamp(None, TimezoneInfo::None)
+    }
+
+    fn date_field_extract_style(&self) -> DateFieldExtractStyle {
+        DateFieldExtractStyle::Extract
+    }
+
+    fn interval_style(&self) -> IntervalStyle {
+        IntervalStyle::SQLStandard
+    }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        if func_name == "date_part" {
+            return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        Ok(None)
+    }
+
     fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, unit: TimeUnit) -> String {
         // https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/data-types#timestamp_type
         let format = match unit {
