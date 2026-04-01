@@ -1931,10 +1931,12 @@ fn project_with_validation(
     expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
 ) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
+    let mut has_wildcard = false;
     for (e, validate) in expr {
         let e = e.into();
         match e {
             SelectExpr::Wildcard(opt) => {
+                has_wildcard = true;
                 let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
 
                 // If there is a REPLACE statement, replace that column with the given
@@ -1955,6 +1957,7 @@ fn project_with_validation(
                 }
             }
             SelectExpr::QualifiedWildcard(table_ref, opt) => {
+                has_wildcard = true;
                 let expanded =
                     expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
 
@@ -1983,6 +1986,12 @@ fn project_with_validation(
                 }
             }
         }
+    }
+    if has_wildcard && projected_expr.is_empty() && !plan.schema().fields().is_empty() {
+        return plan_err!(
+            "SELECT list is empty after resolving * expressions, \
+             the wildcard expanded to zero columns"
+        );
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
