@@ -2306,6 +2306,50 @@ mod tests {
     }
 
     #[test]
+    fn test_with_fetch_caps_ndv_with_skip() {
+        // 1000 rows, NDV=500, OFFSET 5 LIMIT 10
+        // with_fetch computes num_rows = min(1000 - 5, 10) = 10
+        // NDV should be capped at 10
+        let stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Inexact(500),
+                ..Default::default()
+            }],
+        };
+
+        let result = stats.with_fetch(Some(10), 5, 1).unwrap();
+        assert_eq!(result.num_rows, Precision::Exact(10));
+        assert_eq!(
+            result.column_statistics[0].distinct_count,
+            Precision::Inexact(10)
+        );
+    }
+
+    #[test]
+    fn test_with_fetch_caps_ndv_with_large_skip() {
+        // 1000 rows, NDV=500, OFFSET 995 LIMIT 100
+        // with_fetch computes num_rows = min(1000 - 995, 100) = 5
+        // NDV should be capped at 5
+        let stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Inexact(500),
+                ..Default::default()
+            }],
+        };
+
+        let result = stats.with_fetch(Some(100), 995, 1).unwrap();
+        assert_eq!(result.num_rows, Precision::Exact(5));
+        assert_eq!(
+            result.column_statistics[0].distinct_count,
+            Precision::Inexact(5)
+        );
+    }
+
+    #[test]
     fn test_with_fetch_ndv_below_row_count_unchanged() {
         // NDV=5 and LIMIT 10: NDV should stay at 5
         let stats = Statistics {
