@@ -852,6 +852,16 @@ fn select_neg_filter() {
 }
 
 #[test]
+fn select_not_bool_filter() {
+    let sql = "SELECT order_id FROM orders WHERE NOT delivered";
+    let plan = logical_plan(sql).unwrap();
+    let expected = "Projection: orders.order_id\
+        \n  Filter: NOT orders.delivered\
+        \n    TableScan: orders";
+    assert_eq!(expected, format!("{plan}"));
+}
+
+#[test]
 fn select_compound_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE state = 'CO' AND age >= 21 AND age <= 65";
