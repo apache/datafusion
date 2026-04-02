@@ -486,8 +486,8 @@ async fn min_max_dictionary_uses_planned_dictionary_path() -> Result<()> {
 
     let results = df.collect().await?;
 
-    assert_eq!(results[0].schema().field(0).data_type(), &dict_type);
-    assert_eq!(results[0].schema().field(1).data_type(), &dict_type);
+    assert_eq!(results[0].schema().field(0).data_type(), &DataType::Utf8);
+    assert_eq!(results[0].schema().field(1).data_type(), &DataType::Utf8);
 
     assert_snapshot!(
         batches_to_string(&results),

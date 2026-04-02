@@ -53,6 +53,7 @@ use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
 use half::f16;
 use std::mem::size_of_val;
+use std::ops::Deref;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
@@ -62,12 +63,17 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
             input_types.len()
         );
     }
-    // Preserve dictionary inputs so planned MIN/MAX execution uses the same
-    // dictionary-aware accumulator/state path as direct accumulator tests.
-    //
-    // TODO add checker for datatype which min and max supported.
-    // For example, the `Struct` and `Map` type are not supported in the MIN and MAX function.
-    Ok(input_types.to_vec())
+    // min and max support the dictionary data type
+    // unpack the dictionary to get the value
+    match &input_types[0] {
+        DataType::Dictionary(_, dict_value_type) => {
+            // TODO add checker, if the value type is complex data type
+            Ok(vec![dict_value_type.deref().clone()])
+        }
+        // TODO add checker for datatype which min and max supported.
+        // For example, the `Struct` and `Map` type are not supported in the MIN and MAX function.
+        _ => Ok(input_types.to_vec()),
+    }
 }
 
 #[user_doc(
@@ -1209,23 +1215,31 @@ mod tests {
 
     #[test]
     fn test_min_max_coerce_types() {
-        // the coerced types is same with input types
         let funs: Vec<Box<dyn AggregateUDFImpl>> =
             vec![Box::new(Min::new()), Box::new(Max::new())];
-        let input_types = vec![
-            vec![DataType::Int32],
-            vec![DataType::Decimal128(10, 2)],
-            vec![DataType::Decimal256(1, 1)],
-            vec![DataType::Utf8],
-            vec![DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Utf8),
-            )],
+        let cases = vec![
+            (vec![DataType::Int32], vec![DataType::Int32]),
+            (
+                vec![DataType::Decimal128(10, 2)],
+                vec![DataType::Decimal128(10, 2)],
+            ),
+            (
+                vec![DataType::Decimal256(1, 1)],
+                vec![DataType::Decimal256(1, 1)],
+            ),
+            (vec![DataType::Utf8], vec![DataType::Utf8]),
+            (
+                vec![DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Utf8),
+                )],
+                vec![DataType::Utf8],
+            ),
         ];
         for fun in funs {
-            for input_type in &input_types {
+            for (input_type, expected_type) in &cases {
                 let result = fun.coerce_types(input_type);
-                assert_eq!(*input_type, result.unwrap());
+                assert_eq!(*expected_type, result.unwrap());
             }
         }
     }
@@ -1235,18 +1249,12 @@ mod tests {
         let data_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let result = get_min_max_result_type(&[data_type])?;
-        assert_eq!(
-            result,
-            vec![DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Utf8),
-            )]
-        );
+        assert_eq!(result, vec![DataType::Utf8]);
         Ok(())
     }
 
     #[test]
-    fn test_min_max_dictionary() -> Result<()> {
+    fn test_min_max_dictionary_after_coercion() -> Result<()> {
         let values = StringArray::from(vec!["b", "c", "a", "🦀", "d"]);
         let keys = Int32Array::from(vec![Some(0), Some(1), Some(2), None, Some(4)]);
         let dict_array =
@@ -1258,18 +1266,12 @@ mod tests {
         let mut min_acc = MinAccumulator::try_new(&rt_type)?;
         min_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
         let min_result = min_acc.evaluate()?;
-        assert_eq!(
-            min_result,
-            dict_scalar(DataType::Int32, ScalarValue::Utf8(Some("a".to_string())))
-        );
+        assert_eq!(min_result, ScalarValue::Utf8(Some("a".to_string())));
 
         let mut max_acc = MaxAccumulator::try_new(&rt_type)?;
         max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
         let max_result = max_acc.evaluate()?;
-        assert_eq!(
-            max_result,
-            dict_scalar(DataType::Int32, ScalarValue::Utf8(Some("d".to_string())))
-        );
+        assert_eq!(max_result, ScalarValue::Utf8(Some("d".to_string())));
         Ok(())
     }
 
