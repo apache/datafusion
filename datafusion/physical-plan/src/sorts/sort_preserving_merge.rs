@@ -491,6 +491,7 @@ mod tests {
             .with_session_config(config);
         Ok(Arc::new(task_ctx))
     }
+
     // The number in the function is highly related to the memory limit we are testing,
     // any change of the constant should be aware of
     fn generate_spm_for_round_robin_tie_breaker(
@@ -1538,5 +1539,60 @@ mod tests {
             Ok(Err(_)) => exec_err!("SortPreservingMerge task panicked or was cancelled"),
             Err(_) => exec_err!("SortPreservingMerge caused a deadlock"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_sort_merge_stops_after_error_with_buffered_rows() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let sort: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "i", 0,
+        ))
+            as Arc<dyn PhysicalExpr>)]
+        .into();
+
+        let mut stream0 = RecordBatchReceiverStream::builder(Arc::clone(&schema), 2);
+        let tx0 = stream0.tx();
+        let schema0 = Arc::clone(&schema);
+        stream0.spawn(async move {
+            let batch =
+                RecordBatch::try_new(schema0, vec![Arc::new(Int32Array::from(vec![1]))])?;
+            tx0.send(Ok(batch)).await.unwrap();
+            tx0.send(exec_err!("stream failure")).await.unwrap();
+            Ok(())
+        });
+
+        let mut stream1 = RecordBatchReceiverStream::builder(Arc::clone(&schema), 1);
+        let tx1 = stream1.tx();
+        let schema1 = Arc::clone(&schema);
+        stream1.spawn(async move {
+            let batch =
+                RecordBatch::try_new(schema1, vec![Arc::new(Int32Array::from(vec![2]))])?;
+            tx1.send(Ok(batch)).await.unwrap();
+            Ok(())
+        });
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let reservation =
+            MemoryConsumer::new("test").register(&task_ctx.runtime_env().memory_pool);
+
+        let mut merge_stream = StreamingMergeBuilder::new()
+            .with_streams(vec![stream0.build(), stream1.build()])
+            .with_schema(Arc::clone(&schema))
+            .with_expressions(&sort)
+            .with_metrics(BaselineMetrics::new(&metrics, 0))
+            .with_batch_size(task_ctx.session_config().batch_size())
+            .with_fetch(None)
+            .with_reservation(reservation)
+            .build()?;
+
+        let first = merge_stream.next().await.unwrap();
+        assert!(first.is_err(), "expected merge stream to surface the error");
+        assert!(
+            merge_stream.next().await.is_none(),
+            "merge stream yielded data after returning an error"
+        );
+
+        Ok(())
     }
 }

@@ -34,6 +34,7 @@
         clippy::unnecessary_lazy_evaluations
     )
 )]
+#![allow(clippy::allow_attributes, clippy::mutable_key_type)]
 #![warn(missing_docs, clippy::needless_borrow)]
 // Use `allow` instead of `expect` for test configuration to explicitly
 // disable the lint for all test code rather than expecting violations
@@ -762,13 +763,11 @@
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
 
-/// DataFusion crate version
-pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
-
 extern crate core;
-
 #[cfg(feature = "sql")]
 extern crate sqlparser;
+/// DataFusion crate version
+pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod dataframe;
 pub mod datasource;
@@ -786,7 +785,7 @@ pub use object_store;
 pub use parquet;
 
 #[cfg(feature = "avro")]
-pub use datafusion_datasource_avro::apache_avro;
+pub use datafusion_datasource_avro::arrow_avro;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs

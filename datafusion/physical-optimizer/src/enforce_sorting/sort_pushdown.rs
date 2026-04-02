@@ -680,8 +680,10 @@ fn handle_custom_pushdown(
     parent_required: OrderingRequirements,
     maintains_input_order: &[bool],
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    let plan_children = plan.children();
+
     // If the plan has no children, return early:
-    if plan.children().is_empty() {
+    if plan_children.is_empty() {
         return Ok(None);
     }
 
@@ -699,8 +701,7 @@ fn handle_custom_pushdown(
         .collect();
 
     // Get the number of fields in each child's schema:
-    let children_schema_lengths: Vec<usize> = plan
-        .children()
+    let children_schema_lengths: Vec<usize> = plan_children
         .iter()
         .map(|c| c.schema().fields().len())
         .collect();
@@ -734,7 +735,7 @@ fn handle_custom_pushdown(
         let updated_parent_req = requirement
             .into_iter()
             .map(|req| {
-                let child_schema = plan.children()[maintained_child_idx].schema();
+                let child_schema = plan_children[maintained_child_idx].schema();
                 let updated_columns = req
                     .expr
                     .transform_up(|expr| {
@@ -809,13 +810,15 @@ fn handle_hash_join(
 
     let all_from_right_child = all_indices.iter().all(|i| *i >= len_of_left_fields);
 
+    let plan_children = plan.children();
+
     // If all columns are from the right child, update the parent requirements
     if all_from_right_child {
         // Transform the parent-required expression for the child schema by adjusting columns
         let updated_parent_req = requirement
             .into_iter()
             .map(|req| {
-                let child_schema = plan.children()[1].schema();
+                let child_schema = plan_children[1].schema();
                 let updated_columns = req
                     .expr
                     .transform_up(|expr| {

@@ -38,7 +38,6 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use hashbrown::HashSet;
-use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -120,10 +119,6 @@ impl ArrayUnion {
 }
 
 impl ScalarUDFImpl for ArrayUnion {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_union"
     }
@@ -207,10 +202,6 @@ impl ArrayIntersect {
 }
 
 impl ScalarUDFImpl for ArrayIntersect {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_intersect"
     }
@@ -280,10 +271,6 @@ impl Default for ArrayDistinct {
 }
 
 impl ScalarUDFImpl for ArrayDistinct {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_distinct"
     }

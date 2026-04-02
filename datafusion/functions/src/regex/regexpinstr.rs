@@ -109,10 +109,6 @@ impl RegexpInstrFunc {
 }
 
 impl ScalarUDFImpl for RegexpInstrFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regexp_instr"
     }

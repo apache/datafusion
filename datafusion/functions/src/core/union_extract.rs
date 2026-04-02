@@ -69,10 +69,6 @@ impl UnionExtractFun {
 }
 
 impl ScalarUDFImpl for UnionExtractFun {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "union_extract"
     }

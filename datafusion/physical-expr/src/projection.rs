@@ -693,12 +693,15 @@ impl ProjectionExprs {
                         Precision::Absent
                     };
 
-                    let sum_value = Precision::<ScalarValue>::from(stats.num_rows)
-                        .cast_to(&value.data_type())
-                        .ok()
-                        .map(|row_count| {
-                            Precision::Exact(value.clone()).multiply(&row_count)
+                    let widened_sum = Precision::Exact(value.clone()).cast_to_sum_type();
+                    let sum_value = widened_sum
+                        .get_value()
+                        .and_then(|sum| {
+                            Precision::<ScalarValue>::from(stats.num_rows)
+                                .cast_to(&sum.data_type())
+                                .ok()
                         })
+                        .map(|row_count| widened_sum.multiply(&row_count))
                         .unwrap_or(Precision::Absent);
 
                     ColumnStatistics {
@@ -2859,6 +2862,35 @@ pub(crate) mod tests {
         assert_eq!(
             output_stats.column_statistics[1].max_value,
             Precision::Exact(ScalarValue::Int64(Some(21)))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_with_i32_literal_sum_widens_to_i64() -> Result<()> {
+        let input_stats = get_stats();
+        let input_schema = get_schema();
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+                alias: "constant".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col0", 0)),
+                alias: "num".to_string(),
+            },
+        ]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        assert_eq!(
+            output_stats.column_statistics[0].sum_value,
+            Precision::Exact(ScalarValue::Int64(Some(50)))
         );
 
         Ok(())

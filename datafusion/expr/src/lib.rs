@@ -23,6 +23,7 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![allow(clippy::allow_attributes, clippy::mutable_key_type)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! [DataFusion](https://github.com/apache/datafusion)
@@ -52,6 +53,7 @@ pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
+pub mod extension_types;
 pub mod function;
 pub mod select_expr;
 pub mod groups_accumulator {

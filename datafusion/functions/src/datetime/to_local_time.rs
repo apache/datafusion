@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::ops::Add;
 use std::sync::Arc;
 
@@ -121,10 +120,6 @@ impl ToLocalTimeFunc {
 }
 
 impl ScalarUDFImpl for ToLocalTimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_local_time"
     }

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
@@ -388,10 +387,6 @@ macro_rules! impl_with_updated_config {
 }
 
 impl ScalarUDFImpl for ToTimestampFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp"
     }
@@ -498,10 +493,6 @@ impl ScalarUDFImpl for ToTimestampFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampSecondsFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_seconds"
     }
@@ -571,10 +562,6 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampMillisFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_millis"
     }
@@ -644,10 +631,6 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampMicrosFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_micros"
     }
@@ -717,10 +700,6 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampNanosFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_nanos"
     }

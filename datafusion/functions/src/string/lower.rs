@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use std::any::Any;
 
 use crate::string::common::to_lower;
 use datafusion_common::Result;
@@ -68,10 +67,6 @@ impl LowerFunc {
 }
 
 impl ScalarUDFImpl for LowerFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "lower"
     }

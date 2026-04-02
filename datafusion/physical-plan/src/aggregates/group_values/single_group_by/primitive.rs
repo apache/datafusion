@@ -28,7 +28,6 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::hash_table::HashTable;
-use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -42,7 +41,7 @@ macro_rules! hash_integer {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
             fn hash(&self, state: &RandomState) -> u64 {
-                state.hash_one(self)
+                std::hash::BuildHasher::hash_one(state, self)
             }
 
             #[cfg(feature = "force_hash_collisions")]
@@ -61,7 +60,7 @@ macro_rules! hash_float {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
             fn hash(&self, state: &RandomState) -> u64 {
-                state.hash_one(self.to_bits())
+                std::hash::BuildHasher::hash_one(state, self.to_bits())
             }
 
             #[cfg(feature = "force_hash_collisions")]
