@@ -162,6 +162,44 @@ fn test_not_selectivity() {
     assert!((sel - 0.99).abs() < 0.001); // 1 - 0.01
 }
 
+#[test]
+fn test_equality_selectivity_expression_eq_literal() {
+    let stats = make_stats_with_ndv(1000, 100);
+    let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+    let one =
+        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+    let forty_two =
+        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
+    let a_plus_1 =
+        Arc::new(BinaryExpr::new(col, Operator::Plus, one)) as Arc<dyn PhysicalExpr>;
+    let eq = Arc::new(BinaryExpr::new(a_plus_1, Operator::Eq, forty_two))
+        as Arc<dyn PhysicalExpr>;
+
+    let registry = ExpressionAnalyzerRegistry::new();
+    let sel = registry.get_selectivity(&eq, &stats).unwrap();
+    // NDV(a + 1) = NDV(a) = 100, so selectivity = 1/100 = 0.01
+    assert!((sel - 0.01).abs() < 0.001);
+}
+
+#[test]
+fn test_inequality_selectivity_expression_neq_literal() {
+    let stats = make_stats_with_ndv(1000, 100);
+    let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+    let one =
+        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+    let forty_two =
+        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
+    let a_plus_1 =
+        Arc::new(BinaryExpr::new(col, Operator::Plus, one)) as Arc<dyn PhysicalExpr>;
+    let neq = Arc::new(BinaryExpr::new(a_plus_1, Operator::NotEq, forty_two))
+        as Arc<dyn PhysicalExpr>;
+
+    let registry = ExpressionAnalyzerRegistry::new();
+    let sel = registry.get_selectivity(&neq, &stats).unwrap();
+    // NDV(a + 1) = 100, selectivity = 1 - 1/100 = 0.99
+    assert!((sel - 0.99).abs() < 0.001);
+}
+
 // Min/max tests
 
 #[test]

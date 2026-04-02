@@ -52,6 +52,27 @@ impl DefaultExpressionAnalyzer {
             .and_then(|idx| input_stats.column_statistics.get(idx))
     }
 
+    /// Resolve NDV for a binary expression: try direct column stats first,
+    /// then fall back to the registry for arbitrary expressions
+    fn resolve_ndv(
+        left: &Arc<dyn PhysicalExpr>,
+        right: &Arc<dyn PhysicalExpr>,
+        input_stats: &Statistics,
+        registry: &ExpressionAnalyzerRegistry,
+    ) -> Option<usize> {
+        Self::get_column_stats(left, input_stats)
+            .or_else(|| Self::get_column_stats(right, input_stats))
+            .and_then(|s| s.distinct_count.get_value())
+            .filter(|&&ndv| ndv > 0)
+            .copied()
+            .or_else(|| {
+                let l = registry.get_distinct_count(left, input_stats);
+                let r = registry.get_distinct_count(right, input_stats);
+                l.max(r)
+            })
+            .filter(|&n| n > 0)
+    }
+
     /// Recursive selectivity estimation through the registry chain
     fn estimate_selectivity_recursive(
         &self,
@@ -103,24 +124,26 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
 
                 // Equality: selectivity = 1/NDV
                 Operator::Eq => {
-                    let ndv = Self::get_column_stats(binary.left(), input_stats)
-                        .or_else(|| Self::get_column_stats(binary.right(), input_stats))
-                        .and_then(|s| s.distinct_count.get_value())
-                        .filter(|&&ndv| ndv > 0);
-                    if let Some(ndv) = ndv {
-                        return AnalysisResult::Computed(1.0 / (*ndv as f64));
+                    if let Some(ndv) = Self::resolve_ndv(
+                        binary.left(),
+                        binary.right(),
+                        input_stats,
+                        registry,
+                    ) {
+                        return AnalysisResult::Computed(1.0 / (ndv as f64));
                     }
                     0.1 // Default equality selectivity
                 }
 
                 // Inequality: selectivity = 1 - 1/NDV
                 Operator::NotEq => {
-                    let ndv = Self::get_column_stats(binary.left(), input_stats)
-                        .or_else(|| Self::get_column_stats(binary.right(), input_stats))
-                        .and_then(|s| s.distinct_count.get_value())
-                        .filter(|&&ndv| ndv > 0);
-                    if let Some(ndv) = ndv {
-                        return AnalysisResult::Computed(1.0 - (1.0 / (*ndv as f64)));
+                    if let Some(ndv) = Self::resolve_ndv(
+                        binary.left(),
+                        binary.right(),
+                        input_stats,
+                        registry,
+                    ) {
+                        return AnalysisResult::Computed(1.0 - (1.0 / (ndv as f64)));
                     }
                     0.9
                 }
