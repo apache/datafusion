@@ -64,7 +64,7 @@ jobs:
     runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -91,7 +91,7 @@ jobs:
     runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -138,7 +138,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -160,7 +160,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
