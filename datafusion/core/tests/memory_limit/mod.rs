@@ -22,6 +22,7 @@ use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
+mod gc_view_benchmark;
 mod repartition_mem_limit;
 mod union_nullable_spill;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
