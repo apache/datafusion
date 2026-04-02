@@ -661,10 +661,12 @@ impl HashJoinStream {
             }
         }
 
-        // if the left side is empty, we can skip the (potentially expensive) join operation
+        // If the build side is empty, this stream only reaches ProcessProbeBatch for
+        // join types whose output still depends on probe rows.
         let is_empty = build_side.left_data.map().is_empty();
 
-        if is_empty && self.filter.is_none() {
+        if is_empty {
+            debug_assert!(!self.join_type.empty_build_side_produces_empty_result());
             let result = build_batch_empty_build_side(
                 &self.schema,
                 build_side.left_data.batch(),
