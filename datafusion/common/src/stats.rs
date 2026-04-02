@@ -713,33 +713,49 @@ impl Statistics {
             })
             .collect();
 
-        // Accumulate all statistics in a single pass.
-        // Uses precision_add for sum (reuses the lhs accumulator for
-        // direct numeric addition), while preserving the NDV update
-        // ordering required by estimate_ndv_with_overlap.
+        // Accumulate mergeable statistics in a single pass.
+        // `distinct_count` is recomputed afterward from the original
+        // unsmeared inputs so multi-input merges stay order-stable.
         for stat in items.iter().skip(1) {
             for (col_idx, col_stats) in column_statistics.iter_mut().enumerate() {
                 let item_cs = &stat.column_statistics[col_idx];
 
                 col_stats.null_count = col_stats.null_count.add(&item_cs.null_count);
-
-                // NDV must be computed before min/max update (needs pre-merge ranges)
-                col_stats.distinct_count = match (
-                    col_stats.distinct_count.get_value(),
-                    item_cs.distinct_count.get_value(),
-                ) {
-                    (Some(&l), Some(&r)) => Precision::Inexact(
-                        estimate_ndv_with_overlap(col_stats, item_cs, l, r)
-                            .unwrap_or_else(|| usize::max(l, r)),
-                    ),
-                    _ => Precision::Absent,
-                };
                 col_stats.min_value = col_stats.min_value.min(&item_cs.min_value);
                 col_stats.max_value = col_stats.max_value.max(&item_cs.max_value);
                 let item_sum_value = item_cs.sum_value.cast_to_sum_type();
                 precision_add(&mut col_stats.sum_value, &item_sum_value);
                 col_stats.byte_size = col_stats.byte_size.add(&item_cs.byte_size);
             }
+        }
+
+        for (col_idx, col_stats) in column_statistics.iter_mut().enumerate() {
+            let ndv_inputs: Option<Vec<_>> = items
+                .iter()
+                .map(|stat| {
+                    let input = &stat.column_statistics[col_idx];
+                    input
+                        .distinct_count
+                        .get_value()
+                        .copied()
+                        .map(|ndv| (input, ndv))
+                })
+                .collect();
+
+            col_stats.distinct_count = match ndv_inputs {
+                Some(inputs) => {
+                    let fallback = inputs
+                        .iter()
+                        .map(|(_, ndv)| *ndv)
+                        .max()
+                        .expect("statistics merge requires at least one input");
+                    Precision::Inexact(
+                        estimate_ndv_with_overlap_many(&inputs)
+                            .unwrap_or(fallback),
+                    )
+                }
+                None => Precision::Absent,
+            };
         }
 
         Ok(Statistics {
@@ -838,6 +854,102 @@ pub fn estimate_ndv_with_overlap(
     let only_right = (1.0 - overlap_right) * ndv_right as f64;
 
     Some((intersection + only_left + only_right).round() as usize)
+}
+
+fn estimate_ndv_with_overlap_many(
+    inputs: &[(&ColumnStatistics, usize)],
+) -> Option<usize> {
+    if inputs.is_empty() {
+        return Some(0);
+    }
+
+    if inputs.len() == 1 {
+        return Some(inputs[0].1);
+    }
+
+    struct RangedInput<'a> {
+        min: &'a ScalarValue,
+        max: &'a ScalarValue,
+        ndv: usize,
+        range: f64,
+    }
+
+    let mut ranged_inputs = Vec::new();
+    let mut point_inputs = Vec::new();
+    let mut boundaries = Vec::new();
+
+    for (stats, ndv) in inputs {
+        let min = stats.min_value.get_value()?;
+        let max = stats.max_value.get_value()?;
+        let range = max.distance(min)? as f64;
+
+        if range == 0.0 {
+            point_inputs.push((min, *ndv));
+            continue;
+        }
+
+        boundaries.push(min.clone());
+        boundaries.push(max.clone());
+        ranged_inputs.push(RangedInput {
+            min,
+            max,
+            ndv: *ndv,
+            range,
+        });
+    }
+
+    boundaries.sort_by(|left, right| {
+        left.partial_cmp(right)
+            .expect("statistics merge requires comparable boundary values")
+    });
+    boundaries.dedup();
+
+    let mut estimate = 0.0;
+    for window in boundaries.windows(2) {
+        let segment_start = &window[0];
+        let segment_end = &window[1];
+        let segment_range = segment_end.distance(segment_start)? as f64;
+
+        if segment_range == 0.0 {
+            continue;
+        }
+
+        let segment_estimate = ranged_inputs
+            .iter()
+            .filter(|input| input.min <= segment_start && input.max >= segment_end)
+            .map(|input| segment_range * input.ndv as f64 / input.range)
+            .fold(0.0, f64::max);
+        estimate += segment_estimate;
+    }
+
+    let mut point_values: Vec<ScalarValue> = point_inputs
+        .iter()
+        .map(|(value, _)| (*value).clone())
+        .collect();
+    point_values.sort_by(|left, right| {
+        left.partial_cmp(right)
+            .expect("statistics merge requires comparable point values")
+    });
+    point_values.dedup();
+
+    for value in point_values {
+        let point_ndv = point_inputs
+            .iter()
+            .filter(|(point, _)| *point == &value)
+            .map(|(_, ndv)| *ndv)
+            .max()
+            .expect("point inputs were grouped from existing values");
+        let covered_ndv = ranged_inputs
+            .iter()
+            .filter(|input| input.min <= &value && &value <= input.max)
+            .map(|input| input.ndv)
+            .max()
+            .unwrap_or(0);
+
+        estimate += point_ndv.saturating_sub(covered_ndv) as f64;
+    }
+
+    Some(estimate.round() as usize)
 }
 
 /// Creates an estimate of the number of rows in the output using the given
@@ -1809,6 +1921,106 @@ mod tests {
         assert_eq!(
             merged.column_statistics[0].distinct_count,
             Precision::Inexact(2)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_order_invariant_across_permutations() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let stats_a = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+                    .with_distinct_count(Precision::Exact(100)),
+            );
+        let stats_b = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(40))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(60))))
+                    .with_distinct_count(Precision::Exact(10)),
+            );
+        let stats_c = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(50))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(150))))
+                    .with_distinct_count(Precision::Exact(100)),
+            );
+
+        let permutations = [
+            [&stats_a, &stats_b, &stats_c],
+            [&stats_a, &stats_c, &stats_b],
+            [&stats_b, &stats_a, &stats_c],
+            [&stats_b, &stats_c, &stats_a],
+            [&stats_c, &stats_a, &stats_b],
+            [&stats_c, &stats_b, &stats_a],
+        ];
+
+        for (idx, inputs) in permutations.into_iter().enumerate() {
+            let merged = Statistics::try_merge_iter(inputs, &schema).unwrap();
+            assert_eq!(
+                merged.column_statistics[0].distinct_count,
+                Precision::Inexact(150),
+                "permutation {idx} should be order invariant",
+            );
+        }
+    }
+
+    #[test]
+    fn test_try_merge_ndv_nested_pairwise_merge_still_smears_inputs() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let stats_a = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+                    .with_distinct_count(Precision::Exact(100)),
+            );
+        let stats_b = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(40))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(60))))
+                    .with_distinct_count(Precision::Exact(10)),
+            );
+        let stats_c = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(50))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(150))))
+                    .with_distinct_count(Precision::Exact(100)),
+            );
+
+        let merged_direct =
+            Statistics::try_merge_iter([&stats_a, &stats_b, &stats_c], &schema).unwrap();
+        let merged_ab =
+            Statistics::try_merge_iter([&stats_a, &stats_b], &schema).unwrap();
+        let merged_bc =
+            Statistics::try_merge_iter([&stats_b, &stats_c], &schema).unwrap();
+        let merged_ab_c =
+            Statistics::try_merge_iter([&merged_ab, &stats_c], &schema).unwrap();
+        let merged_a_bc =
+            Statistics::try_merge_iter([&stats_a, &merged_bc], &schema).unwrap();
+
+        assert_eq!(
+            merged_direct.column_statistics[0].distinct_count,
+            Precision::Inexact(150)
+        );
+        assert_eq!(
+            merged_ab_c.column_statistics[0].distinct_count,
+            Precision::Inexact(150)
+        );
+        assert_eq!(
+            merged_a_bc.column_statistics[0].distinct_count,
+            Precision::Inexact(148)
         );
     }
 
