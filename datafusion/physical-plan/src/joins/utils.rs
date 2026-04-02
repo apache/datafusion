@@ -855,22 +855,6 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
-/// Returns true when an empty build side necessarily produces an empty result.
-///
-/// This is the shared source of truth for both state-machine short-circuiting
-/// and `build_batch_empty_build_side`.
-pub(crate) fn empty_build_side_produces_empty_result(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Inner
-            | JoinType::Left
-            | JoinType::LeftSemi
-            | JoinType::LeftAnti
-            | JoinType::LeftMark
-            | JoinType::RightSemi
-    )
-}
-
 pub(crate) fn get_final_indices_from_shared_bitmap(
     shared_bitmap: &SharedBitmapBuilder,
     join_type: JoinType,
@@ -1076,7 +1060,7 @@ pub(crate) fn build_batch_empty_build_side(
     column_indices: &[ColumnIndex],
     join_type: JoinType,
 ) -> Result<RecordBatch> {
-    if empty_build_side_produces_empty_result(join_type) {
+    if join_type.empty_build_side_produces_empty_result() {
         // These join types only return data if the left side is not empty.
         return Ok(RecordBatch::new_empty(Arc::new(schema.clone())));
     }

@@ -42,7 +42,7 @@ use crate::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
-        empty_build_side_produces_empty_result, need_produce_result_in_final,
+        need_produce_result_in_final,
     },
 };
 
@@ -409,13 +409,11 @@ impl HashJoinStream {
     /// Returns the next state after the build side has been fully collected
     /// and any required build-side coordination has completed.
     fn state_after_build_ready(
-        has_filter: bool,
         join_type: JoinType,
         left_data: &JoinLeftData,
     ) -> HashJoinStreamState {
-        if !has_filter
-            && left_data.map().is_empty()
-            && empty_build_side_produces_empty_result(join_type)
+        if left_data.map().is_empty()
+            && join_type.empty_build_side_produces_empty_result()
         {
             HashJoinStreamState::Completed
         } else {
@@ -487,11 +485,8 @@ impl HashJoinStream {
             ready!(fut.get_shared(cx))?;
         }
         let build_side = self.build_side.try_as_ready()?;
-        self.state = Self::state_after_build_ready(
-            self.filter.is_some(),
-            self.join_type,
-            build_side.left_data.as_ref(),
-        );
+        self.state =
+            Self::state_after_build_ready(self.join_type, build_side.left_data.as_ref());
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
@@ -562,11 +557,8 @@ impl HashJoinStream {
             }));
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;
         } else {
-            self.state = Self::state_after_build_ready(
-                self.filter.is_some(),
-                self.join_type,
-                left_data.as_ref(),
-            );
+            self.state =
+                Self::state_after_build_ready(self.join_type, left_data.as_ref());
         }
 
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });

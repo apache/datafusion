@@ -2305,18 +2305,32 @@ mod tests {
     async fn assert_empty_build_probe_behavior(
         join_types: &[JoinType],
         expect_probe_error: bool,
+        with_filter: bool,
     ) {
         let (left, right, on) = empty_build_with_probe_error_inputs();
+        let filter = prepare_join_filter();
 
         for join_type in join_types {
-            let join = join(
-                Arc::clone(&left),
-                Arc::clone(&right),
-                on.clone(),
-                join_type,
-                NullEquality::NullEqualsNothing,
-            )
-            .unwrap();
+            let join = if with_filter {
+                join_with_filter(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    filter.clone(),
+                    join_type,
+                    NullEquality::NullEqualsNothing,
+                )
+                .unwrap()
+            } else {
+                join(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    join_type,
+                    NullEquality::NullEqualsNothing,
+                )
+                .unwrap()
+            };
 
             let result = common::collect(
                 join.execute(0, Arc::new(TaskContext::default())).unwrap(),
@@ -5085,6 +5099,24 @@ mod tests {
                 JoinType::RightSemi,
             ],
             false,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn join_does_not_consume_probe_when_empty_build_fixes_output_with_filter() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Inner,
+                JoinType::Left,
+                JoinType::LeftSemi,
+                JoinType::LeftAnti,
+                JoinType::LeftMark,
+                JoinType::RightSemi,
+            ],
+            false,
+            true,
         )
         .await;
     }
@@ -5098,6 +5130,22 @@ mod tests {
                 JoinType::RightAnti,
                 JoinType::RightMark,
             ],
+            true,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn join_still_consumes_probe_when_empty_build_needs_probe_rows_with_filter() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Right,
+                JoinType::Full,
+                JoinType::RightAnti,
+                JoinType::RightMark,
+            ],
+            true,
             true,
         )
         .await;
