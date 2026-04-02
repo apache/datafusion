@@ -26,7 +26,9 @@ use crate::simplify_expressions::ExprSimplifier;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{Column, DFSchemaRef, HashMap, Result, ScalarValue, plan_err};
+use datafusion_common::{
+    Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
+};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
@@ -179,7 +181,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     find_join_exprs(subquery_filter_exprs)?;
                 if let Some(in_predicate) = &self.in_predicate_opt {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
-                    join_filters = remove_duplicated_filter(join_filters, in_predicate);
+                    join_filters = remove_duplicated_filter(join_filters, in_predicate)?;
                 }
                 let correlated_subquery_cols =
                     collect_subquery_cols(&join_filters, subquery_schema)?;
@@ -460,25 +462,39 @@ fn collect_local_correlated_cols(
     }
 }
 
-fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: &Expr) -> Vec<Expr> {
-    filters
+fn remove_duplicated_filter(
+    filters: Vec<Expr>,
+    in_predicate: &Expr,
+) -> Result<Vec<Expr>> {
+    // We assume below that swapping the order of operands to an operator does
+    // not change behavior, which is only true if the operator is commutative.
+    assert_or_internal_err!(
+        match in_predicate {
+            Expr::BinaryExpr(b) => b.op.swap() == Some(b.op),
+            _ => true,
+        },
+        "remove_duplicated_filter: in_predicate must use a commutative operator"
+    );
+
+    Ok(filters
         .into_iter()
         .filter(|filter| {
             if filter == in_predicate {
                 return false;
             }
 
-            // ignore the binary order
+            // Treat swapped operand order to a binary operator as equivalent
             !match (filter, in_predicate) {
                 (Expr::BinaryExpr(a_expr), Expr::BinaryExpr(b_expr)) => {
-                    (a_expr.op == b_expr.op)
-                        && (a_expr.left == b_expr.left && a_expr.right == b_expr.right)
-                        || (a_expr.left == b_expr.right && a_expr.right == b_expr.left)
+                    a_expr.op == b_expr.op
+                        && ((a_expr.left == b_expr.left && a_expr.right == b_expr.right)
+                            || (a_expr.left == b_expr.right
+                                && a_expr.right == b_expr.left))
                 }
                 _ => false,
             }
         })
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>())
 }
 
 fn agg_exprs_evaluation_result_on_empty_batch(

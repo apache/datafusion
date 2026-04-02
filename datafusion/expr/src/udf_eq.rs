@@ -96,7 +96,7 @@ impl UdfPointer for Arc<dyn ScalarUDFImpl + '_> {
 
 impl UdfPointer for Arc<dyn AggregateUDFImpl + '_> {
     fn equals(&self, other: &(dyn AggregateUDFImpl + '_)) -> bool {
-        self.as_ref().dyn_eq(other.as_any())
+        self.as_ref().dyn_eq(other)
     }
 
     fn hash_value(&self) -> u64 {
@@ -108,7 +108,7 @@ impl UdfPointer for Arc<dyn AggregateUDFImpl + '_> {
 
 impl UdfPointer for Arc<dyn WindowUDFImpl + '_> {
     fn equals(&self, other: &(dyn WindowUDFImpl + '_)) -> bool {
-        self.as_ref().dyn_eq(other.as_any())
+        self.as_ref().dyn_eq(other as &dyn Any)
     }
 
     fn hash_value(&self) -> u64 {

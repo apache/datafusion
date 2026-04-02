@@ -923,7 +923,7 @@ impl NestedLoopJoinMetrics {
         Self {
             join_metrics: BuildProbeJoinMetrics::new(partition, metrics),
             selectivity: MetricBuilder::new(metrics)
-                .with_type(MetricType::SUMMARY)
+                .with_type(MetricType::Summary)
                 .ratio_metrics("selectivity", partition),
         }
     }
