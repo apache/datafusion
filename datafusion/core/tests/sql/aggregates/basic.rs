@@ -445,11 +445,16 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
 
 #[tokio::test]
 async fn min_max_dictionary_uses_planned_dictionary_path() -> Result<()> {
-    let ctx = SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
 
     let dict_type =
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-    let schema = Arc::new(Schema::new(vec![Field::new("dict", dict_type.clone(), true)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        dict_type.clone(),
+        true,
+    )]));
 
     let batch1 = RecordBatch::try_new(
         schema.clone(),
