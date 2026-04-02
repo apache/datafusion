@@ -73,6 +73,14 @@ fn test_arithmetic_ndv() {
     )) as Arc<dyn PhysicalExpr>;
     assert_eq!(registry.get_distinct_count(&plus, &stats), Some(100));
 
+    // col - 1: injective, preserves NDV
+    let minus = Arc::new(BinaryExpr::new(
+        Arc::clone(&col),
+        Operator::Minus,
+        Arc::clone(&lit),
+    )) as Arc<dyn PhysicalExpr>;
+    assert_eq!(registry.get_distinct_count(&minus, &stats), Some(100));
+
     // 1 + col: also injective (literal on left)
     let plus_rev =
         Arc::new(BinaryExpr::new(lit, Operator::Plus, col)) as Arc<dyn PhysicalExpr>;

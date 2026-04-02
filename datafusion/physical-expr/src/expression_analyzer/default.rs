@@ -210,20 +210,12 @@ impl ExpressionAnalyzer for DefaultExpressionAnalyzer {
             return AnalysisResult::Computed(1);
         }
 
-        // BinaryExpr: for arithmetic with a literal operand, treat as injective
-        // (preserves NDV). This is an approximation: col * 0 or col % 1 are
-        // technically not injective, but the common case (col + 1, col * 2, etc.) is
+        // BinaryExpr: addition/subtraction with a literal is always injective
+        // TODO: support more injective operators (e.g. multiply by non-zero)
         if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            let is_arithmetic = matches!(
-                binary.op(),
-                Operator::Plus
-                    | Operator::Minus
-                    | Operator::Multiply
-                    | Operator::Divide
-                    | Operator::Modulo
-            );
+            let is_injective = matches!(binary.op(), Operator::Plus | Operator::Minus);
 
-            if is_arithmetic {
+            if is_injective {
                 // If one side is a literal, the operation is injective on the other side
                 let left_is_literal = binary.left().as_any().is::<Literal>();
                 let right_is_literal = binary.right().as_any().is::<Literal>();
