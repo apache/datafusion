@@ -1746,7 +1746,7 @@ SELECT not(true), not(false)
 ----
 false true
 
-query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean
+query error Error during planning: Unary operator 'NOT' requires a boolean expression, got Int64
 SELECT not(1), not(0)
 
 query ?B
@@ -1754,7 +1754,7 @@ SELECT null, not(null)
 ----
 NULL NULL
 
-query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean
+query error Error during planning: Unary operator 'NOT' requires a boolean expression, got Utf8
 SELECT NOT('hi')
 
 # test_negative_expressions()
@@ -1764,7 +1764,7 @@ SELECT null, -null
 ----
 NULL NULL
 
-query error type_coercion\ncaused by\nError during planning: Negation only supports numeric, interval and timestamp types
+query error Error during planning: Unary operator '-' only supports signed numeric, interval and timestamp types
 SELECT -'100'
 
 query error DataFusion error: Error during planning: Unary operator '\+' only supports numeric, interval and timestamp types
