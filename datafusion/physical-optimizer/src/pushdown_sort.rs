@@ -99,7 +99,14 @@ impl PhysicalOptimizerRule for PushdownSort {
             // Each node type defines its own pushdown behavior via try_pushdown_sort()
             match sort_input.try_pushdown_sort(required_ordering)? {
                 SortOrderPushdownResult::Exact { inner } => {
-                    // Data source guarantees perfect ordering - remove the Sort operator
+                    // Data source guarantees perfect ordering - remove the Sort operator.
+                    // Preserve the fetch (LIMIT) from the original SortExec so the
+                    // data source can stop reading early.
+                    let inner = if let Some(fetch) = sort_exec.fetch() {
+                        inner.with_fetch(Some(fetch)).unwrap_or(inner)
+                    } else {
+                        inner
+                    };
                     Ok(Transformed::yes(inner))
                 }
                 SortOrderPushdownResult::Inexact { inner } => {
