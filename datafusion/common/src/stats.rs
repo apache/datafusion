@@ -873,7 +873,9 @@ pub fn estimate_ndv_with_overlap(
 ///
 /// Returns `None` when any input lacks comparable min/max values or when
 /// distance is unsupported for the underlying scalar type.
-fn estimate_ndv_with_overlap_many(inputs: &[(&ColumnStatistics, usize)]) -> Option<usize> {
+fn estimate_ndv_with_overlap_many(
+    inputs: &[(&ColumnStatistics, usize)],
+) -> Option<usize> {
     if inputs.is_empty() {
         return Some(0);
     }
