@@ -1271,13 +1271,21 @@ mod tests {
         dict_scalar(key_type, ScalarValue::Utf8(Some(value.to_string())))
     }
 
-    fn string_dictionary_batch(
-        values: Vec<&str>,
-        keys: Vec<Option<i32>>,
-    ) -> ArrayRef {
-        let values = Arc::new(StringArray::from(values)) as ArrayRef;
-        Arc::new(DictionaryArray::try_new(Int32Array::from(keys), values).unwrap())
-            as ArrayRef
+    fn string_dictionary_batch(values: &[&str], keys: &[Option<i32>]) -> ArrayRef {
+        let values = Arc::new(StringArray::from(values.to_vec())) as ArrayRef;
+        Arc::new(
+            DictionaryArray::try_new(Int32Array::from(keys.to_vec()), values).unwrap(),
+        ) as ArrayRef
+    }
+
+    fn evaluate_dictionary_accumulator(
+        mut acc: impl Accumulator,
+        batches: &[ArrayRef],
+    ) -> Result<ScalarValue> {
+        for batch in batches {
+            acc.update_batch(&[Arc::clone(batch)])?;
+        }
+        acc.evaluate()
     }
 
     fn assert_dictionary_min_max(
@@ -1291,20 +1299,17 @@ mod tests {
             other => panic!("expected dictionary type, got {other:?}"),
         };
 
-        let mut min_acc = MinAccumulator::try_new(dict_type)?;
-        for batch in batches {
-            min_acc.update_batch(&[Arc::clone(batch)])?;
-        }
-        assert_eq!(
-            min_acc.evaluate()?,
-            utf8_dict_scalar(key_type.clone(), expected_min)
-        );
+        let min_result = evaluate_dictionary_accumulator(
+            MinAccumulator::try_new(dict_type)?,
+            batches,
+        )?;
+        assert_eq!(min_result, utf8_dict_scalar(key_type.clone(), expected_min));
 
-        let mut max_acc = MaxAccumulator::try_new(dict_type)?;
-        for batch in batches {
-            max_acc.update_batch(&[Arc::clone(batch)])?;
-        }
-        assert_eq!(max_acc.evaluate()?, utf8_dict_scalar(key_type, expected_max));
+        let max_result = evaluate_dictionary_accumulator(
+            MaxAccumulator::try_new(dict_type)?,
+            batches,
+        )?;
+        assert_eq!(max_result, utf8_dict_scalar(key_type, expected_max));
 
         Ok(())
     }
@@ -1312,8 +1317,8 @@ mod tests {
     #[test]
     fn test_min_max_dictionary_without_coercion() -> Result<()> {
         let dict_array_ref = string_dictionary_batch(
-            vec!["b", "c", "a", "d"],
-            vec![Some(0), Some(1), Some(2), Some(3)],
+            &["b", "c", "a", "d"],
+            &[Some(0), Some(1), Some(2), Some(3)],
         );
         let dict_type = dict_array_ref.data_type().clone();
 
@@ -1323,8 +1328,8 @@ mod tests {
     #[test]
     fn test_min_max_dictionary_with_nulls() -> Result<()> {
         let dict_array_ref = string_dictionary_batch(
-            vec!["b", "c", "a"],
-            vec![None, Some(0), None, Some(1), Some(2)],
+            &["b", "c", "a"],
+            &[None, Some(0), None, Some(1), Some(2)],
         );
         let dict_type = dict_array_ref.data_type().clone();
 
@@ -1335,10 +1340,8 @@ mod tests {
     fn test_min_max_dictionary_multi_batch() -> Result<()> {
         let dict_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-        let batch1 =
-            string_dictionary_batch(vec!["b", "c"], vec![Some(0), Some(1)]);
-        let batch2 =
-            string_dictionary_batch(vec!["a", "d"], vec![Some(0), Some(1)]);
+        let batch1 = string_dictionary_batch(&["b", "c"], &[Some(0), Some(1)]);
+        let batch2 = string_dictionary_batch(&["a", "d"], &[Some(0), Some(1)]);
 
         assert_dictionary_min_max(&dict_type, &[batch1, batch2], "a", "d")
     }

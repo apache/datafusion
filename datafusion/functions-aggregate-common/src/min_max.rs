@@ -142,13 +142,7 @@ macro_rules! min_max_generic {
 }
 
 macro_rules! min_max_dictionary {
-    ($VALUE:expr, $DELTA:expr, wrap $KEY_TYPE:expr, $OP:ident) => {{
-        let winner = min_max_generic!($VALUE, $DELTA, $OP);
-        ScalarValue::Dictionary($KEY_TYPE.clone(), Box::new(winner))
-    }};
-    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
-        min_max_generic!($VALUE, $DELTA, $OP)
-    }};
+    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{ min_max_generic!($VALUE, $DELTA, $OP) }};
 }
 
 // min/max of two scalar values of the same type
@@ -427,11 +421,13 @@ macro_rules! min_max {
                 ScalarValue::Dictionary(key_type, lhs_inner),
                 ScalarValue::Dictionary(_, rhs_inner),
             ) => {
-                min_max_dictionary!(
+                wrap_dictionary_scalar(
+                    key_type.as_ref(),
+                    min_max_dictionary!(
                     lhs_inner.as_ref(),
                     rhs_inner.as_ref(),
-                    wrap key_type,
                     $OP
+                    ),
                 )
             }
 
@@ -467,7 +463,11 @@ fn dictionary_batch_extreme(
         unreachable!("dictionary_batch_extreme requires dictionary arrays")
     };
     let inner = extreme_fn(values.as_any_dictionary().values())?;
-    Ok(ScalarValue::Dictionary(key_type.clone(), Box::new(inner)))
+    Ok(wrap_dictionary_scalar(key_type.as_ref(), inner))
+}
+
+fn wrap_dictionary_scalar(key_type: &DataType, value: ScalarValue) -> ScalarValue {
+    ScalarValue::Dictionary(Box::new(key_type.clone()), Box::new(value))
 }
 
 /// An accumulator to compute the maximum value
