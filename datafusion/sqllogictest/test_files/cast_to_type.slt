@@ -139,3 +139,119 @@ SELECT cast_to_type('not_a_number', NULL::INTEGER);
 
 statement ok
 DROP TABLE t1;
+
+#######
+## Tests for try_cast_to_type function (fallible variant returning NULL)
+#######
+
+# Basic string to integer cast
+query I
+SELECT try_cast_to_type('42', NULL::INTEGER);
+----
+42
+
+# Invalid cast returns NULL instead of error
+query I
+SELECT try_cast_to_type('not_a_number', NULL::INTEGER);
+----
+NULL
+
+# String to double cast
+query R
+SELECT try_cast_to_type('3.14', NULL::DOUBLE);
+----
+3.14
+
+# Invalid double returns NULL
+query R
+SELECT try_cast_to_type('abc', NULL::DOUBLE);
+----
+NULL
+
+# Integer to string cast (always succeeds)
+query T
+SELECT try_cast_to_type(42, NULL::VARCHAR);
+----
+42
+
+# Same-type is a no-op
+query I
+SELECT try_cast_to_type(42, 0::INTEGER);
+----
+42
+
+# NULL first argument
+query I
+SELECT try_cast_to_type(NULL, 0::INTEGER);
+----
+NULL
+
+# CASE expression as first argument
+query I
+SELECT try_cast_to_type(CASE WHEN true THEN '1' ELSE '2' END, NULL::INTEGER);
+----
+1
+
+# Arithmetic expression as first argument
+query R
+SELECT try_cast_to_type(1 + 2, NULL::DOUBLE);
+----
+3
+
+# Nested: try_cast_to_type inside cast_to_type
+query T
+SELECT cast_to_type(try_cast_to_type('3.14', NULL::DOUBLE), NULL::VARCHAR);
+----
+3.14
+
+# Subquery as second argument
+query I
+SELECT try_cast_to_type('42', (SELECT NULL::INTEGER));
+----
+42
+
+# Column reference as second argument
+statement ok
+CREATE TABLE t2 (int_col INTEGER, text_col VARCHAR);
+
+statement ok
+INSERT INTO t2 VALUES (1, 'hello'), (2, 'world');
+
+query I
+SELECT try_cast_to_type('99', int_col) FROM t2 LIMIT 1;
+----
+99
+
+query I
+SELECT try_cast_to_type(text_col, int_col) FROM t2;
+----
+NULL
+NULL
+
+# Cast column to match another column's type
+query T
+SELECT try_cast_to_type(int_col, text_col) FROM t2;
+----
+1
+2
+
+# Boolean cast
+query B
+SELECT try_cast_to_type(1, NULL::BOOLEAN);
+----
+true
+
+# String to date - valid
+query D
+SELECT try_cast_to_type('2024-01-15', NULL::DATE);
+----
+2024-01-15
+
+# String to date - invalid returns NULL
+query D
+SELECT try_cast_to_type('not_a_date', NULL::DATE);
+----
+NULL
+
+statement ok
+DROP TABLE t2;

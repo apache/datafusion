@@ -38,6 +38,7 @@ pub mod nvl2;
 pub mod overlay;
 pub mod planner;
 pub mod r#struct;
+pub mod try_cast_to_type;
 pub mod union_extract;
 pub mod union_tag;
 pub mod version;
@@ -46,6 +47,7 @@ pub mod version;
 make_udf_function!(arrow_cast::ArrowCastFunc, arrow_cast);
 make_udf_function!(arrow_try_cast::ArrowTryCastFunc, arrow_try_cast);
 make_udf_function!(cast_to_type::CastToTypeFunc, cast_to_type);
+make_udf_function!(try_cast_to_type::TryCastToTypeFunc, try_cast_to_type);
 make_udf_function!(nullif::NullIfFunc, nullif);
 make_udf_function!(nvl::NVLFunc, nvl);
 make_udf_function!(nvl2::NVL2Func, nvl2);
@@ -80,6 +82,10 @@ pub mod expr_fn {
     ),(
         cast_to_type,
         "Casts the first argument to the data type of the second argument",
+        arg1 arg2
+    ),(
+        try_cast_to_type,
+        "Casts the first argument to the data type of the second argument, returning NULL on failure",
         arg1 arg2
     ),(
         nvl,
@@ -154,6 +160,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         arrow_cast(),
         arrow_try_cast(),
         cast_to_type(),
+        try_cast_to_type(),
         arrow_metadata(),
         nvl(),
         nvl2(),
