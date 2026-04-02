@@ -51,12 +51,12 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 +--------------------+
 
 -- The current time is based on the session time zone (UTC by default)
-> SET datafusion.execution.time_zone = 'Europe/London';
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
 > SELECT current_time();
 +--------------------+
 | current_time()     |
 +--------------------+
-| 07:30:00.123456789 |
+| 15:30:00.123456789 |
 +--------------------+
 ```"#
 )]
