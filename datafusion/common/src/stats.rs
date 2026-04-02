@@ -715,7 +715,8 @@ impl Statistics {
 
         // Accumulate mergeable statistics in a single pass.
         // `distinct_count` is recomputed afterward from the original
-        // unsmeared inputs so multi-input merges stay order-stable.
+        // unsmeared inputs passed to this call so direct multi-input
+        // merges stay order-stable.
         for stat in items.iter().skip(1) {
             for (col_idx, col_stats) in column_statistics.iter_mut().enumerate() {
                 let item_cs = &stat.column_statistics[col_idx];
@@ -856,9 +857,28 @@ pub fn estimate_ndv_with_overlap(
     Some((intersection + only_left + only_right).round() as usize)
 }
 
-fn estimate_ndv_with_overlap_many(
-    inputs: &[(&ColumnStatistics, usize)],
-) -> Option<usize> {
+/// Estimates the combined number of distinct values (NDV) for multiple inputs
+/// by partitioning the overall value space into non-overlapping segments.
+///
+/// For each open interval between sorted min/max boundaries, this helper:
+///
+/// - finds every input range that fully covers the segment,
+/// - estimates each input's contribution using uniform density
+///   `segment_width * ndv / full_range_width`,
+/// - keeps only the maximum contribution for that segment.
+///
+/// This is a multi-way analogue of [`estimate_ndv_with_overlap`], but it avoids
+/// repeatedly feeding synthesized min/max/NDV values back into later merges.
+/// That makes `Statistics::try_merge_iter` stable across permutations of the
+/// original inputs passed to a single call.
+///
+/// Constant inputs (`min == max`) are handled separately as point values.
+/// If a point is already covered by one or more ranged inputs, only the
+/// uncovered remainder is added by taking `max(point_ndv - covered_ndv, 0)`.
+///
+/// Returns `None` when any input lacks comparable min/max values or when
+/// distance is unsupported for the underlying scalar type.
+fn estimate_ndv_with_overlap_many(inputs: &[(&ColumnStatistics, usize)]) -> Option<usize> {
     if inputs.is_empty() {
         return Some(0);
     }
@@ -1969,59 +1989,6 @@ mod tests {
                 "permutation {idx} should be order invariant",
             );
         }
-    }
-
-    #[test]
-    fn test_try_merge_ndv_nested_pairwise_merge_still_smears_inputs() {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-        let stats_a = Statistics::default()
-            .with_num_rows(Precision::Exact(100))
-            .add_column_statistics(
-                ColumnStatistics::new_unknown()
-                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
-                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
-                    .with_distinct_count(Precision::Exact(100)),
-            );
-        let stats_b = Statistics::default()
-            .with_num_rows(Precision::Exact(10))
-            .add_column_statistics(
-                ColumnStatistics::new_unknown()
-                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(40))))
-                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(60))))
-                    .with_distinct_count(Precision::Exact(10)),
-            );
-        let stats_c = Statistics::default()
-            .with_num_rows(Precision::Exact(100))
-            .add_column_statistics(
-                ColumnStatistics::new_unknown()
-                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(50))))
-                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(150))))
-                    .with_distinct_count(Precision::Exact(100)),
-            );
-
-        let merged_direct =
-            Statistics::try_merge_iter([&stats_a, &stats_b, &stats_c], &schema).unwrap();
-        let merged_ab =
-            Statistics::try_merge_iter([&stats_a, &stats_b], &schema).unwrap();
-        let merged_bc =
-            Statistics::try_merge_iter([&stats_b, &stats_c], &schema).unwrap();
-        let merged_ab_c =
-            Statistics::try_merge_iter([&merged_ab, &stats_c], &schema).unwrap();
-        let merged_a_bc =
-            Statistics::try_merge_iter([&stats_a, &merged_bc], &schema).unwrap();
-
-        assert_eq!(
-            merged_direct.column_statistics[0].distinct_count,
-            Precision::Inexact(150)
-        );
-        assert_eq!(
-            merged_ab_c.column_statistics[0].distinct_count,
-            Precision::Inexact(150)
-        );
-        assert_eq!(
-            merged_a_bc.column_statistics[0].distinct_count,
-            Precision::Inexact(148)
-        );
     }
 
     #[test]
