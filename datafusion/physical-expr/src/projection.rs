@@ -688,6 +688,15 @@ impl ProjectionExprs {
         mut stats: Statistics,
         output_schema: &Schema,
     ) -> Result<Statistics> {
+        // Snapshot for analyzer lookups
+        let original_stats =
+            self.expression_analyzer_registry
+                .as_ref()
+                .map(|_| Statistics {
+                    num_rows: stats.num_rows,
+                    total_byte_size: stats.total_byte_size,
+                    column_statistics: stats.column_statistics.clone(),
+                });
         let mut column_statistics = Vec::with_capacity(self.exprs.len());
 
         for proj_expr in self.exprs.iter() {
@@ -747,18 +756,19 @@ impl ProjectionExprs {
                 }
             } else if let Some(registry) = &self.expression_analyzer_registry {
                 // Use ExpressionAnalyzer to estimate statistics for arbitrary expressions
+                let original_stats = original_stats.as_ref().unwrap();
                 let distinct_count = registry
-                    .get_distinct_count(expr, &stats)
+                    .get_distinct_count(expr, original_stats)
                     .map(Precision::Inexact)
                     .unwrap_or(Precision::Absent);
                 let (min_value, max_value) = registry
-                    .get_min_max(expr, &stats)
+                    .get_min_max(expr, original_stats)
                     .map(|(min, max)| (Precision::Inexact(min), Precision::Inexact(max)))
                     .unwrap_or((Precision::Absent, Precision::Absent));
                 let null_count = registry
-                    .get_null_fraction(expr, &stats)
+                    .get_null_fraction(expr, original_stats)
                     .and_then(|frac| {
-                        stats
+                        original_stats
                             .num_rows
                             .get_value()
                             .map(|&rows| (rows as f64 * frac).ceil() as usize)
@@ -3196,6 +3206,112 @@ pub(crate) mod tests {
         assert_eq!(
             output_stats.column_statistics[1].max_value,
             Precision::Exact(ScalarValue::Int64(Some(21)))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_column_then_expression() -> Result<()> {
+        // SELECT a, a + 1: bare column first, then expression on same column
+        let input_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Exact(100),
+                null_count: Precision::Exact(0),
+                min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+                max_value: Precision::Exact(ScalarValue::Int64(Some(1000))),
+                sum_value: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        };
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                alias: "a".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+                )),
+                alias: "a_plus_1".to_string(),
+            },
+        ])
+        .with_expression_analyzer_registry(Arc::new(ExpressionAnalyzerRegistry::new()));
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        // Bare column: exact stats preserved
+        assert_eq!(
+            output_stats.column_statistics[0].distinct_count,
+            Precision::Exact(100)
+        );
+
+        // Expression on same column: analyzer should still see a's NDV
+        assert_eq!(
+            output_stats.column_statistics[1].distinct_count,
+            Precision::Inexact(100)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_expression_then_column() -> Result<()> {
+        // SELECT a + 1, a: expression first, then bare column
+        let input_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Exact(100),
+                null_count: Precision::Exact(0),
+                min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+                max_value: Precision::Exact(ScalarValue::Int64(Some(1000))),
+                sum_value: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        };
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+                )),
+                alias: "a_plus_1".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                alias: "a".to_string(),
+            },
+        ])
+        .with_expression_analyzer_registry(Arc::new(ExpressionAnalyzerRegistry::new()));
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        // Expression: analyzer sees a's NDV (no take yet)
+        assert_eq!(
+            output_stats.column_statistics[0].distinct_count,
+            Precision::Inexact(100)
+        );
+
+        // Bare column: exact stats preserved
+        assert_eq!(
+            output_stats.column_statistics[1].distinct_count,
+            Precision::Exact(100)
         );
 
         Ok(())
