@@ -1259,7 +1259,7 @@ mod tests {
         let mut max_acc = MaxAccumulator::try_new(&rt_type)?;
         max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
         let max_result = max_acc.evaluate()?;
-        assert_eq!(max_result, ScalarValue::Utf8(Some("🦀".to_string())));
+        assert_eq!(max_result, ScalarValue::Utf8(Some("d".to_string())));
         Ok(())
     }
 
@@ -1272,6 +1272,16 @@ mod tests {
     }
 
     fn string_dictionary_batch(values: &[&str], keys: &[Option<i32>]) -> ArrayRef {
+        let values = Arc::new(StringArray::from(values.to_vec())) as ArrayRef;
+        Arc::new(
+            DictionaryArray::try_new(Int32Array::from(keys.to_vec()), values).unwrap(),
+        ) as ArrayRef
+    }
+
+    fn optional_string_dictionary_batch(
+        values: &[Option<&str>],
+        keys: &[Option<i32>],
+    ) -> ArrayRef {
         let values = Arc::new(StringArray::from(values.to_vec())) as ArrayRef;
         Arc::new(
             DictionaryArray::try_new(Int32Array::from(keys.to_vec()), values).unwrap(),
@@ -1334,6 +1344,28 @@ mod tests {
         let dict_type = dict_array_ref.data_type().clone();
 
         assert_dictionary_min_max(&dict_type, &[dict_array_ref], "a", "c")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_ignores_unreferenced_values() -> Result<()> {
+        let dict_array_ref = string_dictionary_batch(
+            &["a", "z", "zz_unused"],
+            &[Some(1), Some(1), None],
+        );
+        let dict_type = dict_array_ref.data_type().clone();
+
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "z", "z")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_ignores_referenced_null_values() -> Result<()> {
+        let dict_array_ref = optional_string_dictionary_batch(
+            &[Some("b"), None, Some("a"), Some("d")],
+            &[Some(0), Some(1), Some(2), Some(3)],
+        );
+        let dict_type = dict_array_ref.data_type().clone();
+
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "a", "d")
     }
 
     #[test]

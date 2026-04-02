@@ -18,8 +18,8 @@
 //! Basic min/max functionality shared across DataFusion aggregate functions
 
 use arrow::array::{
-    ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
     DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
     Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
@@ -457,13 +457,23 @@ macro_rules! min_max {
 
 fn dictionary_batch_extreme(
     values: &ArrayRef,
-    extreme_fn: fn(&ArrayRef) -> Result<ScalarValue>,
+    ordering: Ordering,
 ) -> Result<ScalarValue> {
-    let DataType::Dictionary(key_type, _) = values.data_type() else {
-        unreachable!("dictionary_batch_extreme requires dictionary arrays")
-    };
-    let inner = extreme_fn(values.as_any_dictionary().values())?;
-    Ok(wrap_dictionary_scalar(key_type.as_ref(), inner))
+    let mut extreme: Option<ScalarValue> = None;
+
+    for i in 0..values.len() {
+        let current = ScalarValue::try_from_array(values, i)?;
+        if current.is_null() {
+            continue;
+        }
+
+        match &extreme {
+            Some(existing) if existing.try_cmp(&current)? != ordering => {}
+            _ => extreme = Some(current),
+        }
+    }
+
+    extreme.map_or_else(|| ScalarValue::try_from(values.data_type()), Ok)
 }
 
 fn wrap_dictionary_scalar(key_type: &DataType, value: ScalarValue) -> ScalarValue {
@@ -813,7 +823,9 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::FixedSizeList(_, _) => {
             min_max_batch_generic(values, Ordering::Greater)?
         }
-        DataType::Dictionary(_, _) => dictionary_batch_extreme(values, min_batch)?,
+        DataType::Dictionary(_, _) => {
+            dictionary_batch_extreme(values, Ordering::Greater)?
+        }
         _ => min_max_batch!(values, min),
     })
 }
@@ -828,7 +840,10 @@ fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarV
     let mut extreme = ScalarValue::try_from_array(array, first_idx)?;
     for i in non_null_indices {
         let current = ScalarValue::try_from_array(array, i)?;
-        if extreme.try_cmp(&current)? == ordering {
+        if current.is_null() {
+            continue;
+        }
+        if extreme.is_null() || extreme.try_cmp(&current)? == ordering {
             extreme = current;
         }
     }
@@ -885,7 +900,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::FixedSizeList(_, _) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::Dictionary(_, _) => dictionary_batch_extreme(values, max_batch)?,
+        DataType::Dictionary(_, _) => dictionary_batch_extreme(values, Ordering::Less)?,
         _ => min_max_batch!(values, max),
     })
 }
