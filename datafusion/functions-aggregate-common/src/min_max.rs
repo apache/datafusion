@@ -141,10 +141,6 @@ macro_rules! min_max_generic {
     }};
 }
 
-macro_rules! min_max_dictionary {
-    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{ min_max_generic!($VALUE, $DELTA, $OP) }};
-}
-
 // min/max of two scalar values of the same type
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
@@ -423,11 +419,7 @@ macro_rules! min_max {
             ) => {
                 wrap_dictionary_scalar(
                     key_type.as_ref(),
-                    min_max_dictionary!(
-                    lhs_inner.as_ref(),
-                    rhs_inner.as_ref(),
-                    $OP
-                    ),
+                    min_max_generic!(lhs_inner.as_ref(), rhs_inner.as_ref(), $OP),
                 )
             }
 
@@ -435,14 +427,14 @@ macro_rules! min_max {
                 ScalarValue::Dictionary(_, lhs_inner),
                 rhs,
             ) => {
-                min_max_dictionary!(lhs_inner.as_ref(), rhs, $OP)
+                min_max_generic!(lhs_inner.as_ref(), rhs, $OP)
             }
 
             (
                 lhs,
                 ScalarValue::Dictionary(_, rhs_inner),
             ) => {
-                min_max_dictionary!(lhs, rhs_inner.as_ref(), $OP)
+                min_max_generic!(lhs, rhs_inner.as_ref(), $OP)
             }
 
             e => {

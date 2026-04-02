@@ -19,6 +19,7 @@ use super::*;
 use datafusion::common::test_util::batches_to_string;
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
+use datafusion_physical_plan::displayable;
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -444,23 +445,40 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
 
 #[tokio::test]
 async fn min_max_dictionary_uses_planned_dictionary_path() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let dict_values = StringArray::from(vec!["a", "z", "zz_unused"]);
-    let dict_indices = Int32Array::from(vec![Some(1), Some(1), None]);
-    let dict = DictionaryArray::new(dict_indices, Arc::new(dict_values));
+    let ctx = SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
 
     let dict_type =
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
     let schema = Arc::new(Schema::new(vec![Field::new("dict", dict_type.clone(), true)]));
 
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)])?;
-    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    let batch1 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![Some(1), Some(1), None]),
+            Arc::new(StringArray::from(vec!["a", "z", "zz_unused"])),
+        ))],
+    )?;
+    let batch2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![Some(0), Some(1)]),
+            Arc::new(StringArray::from(vec!["a", "d"])),
+        ))],
+    )?;
+    let provider = MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?;
     ctx.register_table("t", Arc::new(provider))?;
 
     let df = ctx
         .sql("SELECT min(dict) AS min_dict, max(dict) AS max_dict FROM t")
         .await?;
+    let physical_plan = df.clone().create_physical_plan().await?;
+    let formatted_plan = format!("{}", displayable(physical_plan.as_ref()).indent(true));
+    assert!(formatted_plan.contains("AggregateExec: mode=Partial, gby=[]"));
+    assert!(
+        formatted_plan.contains("AggregateExec: mode=Final, gby=[]")
+            || formatted_plan.contains("AggregateExec: mode=FinalPartitioned, gby=[]")
+    );
+
     let results = df.collect().await?;
 
     assert_eq!(results[0].schema().field(0).data_type(), &dict_type);
@@ -472,7 +490,7 @@ async fn min_max_dictionary_uses_planned_dictionary_path() -> Result<()> {
     +----------+----------+
     | min_dict | max_dict |
     +----------+----------+
-    | z        | z        |
+    | a        | z        |
     +----------+----------+
     "
     );
