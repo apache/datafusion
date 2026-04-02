@@ -413,6 +413,28 @@ macro_rules! min_max {
                 min_max_generic!(lhs, rhs, $OP)
             }
 
+            (
+                ScalarValue::Dictionary(key_type, lhs_inner),
+                ScalarValue::Dictionary(_, rhs_inner),
+            ) => {
+                let winner = min_max_generic!(lhs_inner.as_ref(), rhs_inner.as_ref(), $OP);
+                ScalarValue::Dictionary(key_type.clone(), Box::new(winner))
+            }
+
+            (
+                ScalarValue::Dictionary(_, lhs_inner),
+                rhs,
+            ) => {
+                min_max_generic!(lhs_inner.as_ref(), rhs, $OP)
+            }
+
+            (
+                lhs,
+                ScalarValue::Dictionary(_, rhs_inner),
+            ) => {
+                min_max_generic!(lhs, rhs_inner.as_ref(), $OP)
+            }
+
             e => {
                 return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
@@ -766,9 +788,10 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::FixedSizeList(_, _) => {
             min_max_batch_generic(values, Ordering::Greater)?
         }
-        DataType::Dictionary(_, _) => {
-            let values = values.as_any_dictionary().values();
-            min_batch(values)?
+        DataType::Dictionary(key_type, _) => {
+            let dict_values = values.as_any_dictionary().values();
+            let inner = min_batch(dict_values)?;
+            ScalarValue::Dictionary(key_type.clone(), Box::new(inner))
         }
         _ => min_max_batch!(values, min),
     })
@@ -847,9 +870,10 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::FixedSizeList(_, _) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::Dictionary(_, _) => {
-            let values = values.as_any_dictionary().values();
-            max_batch(values)?
+        DataType::Dictionary(key_type, _) => {
+            let dict_values = values.as_any_dictionary().values();
+            let inner = max_batch(dict_values)?;
+            ScalarValue::Dictionary(key_type.clone(), Box::new(inner))
         }
         _ => min_max_batch!(values, max),
     })
