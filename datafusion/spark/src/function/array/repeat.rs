@@ -22,7 +22,6 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions_nested::repeat::ArrayRepeat;
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::function::null_utils::{
@@ -51,10 +50,6 @@ impl SparkArrayRepeat {
 }
 
 impl ScalarUDFImpl for SparkArrayRepeat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_repeat"
     }

@@ -96,10 +96,6 @@ impl Default for ArrayAgg {
 }
 
 impl AggregateUDFImpl for ArrayAgg {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_agg"
     }

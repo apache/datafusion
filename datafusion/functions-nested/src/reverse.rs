@@ -39,7 +39,6 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -89,10 +88,6 @@ impl ArrayReverse {
 }
 
 impl ScalarUDFImpl for ArrayReverse {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_reverse"
     }

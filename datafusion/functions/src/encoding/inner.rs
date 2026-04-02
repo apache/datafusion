@@ -40,7 +40,6 @@ use datafusion_expr::{
     TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -102,10 +101,6 @@ impl EncodeFunc {
 }
 
 impl ScalarUDFImpl for EncodeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "encode"
     }
@@ -179,10 +174,6 @@ impl DecodeFunc {
 }
 
 impl ScalarUDFImpl for DecodeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "decode"
     }

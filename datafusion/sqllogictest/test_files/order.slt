@@ -1632,3 +1632,27 @@ EXPLAIN SELECT * from ordered ORDER BY a;
 physical_plan
 01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Config reset
+statement ok
+reset datafusion.catalog.information_schema;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.repartition_sorts;
+
+statement ok
+reset datafusion.execution.use_row_number_estimates_to_optimize_partitioning;
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
+reset datafusion.sql_parser.default_null_ordering;
+
+statement ok
+reset datafusion.sql_parser.dialect;

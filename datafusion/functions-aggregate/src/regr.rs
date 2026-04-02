@@ -27,7 +27,6 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
-use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of_val;
@@ -442,10 +441,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
 }
 
 impl AggregateUDFImpl for Regr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.func_name
     }

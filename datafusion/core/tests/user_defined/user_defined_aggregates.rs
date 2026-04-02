@@ -18,7 +18,6 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
@@ -793,10 +792,6 @@ struct TestGroupsAccumulator {
 }
 
 impl AggregateUDFImpl for TestGroupsAccumulator {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "geo_mean"
     }
@@ -936,10 +931,6 @@ impl MetadataBasedAggregateUdf {
 }
 
 impl AggregateUDFImpl for MetadataBasedAggregateUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }

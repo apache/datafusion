@@ -18,7 +18,6 @@
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
@@ -83,10 +82,6 @@ impl NowFunc {
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
 impl ScalarUDFImpl for NowFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "now"
     }

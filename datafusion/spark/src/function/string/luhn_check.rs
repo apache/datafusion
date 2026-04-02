@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::{Array, AsArray, BooleanArray};
 use arrow::datatypes::DataType;
@@ -56,10 +56,6 @@ impl SparkLuhnCheck {
 }
 
 impl ScalarUDFImpl for SparkLuhnCheck {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "luhn_check"
     }

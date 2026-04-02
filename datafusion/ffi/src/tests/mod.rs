@@ -39,6 +39,7 @@ use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::config::extension_options::FFI_ExtensionOptions;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::execution_plan::tests::EmptyExec;
+use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
@@ -51,6 +52,7 @@ use crate::udwf::FFI_WindowUDF;
 mod async_provider;
 pub mod catalog;
 pub mod config;
+mod physical_optimizer;
 mod sync_provider;
 mod table_provider_factory;
 mod udf_udaf_udwf;
@@ -103,6 +105,8 @@ pub struct ForeignLibraryModule {
     pub create_extension_options: extern "C" fn() -> FFI_ExtensionOptions,
 
     pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
+
+    pub create_physical_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -177,6 +181,8 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
         create_empty_exec,
+        create_physical_optimizer_rule:
+            physical_optimizer::create_physical_optimizer_rule,
         version: super::version,
     }
     .leak_into_prefix()

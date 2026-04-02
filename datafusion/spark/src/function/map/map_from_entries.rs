@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::function::map::utils::{
@@ -55,10 +54,6 @@ impl MapFromEntries {
 }
 
 impl ScalarUDFImpl for MapFromEntries {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_from_entries"
     }
