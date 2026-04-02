@@ -1267,94 +1267,79 @@ mod tests {
         ScalarValue::Dictionary(Box::new(key_type), Box::new(inner))
     }
 
-    #[test]
-    fn test_min_max_dictionary_without_coercion() -> Result<()> {
-        let values = StringArray::from(vec!["b", "c", "a", "d"]);
-        let keys = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3)]);
-        let dict_array =
-            DictionaryArray::try_new(keys, Arc::new(values) as ArrayRef).unwrap();
-        let dict_array_ref = Arc::new(dict_array) as ArrayRef;
-        let dict_type = dict_array_ref.data_type().clone();
+    fn utf8_dict_scalar(key_type: DataType, value: &str) -> ScalarValue {
+        dict_scalar(key_type, ScalarValue::Utf8(Some(value.to_string())))
+    }
 
-        let mut min_acc = MinAccumulator::try_new(&dict_type)?;
-        min_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
-        let min_result = min_acc.evaluate()?;
+    fn string_dictionary_batch(
+        values: Vec<&str>,
+        keys: Vec<Option<i32>>,
+    ) -> ArrayRef {
+        let values = Arc::new(StringArray::from(values)) as ArrayRef;
+        Arc::new(DictionaryArray::try_new(Int32Array::from(keys), values).unwrap())
+            as ArrayRef
+    }
+
+    fn assert_dictionary_min_max(
+        dict_type: &DataType,
+        batches: &[ArrayRef],
+        expected_min: &str,
+        expected_max: &str,
+    ) -> Result<()> {
+        let key_type = match dict_type {
+            DataType::Dictionary(key_type, _) => key_type.as_ref().clone(),
+            other => panic!("expected dictionary type, got {other:?}"),
+        };
+
+        let mut min_acc = MinAccumulator::try_new(dict_type)?;
+        for batch in batches {
+            min_acc.update_batch(&[Arc::clone(batch)])?;
+        }
         assert_eq!(
-            min_result,
-            dict_scalar(DataType::Int32, ScalarValue::Utf8(Some("a".to_string())))
+            min_acc.evaluate()?,
+            utf8_dict_scalar(key_type.clone(), expected_min)
         );
 
-        let mut max_acc = MaxAccumulator::try_new(&dict_type)?;
-        max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
-        let max_result = max_acc.evaluate()?;
-        assert_eq!(
-            max_result,
-            dict_scalar(DataType::Int32, ScalarValue::Utf8(Some("d".to_string())))
-        );
+        let mut max_acc = MaxAccumulator::try_new(dict_type)?;
+        for batch in batches {
+            max_acc.update_batch(&[Arc::clone(batch)])?;
+        }
+        assert_eq!(max_acc.evaluate()?, utf8_dict_scalar(key_type, expected_max));
+
         Ok(())
     }
 
     #[test]
-    fn test_min_max_dictionary_with_nulls() -> Result<()> {
-        let values = StringArray::from(vec!["b", "c", "a"]);
-        let keys = Int32Array::from(vec![None, Some(0), None, Some(1), Some(2)]);
-        let dict_array =
-            DictionaryArray::try_new(keys, Arc::new(values) as ArrayRef).unwrap();
-        let dict_array_ref = Arc::new(dict_array) as ArrayRef;
+    fn test_min_max_dictionary_without_coercion() -> Result<()> {
+        let dict_array_ref = string_dictionary_batch(
+            vec!["b", "c", "a", "d"],
+            vec![Some(0), Some(1), Some(2), Some(3)],
+        );
         let dict_type = dict_array_ref.data_type().clone();
 
-        let mut min_acc = MinAccumulator::try_new(&dict_type)?;
-        min_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
-        let min_result = min_acc.evaluate()?;
-        assert_eq!(
-            min_result,
-            dict_scalar(DataType::Int32, ScalarValue::Utf8(Some("a".to_string())))
-        );
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "a", "d")
+    }
 
-        let mut max_acc = MaxAccumulator::try_new(&dict_type)?;
-        max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
-        let max_result = max_acc.evaluate()?;
-        assert_eq!(
-            max_result,
-            dict_scalar(DataType::Int32, ScalarValue::Utf8(Some("c".to_string())))
+    #[test]
+    fn test_min_max_dictionary_with_nulls() -> Result<()> {
+        let dict_array_ref = string_dictionary_batch(
+            vec!["b", "c", "a"],
+            vec![None, Some(0), None, Some(1), Some(2)],
         );
-        Ok(())
+        let dict_type = dict_array_ref.data_type().clone();
+
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "a", "c")
     }
 
     #[test]
     fn test_min_max_dictionary_multi_batch() -> Result<()> {
         let dict_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let batch1 =
+            string_dictionary_batch(vec!["b", "c"], vec![Some(0), Some(1)]);
+        let batch2 =
+            string_dictionary_batch(vec!["a", "d"], vec![Some(0), Some(1)]);
 
-        let values1 = StringArray::from(vec!["b", "c"]);
-        let keys1 = Int32Array::from(vec![Some(0), Some(1)]);
-        let batch1 = Arc::new(
-            DictionaryArray::try_new(keys1, Arc::new(values1) as ArrayRef).unwrap(),
-        ) as ArrayRef;
-
-        let values2 = StringArray::from(vec!["a", "d"]);
-        let keys2 = Int32Array::from(vec![Some(0), Some(1)]);
-        let batch2 = Arc::new(
-            DictionaryArray::try_new(keys2, Arc::new(values2) as ArrayRef).unwrap(),
-        ) as ArrayRef;
-
-        let mut min_acc = MinAccumulator::try_new(&dict_type)?;
-        min_acc.update_batch(&[Arc::clone(&batch1)])?;
-        min_acc.update_batch(&[Arc::clone(&batch2)])?;
-        let min_result = min_acc.evaluate()?;
-        assert_eq!(
-            min_result,
-            dict_scalar(DataType::Int32, ScalarValue::Utf8(Some("a".to_string())))
-        );
-
-        let mut max_acc = MaxAccumulator::try_new(&dict_type)?;
-        max_acc.update_batch(&[Arc::clone(&batch1)])?;
-        max_acc.update_batch(&[Arc::clone(&batch2)])?;
-        let max_result = max_acc.evaluate()?;
-        assert_eq!(
-            max_result,
-            dict_scalar(DataType::Int32, ScalarValue::Utf8(Some("d".to_string())))
-        );
-        Ok(())
+        assert_dictionary_min_max(&dict_type, &[batch1, batch2], "a", "d")
     }
 }
