@@ -53,7 +53,7 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
+use arrow::array::{Array, BinaryViewArray, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
@@ -507,6 +507,12 @@ impl ExternalSorter {
                     array.as_any().downcast_ref::<StringViewArray>()
                 {
                     let new_array = string_view_array.gc();
+                    new_columns.push(Arc::new(new_array));
+                    arr_mutated = true;
+                } else if let Some(binary_view_array) =
+                    array.as_any().downcast_ref::<BinaryViewArray>()
+                {
+                    let new_array = binary_view_array.gc();
                     new_columns.push(Arc::new(new_array));
                     arr_mutated = true;
                 } else {
