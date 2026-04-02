@@ -443,6 +443,44 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
 }
 
 #[tokio::test]
+async fn min_max_dictionary_uses_planned_dictionary_path() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let dict_values = StringArray::from(vec!["a", "z", "zz_unused"]);
+    let dict_indices = Int32Array::from(vec![Some(1), Some(1), None]);
+    let dict = DictionaryArray::new(dict_indices, Arc::new(dict_values));
+
+    let dict_type =
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+    let schema = Arc::new(Schema::new(vec![Field::new("dict", dict_type.clone(), true)]));
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)])?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let df = ctx
+        .sql("SELECT min(dict) AS min_dict, max(dict) AS max_dict FROM t")
+        .await?;
+    let results = df.collect().await?;
+
+    assert_eq!(results[0].schema().field(0).data_type(), &dict_type);
+    assert_eq!(results[0].schema().field(1).data_type(), &dict_type);
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r"
+    +----------+----------+
+    | min_dict | max_dict |
+    +----------+----------+
+    | z        | z        |
+    +----------+----------+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn group_by_ree_dict_column() -> Result<()> {
     let ctx = SessionContext::new();
 
