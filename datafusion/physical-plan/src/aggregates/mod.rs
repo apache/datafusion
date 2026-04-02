@@ -640,7 +640,8 @@ pub struct AggregateExec {
     limit_options: Option<LimitOptions>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
-    /// Schema after the aggregate is applied
+    /// Schema after the aggregate is applied. Contains the group by columns followed by the
+    /// aggregate outputs.
     schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
     /// same as input.schema() but for the final aggregate it will be the same as the input
@@ -1473,11 +1474,15 @@ impl ExecutionPlan for AggregateExec {
         // This optimization is NOT safe for filters on aggregated columns (like filtering on
         // the result of SUM or COUNT), as those require computing all groups first.
 
-        let grouping_columns: HashSet<_> = self
-            .group_by
-            .expr()
-            .iter()
-            .flat_map(|(expr, _)| collect_columns(expr))
+        // Build grouping columns using output indices because parent filters reference the
+        // AggregateExec's output schema where grouping columns in the output schema. The
+        // grouping expressions reference input columns which may not match the output schema.
+        //
+        // It is safe to assume that the output_schema contains group by columns in the same order
+        // as the group by expression. See [`create_schema`] and [`AggregateExec`].
+        let output_schema = self.schema();
+        let grouping_columns: HashSet<_> = (0..self.group_by.expr().len())
+            .map(|i| Column::new(output_schema.field(i).name(), i))
             .collect();
 
         // Analyze each filter separately to determine if it can be pushed down
@@ -1502,9 +1507,7 @@ impl ExecutionPlan for AggregateExec {
                 let filter_column_indices: Vec<usize> = filter_columns
                     .iter()
                     .filter_map(|filter_col| {
-                        self.group_by.expr().iter().position(|(expr, _)| {
-                            collect_columns(expr).contains(filter_col)
-                        })
+                        grouping_columns.get(filter_col).map(|col| col.index())
                     })
                     .collect();
 
@@ -1600,6 +1603,8 @@ impl ExecutionPlan for AggregateExec {
     }
 }
 
+/// Creates the output schema for an [`AggregateExec`] containing the group by columns followed
+/// by the aggregate columns.
 fn create_schema(
     input_schema: &Schema,
     group_by: &PhysicalGroupBy,

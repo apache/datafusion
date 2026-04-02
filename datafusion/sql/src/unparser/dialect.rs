@@ -24,7 +24,7 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -351,6 +351,10 @@ impl Dialect for PostgreSqlDialect {
         func_name: &str,
         args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
+        if func_name == "array_has" {
+            return self.array_has_to_sql_any(unparser, args);
+        }
+
         if func_name == "round" {
             return Ok(Some(
                 self.round_to_sql_enforce_numeric(unparser, func_name, args)?,
@@ -362,6 +366,23 @@ impl Dialect for PostgreSqlDialect {
 }
 
 impl PostgreSqlDialect {
+    fn array_has_to_sql_any(
+        &self,
+        unparser: &Unparser,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        let [haystack, needle] = args else {
+            return internal_err!("array_has expected 2 arguments, got {}", args.len());
+        };
+
+        Ok(Some(ast::Expr::AnyOp {
+            left: Box::new(unparser.expr_to_sql(needle)?),
+            compare_op: BinaryOperator::Eq,
+            right: Box::new(unparser.expr_to_sql(haystack)?),
+            is_some: false,
+        }))
+    }
+
     fn round_to_sql_enforce_numeric(
         &self,
         unparser: &Unparser,

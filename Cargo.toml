@@ -114,7 +114,7 @@ bytes = "1.11"
 bzip2 = "0.6.1"
 chrono = { version = "0.4.44", default-features = false }
 criterion = "0.8"
-ctor = "0.6.3"
+ctor = "0.8.0"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "53.0.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "53.0.0" }
@@ -163,7 +163,7 @@ half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.16.1" }
 hex = { version = "0.4.3" }
 indexmap = "2.13.0"
-insta = { version = "1.46.3", features = ["glob", "filters"] }
+insta = { version = "1.47.2", features = ["glob", "filters"] }
 itertools = "0.14"
 itoa = "1.0"
 liblzma = { version = "0.4.6", features = ["static"] }
@@ -196,7 +196,7 @@ tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
 url = "2.5.7"
-uuid = "1.21"
+uuid = "1.23"
 zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.clippy]

@@ -1307,7 +1307,8 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        if let Some(udf) = binding.as_any().downcast_ref::<MyAggregateUDF>() {
+        if let Some(udf) = (binding.as_ref() as &dyn Any).downcast_ref::<MyAggregateUDF>()
+        {
             let proto = MyAggregateUdfNode {
                 result: udf.result.clone(),
             };
@@ -1334,7 +1335,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        if let Some(udwf) = binding.as_any().downcast_ref::<CustomUDWF>() {
+        if let Some(udwf) = (binding.as_ref() as &dyn Any).downcast_ref::<CustomUDWF>() {
             let proto = CustomUDWFNode {
                 payload: udwf.payload.clone(),
             };

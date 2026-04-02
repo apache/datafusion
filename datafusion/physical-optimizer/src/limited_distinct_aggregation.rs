@@ -54,16 +54,8 @@ impl LimitedDistinctAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::try_new(
-            *aggr.mode(),
-            aggr.group_expr().clone(),
-            aggr.aggr_expr().to_vec(),
-            aggr.filter_expr().to_vec(),
-            aggr.input().to_owned(),
-            aggr.input_schema(),
-        )
-        .expect("Unable to copy Aggregate!")
-        .with_limit_options(Some(LimitOptions::new(limit)));
+        let new_aggr = aggr.with_new_limit_options(Some(LimitOptions::new(limit)));
+
         Some(Arc::new(new_aggr))
     }
 
