@@ -45,7 +45,9 @@ use datafusion_expr::{
 
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
-use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
+use crate::utils::{
+    ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
+};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::ExpressionPlacement;
 
@@ -190,11 +192,11 @@ struct ColumnChecker<'a> {
     /// schema of left join input
     left_schema: &'a DFSchema,
     /// columns in left_schema, computed on demand
-    left_columns: Option<HashSet<Column>>,
+    left_columns: Option<HashSet<ColumnReference<'a>>>,
     /// schema of right join input
     right_schema: &'a DFSchema,
     /// columns in left_schema, computed on demand
-    right_columns: Option<HashSet<Column>>,
+    right_columns: Option<HashSet<ColumnReference<'a>>>,
 }
 
 impl<'a> ColumnChecker<'a> {
@@ -222,20 +224,6 @@ impl<'a> ColumnChecker<'a> {
         }
         has_all_column_refs(predicate, self.right_columns.as_ref().unwrap())
     }
-}
-
-/// Returns all columns in the schema
-fn schema_columns(schema: &DFSchema) -> HashSet<Column> {
-    schema
-        .iter()
-        .flat_map(|(qualifier, field)| {
-            [
-                Column::new(qualifier.cloned(), field.name()),
-                // we need to push down filter using unqualified column as well
-                Column::new_unqualified(field.name()),
-            ]
-        })
-        .collect::<HashSet<_>>()
 }
 
 /// Determine whether the predicate can evaluate as the join conditions
@@ -320,10 +308,8 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
 /// * do nothing.
 fn extract_or_clauses_for_join<'a>(
     filters: &'a [Expr],
-    schema: &'a DFSchema,
+    schema_cols: &'a HashSet<ColumnReference>,
 ) -> impl Iterator<Item = Expr> + 'a {
-    let schema_columns = schema_columns(schema);
-
     // new formed OR clauses and their column references
     filters.iter().filter_map(move |expr| {
         if let Expr::BinaryExpr(BinaryExpr {
@@ -332,8 +318,8 @@ fn extract_or_clauses_for_join<'a>(
             right,
         }) = expr
         {
-            let left_expr = extract_or_clause(left.as_ref(), &schema_columns);
-            let right_expr = extract_or_clause(right.as_ref(), &schema_columns);
+            let left_expr = extract_or_clause(left.as_ref(), schema_cols);
+            let right_expr = extract_or_clause(right.as_ref(), schema_cols);
 
             // If nothing can be extracted from any sub clauses, do nothing for this OR clause.
             if let (Some(left_expr), Some(right_expr)) = (left_expr, right_expr) {
@@ -355,7 +341,10 @@ fn extract_or_clauses_for_join<'a>(
 /// Otherwise, return None.
 ///
 /// For other clause, apply the rule above to extract clause.
-fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Expr> {
+fn extract_or_clause(
+    expr: &Expr,
+    schema_columns: &HashSet<ColumnReference>,
+) -> Option<Expr> {
     let mut predicate = None;
 
     match expr {
@@ -421,6 +410,10 @@ fn push_down_all_join(
     // 3) should be kept as filter conditions
     let left_schema = join.left.schema();
     let right_schema = join.right.schema();
+
+    let left_schema_columns = schema_columns(left_schema.as_ref());
+    let right_schema_columns = schema_columns(right_schema.as_ref());
+
     let mut left_push = vec![];
     let mut right_push = vec![];
     let mut keep_predicates = vec![];
@@ -467,12 +460,24 @@ fn push_down_all_join(
     // Extract from OR clause, generate new predicates for both side of join if possible.
     // We only track the unpushable predicates above.
     if left_preserved {
-        left_push.extend(extract_or_clauses_for_join(&keep_predicates, left_schema));
-        left_push.extend(extract_or_clauses_for_join(&join_conditions, left_schema));
+        left_push.extend(extract_or_clauses_for_join(
+            &keep_predicates,
+            &left_schema_columns,
+        ));
+        left_push.extend(extract_or_clauses_for_join(
+            &join_conditions,
+            &left_schema_columns,
+        ));
     }
     if right_preserved {
-        right_push.extend(extract_or_clauses_for_join(&keep_predicates, right_schema));
-        right_push.extend(extract_or_clauses_for_join(&join_conditions, right_schema));
+        right_push.extend(extract_or_clauses_for_join(
+            &keep_predicates,
+            &right_schema_columns,
+        ));
+        right_push.extend(extract_or_clauses_for_join(
+            &join_conditions,
+            &right_schema_columns,
+        ));
     }
 
     // For predicates from join filter, we should check with if a join side is preserved
@@ -480,13 +485,13 @@ fn push_down_all_join(
     if on_left_preserved {
         left_push.extend(extract_or_clauses_for_join(
             &on_filter_join_conditions,
-            left_schema,
+            &left_schema_columns,
         ));
     }
     if on_right_preserved {
         right_push.extend(extract_or_clauses_for_join(
             &on_filter_join_conditions,
-            right_schema,
+            &right_schema_columns,
         ));
     }
 

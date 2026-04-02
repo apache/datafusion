@@ -23,6 +23,7 @@ pub mod hj;
 pub mod imdb;
 pub mod nlj;
 pub mod smj;
+pub mod sort_pushdown;
 pub mod sort_tpch;
 pub mod tpcds;
 pub mod tpch;

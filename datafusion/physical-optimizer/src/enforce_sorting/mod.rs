@@ -548,8 +548,9 @@ pub fn ensure_sorting(
 
 /// Analyzes if there are any immediate sort removals by checking the `SortExec`s
 /// and their ordering requirement satisfactions with children
-/// If the sort is unnecessary, either replaces it with [`SortPreservingMergeExec`]/`LimitExec`
-/// or removes the [`SortExec`].
+/// If the sort is unnecessary, either replaces it with
+/// [`SortPreservingMergeExec`] and/or a limit node, or removes the
+/// [`SortExec`].
 /// Otherwise, returns the original plan
 fn analyze_immediate_sort_removal(
     mut node: PlanWithCorrespondingSort,

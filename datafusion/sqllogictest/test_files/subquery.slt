@@ -1671,3 +1671,71 @@ drop table employees;
 
 statement count 0
 drop table project_assignments;
+
+# https://github.com/apache/datafusion/issues/21205
+statement ok
+CREATE TABLE dup_filter_t1(id INTEGER) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE dup_filter_t2(id INTEGER) AS VALUES (1), (2), (3);
+
+query I
+SELECT * FROM dup_filter_t1 WHERE dup_filter_t1.id IN (
+    SELECT dup_filter_t2.id FROM dup_filter_t2 WHERE dup_filter_t2.id > dup_filter_t1.id
+);
+----
+
+statement ok
+DROP TABLE dup_filter_t1;
+
+statement ok
+DROP TABLE dup_filter_t2;
+
+# https://github.com/apache/datafusion/issues/21206
+statement ok
+CREATE TABLE sq_name_t1(id INTEGER) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE sq_name_t2(id INTEGER, outer_id INTEGER) AS VALUES (10, 1), (20, 1), (30, 2);
+
+query II
+SELECT sq_name_t1.id,
+  (SELECT count(*) AS id FROM sq_name_t2 WHERE sq_name_t2.outer_id = sq_name_t1.id) AS cnt
+FROM sq_name_t1
+ORDER BY sq_name_t1.id;
+----
+1 2
+2 1
+3 0
+
+query I
+SELECT sq_name_t1.id
+FROM sq_name_t1
+WHERE sq_name_t1.id > (
+  SELECT count(*) AS id
+  FROM sq_name_t2
+  WHERE sq_name_t2.outer_id = sq_name_t1.id
+)
+ORDER BY sq_name_t1.id;
+----
+2
+3
+
+query I
+SELECT sq_name_t1.id * 10 + (
+  SELECT count(*) AS id
+  FROM sq_name_t2
+  WHERE sq_name_t2.outer_id = sq_name_t1.id
+) AS total
+FROM sq_name_t1
+ORDER BY sq_name_t1.id;
+----
+12
+21
+30
+
+statement ok
+DROP TABLE sq_name_t1;
+
+statement ok
+DROP TABLE sq_name_t2;
