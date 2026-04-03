@@ -21,7 +21,8 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::{Result, internal_err};
 use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 
-use super::{FileOpener, FileStream, FileStreamMetrics, FileStreamState, OnError};
+use super::metrics::FileStreamMetrics;
+use super::{FileOpener, FileStream, FileStreamState, OnError};
 
 /// Builder for constructing a [`FileStream`].
 pub struct FileStreamBuilder<'a> {
