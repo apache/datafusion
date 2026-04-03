@@ -117,9 +117,14 @@ where
         let mut buffer = cell.try_borrow_mut()
             .map_err(|_| _internal_datafusion_err!("with_hashes cannot be called reentrantly on the same thread"))?;
 
-        // Ensure buffer has sufficient length, clearing old values
+        // Ensure buffer has sufficient capacity without zero-filling.
+        // create_hashes writes all positions (including null sentinels),
+        // so pre-zeroing is unnecessary.
         buffer.clear();
-        buffer.resize(required_size, 0);
+        buffer.reserve(required_size);
+        // SAFETY: create_hashes will write every position in the buffer
+        // (null positions get a consistent sentinel hash).
+        unsafe { buffer.set_len(required_size) };
 
         // Create hashes in the buffer - this consumes the iterator
         create_hashes(iter, random_state, &mut buffer[..required_size])?;
@@ -244,6 +249,10 @@ fn hash_array_primitive<T>(
             hashes_buffer[i] = hasher.finish();
         }
     } else {
+        // Fill with null sentinel, then overwrite valid positions.
+        // This allows callers to skip pre-zeroing the buffer.
+        let null_hash = random_state.hash_one(1u8);
+        hashes_buffer.fill(null_hash);
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
             hashes_buffer[i] = value.hash_one(random_state);
@@ -289,6 +298,10 @@ fn hash_array<T>(
                 combine_hashes(value.hash_one(random_state), hashes_buffer[i]);
         }
     } else {
+        // Fill with null sentinel, then overwrite valid positions.
+        // This allows callers to skip pre-zeroing the buffer.
+        let null_hash = random_state.hash_one(1u8);
+        hashes_buffer.fill(null_hash);
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
             hashes_buffer[i] = value.hash_one(random_state);
@@ -331,9 +344,13 @@ fn hash_string_view_array_inner<
         }
     };
 
+    let null_hash = random_state.hash_one(1u8);
     let hashes_and_views = hashes_buffer.iter_mut().zip(array.views().iter());
     for (i, (hash, &v)) in hashes_and_views.enumerate() {
         if HAS_NULLS && array.is_null(i) {
+            if !REHASH {
+                *hash = null_hash;
+            }
             continue;
         }
         let view_len = v as u32;
@@ -447,6 +464,7 @@ fn hash_dictionary_inner<
     let mut dict_hashes = vec![0; dict_values.len()];
     create_hashes([dict_values], random_state, &mut dict_hashes)?;
 
+    let null_hash = random_state.hash_one(1u8);
     if HAS_NULL_KEYS {
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
             if let Some(key) = key {
@@ -457,7 +475,11 @@ fn hash_dictionary_inner<
                     } else {
                         *hash = dict_hashes[idx];
                     }
+                } else if !MULTI_COL {
+                    *hash = null_hash;
                 }
+            } else if !MULTI_COL {
+                *hash = null_hash;
             }
         }
     } else {
@@ -469,6 +491,8 @@ fn hash_dictionary_inner<
                 } else {
                     *hash = dict_hashes[idx];
                 }
+            } else if !MULTI_COL {
+                *hash = null_hash;
             }
         }
     }
@@ -916,6 +940,10 @@ fn hash_run_array_inner<
         let end_in_slice = (absolute_run_end - array_offset).min(array_len);
 
         if HAS_NULL_VALUES && sliced_values.is_null(adjusted_physical_index) {
+            if !REHASH {
+                let null_hash = random_state.hash_one(1u8);
+                hashes_buffer[start_in_slice..end_in_slice].fill(null_hash);
+            }
             start_in_slice = end_in_slice;
             continue;
         }
@@ -1103,9 +1131,32 @@ where
     for (i, array) in arrays.into_iter().enumerate() {
         // combine hashes with `combine_hashes` for all columns besides the first
         let rehash = i >= 1;
-        hash_single_array(array.as_dyn_array(), random_state, hashes_buffer, rehash)?;
+        let arr = array.as_dyn_array();
+        // Complex types (struct, list, map, union) always combine with
+        // existing hash values rather than initializing them, so the buffer
+        // must be zeroed when they appear as the first column.
+        if !rehash && needs_zero_init(arr.data_type()) {
+            hashes_buffer.fill(0);
+        }
+        hash_single_array(arr, random_state, hashes_buffer, rehash)?;
     }
     Ok(hashes_buffer)
+}
+
+/// Returns true for types whose hash functions always combine with existing
+/// buffer values (no `rehash=false` path), requiring zero-initialized buffers.
+fn needs_zero_init(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Struct(_)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::Map(_, _)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Union(_, _)
+    )
 }
 
 #[cfg(test)]
@@ -1190,11 +1241,12 @@ mod tests {
                 create_hashes(&[binary_array], &random_state, &mut binary_hashes)
                     .unwrap();
 
-                // Null values result in a zero hash,
+                // Null values result in a consistent null sentinel hash
+                let null_hash = random_state.hash_one(1u8);
                 for (val, hash) in binary.iter().zip(binary_hashes.iter()) {
                     match val {
                         Some(_) => assert_ne!(*hash, 0),
-                        None => assert_eq!(*hash, 0),
+                        None => assert_eq!(*hash, null_hash),
                     }
                 }
 
@@ -1260,11 +1312,12 @@ mod tests {
                 let mut dict_hashes = vec![0; strings.len()];
                 create_hashes(&[dict_array], &random_state, &mut dict_hashes).unwrap();
 
-                // Null values result in a zero hash,
+                // Null values result in a consistent null sentinel hash
+                let null_hash = random_state.hash_one(1u8);
                 for (val, hash) in strings.iter().zip(string_hashes.iter()) {
                     match val {
                         Some(_) => assert_ne!(*hash, 0),
-                        None => assert_eq!(*hash, 0),
+                        None => assert_eq!(*hash, null_hash),
                     }
                 }
 
@@ -1377,11 +1430,12 @@ mod tests {
         let mut dict_hashes = vec![0; strings.len()];
         create_hashes(&[dict_array], &random_state, &mut dict_hashes).unwrap();
 
-        // Null values result in a zero hash,
+        // Null values result in a consistent null sentinel hash
+        let null_hash = random_state.hash_one(1u8);
         for (val, hash) in strings.iter().zip(string_hashes.iter()) {
             match val {
                 Some(_) => assert_ne!(*hash, 0),
-                None => assert_eq!(*hash, 0),
+                None => assert_eq!(*hash, null_hash),
             }
         }
 
@@ -2047,10 +2101,11 @@ mod tests {
             &mut hashes,
         )?;
 
+        let null_hash = random_state.hash_one(1u8);
         assert_eq!(hashes[0], hashes[1]);
         assert_ne!(hashes[0], 0);
         assert_eq!(hashes[2], hashes[3]);
-        assert_eq!(hashes[2], 0);
+        assert_eq!(hashes[2], null_hash);
         assert_eq!(hashes[4], hashes[5]);
         assert_ne!(hashes[4], 0);
         assert_ne!(hashes[0], hashes[4]);
