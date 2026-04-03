@@ -19,7 +19,6 @@
 //! A Sort-Merge join plan consumes two sorted children plans and produces
 //! joined output by given join type and other options.
 
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -418,10 +417,6 @@ impl DisplayAs for SortMergeJoinExec {
 impl ExecutionPlan for SortMergeJoinExec {
     fn name(&self) -> &'static str {
         "SortMergeJoinExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
