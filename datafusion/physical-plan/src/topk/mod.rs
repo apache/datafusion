@@ -17,12 +17,16 @@
 
 //! TopK: Combination of Sort / LIMIT
 
+mod native;
+
 use arrow::{
     array::{Array, AsArray},
     compute::{FilterBuilder, interleave_record_batch, prep_null_mask_filter},
     row::{RowConverter, Rows, SortField},
 };
+use arrow_schema::SortOptions;
 use datafusion_expr::{ColumnarValue, Operator};
+use native::{NativeTopKHeap, find_new_native_topk_items, supports_native_topk};
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -114,12 +118,8 @@ pub struct TopK {
     batch_size: usize,
     /// sort expressions
     expr: LexOrdering,
-    /// row converter, for sort keys
-    row_converter: RowConverter,
-    /// scratch space for converting rows
-    scratch_rows: Rows,
-    /// stores the top k values and their sort key values, in order
-    heap: TopKHeap,
+    /// Heap variant: either row-based (general) or native (single primitive column)
+    inner: TopKInner,
     /// row converter, for common keys between the sort keys and the input ordering
     common_sort_prefix_converter: Option<RowConverter>,
     /// Common sort prefix between the input and the sort expressions to allow early exit optimization
@@ -130,6 +130,23 @@ pub struct TopK {
     /// to be greater (by byte order, after row conversion) than the top K,
     /// which means the top K won't change and the computation can be finished early.
     pub(crate) finished: bool,
+}
+
+/// Heap strategy: general row-based or specialized native encoding.
+enum TopKInner {
+    /// General purpose: uses Arrow RowConverter for multi-column or
+    /// non-primitive sort keys.
+    Row {
+        row_converter: RowConverter,
+        scratch_rows: Rows,
+        heap: TopKHeap,
+    },
+    /// Optimized path for single primitive column sorts: encodes sort
+    /// keys as inline `u128` values, avoiding RowConverter overhead.
+    Native {
+        sort_options: SortOptions,
+        heap: NativeTopKHeap,
+    },
 }
 
 /// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
@@ -198,13 +215,26 @@ impl TopK {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
 
-        let sort_fields = build_sort_fields(&expr, &schema)?;
+        // Use the native path for single primitive column sorts
+        let use_native =
+            expr.len() == 1 && supports_native_topk(&expr[0].expr.data_type(&schema)?);
 
-        // TODO there is potential to add special cases for single column sort fields
-        // to improve performance
-        let row_converter = RowConverter::new(sort_fields)?;
-        let scratch_rows =
-            row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
+        let inner = if use_native {
+            TopKInner::Native {
+                sort_options: expr[0].options,
+                heap: NativeTopKHeap::new(k, batch_size),
+            }
+        } else {
+            let sort_fields = build_sort_fields(&expr, &schema)?;
+            let row_converter = RowConverter::new(sort_fields)?;
+            let scratch_rows = row_converter
+                .empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
+            TopKInner::Row {
+                row_converter,
+                scratch_rows,
+                heap: TopKHeap::new(k, batch_size),
+            }
+        };
 
         let prefix_row_converter = if common_sort_prefix.is_empty() {
             None
@@ -219,9 +249,7 @@ impl TopK {
             reservation,
             batch_size,
             expr,
-            row_converter,
-            scratch_rows,
-            heap: TopKHeap::new(k, batch_size),
+            inner,
             common_sort_prefix_converter: prefix_row_converter,
             common_sort_prefix: Arc::from(common_sort_prefix),
             finished: false,
@@ -281,27 +309,68 @@ impl TopK {
                 .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
                 .collect::<Result<Vec<_>>>()?;
         }
-        // reuse existing `Rows` to avoid reallocations
-        let rows = &mut self.scratch_rows;
-        rows.clear();
-        self.row_converter.append(rows, &sort_keys)?;
 
-        let mut batch_entry = self.heap.register_batch(batch.clone());
+        let replacements = match &mut self.inner {
+            TopKInner::Row {
+                row_converter,
+                scratch_rows,
+                heap,
+            } => {
+                // reuse existing `Rows` to avoid reallocations
+                scratch_rows.clear();
+                row_converter.append(scratch_rows, &sort_keys)?;
 
-        let replacements = match selected_rows {
-            Some(filter) => {
-                self.find_new_topk_items(filter.values().set_indices(), &mut batch_entry)
+                let mut batch_entry = heap.register_batch(batch.clone());
+                let replacements = match selected_rows {
+                    Some(ref filter) => find_new_topk_items_row(
+                        heap,
+                        scratch_rows,
+                        filter.values().set_indices(),
+                        &mut batch_entry,
+                    ),
+                    None => find_new_topk_items_row(
+                        heap,
+                        scratch_rows,
+                        0..sort_keys[0].len(),
+                        &mut batch_entry,
+                    ),
+                };
+                if replacements > 0 {
+                    heap.insert_batch_entry(batch_entry);
+                    heap.maybe_compact()?;
+                }
+                replacements
             }
-            None => self.find_new_topk_items(0..sort_keys[0].len(), &mut batch_entry),
+            TopKInner::Native { sort_options, heap } => {
+                let sort_key = &sort_keys[0];
+                let options = *sort_options;
+                let mut batch_entry = heap.register_batch(batch.clone());
+                let replacements = match selected_rows {
+                    Some(ref filter) => find_new_native_topk_items(
+                        heap,
+                        sort_key,
+                        options,
+                        filter.values().set_indices(),
+                        &mut batch_entry,
+                    ),
+                    None => find_new_native_topk_items(
+                        heap,
+                        sort_key,
+                        options,
+                        0..sort_key.len(),
+                        &mut batch_entry,
+                    ),
+                };
+                if replacements > 0 {
+                    heap.insert_batch_entry(batch_entry);
+                    heap.maybe_compact()?;
+                }
+                replacements
+            }
         };
 
         if replacements > 0 {
             self.metrics.row_replacements.add(replacements);
-
-            self.heap.insert_batch_entry(batch_entry);
-
-            // conserve memory
-            self.heap.maybe_compact()?;
 
             // update memory reservation
             self.reservation.try_resize(self.size())?;
@@ -318,26 +387,20 @@ impl TopK {
         Ok(())
     }
 
-    fn find_new_topk_items(
-        &mut self,
-        items: impl Iterator<Item = usize>,
-        batch_entry: &mut RecordBatchEntry,
-    ) -> usize {
-        let mut replacements = 0;
-        let rows = &mut self.scratch_rows;
-        for (index, row) in items.zip(rows.iter()) {
-            match self.heap.max() {
-                // heap has k items, and the new row is greater than the
-                // current max in the heap ==> it is not a new topk
-                Some(max_row) if row.as_ref() >= max_row.row() => {}
-                // don't yet have k items or new item is lower than the currently k low values
-                None | Some(_) => {
-                    self.heap.add(batch_entry, row, index);
-                    replacements += 1;
-                }
-            }
+    /// Helper: access the max row's (batch_id, index) from either heap variant.
+    fn heap_max_ids(&self) -> Option<(u32, usize)> {
+        match &self.inner {
+            TopKInner::Row { heap, .. } => heap.max().map(|r| (r.batch_id, r.index)),
+            TopKInner::Native { heap, .. } => heap.max().map(|r| (r.batch_id, r.index)),
         }
-        replacements
+    }
+
+    /// Helper: get the store from either heap variant.
+    fn store(&self) -> &RecordBatchStore {
+        match &self.inner {
+            TopKInner::Row { heap, .. } => &heap.store,
+            TopKInner::Native { heap, .. } => &heap.store,
+        }
     }
 
     /// Update the filter representation of our TopK heap.
@@ -352,11 +415,19 @@ impl TopK {
     /// ```
     fn update_filter(&mut self) -> Result<()> {
         // If the heap doesn't have k elements yet, we can't create thresholds
-        let Some(max_row) = self.heap.max() else {
+        let Some((max_batch_id, max_index)) = self.heap_max_ids() else {
             return Ok(());
         };
 
-        let new_threshold_row = &max_row.row;
+        // Build a comparable threshold representation for cross-partition dedup.
+        // Row variant: use the row bytes directly.
+        // Native variant: use the u128 key as big-endian bytes.
+        let new_threshold_bytes: Vec<u8> = match &self.inner {
+            TopKInner::Row { heap, .. } => heap.max().unwrap().row.clone(),
+            TopKInner::Native { heap, .. } => {
+                heap.max().unwrap().key.to_be_bytes().to_vec()
+            }
+        };
 
         // Fast path: check if the current value in topk is better than what is
         // currently set in the filter with a read only lock
@@ -367,7 +438,7 @@ impl TopK {
             .as_ref()
             .map(|current_row| {
                 // new < current means new threshold is more selective
-                new_threshold_row < current_row
+                new_threshold_bytes.as_slice() < current_row.as_slice()
             })
             .unwrap_or(true); // No current threshold, so we need to set one
 
@@ -377,14 +448,18 @@ impl TopK {
         }
 
         // Extract scalar values BEFORE acquiring lock to reduce critical section
-        let thresholds = match self.heap.get_threshold_values(&self.expr)? {
+        let thresholds = match get_threshold_values(
+            self.store(),
+            max_batch_id,
+            max_index,
+            &self.expr,
+        )? {
             Some(t) => t,
             None => return Ok(()),
         };
 
         // Build the filter expression OUTSIDE any synchronization
         let predicate = Self::build_filter_expression(&self.expr, &thresholds)?;
-        let new_threshold = new_threshold_row.to_vec();
 
         // update the threshold. Since there was a lock gap, we must check if it is still the best
         // may have changed while we were building the expression without the lock
@@ -396,8 +471,8 @@ impl TopK {
         match old_threshold {
             Some(old_threshold) => {
                 // new threshold is still better than the old one
-                if new_threshold.as_slice() < old_threshold.as_slice() {
-                    filter.threshold_row = Some(new_threshold);
+                if new_threshold_bytes.as_slice() < old_threshold.as_slice() {
+                    filter.threshold_row = Some(new_threshold_bytes);
                 } else {
                     // some other thread updated the threshold to a better
                     // one while we were building so there is no need to
@@ -408,7 +483,7 @@ impl TopK {
             }
             None => {
                 // No previous threshold, so we can set the new one
-                filter.threshold_row = Some(new_threshold);
+                filter.threshold_row = Some(new_threshold_bytes);
             }
         };
 
@@ -524,8 +599,8 @@ impl TopK {
             return Ok(());
         };
 
-        // Early exit if the heap is not full (`heap.max()` only returns `Some` if the heap is full).
-        let Some(max_topk_row) = self.heap.max() else {
+        // Early exit if the heap is not full (`heap_max_ids()` only returns `Some` if the heap is full).
+        let Some((max_batch_id, max_index)) = self.heap_max_ids() else {
             return Ok(());
         };
 
@@ -538,18 +613,13 @@ impl TopK {
 
         // Retrieve the max row from the heap.
         let store_entry = self
-            .heap
-            .store
-            .get(max_topk_row.batch_id)
+            .store()
+            .get(max_batch_id)
             .ok_or(internal_datafusion_err!("Invalid batch id in topK heap"))?;
         let max_batch = &store_entry.batch;
         let mut heap_prefix_scratch =
             prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
-        self.compute_common_sort_prefix(
-            max_batch,
-            max_topk_row.index,
-            &mut heap_prefix_scratch,
-        )?;
+        self.compute_common_sort_prefix(max_batch, max_index, &mut heap_prefix_scratch)?;
 
         // If the last row's prefix is strictly greater than the max prefix, mark as finished.
         if batch_prefix_scratch.row(0).as_ref() > heap_prefix_scratch.row(0).as_ref() {
@@ -591,9 +661,7 @@ impl TopK {
             reservation: _,
             batch_size,
             expr: _,
-            row_converter: _,
-            scratch_rows: _,
-            mut heap,
+            inner,
             common_sort_prefix_converter: _,
             common_sort_prefix: _,
             finished: _,
@@ -604,9 +672,14 @@ impl TopK {
         // Mark the dynamic filter as complete now that TopK processing is finished.
         filter.read().expr().mark_complete();
 
+        let emitted = match inner {
+            TopKInner::Row { mut heap, .. } => heap.emit()?,
+            TopKInner::Native { mut heap, .. } => heap.emit()?,
+        };
+
         // break into record batches as needed
         let mut batches = vec![];
-        if let Some(mut batch) = heap.emit()? {
+        if let Some(mut batch) = emitted {
             (&batch).record_output(&metrics.baseline);
 
             loop {
@@ -629,9 +702,14 @@ impl TopK {
     /// return the size of memory used by this operator, in bytes
     fn size(&self) -> usize {
         size_of::<Self>()
-            + self.row_converter.size()
-            + self.scratch_rows.size()
-            + self.heap.size()
+            + match &self.inner {
+                TopKInner::Row {
+                    row_converter,
+                    scratch_rows,
+                    heap,
+                } => row_converter.size() + scratch_rows.size() + heap.size(),
+                TopKInner::Native { heap, .. } => heap.size(),
+            }
     }
 }
 
@@ -844,47 +922,64 @@ impl TopKHeap {
             + self.store.size()
             + self.owned_bytes
     }
+}
 
-    fn get_threshold_values(
-        &self,
-        sort_exprs: &[PhysicalSortExpr],
-    ) -> Result<Option<Vec<ScalarValue>>> {
-        // If the heap doesn't have k elements yet, we can't create thresholds
-        let max_row = match self.max() {
-            Some(row) => row,
-            None => return Ok(None),
-        };
-
-        // Get the batch that contains the max row
-        let batch_entry = match self.store.get(max_row.batch_id) {
-            Some(entry) => entry,
-            None => return internal_err!("Invalid batch ID in TopKRow"),
-        };
-
-        // Extract threshold values for each sort expression
-        let mut scalar_values = Vec::with_capacity(sort_exprs.len());
-        for sort_expr in sort_exprs {
-            // Extract the value for this column from the max row
-            let expr = Arc::clone(&sort_expr.expr);
-            let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
-
-            // Convert to scalar value - should be a single value since we're evaluating on a single row batch
-            let scalar = match value {
-                ColumnarValue::Scalar(scalar) => scalar,
-                ColumnarValue::Array(array) if array.len() == 1 => {
-                    // Extract the first (and only) value from the array
-                    ScalarValue::try_from_array(&array, 0)?
-                }
-                array => {
-                    return internal_err!("Expected a scalar value, got {:?}", array);
-                }
-            };
-
-            scalar_values.push(scalar);
+/// Row-based insertion loop (general multi-column path).
+fn find_new_topk_items_row(
+    heap: &mut TopKHeap,
+    rows: &Rows,
+    items: impl Iterator<Item = usize>,
+    batch_entry: &mut RecordBatchEntry,
+) -> usize {
+    let mut replacements = 0;
+    for (index, row) in items.zip(rows.iter()) {
+        match heap.max() {
+            // heap has k items, and the new row is greater than the
+            // current max in the heap ==> it is not a new topk
+            Some(max_row) if row.as_ref() >= max_row.row() => {}
+            // don't yet have k items or new item is lower than the currently k low values
+            None | Some(_) => {
+                heap.add(batch_entry, row, index);
+                replacements += 1;
+            }
         }
-
-        Ok(Some(scalar_values))
     }
+    replacements
+}
+
+/// Extract scalar threshold values from the heap's max row.
+/// Works for both row-based and native heaps since it operates
+/// on the underlying RecordBatch store.
+fn get_threshold_values(
+    store: &RecordBatchStore,
+    batch_id: u32,
+    index: usize,
+    sort_exprs: &[PhysicalSortExpr],
+) -> Result<Option<Vec<ScalarValue>>> {
+    let batch_entry = match store.get(batch_id) {
+        Some(entry) => entry,
+        None => return internal_err!("Invalid batch ID in TopK heap"),
+    };
+
+    let mut scalar_values = Vec::with_capacity(sort_exprs.len());
+    for sort_expr in sort_exprs {
+        let expr = Arc::clone(&sort_expr.expr);
+        let value = expr.evaluate(&batch_entry.batch.slice(index, 1))?;
+
+        let scalar = match value {
+            ColumnarValue::Scalar(scalar) => scalar,
+            ColumnarValue::Array(array) if array.len() == 1 => {
+                ScalarValue::try_from_array(&array, 0)?
+            }
+            array => {
+                return internal_err!("Expected a scalar value, got {:?}", array);
+            }
+        };
+
+        scalar_values.push(scalar);
+    }
+
+    Ok(Some(scalar_values))
 }
 
 /// Represents one of the top K rows held in this heap. Orders
@@ -951,11 +1046,11 @@ impl Ord for TopKRow {
 }
 
 #[derive(Debug)]
-struct RecordBatchEntry {
-    id: u32,
-    batch: RecordBatch,
+pub(crate) struct RecordBatchEntry {
+    pub id: u32,
+    pub batch: RecordBatch,
     // for this batch, how many times has it been used
-    uses: usize,
+    pub uses: usize,
 }
 
 /// This structure tracks [`RecordBatch`] by an id so that:
@@ -963,17 +1058,17 @@ struct RecordBatchEntry {
 /// 1. The baches can be tracked via an id that can be copied cheaply
 /// 2. The total memory held by all batches is tracked
 #[derive(Debug)]
-struct RecordBatchStore {
+pub(crate) struct RecordBatchStore {
     /// id generator
     next_id: u32,
     /// storage
-    batches: HashMap<u32, RecordBatchEntry>,
+    pub batches: HashMap<u32, RecordBatchEntry>,
     /// total size of all record batches tracked by this store
     batches_size: usize,
 }
 
 impl RecordBatchStore {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             next_id: 0,
             batches: HashMap::new(),
@@ -1000,23 +1095,23 @@ impl RecordBatchStore {
     }
 
     /// Clear all values in this store, invalidating all previous batch ids
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.batches.clear();
         self.batches_size = 0;
     }
 
-    fn get(&self, id: u32) -> Option<&RecordBatchEntry> {
+    pub(crate) fn get(&self, id: u32) -> Option<&RecordBatchEntry> {
         self.batches.get(&id)
     }
 
     /// returns the total number of batches stored in this store
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.batches.len()
     }
 
     /// Returns the total number of rows in batches minus the number
     /// which are in use
-    fn unused_rows(&self) -> usize {
+    pub(crate) fn unused_rows(&self) -> usize {
         self.batches
             .values()
             .map(|batch_entry| batch_entry.batch.num_rows() - batch_entry.uses)
@@ -1024,7 +1119,7 @@ impl RecordBatchStore {
     }
 
     /// returns true if the store has nothing stored
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.batches.is_empty()
     }
 
