@@ -4601,10 +4601,6 @@ impl ScalarValue {
     /// Estimates [size](Self::size) of [`HashSet`] in bytes.
     ///
     /// Includes the size of the [`HashSet`] container itself.
-    #[expect(
-        clippy::mutable_key_type,
-        reason = "ScalarValue is intentionally hashable and used in HashSet-based APIs"
-    )]
     pub fn size_of_hashset<S>(set: &HashSet<Self, S>) -> usize {
         size_of_val(set)
             + (size_of::<ScalarValue>() * set.capacity())
@@ -7253,10 +7249,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::mutable_key_type,
-        reason = "test validates HashSet<ScalarValue> memory accounting"
-    )]
     fn memory_size() {
         let sv = ScalarValue::Binary(Some(Vec::with_capacity(10)));
         assert_eq!(sv.size(), size_of::<ScalarValue>() + 10,);

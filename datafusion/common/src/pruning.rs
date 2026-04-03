@@ -121,10 +121,6 @@ pub trait PruningStatistics {
     /// container, return `None` (the default).
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
-    #[expect(
-        clippy::mutable_key_type,
-        reason = "ScalarValue is the established pruning API literal set type"
-    )]
     fn contained(
         &self,
         column: &Column,
@@ -530,10 +526,6 @@ impl PruningStatistics for CompositePruningStatistics {
 
 #[cfg(test)]
 #[expect(deprecated)]
-#[expect(
-    clippy::mutable_key_type,
-    reason = "tests intentionally exercise HashSet<ScalarValue> behavior"
-)]
 mod tests {
     use crate::{
         ColumnStatistics,
