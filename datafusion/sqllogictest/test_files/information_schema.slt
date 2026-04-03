@@ -275,6 +275,7 @@ datafusion.execution.split_file_groups_by_statistics false
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone NULL
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false
+datafusion.explain.analyze_categories all
 datafusion.explain.analyze_level dev
 datafusion.explain.format indent
 datafusion.explain.logical_plan_only false
@@ -312,6 +313,7 @@ datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values 150
 datafusion.optimizer.hash_join_inlist_pushdown_max_size 131072
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.hash_join_single_partition_threshold_rows 131072
+datafusion.optimizer.join_reordering true
 datafusion.optimizer.max_passes 3
 datafusion.optimizer.prefer_existing_sort false
 datafusion.optimizer.prefer_existing_union false
@@ -415,6 +417,7 @@ datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate 
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
 datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now` return timestamps in this time zone
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for this decision. Setting this flag to `true` will likely produce better plans. if the source of statistics is accurate. We plan to make this the default in the future.
+datafusion.explain.analyze_categories all Which metric categories to include in "EXPLAIN ANALYZE" output. Comma-separated list of: "rows", "bytes", "timing", "uncategorized". Use "none" to show plan structure only, or "all" (default) to show everything. Metrics without a declared category are treated as "uncategorized".
 datafusion.explain.analyze_level dev Verbosity level for "EXPLAIN ANALYZE". Default is "dev" "summary" shows common metrics for high-level insights. "dev" provides deep operator-level introspection for developers.
 datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format.
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans
@@ -452,6 +455,7 @@ datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values 150 Maximum n
 datafusion.optimizer.hash_join_inlist_pushdown_max_size 131072 Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering. Build sides larger than this will use hash table lookups instead. Set to 0 to always use hash table lookups. InList pushdown can be more efficient for small build sides because it can result in better statistics pruning as well as use any bloom filters present on the scan side. InList expressions are also more transparent and easier to serialize over the network in distributed uses of DataFusion. On the other hand InList pushdown requires making a copy of the data and thus adds some overhead to the build side and uses more memory. This setting is per-partition, so we may end up using `hash_join_inlist_pushdown_max_size` * `target_partitions` memory. The default is 128kB per partition. This should allow point lookup joins (e.g. joining on a unique primary key) to use InList pushdown in most cases but avoids excessive memory usage or overhead for larger joins.
 datafusion.optimizer.hash_join_single_partition_threshold 1048576 The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition
 datafusion.optimizer.hash_join_single_partition_threshold_rows 131072 The maximum estimated size in rows for one input side of a HashJoin will be collected into a single partition
+datafusion.optimizer.join_reordering true When set to true, the physical plan optimizer may swap join inputs based on statistics. When set to false, statistics-driven join input reordering is disabled and the original join order in the query is used.
 datafusion.optimizer.max_passes 3 Number of times that the optimizer will attempt to optimize the plan
 datafusion.optimizer.prefer_existing_sort false When true, DataFusion will opportunistically remove sorts when the data is already sorted, (i.e. setting `preserve_order` to true on `RepartitionExec`  and using `SortPreservingMergeExec`) When false, DataFusion will maximize plan parallelism using `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
 datafusion.optimizer.prefer_existing_union false When set to true, the optimizer will not attempt to convert Union to Interleave
@@ -868,3 +872,18 @@ date_trunc Timestamp(ns, "+TZ") [precision, expression] [String, Timestamp(ns, "
 
 statement ok
 show functions
+
+# Config reset
+statement ok
+reset datafusion.catalog.information_schema;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.execution.planning_concurrency;
+
+statement ok
+reset datafusion.execution.parquet.created_by;

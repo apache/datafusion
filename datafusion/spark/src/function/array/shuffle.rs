@@ -36,7 +36,6 @@ use datafusion_expr::{
 use rand::rng;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng, seq::SliceRandom};
-use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -77,10 +76,6 @@ impl SparkShuffle {
 }
 
 impl ScalarUDFImpl for SparkShuffle {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "shuffle"
     }

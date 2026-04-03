@@ -82,7 +82,7 @@ impl Display for WindowUDF {
 
 impl PartialEq for WindowUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(other.inner.as_any())
+        self.inner.dyn_eq(other.inner.as_ref() as &dyn Any)
     }
 }
 
@@ -240,7 +240,6 @@ where
 /// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 /// # Basic Example
 /// ```
-/// # use std::any::Any;
 /// # use std::sync::LazyLock;
 /// # use arrow::datatypes::{DataType, Field, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
@@ -277,7 +276,6 @@ where
 ///
 /// /// Implement the WindowUDFImpl trait for SmoothIt
 /// impl WindowUDFImpl for SmoothIt {
-///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "smooth_it" }
 ///    fn signature(&self) -> &Signature { &self.signature }
 ///    // The actual implementation would smooth the window
@@ -314,10 +312,7 @@ where
 ///     .build()
 ///     .unwrap();
 /// ```
-pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
-    /// Returns this object as an [`Any`] trait object
-    fn as_any(&self) -> &dyn Any;
-
+pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns this function's name
     fn name(&self) -> &str;
 
@@ -462,7 +457,7 @@ pub enum ReversedUDWF {
 
 impl PartialEq for dyn WindowUDFImpl {
     fn eq(&self, other: &Self) -> bool {
-        self.dyn_eq(other.as_any())
+        self.dyn_eq(other as &dyn Any)
     }
 }
 
@@ -502,10 +497,6 @@ impl AliasedWindowUDFImpl {
 
 #[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl WindowUDFImpl for AliasedWindowUDFImpl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -570,7 +561,6 @@ mod test {
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use std::any::Any;
     use std::cmp::Ordering;
     use std::hash::{DefaultHasher, Hash, Hasher};
     use std::sync::Arc;
@@ -594,9 +584,6 @@ mod test {
 
     /// Implement the WindowUDFImpl trait for AddOne
     impl WindowUDFImpl for AWindowUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "a"
         }
@@ -637,9 +624,6 @@ mod test {
 
     /// Implement the WindowUDFImpl trait for AddOne
     impl WindowUDFImpl for BWindowUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "b"
         }

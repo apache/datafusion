@@ -46,7 +46,7 @@ use crate::joins::utils::{
     swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
-use crate::metrics::{Count, MetricBuilder};
+use crate::metrics::{Count, MetricBuilder, MetricCategory};
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
@@ -1317,6 +1317,7 @@ impl ExecutionPlan for HashJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         let array_map_created_count = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
         let left_fut = match self.mode {
@@ -2147,7 +2148,6 @@ mod tests {
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
-    use arrow_schema::Schema;
     use datafusion_common::hash_utils::create_hashes;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
@@ -2157,7 +2157,6 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};

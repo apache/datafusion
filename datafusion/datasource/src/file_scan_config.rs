@@ -21,7 +21,7 @@
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType, file_stream::FileStream,
+    file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
     source::DataSource, statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
@@ -588,7 +588,11 @@ impl DataSource for FileScanConfig {
 
         let opener = source.create_file_opener(object_store, self, partition)?;
 
-        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        let stream = FileStreamBuilder::new(self)
+            .with_partition(partition)
+            .with_file_opener(opener)
+            .with_metrics(source.metrics())
+            .build()?;
         Ok(Box::pin(cooperative(stream)))
     }
 
@@ -1540,13 +1544,12 @@ mod tests {
     };
 
     use arrow::datatypes::Field;
+    use datafusion_common::ColumnStatistics;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, internal_err};
-    use datafusion_expr::{Operator, SortExpr};
+    use datafusion_expr::SortExpr;
     use datafusion_physical_expr::create_physical_sort_expr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
-    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     #[derive(Clone)]
     struct InexactSortPushdownSource {

@@ -98,7 +98,6 @@ impl AddOne {
 
 /// Implement the ScalarUDFImpl trait for AddOne
 impl ScalarUDFImpl for AddOne {
-   fn as_any(&self) -> &dyn Any { self }
    fn name(&self) -> &str { "add_one" }
    fn signature(&self) -> &Signature { &self.signature }
    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -161,7 +160,6 @@ We now need to register the function with DataFusion so that it can be used in t
 #
 # /// Implement the ScalarUDFImpl trait for AddOne
 # impl ScalarUDFImpl for AddOne {
-#    fn as_any(&self) -> &dyn Any { self }
 #    fn name(&self) -> &str { "add_one" }
 #    fn signature(&self) -> &Signature { &self.signature }
 #    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -411,10 +409,6 @@ impl AsyncUpper {
 /// Implement the normal ScalarUDFImpl trait for AsyncUpper
 #[async_trait]
 impl ScalarUDFImpl for AsyncUpper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "async_upper"
     }
@@ -514,10 +508,6 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #
 # #[async_trait]
 # impl ScalarUDFImpl for AsyncUpper {
-#     fn as_any(&self) -> &dyn Any {
-#         self
-#     }
-#
 #     fn name(&self) -> &str {
 #         "async_upper"
 #     }
@@ -641,7 +631,6 @@ impl PowerFunction {
 }
 
 impl ScalarUDFImpl for PowerFunction {
-    fn as_any(&self) -> &dyn Any { self }
     fn name(&self) -> &str { "power" }
     fn signature(&self) -> &Signature { &self.signature }
 
@@ -1388,15 +1377,16 @@ in the CLI to read the metadata from a Parquet file.
 
 The simple UDTF used here takes a single `Int64` argument and returns a table with a single column with the value of the
 argument. To create a function in DataFusion, you need to implement the `TableFunctionImpl` trait. This trait has a
-single method, `call`, that takes a slice of `Expr`s and returns a `Result<Arc<dyn TableProvider>>`.
+single method, `call_with_args`, that takes a `TableFunctionArgs` struct and returns a `Result<Arc<dyn TableProvider>>`.
+Passed struct includes function arguments as a slice of `Expr`s.
 
-In the `call` method, you parse the input `Expr`s and return a `TableProvider`. You might also want to do some
+In the `call_with_args` method, you parse the input `Expr`s and return a `TableProvider`. You might also want to do some
 validation of the input `Expr`s, e.g. checking that the number of arguments is correct.
 
 ```rust
 use std::sync::Arc;
 use datafusion::common::{plan_err, ScalarValue, Result};
-use datafusion::catalog::{TableFunctionImpl, TableProvider};
+use datafusion::catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::datasource::memory::MemTable;
 use arrow::record_batch::RecordBatch;
@@ -1408,7 +1398,8 @@ use datafusion_expr::Expr;
 pub struct EchoFunction {}
 
 impl TableFunctionImpl for EchoFunction {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         let Some(Expr::Literal(ScalarValue::Int64(Some(value)), _)) = exprs.get(0) else {
             return plan_err!("First argument must be an integer");
         };
@@ -1437,7 +1428,7 @@ With the UDTF implemented, you can register it with the `SessionContext`:
 ```rust
 # use std::sync::Arc;
 # use datafusion::common::{plan_err, ScalarValue, Result};
-# use datafusion::catalog::{TableFunctionImpl, TableProvider};
+# use datafusion::catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 # use datafusion::arrow::array::{ArrayRef, Int64Array};
 # use datafusion::datasource::memory::MemTable;
 # use arrow::record_batch::RecordBatch;
@@ -1449,7 +1440,8 @@ With the UDTF implemented, you can register it with the `SessionContext`:
 # pub struct EchoFunction {}
 #
 # impl TableFunctionImpl for EchoFunction {
-#     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+#    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+#        let exprs = args.exprs();
 #         let Some(Expr::Literal(ScalarValue::Int64(Some(value)), _)) = exprs.get(0) else {
 #             return plan_err!("First argument must be an integer");
 #         };

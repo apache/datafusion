@@ -44,15 +44,10 @@ on:
       - 'datafusion/physical*/**/*.rs'
       - 'datafusion/expr*/**/*.rs'
       - 'datafusion/optimizer/**/*.rs'
+      - 'datafusion/sql/**/*.rs'
       - 'datafusion-testing'
   workflow_dispatch:
     inputs:
-      pr_number:
-        description: 'Pull request number'
-        type: string
-      check_run_id:
-        description: 'Check run ID for status updates'
-        type: string
       pr_head_sha:
         description: 'PR head SHA'
         type: string
@@ -69,7 +64,7 @@ jobs:
     runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -93,11 +88,10 @@ jobs:
   linux-test-extended:
     name: cargo test 'extended_tests' (amd64)
     needs: [linux-build-lib]
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion,spot=false', github.run_id) || 'ubuntu-latest' }}
-    # spot=false because the tests are long, https://runs-on.com/configuration/spot-instances/#disable-spot-pricing
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -144,7 +138,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
@@ -162,21 +156,20 @@ jobs:
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
-    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=48,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion,spot=false', github.run_id) || 'ubuntu-latest' }}
-    # spot=false because the tests are long, https://runs-on.com/configuration/spot-instances/#disable-spot-pricing
+    runs-on: ${{ github.repository_owner == 'apache' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@cd2b598b0515d39d78c38a02d529db87d2196d1e  # v2.0.3
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
           fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+      # Don't use setup-builder to avoid configuring RUST_BACKTRACE which is expensive
+      - name: Install protobuf compiler
+        run: |
+          apt-get update && apt-get install -y protobuf-compiler
       - name: Run sqllogictest
         run: |
           cargo test --features backtrace,parquet_encryption --profile ci-optimized --test sqllogictests -- --include-sqlite

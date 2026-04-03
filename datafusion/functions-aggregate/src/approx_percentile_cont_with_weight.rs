@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of_val;
@@ -152,10 +151,6 @@ impl ApproxPercentileContWithWeight {
 }
 
 impl AggregateUDFImpl for ApproxPercentileContWithWeight {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "approx_percentile_cont_with_weight"
     }

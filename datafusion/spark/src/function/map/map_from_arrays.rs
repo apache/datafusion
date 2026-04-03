@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use crate::function::map::utils::{
     get_element_type, get_list_offsets, get_list_values,
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
@@ -55,10 +53,6 @@ impl MapFromArrays {
 }
 
 impl ScalarUDFImpl for MapFromArrays {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_from_arrays"
     }
@@ -117,8 +111,6 @@ fn map_from_arrays_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn test_map_from_arrays_nullability_and_type() {

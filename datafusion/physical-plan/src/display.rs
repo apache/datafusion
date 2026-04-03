@@ -28,7 +28,7 @@ use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
-use crate::metrics::MetricType;
+use crate::metrics::{MetricCategory, MetricType};
 use crate::render_tree::RenderTree;
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
@@ -123,13 +123,16 @@ pub struct DisplayableExecutionPlan<'a> {
     show_schema: bool,
     /// Which metric categories should be included when rendering
     metric_types: Vec<MetricType>,
+    /// Optional filter by semantic category (rows / bytes / timing).
+    /// `None` means show all categories; `Some(vec![])` means plan-only.
+    metric_categories: Option<Vec<MetricCategory>>,
     // (TreeRender) Maximum total width of the rendered tree
     tree_maximum_render_width: usize,
 }
 
 impl<'a> DisplayableExecutionPlan<'a> {
     fn default_metric_types() -> Vec<MetricType> {
-        vec![MetricType::SUMMARY, MetricType::DEV]
+        vec![MetricType::Summary, MetricType::Dev]
     }
 
     /// Create a wrapper around an [`ExecutionPlan`] which can be
@@ -141,6 +144,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: false,
             show_schema: false,
             metric_types: Self::default_metric_types(),
+            metric_categories: None,
             tree_maximum_render_width: 240,
         }
     }
@@ -155,6 +159,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: false,
             show_schema: false,
             metric_types: Self::default_metric_types(),
+            metric_categories: None,
             tree_maximum_render_width: 240,
         }
     }
@@ -169,6 +174,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: false,
             show_schema: false,
             metric_types: Self::default_metric_types(),
+            metric_categories: None,
             tree_maximum_render_width: 240,
         }
     }
@@ -191,6 +197,23 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Specify which metric types should be rendered alongside the plan
     pub fn set_metric_types(mut self, metric_types: Vec<MetricType>) -> Self {
         self.metric_types = metric_types;
+        self
+    }
+
+    /// Specify which metric categories to include.
+    ///
+    /// - `None` means show all categories (default).
+    /// - `Some(vec![])` means plan-only — suppress all metrics.
+    /// - `Some(vec![Rows])` means show only row-count metrics (plus
+    ///   uncategorized metrics).
+    ///
+    /// See [`MetricCategory`] for the determinism properties of each
+    /// category.
+    pub fn set_metric_categories(
+        mut self,
+        metric_categories: Option<Vec<MetricCategory>>,
+    ) -> Self {
+        self.metric_categories = metric_categories;
         self
     }
 
@@ -223,6 +246,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: bool,
             show_schema: bool,
             metric_types: Vec<MetricType>,
+            metric_categories: Option<Vec<MetricCategory>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -234,6 +258,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_statistics: self.show_statistics,
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
+                    metric_categories: self.metric_categories.as_deref(),
                 };
                 accept(self.plan, &mut visitor)
             }
@@ -245,6 +270,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: self.show_statistics,
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
+            metric_categories: self.metric_categories.clone(),
         }
     }
 
@@ -265,6 +291,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics,
             show_statistics: bool,
             metric_types: Vec<MetricType>,
+            metric_categories: Option<Vec<MetricCategory>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -276,6 +303,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
                     metric_types: &self.metric_types,
+                    metric_categories: self.metric_categories.as_deref(),
                     graphviz_builder: GraphvizBuilder::default(),
                     parents: Vec::new(),
                 };
@@ -294,6 +322,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
             metric_types: self.metric_types.clone(),
+            metric_categories: self.metric_categories.clone(),
         }
     }
 
@@ -329,6 +358,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: bool,
             show_schema: bool,
             metric_types: Vec<MetricType>,
+            metric_categories: Option<Vec<MetricCategory>>,
         }
 
         impl fmt::Display for Wrapper<'_> {
@@ -341,6 +371,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_statistics: self.show_statistics,
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
+                    metric_categories: self.metric_categories.as_deref(),
                 };
                 visitor.pre_visit(self.plan)?;
                 Ok(())
@@ -353,6 +384,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: self.show_statistics,
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
+            metric_categories: self.metric_categories.clone(),
         }
     }
 
@@ -409,6 +441,8 @@ struct IndentVisitor<'a, 'b> {
     show_schema: bool,
     /// Which metric types should be rendered
     metric_types: &'a [MetricType],
+    /// Optional filter by semantic category (rows / bytes / timing).
+    metric_categories: Option<&'a [MetricCategory]>,
 }
 
 impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
@@ -420,12 +454,14 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             ShowMetrics::None => {}
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics
+                    let mut metrics = metrics
                         .filter_by_metric_types(self.metric_types)
                         .aggregate_by_name()
                         .sorted_for_display()
                         .timestamps_removed();
-
+                    if let Some(cats) = self.metric_categories {
+                        metrics = metrics.filter_by_categories(cats);
+                    }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
@@ -433,7 +469,10 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
             ShowMetrics::Full => {
                 if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics.filter_by_metric_types(self.metric_types);
+                    let mut metrics = metrics.filter_by_metric_types(self.metric_types);
+                    if let Some(cats) = self.metric_categories {
+                        metrics = metrics.filter_by_categories(cats);
+                    }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
@@ -472,6 +511,8 @@ struct GraphvizVisitor<'a, 'b> {
     show_statistics: bool,
     /// Which metric types should be rendered
     metric_types: &'a [MetricType],
+    /// Optional filter by semantic category
+    metric_categories: Option<&'a [MetricCategory]>,
 
     graphviz_builder: GraphvizBuilder,
     /// Used to record parent node ids when visiting a plan.
@@ -508,12 +549,14 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             ShowMetrics::None => "".to_string(),
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics
+                    let mut metrics = metrics
                         .filter_by_metric_types(self.metric_types)
                         .aggregate_by_name()
                         .sorted_for_display()
                         .timestamps_removed();
-
+                    if let Some(cats) = self.metric_categories {
+                        metrics = metrics.filter_by_categories(cats);
+                    }
                     format!("metrics=[{metrics}]")
                 } else {
                     "metrics=[]".to_string()
@@ -521,7 +564,10 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             }
             ShowMetrics::Full => {
                 if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics.filter_by_metric_types(self.metric_types);
+                    let mut metrics = metrics.filter_by_metric_types(self.metric_types);
+                    if let Some(cats) = self.metric_categories {
+                        metrics = metrics.filter_by_categories(cats);
+                    }
                     format!("metrics=[{metrics}]")
                 } else {
                     "metrics=[]".to_string()

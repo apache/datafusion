@@ -1578,16 +1578,12 @@ pub(crate) fn stub_properties() -> Arc<PlanProperties> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-    use std::sync::Arc;
 
     use super::*;
     use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
     use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{Result, Statistics};
-    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use arrow::datatypes::{DataType, Field, Schema};
 
     #[derive(Debug)]
     pub struct EmptyExec;
@@ -1754,7 +1750,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &std::sync::Arc<PlanProperties> {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 

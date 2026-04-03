@@ -857,7 +857,7 @@ fn col_stats_union(
     left.distinct_count = union_distinct_count(&left, right);
     left.min_value = left.min_value.min(&right.min_value);
     left.max_value = left.max_value.max(&right.max_value);
-    left.sum_value = left.sum_value.add(&right.sum_value);
+    left.sum_value = left.sum_value.add_for_sum(&right.sum_value);
     left.null_count = left.null_count.add(&right.null_count);
 
     left
@@ -913,7 +913,6 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
-    use datafusion_common::stats::Precision;
     use datafusion_physical_expr::equivalence::convert_to_orderings;
     use datafusion_physical_expr::expressions::col;
 

@@ -27,7 +27,9 @@ use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
 use datafusion_physical_plan::metrics::SplitMetrics;
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
@@ -356,7 +358,20 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.data_source.metrics().clone_inner())
+        let mut metrics = self.data_source.metrics().clone_inner();
+
+        // Add `output_rows_skew` metric to the metrics set.
+        // Done here because it's a derived metric from output_rows metric.
+        if let Some(file_scan_config) =
+            self.data_source.as_any().downcast_ref::<FileScanConfig>()
+            && file_scan_config.file_source().file_type() == "parquet"
+            && let Some(output_rows_skew) =
+                BaselineMetrics::output_rows_skew_metric(&metrics)
+        {
+            metrics.push(output_rows_skew);
+        }
+
+        Some(metrics)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {

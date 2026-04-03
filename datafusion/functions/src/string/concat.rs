@@ -18,7 +18,6 @@
 use arrow::array::{Array, as_largestring_array};
 use arrow::datatypes::DataType;
 use datafusion_expr::sort_properties::ExprProperties;
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::string::concat;
@@ -76,10 +75,6 @@ impl ConcatFunc {
 }
 
 impl ScalarUDFImpl for ConcatFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "concat"
     }
@@ -376,8 +371,8 @@ mod tests {
     use super::*;
     use crate::utils::test::test_function;
     use DataType::*;
-    use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
+    use arrow::array::{LargeStringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
 

@@ -101,8 +101,23 @@ EOF
 echo "Running CLI and inserting config docs table"
 $PRINT_CONFIG_DOCS_COMMAND >> "$TARGET_FILE"
 
-echo "Inserting runtime config header"
+echo "Inserting reset command details and runtime config header"
 cat <<'EOF' >> "$TARGET_FILE"
+
+You can also reset configuration options to default settings via SQL using the `RESET` command. For
+example, to set and reset `datafusion.execution.batch_size`:
+
+```sql
+SET datafusion.execution.batch_size = '10000';
+
+SHOW datafusion.execution.batch_size;
+datafusion.execution.batch_size 10000
+
+RESET datafusion.execution.batch_size;
+
+SHOW datafusion.execution.batch_size;
+datafusion.execution.batch_size 8192
+```
 
 # Runtime Configuration Settings
 

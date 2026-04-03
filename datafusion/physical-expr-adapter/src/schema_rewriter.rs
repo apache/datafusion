@@ -25,12 +25,11 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use datafusion_common::{
-    Result, ScalarValue, exec_err,
+    DataFusionError, Result, ScalarValue, exec_err,
     metadata::FieldMetadata,
-    nested_struct::validate_struct_compatibility,
+    nested_struct::validate_data_type_compatibility,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
@@ -487,31 +486,18 @@ impl DefaultPhysicalExprAdapterRewriter {
         physical_field: FieldRef,
         logical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        // For struct types, use validate_struct_compatibility which handles:
-        // - Missing fields in source (filled with nulls)
-        // - Extra fields in source (ignored)
-        // - Recursive validation of nested structs
-        // For non-struct types, use Arrow's can_cast_types
-        match (physical_field.data_type(), logical_field.data_type()) {
-            (DataType::Struct(physical_fields), DataType::Struct(logical_fields)) => {
-                validate_struct_compatibility(
-                    physical_fields.as_ref(),
-                    logical_fields.as_ref(),
-                )?;
-            }
-            _ => {
-                let is_compatible =
-                    can_cast_types(physical_field.data_type(), logical_field.data_type());
-                if !is_compatible {
-                    return exec_err!(
-                        "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type)",
+        validate_data_type_compatibility(
+            column.name(),
+            physical_field.data_type(),
+            logical_field.data_type(),
+        )
+        .map_err(|e|
+                     DataFusionError::Execution(format!(
+                        "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type): {e}",
                         column.name(),
                         physical_field.data_type(),
                         logical_field.data_type()
-                    );
-                }
-            }
-        }
+                    )))?;
 
         let cast_expr = Arc::new(CastColumnExpr::new(
             Arc::new(column),
@@ -663,16 +649,13 @@ impl BatchAdapter {
 mod tests {
     use super::*;
     use arrow::array::{
-        BooleanArray, Int32Array, Int64Array, RecordBatch, RecordBatchOptions,
-        StringArray, StringViewArray, StructArray,
+        Array, BooleanArray, GenericListArray, Int32Array, Int64Array, RecordBatch,
+        RecordBatchOptions, StringArray, StringViewArray, StructArray,
     };
-    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-    use datafusion_common::{Result, ScalarValue, assert_contains, record_batch};
+    use arrow::datatypes::{Fields, Schema};
+    use datafusion_common::{assert_contains, record_batch};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, Literal, col, lit};
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use itertools::Itertools;
-    use std::sync::Arc;
 
     fn create_test_schema() -> (Schema, Schema) {
         let physical_schema = Schema::new(vec![
@@ -707,8 +690,6 @@ mod tests {
 
     #[test]
     fn test_rewrite_column_with_metadata_or_nullability_mismatch() -> Result<()> {
-        use std::collections::HashMap;
-
         let physical_schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
         let logical_schema =
             Schema::new(vec![Field::new("a", DataType::Int64, false).with_metadata(
@@ -916,8 +897,6 @@ mod tests {
 
     #[test]
     fn test_rewrite_missing_column_propagates_metadata() -> Result<()> {
-        use std::collections::HashMap;
-
         let physical_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let logical_schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1284,6 +1263,142 @@ mod tests {
 
         // Verify extra field (missing from physical) is filled with nulls
         let extra_col = result_struct.column_by_name("extra").unwrap();
+        assert_eq!(extra_col.data_type(), &DataType::Boolean);
+        let extra_values = extra_col.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert_eq!(extra_values.iter().collect_vec(), vec![None, None, None]);
+    }
+
+    /// Test that List<Struct> columns are properly adapted with struct evolution.
+    #[test]
+    fn test_adapt_list_struct_batches() {
+        // Physical: List<{id: Int32, name: Utf8}>
+        let physical_struct_fields: Fields = vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]
+        .into();
+
+        let struct_array = StructArray::new(
+            physical_struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+                Arc::new(StringArray::from(vec![
+                    Some("alice"),
+                    None,
+                    Some("charlie"),
+                ])) as _,
+            ],
+            None,
+        );
+
+        // One list element per row
+        let item_field = Arc::new(Field::new(
+            "item",
+            DataType::Struct(physical_struct_fields.clone()),
+            true,
+        ));
+        let offsets =
+            arrow::buffer::OffsetBuffer::from_lengths(vec![1usize; struct_array.len()]);
+        let list_array = GenericListArray::<i32>::new(
+            item_field,
+            offsets,
+            Arc::new(struct_array),
+            None,
+        );
+
+        let physical_schema = Arc::new(Schema::new(vec![Field::new(
+            "data",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(physical_struct_fields),
+                true,
+            ))),
+            false,
+        )]));
+
+        let physical_batch = RecordBatch::try_new(
+            Arc::clone(&physical_schema),
+            vec![Arc::new(list_array)],
+        )
+        .unwrap();
+
+        // Logical: List<{id: Int64, name: Utf8View, extra: Boolean}>
+        let logical_struct_fields: Fields = vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8View, true),
+            Field::new("extra", DataType::Boolean, true),
+        ]
+        .into();
+
+        let logical_schema = Arc::new(Schema::new(vec![Field::new(
+            "data",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(logical_struct_fields.clone()),
+                true,
+            ))),
+            false,
+        )]));
+
+        let projection = vec![col("data", &logical_schema).unwrap()];
+
+        let factory = DefaultPhysicalExprAdapterFactory;
+        let adapter = factory
+            .create(Arc::clone(&logical_schema), Arc::clone(&physical_schema))
+            .unwrap();
+
+        let adapted_projection = projection
+            .into_iter()
+            .map(|expr| adapter.rewrite(expr).unwrap())
+            .collect_vec();
+
+        let adapted_schema = Arc::new(Schema::new(
+            adapted_projection
+                .iter()
+                .map(|expr| expr.return_field(&physical_schema).unwrap())
+                .collect_vec(),
+        ));
+
+        let res = batch_project(
+            adapted_projection,
+            &physical_batch,
+            Arc::clone(&adapted_schema),
+        )
+        .unwrap();
+
+        assert_eq!(res.num_columns(), 1);
+
+        let result_list = res
+            .column(0)
+            .as_any()
+            .downcast_ref::<GenericListArray<i32>>()
+            .unwrap();
+
+        // Check each list element contains the evolved struct
+        assert_eq!(result_list.len(), 3);
+        let flat_structs = result_list
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        let id_col = flat_structs.column_by_name("id").unwrap();
+        assert_eq!(id_col.data_type(), &DataType::Int64);
+        let id_values = id_col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(
+            id_values.iter().collect_vec(),
+            vec![Some(1), Some(2), Some(3)]
+        );
+
+        let name_col = flat_structs.column_by_name("name").unwrap();
+        assert_eq!(name_col.data_type(), &DataType::Utf8View);
+        let name_values = name_col.as_any().downcast_ref::<StringViewArray>().unwrap();
+        assert_eq!(
+            name_values.iter().collect_vec(),
+            vec![Some("alice"), None, Some("charlie")]
+        );
+
+        let extra_col = flat_structs.column_by_name("extra").unwrap();
         assert_eq!(extra_col.data_type(), &DataType::Boolean);
         let extra_values = extra_col.as_any().downcast_ref::<BooleanArray>().unwrap();
         assert_eq!(extra_values.iter().collect_vec(), vec![None, None, None]);
