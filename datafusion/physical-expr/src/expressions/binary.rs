@@ -40,7 +40,9 @@ use datafusion_expr::statistics::{
     create_bernoulli_from_comparison, new_generic_from_binary_op,
 };
 use datafusion_expr::{ColumnarValue, Operator};
-use datafusion_physical_expr_common::datum::{apply, apply_cmp};
+use datafusion_physical_expr_common::datum::{
+    ArithmeticOp, apply, apply_arithmetic, apply_cmp,
+};
 
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
@@ -271,8 +273,6 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        use arrow::compute::kernels::numeric::*;
-
         // Evaluate left-hand side expression.
         let lhs = self.left.evaluate(batch)?;
 
@@ -338,19 +338,31 @@ impl PhysicalExpr for BinaryExpr {
         let input_schema = schema.as_ref();
 
         match self.op {
-            Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),
-            Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
+            Operator::Plus if self.fail_on_overflow => {
+                return apply_arithmetic(lhs, rhs, ArithmeticOp::Add);
+            }
+            Operator::Plus => {
+                return apply_arithmetic(lhs, rhs, ArithmeticOp::AddWrapping);
+            }
             // Special case: Date - Date returns Int64 (days difference)
             // This aligns with PostgreSQL, DuckDB, and MySQL behavior
             Operator::Minus if is_date_minus_date(&left_data_type, &right_data_type) => {
                 return apply_date_subtraction(&lhs, &rhs);
             }
-            Operator::Minus if self.fail_on_overflow => return apply(&lhs, &rhs, sub),
-            Operator::Minus => return apply(&lhs, &rhs, sub_wrapping),
-            Operator::Multiply if self.fail_on_overflow => return apply(&lhs, &rhs, mul),
-            Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
-            Operator::Divide => return apply(&lhs, &rhs, div),
-            Operator::Modulo => return apply(&lhs, &rhs, rem),
+            Operator::Minus if self.fail_on_overflow => {
+                return apply_arithmetic(lhs, rhs, ArithmeticOp::Sub);
+            }
+            Operator::Minus => {
+                return apply_arithmetic(lhs, rhs, ArithmeticOp::SubWrapping);
+            }
+            Operator::Multiply if self.fail_on_overflow => {
+                return apply_arithmetic(lhs, rhs, ArithmeticOp::Mul);
+            }
+            Operator::Multiply => {
+                return apply_arithmetic(lhs, rhs, ArithmeticOp::MulWrapping);
+            }
+            Operator::Divide => return apply_arithmetic(lhs, rhs, ArithmeticOp::Div),
+            Operator::Modulo => return apply_arithmetic(lhs, rhs, ArithmeticOp::Rem),
 
             Operator::Eq
             | Operator::NotEq
