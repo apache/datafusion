@@ -5197,9 +5197,14 @@ async fn test_buffer_exec_waits_for_hash_join_dynamic_filter() {
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
     ]));
+    // Delay the build scan so the filter is definitely not populated yet when
+    // the probe scan would start without waiting. With wait_ms=usize::MAX,
+    // BufferExec waits for the slow build to finish, so output_rows=2 proves
+    // that waiting actually occurred.
     let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
         .with_support(true)
         .with_batches(build_batches)
+        .with_open_delay_ms(20)
         .build();
 
     let probe_batches = vec![
@@ -5217,6 +5222,7 @@ async fn test_buffer_exec_waits_for_hash_join_dynamic_filter() {
         .with_support(true)
         .with_batches(probe_batches)
         .build();
+    let probe_scan_ref = Arc::clone(&probe_scan);
 
     let mut config = ConfigOptions::default();
     config.optimizer.enable_dynamic_filter_pushdown = true;
@@ -5240,18 +5246,76 @@ async fn test_buffer_exec_waits_for_hash_join_dynamic_filter() {
         Arc::new(InMemory::new()),
     );
     let task_ctx = session_ctx.state().task_ctx();
-    let batches = collect(plan, task_ctx).await.unwrap();
+    let _batches = collect(Arc::clone(&plan), task_ctx).await.unwrap();
 
-    // "ac" has no match on build side so only "aa" and "ab" rows appear
-    let result = format!("{}", pretty_format_batches(&batches).unwrap());
-    insta::assert_snapshot!(result, @r"
-    +----+---+----+-----+
-    | a  | b | a  | c   |
-    +----+---+----+-----+
-    | aa | 1 | aa | 1.0 |
-    | ab | 2 | ab | 2.0 |
-    +----+---+----+-----+
-    ");
+    // The probe scan had 3 rows but the dynamic filter pruned "ac", so only 2 rows
+    // were output. This verifies the filter was applied before the scan ran.
+    let probe_metrics = probe_scan_ref.metrics().unwrap();
+    assert_eq!(probe_metrics.output_rows().unwrap(), 2);
+}
+
+/// Test that when wait_ms=0, BufferExec does not wait for the dynamic filter,
+/// so the probe scan outputs all rows (no pruning). The build scan has a delay
+/// to ensure it hasn't finished by the time the probe scan runs.
+#[tokio::test]
+async fn test_buffer_exec_no_wait_probe_scan_reads_all_rows() {
+    let build_batches =
+        vec![record_batch!(("a", Utf8, ["aa", "ab"]), ("b", Int32, [1, 2])).unwrap()];
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    // Delay a bit the build scan so the probe scan starts before the filter is populated.
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .with_open_delay_ms(20)
+        .build();
+
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac"]),
+            ("c", Float64, [1.0, 2.0, 3.0])
+        )
+        .unwrap(),
+    ];
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+    let probe_scan_ref = Arc::clone(&probe_scan);
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
+    config.execution.hash_join_buffering_capacity = 1024 * 1024;
+    config.execution.hash_join_buffering_dynamic_filter_wait_ms = 0;
+
+    let plan = build_buffered_hash_join_plan(
+        build_scan,
+        probe_scan,
+        &build_schema,
+        &probe_schema,
+        JoinType::Inner,
+        &config,
+    );
+
+    let session_config = SessionConfig::from(config);
+    let session_ctx = SessionContext::new_with_config(session_config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let task_ctx = session_ctx.state().task_ctx();
+    collect(plan, task_ctx).await.unwrap();
+
+    // Without waiting, the probe scan reads all 3 rows before the filter is populated.
+    let probe_metrics = probe_scan_ref.metrics().unwrap();
+    assert_eq!(probe_metrics.output_rows().unwrap(), 3);
 }
 
 /// Test that BufferExec + HashJoin with a TopK above does not deadlock.
@@ -5318,12 +5382,7 @@ async fn test_buffer_exec_hash_join_with_topk_above_no_deadlock() {
     );
     let task_ctx = session_ctx.state().task_ctx();
 
-    // Should complete without deadlock
-    let batches =
-        tokio::time::timeout(std::time::Duration::from_secs(10), collect(topk, task_ctx))
-            .await
-            .expect("should not deadlock")
-            .unwrap();
+    let batches = collect(topk, task_ctx).await.unwrap();
 
     assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
 }

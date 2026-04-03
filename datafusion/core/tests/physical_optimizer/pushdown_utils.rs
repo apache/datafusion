@@ -54,10 +54,12 @@ pub struct TestOpener {
     batch_size: Option<usize>,
     projection: Option<ProjectionExprs>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
+    open_delay_ms: Option<u64>,
 }
 
 impl FileOpener for TestOpener {
     fn open(&self, _partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
+        let delay_ms = self.open_delay_ms;
         let mut batches = self.batches.clone();
         if self.batches.is_empty() {
             return Ok((async { Ok(TestStream::new(vec![]).boxed()) }).boxed());
@@ -95,7 +97,13 @@ impl FileOpener for TestOpener {
 
         let stream = TestStream::new(batches);
 
-        Ok((async { Ok(stream.boxed()) }).boxed())
+        Ok((async move {
+            if let Some(ms) = delay_ms {
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            }
+            Ok(stream.boxed())
+        })
+        .boxed())
     }
 }
 
@@ -109,6 +117,7 @@ pub struct TestSource {
     metrics: ExecutionPlanMetricsSet,
     projection: Option<ProjectionExprs>,
     table_schema: datafusion_datasource::TableSchema,
+    open_delay_ms: Option<u64>,
 }
 
 impl TestSource {
@@ -122,6 +131,7 @@ impl TestSource {
             batch_size: None,
             projection: None,
             table_schema,
+            open_delay_ms: None,
         }
     }
 }
@@ -138,6 +148,7 @@ impl FileSource for TestSource {
             batch_size: self.batch_size,
             projection: self.projection.clone(),
             predicate: self.predicate.clone(),
+            open_delay_ms: self.open_delay_ms,
         }))
     }
 
@@ -266,6 +277,7 @@ pub struct TestScanBuilder {
     support: bool,
     batches: Vec<RecordBatch>,
     schema: SchemaRef,
+    open_delay_ms: Option<u64>,
 }
 
 impl TestScanBuilder {
@@ -274,6 +286,7 @@ impl TestScanBuilder {
             support: false,
             batches: vec![],
             schema,
+            open_delay_ms: None,
         }
     }
 
@@ -287,12 +300,16 @@ impl TestScanBuilder {
         self
     }
 
+    pub fn with_open_delay_ms(mut self, delay_ms: u64) -> Self {
+        self.open_delay_ms = Some(delay_ms);
+        self
+    }
+
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
-        let source = Arc::new(TestSource::new(
-            Arc::clone(&self.schema),
-            self.support,
-            self.batches,
-        ));
+        let mut source =
+            TestSource::new(Arc::clone(&self.schema), self.support, self.batches);
+        source.open_delay_ms = self.open_delay_ms;
+        let source = Arc::new(source);
         let base_config =
             FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source)
                 .with_file(PartitionedFile::new("test.parquet", 123))
