@@ -1853,7 +1853,7 @@ mod tests {
     use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
-    use datafusion_functions_nested::expr_fn::{array_element, make_array};
+    use datafusion_functions_nested::expr_fn::{array_element, array_has, make_array};
     use datafusion_functions_nested::map::map;
     use datafusion_functions_window::rank::rank_udwf;
     use datafusion_functions_window::row_number::row_number_udwf;
@@ -3071,6 +3071,24 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_postgres_array_has_to_any() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> = Arc::new(DefaultDialect {});
+        let postgres_dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+        let expr = array_has(col("items"), lit(1));
+
+        for (dialect, expected) in [
+            (default_dialect, "array_has(\"items\", 1)"),
+            (postgres_dialect, "1 = ANY(\"items\")"),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+            let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+            assert_eq!(actual, expected);
+        }
+
         Ok(())
     }
 

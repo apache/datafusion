@@ -49,6 +49,8 @@ macro_rules! get_extreme_value {
             DataType::Int64 => ScalarValue::Int64(Some(i64::$extreme)),
             DataType::Float32 => ScalarValue::Float32(Some(f32::$extreme)),
             DataType::Float64 => ScalarValue::Float64(Some(f64::$extreme)),
+            DataType::Date32 => ScalarValue::Date32(Some(i32::$extreme)),
+            DataType::Date64 => ScalarValue::Date64(Some(i64::$extreme)),
             DataType::Duration(TimeUnit::Second) => {
                 ScalarValue::DurationSecond(Some(i64::$extreme))
             }

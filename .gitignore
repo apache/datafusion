@@ -78,3 +78,6 @@ datafusion-examples/examples/datafusion-examples/
 
 # Samply profile data
 profile.json.gz
+
+# Claude Code personal settings
+.claude/settings.local.json
