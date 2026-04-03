@@ -603,7 +603,11 @@ mod test {
     #[test]
     fn test_snapshot() {
         let expr = lit(42) as Arc<dyn PhysicalExpr>;
-        let dynamic_filter = DynamicFilterPhysicalExpr::new(vec![], Arc::clone(&expr));
+        let dynamic_filter = DynamicFilterPhysicalExpr::new(
+            vec![],
+            Arc::clone(&expr),
+            ProducerKind::HashJoin,
+        );
 
         // Take a snapshot of the current expression
         let snapshot = dynamic_filter.snapshot().unwrap();
@@ -619,8 +623,11 @@ mod test {
 
     #[test]
     fn test_dynamic_filter_physical_expr_misbehaves_data_type_nullable() {
-        let dynamic_filter =
-            DynamicFilterPhysicalExpr::new(vec![], lit(42) as Arc<dyn PhysicalExpr>);
+        let dynamic_filter = DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(42) as Arc<dyn PhysicalExpr>,
+            ProducerKind::HashJoin,
+        );
 
         // First call to data_type and nullable should set the initial values.
         let initial_data_type = dynamic_filter.data_type(&Schema::empty()).unwrap();
@@ -810,8 +817,11 @@ mod test {
         use std::hash::{Hash, Hasher};
 
         // Create filter with initial value
-        let filter =
-            DynamicFilterPhysicalExpr::new(vec![], lit(true) as Arc<dyn PhysicalExpr>);
+        let filter = DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(true) as Arc<dyn PhysicalExpr>,
+            ProducerKind::HashJoin,
+        );
 
         // Compute hash BEFORE update
         let mut hasher_before = DefaultHasher::new();
@@ -844,10 +854,16 @@ mod test {
     #[test]
     fn test_identity_based_equality() {
         // Create two separate filters with identical initial expressions
-        let filter1 =
-            DynamicFilterPhysicalExpr::new(vec![], lit(true) as Arc<dyn PhysicalExpr>);
-        let filter2 =
-            DynamicFilterPhysicalExpr::new(vec![], lit(true) as Arc<dyn PhysicalExpr>);
+        let filter1 = DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(true) as Arc<dyn PhysicalExpr>,
+            ProducerKind::HashJoin,
+        );
+        let filter2 = DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(true) as Arc<dyn PhysicalExpr>,
+            ProducerKind::HashJoin,
+        );
 
         // Different instances should NOT be equal even with same expression
         // because they have independent inner Arcs (different update lifecycles)
@@ -867,8 +883,11 @@ mod test {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        let filter =
-            DynamicFilterPhysicalExpr::new(vec![], lit(true) as Arc<dyn PhysicalExpr>);
+        let filter = DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(true) as Arc<dyn PhysicalExpr>,
+            ProducerKind::HashJoin,
+        );
 
         // Compute hash twice for the same instance
         let hash1 = {
