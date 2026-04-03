@@ -351,7 +351,7 @@ impl SchemaProvider for ForeignSchemaProvider {
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         unsafe {
-            let ffi_table = match table.as_any().downcast_ref::<ForeignTableProvider>() {
+            let ffi_table = match table.downcast_ref::<ForeignTableProvider>() {
                 Some(t) => t.0.clone(),
                 None => FFI_TableProvider::new_with_ffi_codec(
                     table,

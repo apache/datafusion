@@ -319,10 +319,6 @@ impl CustomDataSource {
 
 #[async_trait]
 impl TableProvider for CustomDataSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         SchemaRef::new(Schema::new(vec![
             Field::new("id", DataType::UInt8, false),
@@ -515,10 +511,6 @@ This will allow you to use the custom table provider in DataFusion. For example,
 #
 # #[async_trait]
 # impl TableProvider for CustomDataSource {
-#     fn as_any(&self) -> &dyn Any {
-#         self
-#     }
-#
 #     fn schema(&self) -> SchemaRef {
 #         SchemaRef::new(Schema::new(vec![
 #             Field::new("id", DataType::UInt8, false),

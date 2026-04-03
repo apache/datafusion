@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -391,7 +390,9 @@ impl FFI_TableProvider {
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
-        if let Some(provider) = provider.as_any().downcast_ref::<ForeignTableProvider>() {
+        if let Some(provider) = (provider.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<ForeignTableProvider>()
+        {
             return provider.0.clone();
         }
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
@@ -443,10 +444,6 @@ impl Clone for FFI_TableProvider {
 
 #[async_trait]
 impl TableProvider for ForeignTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         let wrapped_schema = unsafe { (self.0.schema)(&self.0) };
         wrapped_schema.into()
@@ -701,7 +698,6 @@ mod tests {
         let foreign_table: Arc<dyn TableProvider> = (&ffi_table).into();
         assert!(
             foreign_table
-                .as_any()
                 .downcast_ref::<datafusion::datasource::MemTable>()
                 .is_some()
         );
@@ -711,7 +707,6 @@ mod tests {
         let foreign_table: Arc<dyn TableProvider> = (&ffi_table).into();
         assert!(
             foreign_table
-                .as_any()
                 .downcast_ref::<ForeignTableProvider>()
                 .is_some()
         );

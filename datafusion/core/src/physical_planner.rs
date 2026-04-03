@@ -4472,10 +4472,6 @@ digraph {
 
     #[async_trait]
     impl TableProvider for MockSchemaTableProvider {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn schema(&self) -> SchemaRef {
             Arc::clone(&self.logical_schema)
         }

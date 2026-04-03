@@ -424,12 +424,9 @@ pub trait AsyncCatalogProviderList: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        any::Any,
-        sync::{
-            Arc,
-            atomic::{AtomicU32, Ordering},
-        },
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
     };
 
     use arrow::datatypes::SchemaRef;
@@ -447,10 +444,6 @@ mod tests {
     struct MockTableProvider {}
     #[async_trait]
     impl TableProvider for MockTableProvider {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         /// Get a reference to the schema for this table
         fn schema(&self) -> SchemaRef {
             unimplemented!()

@@ -303,10 +303,6 @@ impl StreamTable {
 
 #[async_trait]
 impl TableProvider for StreamTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(self.0.source.schema())
     }
