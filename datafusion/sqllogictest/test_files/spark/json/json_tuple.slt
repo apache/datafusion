@@ -199,6 +199,36 @@ SELECT json_tuple('{"v":3.14}'::STRING, 'v'::STRING);
 ----
 {c0: 3.14}
 
+# Missing key returns NULL
+query ?
+SELECT json_tuple('{"a":1}'::STRING, 'b'::STRING);
+----
+{c0: NULL}
+
+# Dot notation is not supported (treated as literal key)
+query ?
+SELECT json_tuple('{"a":{"b":1}}'::STRING, 'a.b'::STRING);
+----
+{c0: NULL}
+
+# Deep nesting: nested object returned as raw string
+query ?
+SELECT json_tuple('{"a":{"b":{"c":{"d":1}}}}'::STRING, 'a'::STRING);
+----
+{c0: {"b":{"c":{"d":1}}}}
+
+# Duplicate keys: last value wins
+query ?
+SELECT json_tuple('{"a":1,"a":2}'::STRING, 'a'::STRING);
+----
+{c0: 2}
+
+# Array field: returned as raw string
+query ?
+SELECT json_tuple('{"a":[1,2,3]}'::STRING, 'a'::STRING);
+----
+{c0: [1,2,3]}
+
 # Verify return type with arrow_typeof
 query T
 SELECT arrow_typeof(json_tuple('{"a":1}'::STRING, 'a'::STRING));
