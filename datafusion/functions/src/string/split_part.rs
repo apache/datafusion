@@ -169,21 +169,25 @@ impl ScalarUDFImpl for SplitPartFunc {
             ),
             DataType::Utf8 => {
                 let str_arr = &args[0].as_string::<i32>();
+                // Conservative under-estimate for data capacity: split_part
+                // output is typically much smaller than the input, so avoid
+                // pre-allocating the full input data size.
                 split_part_for_delimiter_type!(
                     str_arr,
                     GenericStringBuilder::<i32>::with_capacity(
                         inferred_length,
-                        str_arr.value_data().len(),
+                        inferred_length,
                     )
                 )
             }
             DataType::LargeUtf8 => {
                 let str_arr = &args[0].as_string::<i64>();
+                // Conservative under-estimate; see Utf8 comment above.
                 split_part_for_delimiter_type!(
                     str_arr,
                     GenericStringBuilder::<i64>::with_capacity(
                         inferred_length,
-                        str_arr.value_data().len(),
+                        inferred_length,
                     )
                 )
             }
@@ -283,26 +287,24 @@ fn split_part_scalar(
         ),
         DataType::Utf8 => {
             let arr = string_array.as_string::<i32>();
+            // Conservative under-estimate for data capacity: split_part output
+            // is typically much smaller than the input, so avoid pre-allocating
+            // the full input data size.
             split_part_scalar_impl(
                 arr,
                 delimiter,
                 position,
-                GenericStringBuilder::<i32>::with_capacity(
-                    arr.len(),
-                    arr.value_data().len(),
-                ),
+                GenericStringBuilder::<i32>::with_capacity(arr.len(), arr.len()),
             )
         }
         DataType::LargeUtf8 => {
             let arr = string_array.as_string::<i64>();
+            // Conservative under-estimate; see Utf8 comment above.
             split_part_scalar_impl(
                 arr,
                 delimiter,
                 position,
-                GenericStringBuilder::<i64>::with_capacity(
-                    arr.len(),
-                    arr.value_data().len(),
-                ),
+                GenericStringBuilder::<i64>::with_capacity(arr.len(), arr.len()),
             )
         }
         other => exec_err!("Unsupported string type {other:?} for split_part"),
