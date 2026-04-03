@@ -302,6 +302,72 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
 
             let stream_idx = self.loser_tree[0];
+
+            // Batch pass-through: when the winner's entire remaining
+            // batch is strictly less than every other stream's current
+            // value we can skip per-row loser-tree comparisons.
+            // Only check at the start of a new batch to amortise the
+            // O(log K) runner-up lookup.
+            if self.cursors[stream_idx]
+                .as_ref()
+                .is_some_and(|c| c.is_at_start())
+                && self.can_batch_pass_through(stream_idx)
+            {
+                let remaining = self.cursors[stream_idx].as_ref().unwrap().remaining();
+                let space_in_batch =
+                    self.batch_size.saturating_sub(self.in_progress.len());
+                let fetch_remaining = self
+                    .fetch
+                    .map(|f| f.saturating_sub(self.produced + self.in_progress.len()))
+                    .unwrap_or(usize::MAX);
+                let rows_to_add = remaining.min(space_in_batch).min(fetch_remaining);
+
+                if rows_to_add > 0 {
+                    // Zero-copy fast path: emit a batch slice directly when
+                    // the in-progress buffer is empty and we can take the
+                    // entire remaining batch.
+                    if self.in_progress.is_empty() && rows_to_add == remaining {
+                        let batch =
+                            self.in_progress.take_batch_slice(stream_idx, rows_to_add);
+                        self.produced += rows_to_add;
+
+                        let cursor = self.cursors[stream_idx].as_mut().unwrap();
+                        cursor.advance_by(rows_to_add);
+                        if cursor.is_finished() {
+                            self.prev_cursors[stream_idx] =
+                                self.cursors[stream_idx].take();
+                        }
+                        self.loser_tree_adjusted = false;
+
+                        if self.fetch_reached() {
+                            self.done = true;
+                        }
+                        return Poll::Ready(Some(Ok(batch)));
+                    }
+
+                    // Bulk-push path: append all qualifying rows at once,
+                    // avoiding per-row loser-tree work.
+                    self.in_progress.push_rows(stream_idx, rows_to_add);
+
+                    let cursor = self.cursors[stream_idx].as_mut().unwrap();
+                    cursor.advance_by(rows_to_add);
+                    if cursor.is_finished() {
+                        self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();
+                    }
+                    self.loser_tree_adjusted = false;
+
+                    if self.fetch_reached() {
+                        self.done = true;
+                        self.drain_in_progress_on_done = true;
+                    } else if self.in_progress.len() < self.batch_size {
+                        continue;
+                    }
+
+                    return Poll::Ready(self.emit_in_progress_batch().transpose());
+                }
+            }
+
+            // Normal row-by-row path
             if self.advance_cursors(stream_idx) {
                 self.loser_tree_adjusted = false;
                 self.in_progress.push_row(stream_idx);
@@ -337,6 +403,48 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 self.num_of_polled_with_same_value[partition_idx] += 1;
             } else {
                 self.num_of_polled_with_same_value[partition_idx] = 0;
+            }
+        }
+    }
+
+    /// Walk the loser tree to find the runner-up (second-smallest current
+    /// value). This is the minimum of the losers along the winner's path
+    /// from leaf to root.  Cost: O(log K).
+    fn find_runner_up(&self) -> Option<usize> {
+        let winner = self.loser_tree[0];
+        let num_streams = self.cursors.len();
+        let mut runner_up: Option<usize> = None;
+
+        let mut node = self.lt_leaf_node_index(winner);
+        while node != 0 {
+            let loser = self.loser_tree[node];
+            if loser < num_streams && self.cursors[loser].is_some() {
+                runner_up = Some(match runner_up {
+                    None => loser,
+                    Some(current) if self.is_gt(current, loser) => loser,
+                    Some(current) => current,
+                });
+            }
+            node = self.lt_parent_node_index(node);
+        }
+        runner_up
+    }
+
+    /// Returns `true` when the winner's entire remaining batch is strictly
+    /// less than every other stream's current value, meaning those rows can
+    /// be emitted without per-row loser-tree comparisons.
+    fn can_batch_pass_through(&self, winner: usize) -> bool {
+        let winner_cursor = match &self.cursors[winner] {
+            Some(c) if c.remaining() > 1 => c,
+            _ => return false,
+        };
+
+        match self.find_runner_up() {
+            // All other streams exhausted — pass through is safe
+            None => true,
+            Some(runner_up) => {
+                let runner_up_cursor = self.cursors[runner_up].as_ref().unwrap();
+                winner_cursor.last_cmp(runner_up_cursor).is_lt()
             }
         }
     }

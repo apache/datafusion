@@ -116,6 +116,34 @@ impl BatchBuilder {
         self.indices.push((cursor.batch_idx, row_idx));
     }
 
+    /// Append `count` consecutive rows from `stream_idx`
+    pub fn push_rows(&mut self, stream_idx: usize, count: usize) {
+        let cursor = &mut self.cursors[stream_idx];
+        let batch_idx = cursor.batch_idx;
+        let start_row = cursor.row_idx;
+        self.indices
+            .extend((0..count).map(|i| (batch_idx, start_row + i)));
+        cursor.row_idx += count;
+    }
+
+    /// Slice the current batch for `stream_idx` starting at its cursor
+    /// position, returning `num_rows` rows as a zero-copy [`RecordBatch`].
+    ///
+    /// Advances the builder's cursor but does **not** touch `self.indices`,
+    /// so the caller must not also call `push_row`/`push_rows` for these
+    /// rows.
+    pub fn take_batch_slice(
+        &mut self,
+        stream_idx: usize,
+        num_rows: usize,
+    ) -> RecordBatch {
+        let cursor = &mut self.cursors[stream_idx];
+        let (_, batch) = &self.batches[cursor.batch_idx];
+        let sliced = batch.slice(cursor.row_idx, num_rows);
+        cursor.row_idx += num_rows;
+        sliced
+    }
+
     /// Returns the number of in-progress rows in this [`BatchBuilder`]
     pub fn len(&self) -> usize {
         self.indices.len()

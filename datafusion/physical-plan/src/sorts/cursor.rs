@@ -93,11 +93,39 @@ impl<T: CursorValues> Cursor<T> {
         self.offset == self.values.len()
     }
 
+    /// Returns true if the cursor is at the start (offset 0)
+    pub fn is_at_start(&self) -> bool {
+        self.offset == 0
+    }
+
+    /// Returns the number of remaining rows (including current position)
+    pub fn remaining(&self) -> usize {
+        self.values.len() - self.offset
+    }
+
     /// Advance the cursor, returning the previous row index
     pub fn advance(&mut self) -> usize {
         let t = self.offset;
         self.offset += 1;
         t
+    }
+
+    /// Advance the cursor by `n` positions
+    pub fn advance_by(&mut self, n: usize) {
+        self.offset += n;
+    }
+
+    /// Compare the last value in this cursor with the current value of `other`.
+    ///
+    /// Returns [`Ordering::Less`] if the last value of this cursor comes
+    /// before `other`'s current value in sort order.
+    pub fn last_cmp(&self, other: &Self) -> Ordering {
+        T::compare(
+            &self.values,
+            self.values.len() - 1,
+            &other.values,
+            other.offset,
+        )
     }
 
     pub fn is_eq_to_prev_one(&self, prev_cursor: Option<&Cursor<T>>) -> bool {

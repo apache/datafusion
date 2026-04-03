@@ -1595,4 +1595,172 @@ mod tests {
 
         Ok(())
     }
+
+    async fn _test_merge_sort_by_b(
+        partitions: &[Vec<RecordBatch>],
+        exp: &[&str],
+        context: Arc<TaskContext>,
+    ) {
+        let schema = partitions[0][0].schema();
+        let sort: LexOrdering = [PhysicalSortExpr {
+            expr: col("b", &schema).unwrap(),
+            options: Default::default(),
+        }]
+        .into();
+        let exec = TestMemoryExec::try_new_exec(partitions, schema, None).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
+        let collected = collect(merge, context).await.unwrap();
+        assert_batches_eq!(exp, collected.as_slice());
+    }
+
+    /// Test batch pass-through with multiple non-overlapping batches per
+    /// partition, ensuring cursor advancement and batch cleanup work.
+    #[tokio::test]
+    async fn test_batch_pass_through_multi_batch() {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Partition 0: two batches [a, b] then [c, d]
+        let b0a = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+            ("b", Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef),
+        ])
+        .unwrap();
+        let b0b = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(Int32Array::from(vec![3, 4])) as ArrayRef),
+            ("b", Arc::new(StringArray::from(vec!["c", "d"])) as ArrayRef),
+        ])
+        .unwrap();
+
+        // Partition 1: two batches [e, f] then [g, h]
+        let b1a = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(Int32Array::from(vec![5, 6])) as ArrayRef),
+            ("b", Arc::new(StringArray::from(vec!["e", "f"])) as ArrayRef),
+        ])
+        .unwrap();
+        let b1b = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(Int32Array::from(vec![7, 8])) as ArrayRef),
+            ("b", Arc::new(StringArray::from(vec!["g", "h"])) as ArrayRef),
+        ])
+        .unwrap();
+
+        _test_merge_sort_by_b(
+            &[vec![b0a, b0b], vec![b1a, b1b]],
+            &[
+                "+---+---+",
+                "| a | b |",
+                "+---+---+",
+                "| 1 | a |",
+                "| 2 | b |",
+                "| 3 | c |",
+                "| 4 | d |",
+                "| 5 | e |",
+                "| 6 | f |",
+                "| 7 | g |",
+                "| 8 | h |",
+                "+---+---+",
+            ],
+            task_ctx,
+        )
+        .await;
+    }
+
+    /// Test batch pass-through with a fetch limit that cuts through a
+    /// pass-through batch.
+    #[tokio::test]
+    async fn test_batch_pass_through_with_fetch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+
+        // Partition 0: [a, b, c]
+        let b0 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )?;
+
+        // Partition 1: [x, y, z]  — completely non-overlapping
+        let b1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(StringArray::from(vec!["x", "y", "z"])),
+            ],
+        )?;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let sort: LexOrdering = [PhysicalSortExpr {
+            expr: col("b", &schema)?,
+            options: Default::default(),
+        }]
+        .into();
+        let exec = TestMemoryExec::try_new_exec(&[vec![b0], vec![b1]], schema, None)?;
+        let merge =
+            Arc::new(SortPreservingMergeExec::new(sort, exec).with_fetch(Some(4)));
+
+        let collected = collect(merge, task_ctx).await?;
+        assert_batches_eq!(
+            [
+                "+---+---+",
+                "| a | b |",
+                "+---+---+",
+                "| 1 | a |",
+                "| 2 | b |",
+                "| 3 | c |",
+                "| 4 | x |",
+                "+---+---+",
+            ],
+            collected.as_slice()
+        );
+        Ok(())
+    }
+
+    /// Test that the merge is still correct when batches partially overlap
+    /// (only some partitions qualify for pass-through).
+    #[tokio::test]
+    async fn test_batch_pass_through_partial_overlap() {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Partition 0: [a, b] — non-overlapping with partition 2
+        let b0 = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+            ("b", Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef),
+        ])
+        .unwrap();
+
+        // Partition 1: [b, d] — overlaps with partition 0 at "b"
+        let b1 = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(Int32Array::from(vec![3, 4])) as ArrayRef),
+            ("b", Arc::new(StringArray::from(vec!["b", "d"])) as ArrayRef),
+        ])
+        .unwrap();
+
+        // Partition 2: [f, g] — non-overlapping with everything
+        let b2 = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(Int32Array::from(vec![5, 6])) as ArrayRef),
+            ("b", Arc::new(StringArray::from(vec!["f", "g"])) as ArrayRef),
+        ])
+        .unwrap();
+
+        _test_merge_sort_by_b(
+            &[vec![b0], vec![b1], vec![b2]],
+            &[
+                "+---+---+",
+                "| a | b |",
+                "+---+---+",
+                "| 1 | a |",
+                "| 2 | b |",
+                "| 3 | b |",
+                "| 4 | d |",
+                "| 5 | f |",
+                "| 6 | g |",
+                "+---+---+",
+            ],
+            task_ctx,
+        )
+        .await;
+    }
 }
