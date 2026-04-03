@@ -144,7 +144,11 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 }
 
                 let mut all_subqueries = vec![];
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut expr_to_rewrite_expr_map = HashMap::new();
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut subquery_to_expr_map = HashMap::new();
                 for expr in projection.expr.iter() {
                     let (subqueries, rewrite_exprs) =

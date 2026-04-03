@@ -592,9 +592,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } else {
                 let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
 
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut projection_exprs = match &aggr_expr_using_columns {
                     Some(exprs) => (*exprs).clone(),
                     None => {
+                        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                         let mut columns = HashSet::new();
                         for expr in &aggr_expr {
                             expr.apply(|expr| {

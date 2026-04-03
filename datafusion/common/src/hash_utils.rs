@@ -201,6 +201,7 @@ hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
 /// Create a `SeedableRandomState` whose per-hasher seed incorporates `seed`.
 /// This folds the previous hash into the hasher's initial state so only the
 /// new value needs to pass through the hash function — same cost as `hash_one`.
+#[cfg(not(feature = "force_hash_collisions"))]
 #[inline]
 #[cfg(not(feature = "force_hash_collisions"))]
 fn seeded_state(seed: u64) -> foldhash::fast::SeedableRandomState {
@@ -307,6 +308,7 @@ fn hash_array<T>(
 /// HAS_NULLS: do we have to check null in the inner loop
 /// HAS_BUFFERS: if true, array has external buffers; if false, all strings are inlined/ less then 12 bytes
 /// REHASH: if true, combining with existing hash, otherwise initializing
+#[cfg(not(feature = "force_hash_collisions"))]
 #[inline(never)]
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_string_view_array_inner<
@@ -434,6 +436,7 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
 /// - `HAS_NULL_KEYS`: Whether to check for null dictionary keys
 /// - `HAS_NULL_VALUES`: Whether to check for null dictionary values
 /// - `MULTI_COL`: Whether to combine with existing hash (true) or initialize (false)
+#[cfg(not(feature = "force_hash_collisions"))]
 #[inline(never)]
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_dictionary_inner<

@@ -2093,6 +2093,7 @@ fn get_physical_expr_pair(
 /// A vector of unqualified filter expressions that can be passed to the TableProvider for execution.
 /// Returns an empty vector if no applicable filters are found.
 ///
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn extract_dml_filters(
     input: &Arc<LogicalPlan>,
     target: &TableReference,
