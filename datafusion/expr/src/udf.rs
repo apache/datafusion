@@ -360,7 +360,7 @@ impl ScalarUDF {
 
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
-        (self.inner().as_ref() as &dyn Any).downcast_ref::<AsyncScalarUDF>()
+        self.inner().downcast_ref::<AsyncScalarUDF>()
     }
 
     /// Returns placement information for this function.
@@ -981,6 +981,25 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// closer to the data source.
     fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
+    }
+}
+
+impl dyn ScalarUDFImpl {
+    /// Returns `true` if the implementation is of type `T`.
+    ///
+    /// Works correctly when called on `Arc<dyn ScalarUDFImpl>` via auto-deref.
+    pub fn is<T: ScalarUDFImpl>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast to a concrete type `T`, returning `None` if the
+    /// implementation is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn ScalarUDFImpl>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: ScalarUDFImpl>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
     }
 }
 

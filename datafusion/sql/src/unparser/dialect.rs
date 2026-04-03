@@ -216,7 +216,7 @@ pub trait Dialect: Send + Sync {
 
     /// Allows the dialect to override logic of formatting datetime with tz into string.
     fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, _unit: TimeUnit) -> String {
-        dt.to_string()
+        dt.to_rfc3339()
     }
 
     /// Whether the dialect supports an empty select list such as `SELECT FROM table`.
@@ -489,17 +489,6 @@ impl Dialect for DuckDBDialect {
 
         Ok(None)
     }
-
-    fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, unit: TimeUnit) -> String {
-        let format = match unit {
-            TimeUnit::Second => "%Y-%m-%d %H:%M:%S%:z",
-            TimeUnit::Millisecond => "%Y-%m-%d %H:%M:%S%.3f%:z",
-            TimeUnit::Microsecond => "%Y-%m-%d %H:%M:%S%.6f%:z",
-            TimeUnit::Nanosecond => "%Y-%m-%d %H:%M:%S%.9f%:z",
-        };
-
-        dt.format(format).to_string()
-    }
 }
 
 pub struct MySqlDialect {}
@@ -655,18 +644,6 @@ impl Dialect for BigQueryDialect {
 
     fn unnest_as_table_factor(&self) -> bool {
         true
-    }
-
-    fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, unit: TimeUnit) -> String {
-        // https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/data-types#timestamp_type
-        let format = match unit {
-            TimeUnit::Second => "%Y-%m-%d %H:%M:%S%:z",
-            TimeUnit::Millisecond => "%Y-%m-%d %H:%M:%S%.3f%:z",
-            TimeUnit::Microsecond => "%Y-%m-%d %H:%M:%S%.6f%:z",
-            TimeUnit::Nanosecond => "%Y-%m-%d %H:%M:%S%.9f%:z",
-        };
-
-        dt.format(format).to_string()
     }
 }
 

@@ -157,10 +157,6 @@ impl ExecutionPlan for CustomExecutionPlan {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -335,7 +331,7 @@ async fn optimizers_catch_all_statistics() {
 
 #[expect(clippy::needless_pass_by_value)]
 fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if plan.as_any().is::<PlaceholderRowExec>() {
+    if plan.is::<PlaceholderRowExec>() {
         true
     } else if plan.children().len() != 1 {
         false
