@@ -31,6 +31,7 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use parking_lot::RwLock;
+use std::any::Any;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -48,7 +49,7 @@ impl Empty {
 }
 
 impl LazyBatchGenerator for Empty {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -377,7 +378,7 @@ impl<T: SeriesValue> GenericSeriesState<T> {
 }
 
 impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
