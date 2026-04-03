@@ -367,7 +367,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             },
             _ => {
                 let batch_size = context.session_config().batch_size();
-                Ok(Box::pin(LazySortPreservingMergeStream {
+                Ok(Box::pin(SortPreservingMergeExecStream {
                     schema,
                     input: Arc::clone(&self.input),
                     context,
@@ -377,7 +377,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     fetch: self.fetch,
                     reservation,
                     enable_round_robin_repartition: self.enable_round_robin_repartition,
-                    state: LazySPMState::Pending,
+                    state: SPMStreamState::Pending,
                 }))
             }
         }
@@ -424,7 +424,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
 /// A stream that lazily spawns input partition tasks and builds the streaming
 /// merge on first poll, rather than eagerly in `execute()`.
-struct LazySortPreservingMergeStream {
+struct SortPreservingMergeExecStream {
     schema: SchemaRef,
     input: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -434,10 +434,10 @@ struct LazySortPreservingMergeStream {
     fetch: Option<usize>,
     reservation: datafusion_execution::memory_pool::MemoryReservation,
     enable_round_robin_repartition: bool,
-    state: LazySPMState,
+    state: SPMStreamState,
 }
 
-enum LazySPMState {
+enum SPMStreamState {
     /// Tasks have not been spawned yet.
     Pending,
     /// The streaming merge has been built and is running.
@@ -446,7 +446,7 @@ enum LazySPMState {
     Failed,
 }
 
-impl LazySortPreservingMergeStream {
+impl SortPreservingMergeExecStream {
     fn start(&mut self) -> Result<&mut SendableRecordBatchStream> {
         let input_partitions = self.input.output_partitioning().partition_count();
 
@@ -479,21 +479,21 @@ impl LazySortPreservingMergeStream {
 
         debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
 
-        self.state = LazySPMState::Running(result);
+        self.state = SPMStreamState::Running(result);
         match &mut self.state {
-            LazySPMState::Running(s) => Ok(s),
+            SPMStreamState::Running(s) => Ok(s),
             _ => unreachable!(),
         }
     }
 }
 
-impl RecordBatchStream for LazySortPreservingMergeStream {
+impl RecordBatchStream for SortPreservingMergeExecStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 }
 
-impl Stream for LazySortPreservingMergeStream {
+impl Stream for SortPreservingMergeExecStream {
     type Item = Result<arrow::array::RecordBatch>;
 
     fn poll_next(
@@ -501,12 +501,12 @@ impl Stream for LazySortPreservingMergeStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let stream = match &mut self.state {
-            LazySPMState::Running(s) => s,
-            LazySPMState::Failed => return Poll::Ready(None),
-            LazySPMState::Pending => match self.start() {
+            SPMStreamState::Running(s) => s,
+            SPMStreamState::Failed => return Poll::Ready(None),
+            SPMStreamState::Pending => match self.start() {
                 Ok(s) => s,
                 Err(e) => {
-                    self.state = LazySPMState::Failed;
+                    self.state = SPMStreamState::Failed;
                     return Poll::Ready(Some(Err(e)));
                 }
             },
