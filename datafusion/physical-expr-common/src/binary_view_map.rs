@@ -310,10 +310,8 @@ where
                             return header.view == view_u128;
                         }
 
-                        // For larger strings: first compare the 4-byte prefix
-                        let stored_prefix = (header.view >> 32) as u32;
-                        let input_prefix = (view_u128 >> 32) as u32;
-                        if stored_prefix != input_prefix {
+                        // For larger strings: compare length + 4-byte prefix together
+                        if (header.view as u64) != (view_u128 as u64) {
                             return false;
                         }
 
