@@ -43,7 +43,7 @@ use futures::stream::BoxStream;
 use futures::{FutureExt as _, Stream, StreamExt as _, ready};
 
 pub use builder::FileStreamBuilder;
-use metrics::FileStreamMetrics;
+pub use metrics::{FileStreamMetrics, StartableTime};
 
 /// A stream that iterates record batch by record batch, file over file.
 pub struct FileStream {
