@@ -33,7 +33,7 @@ use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
-    type_coercion::binary::comparison_coercion_numeric,
+    type_coercion::binary::comparison_coercion,
     type_coercion::binary::string_coercion,
 };
 use itertools::Itertools as _;
@@ -593,7 +593,7 @@ fn get_valid_types(
             function_length_check(function_name, current_types.len(), *num)?;
             let mut target_type = current_types[0].to_owned();
             for data_type in current_types.iter().skip(1) {
-                if let Some(dt) = comparison_coercion_numeric(&target_type, data_type) {
+                if let Some(dt) = comparison_coercion(&target_type, data_type) {
                     target_type = dt;
                 } else {
                     return plan_err!(

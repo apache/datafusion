@@ -17,12 +17,13 @@
 
 use arrow::array::{Array, ArrayRef, AsArray, TimestampMicrosecondBuilder};
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimeUnit,
+    ArrowPrimitiveType, DataType, Field, FieldRef, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, TimeUnit,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::types::{
-    logical_int8, logical_int16, logical_int32, logical_int64, logical_string,
+    logical_float32, logical_float64, logical_int8, logical_int16, logical_int32,
+    logical_int64, logical_string,
 };
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{Coercion, TypeSignatureClass};
@@ -34,10 +35,50 @@ use std::sync::Arc;
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
-/// Convert seconds to microseconds with saturating overflow behavior (matches spark spec)
+/// Convert integer seconds to microseconds with saturating overflow behavior
 #[inline]
 fn secs_to_micros(secs: i64) -> i64 {
     secs.saturating_mul(MICROS_PER_SECOND)
+}
+
+/// Convert float seconds to microseconds
+/// Returns None for NaN/Infinity in non-ANSI mode, error in ANSI mode
+/// Saturates to i64::MAX/MIN for overflow
+#[inline]
+fn float_secs_to_micros(val: f64, enable_ansi_mode: bool) -> Result<Option<i64>> {
+    if val.is_nan() || val.is_infinite() {
+        if enable_ansi_mode {
+            let display_val = if val.is_nan() {
+                "NaN"
+            } else if val.is_sign_positive() {
+                "Infinity"
+            } else {
+                "-Infinity"
+            };
+            return exec_err!("Cannot cast {} to TIMESTAMP", display_val);
+        }
+        return Ok(None);
+    }
+    let micros = val * MICROS_PER_SECOND as f64;
+
+    // Bounds check for i64 range.
+    // Note on precision: i64::MIN (-2^63) is exactly representable in f64,
+    // but i64::MAX (2^63 - 1) is not - it rounds up to 2^63 (i64::MAX + 1).
+    // We use strict `<` for the upper bound to reject values >= 2^63,
+    // which correctly handles the precision loss edge case.
+    if micros >= i64::MIN as f64 && micros < i64::MAX as f64 {
+        Ok(Some(micros as i64))
+    } else {
+        if enable_ansi_mode {
+            return exec_err!("Overflow casting {} to TIMESTAMP", val);
+        }
+        // Saturate to i64::MAX or i64::MIN like Spark does for overflow
+        if micros.is_sign_negative() {
+            Ok(Some(i64::MIN))
+        } else {
+            Ok(Some(i64::MAX))
+        }
+    }
 }
 
 /// Spark-compatible `cast` function for type conversions
@@ -50,10 +91,11 @@ fn secs_to_micros(secs: i64) -> i64 {
 /// ```
 ///
 /// # Currently supported conversions
-/// - Int8/Int16/Int32/Int64 -> Timestamp (target_type = 'timestamp')
+/// - Int8/Int16/Int32/Int64/Float32/Float64 -> Timestamp (target_type = 'timestamp')
 ///
 /// The integer value is interpreted as seconds since the Unix epoch (1970-01-01 00:00:00 UTC)
-/// and converted to a timestamp with microsecond precision (matches spark's spec)
+/// and converted to a timestamp with microsecond precision (matches spark's spec). Same is the case
+/// with Float but with higher precision to support micro / nanoseconds.
 ///
 /// # Overflow behavior
 /// Uses saturating multiplication to handle overflow - values that would overflow
@@ -79,28 +121,30 @@ impl SparkCast {
     }
 
     pub fn new_with_config(config: &ConfigOptions) -> Self {
-        // First arg: value to cast (only signed ints - Spark doesn't have unsigned integers)
+        // First arg: value to cast
         // Second arg: target datatype as Utf8 string literal (ex : 'timestamp')
         let string_arg =
             Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
 
-        // Spark only supports signed integers, so we explicitly list them
-        let signed_int_signatures = [
+        // Supported input types: signed integers and floats
+        let input_type_signatures = [
             logical_int8(),
             logical_int16(),
             logical_int32(),
             logical_int64(),
+            logical_float32(),
+            logical_float64(),
         ]
-        .map(|int_type| {
+        .map(|input_type| {
             TypeSignature::Coercible(vec![
-                Coercion::new_exact(TypeSignatureClass::Native(int_type)),
+                Coercion::new_exact(TypeSignatureClass::Native(input_type)),
                 string_arg.clone(),
             ])
         });
 
         Self {
             signature: Signature::new(
-                TypeSignature::OneOf(Vec::from(signed_int_signatures)),
+                TypeSignature::OneOf(Vec::from(input_type_signatures)),
                 Volatility::Stable,
             ),
             timezone: config
@@ -165,6 +209,35 @@ where
     Ok(Arc::new(builder.finish().with_timezone_opt(timezone)))
 }
 
+/// Cast float to timestamp
+/// Float value represents seconds (with fractional part) since Unix epoch
+/// NaN and Infinity: error in ANSI mode, NULL in non-ANSI mode
+fn cast_float_to_timestamp<T: ArrowPrimitiveType>(
+    array: &ArrayRef,
+    timezone: Option<Arc<str>>,
+    enable_ansi_mode: bool,
+) -> Result<ArrayRef>
+where
+    T::Native: Into<f64>,
+{
+    let arr = array.as_primitive::<T>();
+    let mut builder = TimestampMicrosecondBuilder::with_capacity(arr.len());
+
+    for i in 0..arr.len() {
+        if arr.is_null(i) {
+            builder.append_null();
+        } else {
+            let val: f64 = arr.value(i).into();
+            match float_secs_to_micros(val, enable_ansi_mode)? {
+                Some(micros) => builder.append_value(micros),
+                None => builder.append_null(),
+            }
+        }
+    }
+
+    Ok(Arc::new(builder.finish().with_timezone_opt(timezone)))
+}
+
 impl ScalarUDFImpl for SparkCast {
     fn name(&self) -> &str {
         "spark_cast"
@@ -183,19 +256,19 @@ impl ScalarUDFImpl for SparkCast {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         let return_type = get_target_type_from_scalar_args(
             args.scalar_arguments,
             self.timezone.clone(),
         )?;
-        Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
+        Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let enable_ansi_mode = args.config_options.execution.enable_ansi_mode;
         let target_type = args.return_field.data_type();
         match target_type {
             DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-                cast_to_timestamp(&args.args[0], tz.clone())
+                cast_to_timestamp(&args.args[0], tz.clone(), enable_ansi_mode)
             }
             other => exec_err!("Unsupported spark_cast target type: {:?}", other),
         }
@@ -206,6 +279,7 @@ impl ScalarUDFImpl for SparkCast {
 fn cast_to_timestamp(
     input: &ColumnarValue,
     timezone: Option<Arc<str>>,
+    enable_ansi_mode: bool,
 ) -> Result<ColumnarValue> {
     match input {
         ColumnarValue::Array(array) => match array.data_type() {
@@ -225,6 +299,20 @@ fn cast_to_timestamp(
             DataType::Int64 => Ok(ColumnarValue::Array(cast_int_to_timestamp::<
                 Int64Type,
             >(array, timezone)?)),
+            DataType::Float32 => Ok(ColumnarValue::Array(cast_float_to_timestamp::<
+                Float32Type,
+            >(
+                array,
+                timezone,
+                enable_ansi_mode,
+            )?)),
+            DataType::Float64 => Ok(ColumnarValue::Array(cast_float_to_timestamp::<
+                Float64Type,
+            >(
+                array,
+                timezone,
+                enable_ansi_mode,
+            )?)),
             other => exec_err!("Unsupported cast from {:?} to timestamp", other),
         },
         ColumnarValue::Scalar(scalar) => {
@@ -233,11 +321,19 @@ fn cast_to_timestamp(
                 | ScalarValue::Int8(None)
                 | ScalarValue::Int16(None)
                 | ScalarValue::Int32(None)
-                | ScalarValue::Int64(None) => None,
+                | ScalarValue::Int64(None)
+                | ScalarValue::Float32(None)
+                | ScalarValue::Float64(None) => None,
                 ScalarValue::Int8(Some(v)) => Some(secs_to_micros((*v).into())),
                 ScalarValue::Int16(Some(v)) => Some(secs_to_micros((*v).into())),
                 ScalarValue::Int32(Some(v)) => Some(secs_to_micros((*v).into())),
                 ScalarValue::Int64(Some(v)) => Some(secs_to_micros(*v)),
+                ScalarValue::Float32(Some(v)) => {
+                    float_secs_to_micros(*v as f64, enable_ansi_mode)?
+                }
+                ScalarValue::Float64(Some(v)) => {
+                    float_secs_to_micros(*v, enable_ansi_mode)?
+                }
                 other => {
                     return exec_err!("Unsupported cast from {:?} to timestamp", other);
                 }
@@ -252,7 +348,9 @@ fn cast_to_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int8Array, Int16Array, Int32Array, Int64Array};
+    use arrow::array::{
+        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    };
     use arrow::datatypes::TimestampMicrosecondType;
 
     // helpers to make testing easier
@@ -650,5 +748,260 @@ mod tests {
         let result = cast.invoke_with_args(args).unwrap();
         // Defaults to UTC
         assert_scalar_timestamp_with_tz(result, 0, "UTC");
+    }
+
+    fn make_args_with_ansi_mode(
+        input: ColumnarValue,
+        target_type: &str,
+        enable_ansi_mode: bool,
+    ) -> ScalarFunctionArgs {
+        let return_field = Arc::new(Field::new(
+            "result",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            true,
+        ));
+        let mut config = ConfigOptions::default();
+        config.execution.time_zone = Some("UTC".to_string());
+        config.execution.enable_ansi_mode = enable_ansi_mode;
+        ScalarFunctionArgs {
+            args: vec![
+                input,
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(target_type.to_string()))),
+            ],
+            arg_fields: vec![],
+            number_rows: 0,
+            return_field,
+            config_options: Arc::new(config),
+        }
+    }
+
+    #[test]
+    fn test_cast_float64_array_to_timestamp() {
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(0.0),
+            Some(1.5),
+            Some(-1.5),
+            Some(1704067200.123456),
+            None,
+        ]));
+
+        let cast = SparkCast::new();
+        let args = make_args(ColumnarValue::Array(array), "timestamp");
+        let result = cast.invoke_with_args(args).unwrap();
+
+        match result {
+            ColumnarValue::Array(result_array) => {
+                let ts_array = result_array.as_primitive::<TimestampMicrosecondType>();
+                assert_eq!(ts_array.value(0), 0);
+                assert_eq!(ts_array.value(1), 1_500_000); // 1.5 seconds
+                assert_eq!(ts_array.value(2), -1_500_000); // -1.5 seconds
+                assert_eq!(ts_array.value(3), 1_704_067_200_123_456); // with fractional
+                assert!(ts_array.is_null(4));
+            }
+            _ => panic!("Expected array result"),
+        }
+    }
+
+    #[test]
+    fn test_cast_float32_array_to_timestamp() {
+        let array: ArrayRef = Arc::new(Float32Array::from(vec![
+            Some(0.0f32),
+            Some(1.5f32),
+            Some(-1.5f32),
+            None,
+        ]));
+
+        let cast = SparkCast::new();
+        let args = make_args(ColumnarValue::Array(array), "timestamp");
+        let result = cast.invoke_with_args(args).unwrap();
+
+        match result {
+            ColumnarValue::Array(result_array) => {
+                let ts_array = result_array.as_primitive::<TimestampMicrosecondType>();
+                assert_eq!(ts_array.value(0), 0);
+                assert_eq!(ts_array.value(1), 1_500_000); // 1.5 seconds
+                assert_eq!(ts_array.value(2), -1_500_000); // -1.5 seconds
+                assert!(ts_array.is_null(3));
+            }
+            _ => panic!("Expected array result"),
+        }
+    }
+
+    #[test]
+    fn test_cast_scalar_float64() {
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.5))),
+            "timestamp",
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        assert_scalar_timestamp(result, 1_500_000);
+    }
+
+    #[test]
+    fn test_cast_scalar_float32() {
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(1.5f32))),
+            "timestamp",
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        assert_scalar_timestamp(result, 1_500_000);
+    }
+
+    #[test]
+    fn test_cast_float_nan_non_ansi_mode() {
+        // In non-ANSI mode, NaN should return NULL
+        let cast = SparkCast::new();
+        let args = make_args_with_ansi_mode(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::NAN))),
+            "timestamp",
+            false,
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        assert_scalar_null(result);
+    }
+
+    #[test]
+    fn test_cast_float_infinity_non_ansi_mode() {
+        // In non-ANSI mode, Infinity should return NULL
+        let cast = SparkCast::new();
+
+        // Positive infinity
+        let args = make_args_with_ansi_mode(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::INFINITY))),
+            "timestamp",
+            false,
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        assert_scalar_null(result);
+
+        // Negative infinity
+        let args = make_args_with_ansi_mode(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::NEG_INFINITY))),
+            "timestamp",
+            false,
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        assert_scalar_null(result);
+    }
+
+    #[test]
+    fn test_cast_float_nan_ansi_mode() {
+        // In ANSI mode, NaN should error
+        let cast = SparkCast::new();
+        let args = make_args_with_ansi_mode(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::NAN))),
+            "timestamp",
+            true,
+        );
+        let result = cast.invoke_with_args(args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Cannot cast NaN"));
+    }
+
+    #[test]
+    fn test_cast_float_infinity_ansi_mode() {
+        // In ANSI mode, Infinity should error
+        let cast = SparkCast::new();
+        let args = make_args_with_ansi_mode(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::INFINITY))),
+            "timestamp",
+            true,
+        );
+        let result = cast.invoke_with_args(args);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot cast Infinity")
+        );
+    }
+
+    #[test]
+    fn test_cast_float_overflow_non_ansi_mode() {
+        // Value too large to fit in i64 microseconds - should saturate to i64::MAX like Spark
+        let cast = SparkCast::new();
+        let large_value = 1e19; // Way too large for i64 microseconds
+        let args = make_args_with_ansi_mode(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(large_value))),
+            "timestamp",
+            false,
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        // Spark saturates overflow to i64::MAX
+        assert_scalar_timestamp(result, i64::MAX);
+    }
+
+    #[test]
+    fn test_cast_float_negative_overflow_non_ansi_mode() {
+        // Large negative value - should saturate to i64::MIN like Spark
+        let cast = SparkCast::new();
+        let large_value = -1e19; // Way too large negative for i64 microseconds
+        let args = make_args_with_ansi_mode(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(large_value))),
+            "timestamp",
+            false,
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        // Spark saturates negative overflow to i64::MIN
+        assert_scalar_timestamp(result, i64::MIN);
+    }
+
+    #[test]
+    fn test_cast_float_overflow_ansi_mode() {
+        // Value too large to fit in i64 microseconds - should error in ANSI mode
+        let cast = SparkCast::new();
+        let large_value = 1e19; // Way too large for i64 microseconds
+        let args = make_args_with_ansi_mode(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(large_value))),
+            "timestamp",
+            true,
+        );
+        let result = cast.invoke_with_args(args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Overflow"));
+    }
+
+    #[test]
+    fn test_cast_float_array_with_nan_and_infinity() {
+        // Array with NaN and Infinity in non-ANSI mode
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+            Some(2.0),
+        ]));
+
+        let cast = SparkCast::new();
+        let args =
+            make_args_with_ansi_mode(ColumnarValue::Array(array), "timestamp", false);
+        let result = cast.invoke_with_args(args).unwrap();
+
+        match result {
+            ColumnarValue::Array(result_array) => {
+                let ts_array = result_array.as_primitive::<TimestampMicrosecondType>();
+                assert_eq!(ts_array.value(0), 1_000_000);
+                assert!(ts_array.is_null(1)); // NaN -> NULL
+                assert!(ts_array.is_null(2)); // Infinity -> NULL
+                assert!(ts_array.is_null(3)); // -Infinity -> NULL
+                assert_eq!(ts_array.value(4), 2_000_000);
+            }
+            _ => panic!("Expected array result"),
+        }
+    }
+
+    #[test]
+    fn test_cast_float_negative_values() {
+        let cast = SparkCast::new();
+        let args = make_args(
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(-86400.5))),
+            "timestamp",
+        );
+        let result = cast.invoke_with_args(args).unwrap();
+        // -86400.5 seconds = -86400500000 microseconds (1 day and 0.5 seconds before epoch)
+        assert_scalar_timestamp(result, -86_400_500_000);
     }
 }

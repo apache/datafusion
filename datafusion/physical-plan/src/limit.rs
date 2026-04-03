@@ -17,7 +17,6 @@
 
 //! Defines the LIMIT plan
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -155,10 +154,6 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -347,10 +342,6 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }

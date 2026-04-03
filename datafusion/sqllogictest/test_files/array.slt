@@ -9358,6 +9358,74 @@ select string_to_list(e, 'm') from values;
 [adipiscing]
 NULL
 
+# string_to_array: single-char delimiter producing multiple elements
+query ?
+SELECT string_to_array('a,b,c', ',')
+----
+[a, b, c]
+
+# string_to_array: delimiter not found in input
+query ?
+SELECT string_to_array('abc', ',')
+----
+[abc]
+
+# string_to_array: empty string input
+query ?
+SELECT string_to_array('', ',')
+----
+[]
+
+# string_to_array: null_str matching multiple elements
+query ?
+SELECT string_to_array('a,NULL,b,NULL,c', ',', 'NULL')
+----
+[a, NULL, b, NULL, c]
+
+# string_to_array: null_str matching all elements
+query ?
+SELECT string_to_array('x,x,x', ',', 'x')
+----
+[NULL, NULL, NULL]
+
+# string_to_array: null_str with empty-string delimiter
+query ?
+SELECT string_to_array('abc', '', 'abc')
+----
+[NULL]
+
+# string_to_array: NULL string input
+query ?
+SELECT string_to_array(NULL, ',')
+----
+NULL
+
+# string_to_array: columnar delimiter
+query ??
+SELECT string_to_array('a,b,c', col1), string_to_array('a::b::c', col2)
+  FROM (VALUES (',', '::')) AS t(col1, col2)
+----
+[a, b, c] [a, b, c]
+
+# string_to_array: columnar null_str
+query ?
+SELECT string_to_array('a,NULL,b', ',', col1)
+  FROM (VALUES ('NULL')) AS t(col1)
+----
+[a, NULL, b]
+
+# string_to_array: adjacent delimiters produce empty strings
+query ?
+SELECT string_to_array('a,,b', ',')
+----
+[a, , b]
+
+# string_to_array: delimiter at start and end
+query ?
+SELECT string_to_array(',a,b,', ',')
+----
+[, a, b, ]
+
 # array_resize scalar function #1
 query ?
 select array_resize(make_array(1, 2, 3), 1);
