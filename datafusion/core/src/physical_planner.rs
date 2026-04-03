@@ -1198,7 +1198,14 @@ impl DefaultPhysicalPlanner {
                 let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
             }
-            LogicalPlan::Subquery(_) => todo!(),
+            // The optimizer's decorrelation passes remove Subquery nodes
+            // for supported patterns. This error is hit for correlated
+            // patterns that the optimizer cannot (yet) decorrelate.
+            LogicalPlan::Subquery(_) => {
+                return not_impl_err!(
+                    "Physical plan does not support undecorrelated Subquery"
+                );
+            }
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
