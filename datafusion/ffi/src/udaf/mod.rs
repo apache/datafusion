@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -372,9 +371,7 @@ impl Clone for FFI_AggregateUDF {
 
 impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
     fn from(udaf: Arc<AggregateUDF>) -> Self {
-        if let Some(udaf) =
-            (udaf.inner().as_ref() as &dyn Any).downcast_ref::<ForeignAggregateUDF>()
-        {
+        if let Some(udaf) = udaf.inner().downcast_ref::<ForeignAggregateUDF>() {
             return udaf.udaf.clone();
         }
 
@@ -644,7 +641,6 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::collections::HashMap;
 
     use arrow::datatypes::Schema;
@@ -855,20 +851,12 @@ mod tests {
 
         // Verify local libraries can be downcast to their original
         let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&ffi_udaf).into();
-        assert!(
-            (foreign_udaf.as_ref() as &dyn Any)
-                .downcast_ref::<Sum>()
-                .is_some()
-        );
+        assert!(foreign_udaf.is::<Sum>());
 
         // Verify different library markers generate foreign providers
         ffi_udaf.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&ffi_udaf).into();
-        assert!(
-            (foreign_udaf.as_ref() as &dyn Any)
-                .downcast_ref::<ForeignAggregateUDF>()
-                .is_some()
-        );
+        assert!(foreign_udaf.is::<ForeignAggregateUDF>());
 
         Ok(())
     }

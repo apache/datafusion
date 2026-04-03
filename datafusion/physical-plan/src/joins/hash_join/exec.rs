@@ -20,7 +20,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::{any::Any, vec};
+use std::vec;
 
 use crate::ExecutionPlanProperties;
 use crate::execution_plan::{
@@ -1177,10 +1177,6 @@ impl DisplayAs for HashJoinExec {
 impl ExecutionPlan for HashJoinExec {
     fn name(&self) -> &'static str {
         "HashJoinExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

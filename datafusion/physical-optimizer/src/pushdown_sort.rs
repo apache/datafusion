@@ -84,7 +84,7 @@ impl PhysicalOptimizerRule for PushdownSort {
         // Use transform_down to find and optimize all SortExec nodes (including nested ones)
         plan.transform_down(|plan: Arc<dyn ExecutionPlan>| {
             // Check if this is a SortExec
-            let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() else {
+            let Some(sort_exec) = plan.downcast_ref::<SortExec>() else {
                 return Ok(Transformed::no(plan));
             };
 

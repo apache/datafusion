@@ -46,7 +46,7 @@ use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
-    Volatility, expr_vec_fmt,
+    ScalarUDFImpl, Volatility, expr_vec_fmt,
 };
 
 /// Physical expression of a scalar function
@@ -169,16 +169,10 @@ impl ScalarFunctionExpr {
     /// Otherwise returns `Some(ScalarFunctionExpr)`.
     pub fn try_downcast_func<T>(expr: &dyn PhysicalExpr) -> Option<&ScalarFunctionExpr>
     where
-        T: 'static,
+        T: ScalarUDFImpl,
     {
         match expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
-            Some(scalar_expr)
-                if (scalar_expr.fun().inner().as_ref() as &dyn Any)
-                    .downcast_ref::<T>()
-                    .is_some() =>
-            {
-                Some(scalar_expr)
-            }
+            Some(scalar_expr) if scalar_expr.fun().inner().is::<T>() => Some(scalar_expr),
             _ => None,
         }
     }
