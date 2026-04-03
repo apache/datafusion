@@ -660,14 +660,6 @@ impl ExecutionPlan for RepartitionExec {
         let sort_exprs = self.sort_exprs().cloned().unwrap_or_default();
 
         let state = Arc::clone(&self.state);
-        if let Some(mut state) = state.try_lock() {
-            state.ensure_input_streams_initialized(
-                Arc::clone(&input),
-                metrics.clone(),
-                partitioning.partition_count(),
-                Arc::clone(&context),
-            )?;
-        }
 
         let stream = futures::stream::once(async move {
             let num_input_partitions = input.output_partitioning().partition_count();
@@ -1357,8 +1349,13 @@ mod tests {
         let partitioning = Partitioning::RoundRobinBatch(1);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
-        // Expect that an error is returned
-        let result_string = exec.execute(0, task_ctx).err().unwrap().to_string();
+        // Note: with lazy initialization, the error is not returned from execute()
+        // but from the first poll of the stream.
+        let output_stream = exec.execute(0, task_ctx).unwrap();
+        let result_string = crate::common::collect(output_stream)
+            .await
+            .unwrap_err()
+            .to_string();
 
         assert!(
             result_string.contains("ErrorExec, unsurprisingly, errored in partition 0"),
