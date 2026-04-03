@@ -902,57 +902,51 @@ impl DataSource for FileScanConfig {
 
     /// Push sort requirements into file-based data sources.
     ///
-    /// # Sort Pushdown Architecture
+    /// # When does this matter?
+    ///
+    /// `EnforceSorting` (which runs before `PushdownSort`) already eliminates
+    /// `SortExec` when `validated_output_ordering()` confirms the file order is
+    /// correct. However, if files are listed in wrong order (e.g., alphabetical
+    /// order doesn't match sort key order), `validated_output_ordering()` strips
+    /// the ordering and `EnforceSorting` cannot help.
+    ///
+    /// This is where `PushdownSort` adds value: it **sorts files by statistics**
+    /// to fix the ordering, then re-checks — enabling sort elimination even when
+    /// files were originally in wrong order.
+    ///
+    /// # Architecture
     ///
     /// ```text
-    /// Query: SELECT ... ORDER BY col ASC [LIMIT N]
-    ///
-    ///   PushdownSort optimizer
-    ///         │
-    ///         ▼
-    ///   FileScanConfig::try_pushdown_sort()
-    ///         │
-    ///         ├─► FileSource::try_pushdown_sort()
-    ///         │     │
-    ///         │     ├─ natural ordering matches? ──► Exact
-    ///         │     │   (e.g. Parquet WITH ORDER)     │
-    ///         │     │                                  ▼
-    ///         │     │                      rebuild_with_source(exact=true)
-    ///         │     │                        ├─ sort files by stats within groups
-    ///         │     │                        ├─ verify non-overlapping
-    ///         │     │                        └─► keep output_ordering → SortExec removed
-    ///         │     │
-    ///         │     ├─ reversed ordering matches? ──► Inexact
-    ///         │     │   (reverse_row_groups=true)      │
-    ///         │     │                                   ▼
-    ///         │     │                       rebuild_with_source(exact=false)
-    ///         │     │                         ├─ sort files by stats
-    ///         │     │                         └─► clear output_ordering → SortExec kept
-    ///         │     │
-    ///         │     └─ neither ──► Unsupported
-    ///         │
-    ///         └─► try_sort_file_groups_by_statistics()
-    ///               (best-effort: reorder files by min/max stats)
-    ///               └─► Inexact if reordered, Unsupported if already in order
+    /// PushdownSort optimizer finds SortExec
+    ///   │
+    ///   ▼
+    /// FileScanConfig::try_pushdown_sort()
+    ///   │
+    ///   ├─► FileSource returns Exact
+    ///   │     (natural ordering already satisfies request)
+    ///   │     → rebuild_with_source: sort files by stats, verify non-overlapping
+    ///   │     → SortExec removed, fetch (LIMIT) pushed to DataSourceExec
+    ///   │
+    ///   ├─► FileSource returns Inexact
+    ///   │     (reverse_row_groups=true)
+    ///   │     → SortExec kept, scan optimized
+    ///   │
+    ///   └─► FileSource returns Unsupported
+    ///         (ordering was stripped because files in wrong order)
+    ///         → try_sort_file_groups_by_statistics():
+    ///           1. Sort files within groups by min/max statistics
+    ///           2. Re-check: are files now non-overlapping + ordering valid?
+    ///              YES → upgrade to Exact → SortExec removed
+    ///              NO  → Inexact (files reordered but Sort stays)
     /// ```
     ///
-    /// # Result Plans
+    /// # Note on multi-partition plans
     ///
-    /// ```text
-    /// Exact (single partition):     DataSourceExec [files sorted, non-overlapping]
-    /// Exact (multi partition):      SPM ─► DataSourceExec [group 0] | [group 1]
-    /// Inexact (reverse scan):       SortExec ─► DataSourceExec [reverse_row_groups]
-    /// Inexact (stats reorder):      SortExec ─► DataSourceExec [files reordered]
-    /// ```
-    ///
-    /// # Trade-offs
-    ///
-    /// - **Exact + single partition**: No sort, no merge, but sequential I/O only.
-    ///   Best for LIMIT queries (reads minimal data and stops).
-    /// - **Exact + multi partition**: No sort per partition, cheap O(n) SPM merge,
-    ///   parallel I/O. Best for full scans on large datasets.
-    /// - **Inexact**: Sort still required, but statistics-aware file ordering helps
-    ///   TopK discard data earlier via dynamic filters.
+    /// In the default configuration, `EnforceDistribution` byte-range splits
+    /// files into single-file groups before `PushdownSort` runs. Single-file
+    /// groups pass `validated_output_ordering()` trivially, so `EnforceSorting`
+    /// already eliminates `SortExec`. In this case, `PushdownSort` finds no
+    /// `SortExec` and does nothing.
     fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],

@@ -37,15 +37,13 @@
 //!
 //! ## Capabilities
 //!
-//! - **Sort elimination**: when data source's natural ordering already satisfies the
-//!   request (e.g., Parquet files with matching `WITH ORDER`), return `Exact` and
-//!   remove the `SortExec` entirely
+//! - **Statistics-based file sorting + sort elimination**: when files within a
+//!   partition are non-overlapping and internally sorted but listed in wrong order,
+//!   sort them by min/max statistics to fix the ordering. After sorting, the
+//!   ordering becomes valid and `SortExec` can be removed entirely. Also preserves
+//!   `fetch` (LIMIT) from the eliminated `SortExec` for early termination.
 //! - **Reverse scan optimization**: when required sort is the reverse of the data source's
 //!   natural ordering, enable reverse scanning (reading row groups in reverse order)
-//! - **Statistics-based file reordering**: sort files within each group by their min/max
-//!   statistics to approximate the requested order, improving TopK and limit performance
-//! - **Non-overlapping detection**: when files have non-overlapping ranges and matching
-//!   within-file ordering, the combined scan is `Exact` (sort eliminated)
 //! - **Prefix matching**: if data has ordering [A DESC, B ASC] and query needs
 //!   [A DESC], the existing ordering satisfies the requirement (`Exact`).
 //!   If the query needs [A ASC] (reverse of the prefix), a reverse scan is
