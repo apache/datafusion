@@ -35,6 +35,7 @@ use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, internal_err, not_impl_err};
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_functions_aggregate::expr_fn::count;
@@ -108,10 +109,6 @@ impl ExecutionPlan for CustomPlan {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -152,6 +149,22 @@ impl ExecutionPlan for CustomPlan {
             })),
         )))
     }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.cache.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -190,7 +203,7 @@ impl TableProvider for CustomProvider {
                     Expr::Literal(ScalarValue::Int16(Some(i)), _) => *i as i64,
                     Expr::Literal(ScalarValue::Int32(Some(i)), _) => *i as i64,
                     Expr::Literal(ScalarValue::Int64(Some(i)), _) => *i,
-                    Expr::Cast(Cast { expr, data_type: _ }) => match expr.deref() {
+                    Expr::Cast(Cast { expr, field: _ }) => match expr.deref() {
                         Expr::Literal(lit_value, _) => match lit_value {
                             ScalarValue::Int8(Some(v)) => *v as i64,
                             ScalarValue::Int16(Some(v)) => *v as i64,

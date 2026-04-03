@@ -24,7 +24,7 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -216,7 +216,7 @@ pub trait Dialect: Send + Sync {
 
     /// Allows the dialect to override logic of formatting datetime with tz into string.
     fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, _unit: TimeUnit) -> String {
-        dt.to_string()
+        dt.to_rfc3339()
     }
 
     /// Whether the dialect supports an empty select list such as `SELECT FROM table`.
@@ -247,6 +247,17 @@ pub trait Dialect: Send + Sync {
     /// ```
     fn supports_empty_select_list(&self) -> bool {
         false
+    }
+
+    /// Override the default string literal unparsing.
+    ///
+    /// Returns `Some(ast::Expr)` to replace the default single-quoted string,
+    /// or `None` to use the default behavior.
+    ///
+    /// For example, MSSQL requires non-ASCII strings to use national string
+    /// literal syntax (`N'datafusion資料融合'`).
+    fn string_literal_to_sql(&self, _s: &str) -> Option<ast::Expr> {
+        None
     }
 }
 
@@ -340,6 +351,10 @@ impl Dialect for PostgreSqlDialect {
         func_name: &str,
         args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
+        if func_name == "array_has" {
+            return self.array_has_to_sql_any(unparser, args);
+        }
+
         if func_name == "round" {
             return Ok(Some(
                 self.round_to_sql_enforce_numeric(unparser, func_name, args)?,
@@ -351,6 +366,23 @@ impl Dialect for PostgreSqlDialect {
 }
 
 impl PostgreSqlDialect {
+    fn array_has_to_sql_any(
+        &self,
+        unparser: &Unparser,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        let [haystack, needle] = args else {
+            return internal_err!("array_has expected 2 arguments, got {}", args.len());
+        };
+
+        Ok(Some(ast::Expr::AnyOp {
+            left: Box::new(unparser.expr_to_sql(needle)?),
+            compare_op: BinaryOperator::Eq,
+            right: Box::new(unparser.expr_to_sql(haystack)?),
+            is_some: false,
+        }))
+    }
+
     fn round_to_sql_enforce_numeric(
         &self,
         unparser: &Unparser,
@@ -456,17 +488,6 @@ impl Dialect for DuckDBDialect {
         }
 
         Ok(None)
-    }
-
-    fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, unit: TimeUnit) -> String {
-        let format = match unit {
-            TimeUnit::Second => "%Y-%m-%d %H:%M:%S%:z",
-            TimeUnit::Millisecond => "%Y-%m-%d %H:%M:%S%.3f%:z",
-            TimeUnit::Microsecond => "%Y-%m-%d %H:%M:%S%.6f%:z",
-            TimeUnit::Nanosecond => "%Y-%m-%d %H:%M:%S%.9f%:z",
-        };
-
-        dt.format(format).to_string()
     }
 }
 

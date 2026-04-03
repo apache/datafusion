@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType};
@@ -51,10 +50,6 @@ impl SparkNextDay {
 }
 
 impl ScalarUDFImpl for SparkNextDay {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "next_day"
     }
@@ -213,7 +208,7 @@ where
 }
 
 fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
-    let date = Date32Type::to_naive_date(days);
+    let date = Date32Type::to_naive_date_opt(days)?;
 
     let day_of_week = day_of_week.trim().to_uppercase();
     let day_of_week = match day_of_week.as_str() {
@@ -253,7 +248,6 @@ fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn return_type_is_not_used() {

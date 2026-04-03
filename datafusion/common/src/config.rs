@@ -22,7 +22,7 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
+use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
@@ -669,6 +669,21 @@ config_namespace! {
         /// # Default
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
+
+        /// How many bytes to buffer in the probe side of hash joins while the build side is
+        /// concurrently being built.
+        ///
+        /// Without this, hash joins will wait until the full materialization of the build side
+        /// before polling the probe side. This is useful in scenarios where the query is not
+        /// completely CPU bounded, allowing to do some early work concurrently and reducing the
+        /// latency of the query.
+        ///
+        /// Note that when hash join buffering is enabled, the probe side will start eagerly
+        /// polling data, not giving time for the producer side of dynamic filters to produce any
+        /// meaningful predicate. Queries with dynamic filters might see performance degradation.
+        ///
+        /// Disabled by default, set to a number greater than 0 for enabling it.
+        pub hash_join_buffering_capacity: usize, default = 0
     }
 }
 
@@ -922,6 +937,11 @@ config_namespace! {
         /// past window functions, if possible
         pub enable_window_limits: bool, default = true
 
+        /// When set to true, the optimizer will push TopK (Sort with fetch)
+        /// below hash repartition when the partition key is a prefix of the
+        /// sort key, reducing data volume before the shuffle.
+        pub enable_topk_repartition: bool, default = true
+
         /// When set to true, the optimizer will attempt to push down TopK dynamic filters
         /// into the file scan phase.
         pub enable_topk_dynamic_filter_pushdown: bool, default = true
@@ -1068,6 +1088,12 @@ config_namespace! {
         /// process to reorder the join keys
         pub top_down_join_key_reordering: bool, default = true
 
+        /// When set to true, the physical plan optimizer may swap join inputs
+        /// based on statistics. When set to false, statistics-driven join
+        /// input reordering is disabled and the original join order in the
+        /// query is used.
+        pub join_reordering: bool, default = true
+
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         pub prefer_hash_join: bool, default = true
@@ -1185,7 +1211,13 @@ config_namespace! {
         /// Verbosity level for "EXPLAIN ANALYZE". Default is "dev"
         /// "summary" shows common metrics for high-level insights.
         /// "dev" provides deep operator-level introspection for developers.
-        pub analyze_level: ExplainAnalyzeLevel, default = ExplainAnalyzeLevel::Dev
+        pub analyze_level: MetricType, default = MetricType::Dev
+
+        /// Which metric categories to include in "EXPLAIN ANALYZE" output.
+        /// Comma-separated list of: "rows", "bytes", "timing", "uncategorized".
+        /// Use "none" to show plan structure only, or "all" (default) to show everything.
+        /// Metrics without a declared category are treated as "uncategorized".
+        pub analyze_categories: ExplainAnalyzeCategories, default = ExplainAnalyzeCategories::All
     }
 }
 
@@ -1228,30 +1260,30 @@ config_namespace! {
     }
 }
 
-impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
+impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
-    fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
-        let duration_format = match self.duration_format.as_str() {
+    fn try_from(options: &'a FormatOptions) -> Result<Self> {
+        let duration_format = match options.duration_format.as_str() {
             "pretty" => arrow::util::display::DurationFormat::Pretty,
             "iso8601" => arrow::util::display::DurationFormat::ISO8601,
             _ => {
                 return _config_err!(
                     "Invalid duration format: {}. Valid values are pretty or iso8601",
-                    self.duration_format
+                    options.duration_format
                 );
             }
         };
 
-        Ok(arrow::util::display::FormatOptions::new()
-            .with_display_error(self.safe)
-            .with_null(&self.null)
-            .with_date_format(self.date_format.as_deref())
-            .with_datetime_format(self.datetime_format.as_deref())
-            .with_timestamp_format(self.timestamp_format.as_deref())
-            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
-            .with_time_format(self.time_format.as_deref())
+        Ok(Self::new()
+            .with_display_error(options.safe)
+            .with_null(&options.null)
+            .with_date_format(options.date_format.as_deref())
+            .with_datetime_format(options.datetime_format.as_deref())
+            .with_timestamp_format(options.timestamp_format.as_deref())
+            .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
+            .with_time_format(options.time_format.as_deref())
             .with_duration_format(duration_format)
-            .with_types_info(self.types_info))
+            .with_types_info(options.types_info))
     }
 }
 
@@ -2711,10 +2743,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
                 },
             );
         }
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
         ConfigFileEncryptionProperties {
             encrypt_footer: f.encrypt_footer(),
             footer_key_as_hex: hex::encode(f.footer_key()),
@@ -2852,10 +2881,7 @@ impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
             column_decryption_properties.insert(column_name.clone(), props);
         }
 
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
         ConfigFileDecryptionProperties {
             footer_key_as_hex: hex::encode(
                 f.footer_key(None).unwrap_or_default().as_ref(),

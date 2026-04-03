@@ -618,7 +618,7 @@ select repeat('-1.2', arrow_cast(3, 'Int32'));
 ----
 -1.2-1.2-1.2
 
-query error DataFusion error: Error during planning: Function 'repeat' requires TypeSignatureClass::Native\(LogicalType\(Native\(Int64\), Int64\)\), but received Float64 \(DataType: Float64\)
+query error DataFusion error: Error during planning: Function 'repeat' requires Int64, but received Float64 \(DataType: Float64\)
 select repeat('-1.2', 3.2);
 
 query T
@@ -698,6 +698,26 @@ ghi
 
 query T
 SELECT split_part('abc~@~def~@~ghi', '~@~', -100)
+----
+(empty)
+
+query T
+SELECT split_part('a,b', '', 1)
+----
+a,b
+
+query T
+SELECT split_part('a,b', '', -1)
+----
+a,b
+
+query T
+SELECT split_part('a,b', '', 2)
+----
+(empty)
+
+query T
+SELECT split_part('a,b', '', -2)
 ----
 (empty)
 
@@ -1066,55 +1086,37 @@ SELECT 0.3 NOT IN (0.0,0.1,0.2,NULL)
 ----
 NULL
 
-query B
+# Mixed string/integer IN lists: comparison coercion picks the numeric
+# type, so non-numeric strings like 'a' fail to cast to Int64.
+query error Cannot cast string 'a' to value of Int64 type
 SELECT '1' IN ('a','b',1)
-----
-true
 
-query B
+query error Cannot cast string 'a' to value of Int64 type
 SELECT '2' IN ('a','b',1)
-----
-false
 
-query B
+query error Cannot cast string 'a' to value of Int64 type
 SELECT '2' NOT IN ('a','b',1)
-----
-true
 
-query B
+query error Cannot cast string 'a' to value of Int64 type
 SELECT '1' NOT IN ('a','b',1)
-----
-false
 
-query B
+query error Cannot cast string 'a' to value of Int64 type
 SELECT NULL IN ('a','b',1)
-----
-NULL
 
-query B
+query error Cannot cast string 'a' to value of Int64 type
 SELECT NULL NOT IN ('a','b',1)
-----
-NULL
 
-query B
+query error Cannot cast string 'a' to value of Int64 type
 SELECT '1' IN ('a','b',NULL,1)
-----
-true
 
-query B
+query error Cannot cast string 'a' to value of Int64 type
 SELECT '2' IN ('a','b',NULL,1)
-----
-NULL
 
-query B
+query error Cannot cast string 'a' to value of Int64 type
 SELECT '1' NOT IN ('a','b',NULL,1)
-----
-false
 
-query B
+query error Cannot cast string 'a' to value of Int64 type
 SELECT '2' NOT IN ('a','b',NULL,1)
-----
-NULL
 
 # ========================================================================
 # Comprehensive IN LIST tests with NULL handling

@@ -42,8 +42,6 @@ physical_plan
 statement error DataFusion error: Error during planning: WITH query name "a" specified more than once
 WITH a AS (SELECT 1), a AS (SELECT 2) SELECT * FROM a;
 
-statement ok
-CREATE TABLE orders AS VALUES (1), (2);
 
 ##########
 ## CTE Reference Resolution
@@ -59,9 +57,13 @@ CREATE TABLE orders AS VALUES (1), (2);
 #
 # Refs: https://github.com/apache/datafusion/issues/18932
 #
-# NOTE: This test relies on a strict catalog/schema provider registered in
+# NOTE: This test relies on a strict schema provider registered in
 # `datafusion/sqllogictest/src/test_context.rs` that provides only the `orders`
 # table and panics on unexpected lookups.
+
+# Use the strict schema provider
+statement ok
+set datafusion.catalog.default_schema = "strict_schema";
 
 statement ok
 set datafusion.sql_parser.enable_ident_normalization = true;
@@ -98,6 +100,17 @@ with barbaz as (select * from orders) select * from barbaz;
 ----
 1
 2
+
+# Reset to default configs
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+statement ok
+set datafusion.catalog.default_schema = "public";
+
+## CTE reference resolution tests end ##
+
+
 
 # Test disabling recursive CTE
 statement ok
@@ -1015,7 +1028,7 @@ logical_plan
 04)----SubqueryAlias: cte
 05)------TableScan: person projection=[id]
 physical_plan
-01)HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
 03)--DataSourceExec: partitions=1, partition_sizes=[0]
 
@@ -1219,3 +1232,13 @@ explain WITH RECURSIVE numbers AS (
   UNION ALL
   select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
+
+# Config reset
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+RESET datafusion.execution.enable_recursive_ctes;
+
+statement ok
+RESET datafusion.sql_parser.enable_ident_normalization;

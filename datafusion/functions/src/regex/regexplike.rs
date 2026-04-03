@@ -26,8 +26,8 @@ use datafusion_common::{
     Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature,
-    TypeSignature, TypeSignatureClass, Volatility, binary_expr, cast,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility, binary_expr, cast,
 };
 use datafusion_macros::user_doc;
 
@@ -35,7 +35,6 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use regex::Regex;
-use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
@@ -103,10 +102,6 @@ impl RegexpLikeFunc {
 }
 
 impl ScalarUDFImpl for RegexpLikeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regexp_like"
     }
@@ -126,10 +121,7 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         })
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         match args.as_slice() {
             [ColumnarValue::Scalar(value), ColumnarValue::Scalar(pattern)] => {

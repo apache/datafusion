@@ -42,7 +42,8 @@ pub async fn from_exchange_rel(
             let mut partition_columns = vec![];
             let input_schema = input.schema();
             for field_ref in &scatter_fields.fields {
-                let column = from_substrait_field_reference(field_ref, input_schema)?;
+                let column =
+                    from_substrait_field_reference(consumer, field_ref, input_schema)?;
                 partition_columns.push(column);
             }
             Partitioning::Hash(partition_columns, exchange.partition_count as usize)

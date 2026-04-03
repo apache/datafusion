@@ -34,6 +34,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_catalog::memory::DataSourceExec;
+use datafusion_common::JoinType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_datasource::{
     PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
@@ -53,6 +54,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_optimizer::{
     PhysicalOptimizerRule, filter_pushdown::FilterPushdown,
 };
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::{
     ExecutionPlan,
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
@@ -528,6 +530,240 @@ fn test_filter_with_projection() {
         Ok:
           - ProjectionExec: expr=[b@1 as b]
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_collapse_outer_fetch_preserved() {
+    // When the outer filter has fetch and inner does not, the merged filter should preserve fetch
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let predicate1 = col_lit_predicate("a", "foo", &schema());
+    let filter1 = Arc::new(FilterExec::try_new(predicate1, scan).unwrap());
+    let predicate2 = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate2, filter1)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar, fetch=10
+        -   FilterExec: a@0 = foo
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - FilterExec: b@1 = bar AND a@0 = foo, fetch=10
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_collapse_inner_fetch_preserved() {
+    // When the inner filter has fetch and outer does not, the merged filter should preserve fetch
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let predicate1 = col_lit_predicate("a", "foo", &schema());
+    let filter1 = Arc::new(
+        FilterExecBuilder::new(predicate1, scan)
+            .with_fetch(Some(5))
+            .build()
+            .unwrap(),
+    );
+    let predicate2 = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate2, filter1).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar
+        -   FilterExec: a@0 = foo, fetch=5
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - FilterExec: b@1 = bar AND a@0 = foo, fetch=5
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_collapse_both_fetch_uses_minimum() {
+    // When both filters have fetch, the merged filter should use the smaller (tighter) fetch.
+    // Inner fetch=5 is tighter than outer fetch=10, so the result should be fetch=5.
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let predicate1 = col_lit_predicate("a", "foo", &schema());
+    let filter1 = Arc::new(
+        FilterExecBuilder::new(predicate1, scan)
+            .with_fetch(Some(5))
+            .build()
+            .unwrap(),
+    );
+    let predicate2 = col_lit_predicate("b", "bar", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate2, filter1)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar, fetch=10
+        -   FilterExec: a@0 = foo, fetch=5
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - FilterExec: b@1 = bar AND a@0 = foo, fetch=5
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_fully_pushed_to_scan() {
+    // When a FilterExec has a fetch limit and all predicates are pushed down
+    // to a supportive DataSourceExec, the FilterExec is removed and the fetch
+    // must be propagated to the DataSourceExec.
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, scan)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=10
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], limit=10, file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_and_projection_fully_pushed_to_scan() {
+    // When a FilterExec has both fetch and projection, and all predicates are
+    // pushed down, the filter is replaced by a ProjectionExec and the fetch
+    // must still be propagated to the DataSourceExec.
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let projection = vec![1, 0];
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, scan)
+            .with_fetch(Some(5))
+            .apply_projection(Some(projection))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, projection=[b@1, a@0], fetch=5
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - ProjectionExec: expr=[b@1 as b, a@0 as a]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], limit=5, file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_partially_pushed_to_scan() {
+    // When a FilterExec has fetch and only some predicates are pushed down,
+    // the FilterExec remains with the unpushed predicate and keeps its fetch.
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let pushed_predicate = col_lit_predicate("a", "foo", &schema());
+    let volatile_predicate = {
+        let cfg = Arc::new(ConfigOptions::default());
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()),
+            Operator::Eq,
+            Arc::new(
+                ScalarFunctionExpr::try_new(
+                    Arc::new(ScalarUDF::from(RandomFunc::new())),
+                    vec![],
+                    &schema(),
+                    cfg,
+                )
+                .unwrap(),
+            ),
+        )) as Arc<dyn PhysicalExpr>
+    };
+    // Combine: a = 'foo' AND a = random()
+    let combined = Arc::new(BinaryExpr::new(
+        pushed_predicate,
+        Operator::And,
+        volatile_predicate,
+    )) as Arc<dyn PhysicalExpr>;
+    let plan = Arc::new(
+        FilterExecBuilder::new(combined, scan)
+            .with_fetch(Some(7))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo AND a@0 = random(), fetch=7
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: a@0 = random(), fetch=7
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_not_pushed_to_unsupportive_scan() {
+    // When the DataSourceExec does not support pushdown, the FilterExec
+    // remains unchanged with its fetch intact.
+    let scan = TestScanBuilder::new(schema()).with_support(false).build();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, scan)
+            .with_fetch(Some(3))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=3
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - FilterExec: a@0 = foo, fetch=3
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -1253,7 +1489,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 2 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 4 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
     "
     );
 
@@ -2083,6 +2319,116 @@ fn test_filter_pushdown_through_union_does_not_support() {
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
           -   FilterExec: a@0 = foo
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_fully_pushed_through_union() {
+    // When a FilterExec with fetch wraps a UnionExec and all predicates are
+    // pushed down, UnionExec does not support with_fetch, so a LocalLimitExec
+    // should be inserted to preserve the fetch limit.
+    let scan1 = TestScanBuilder::new(schema()).with_support(true).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(true).build();
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, union)
+            .with_fetch(Some(10))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=10
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - LocalLimitExec: fetch=10
+          -   UnionExec
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_and_projection_fully_pushed_through_union() {
+    // When a FilterExec with both fetch and projection wraps a UnionExec and
+    // all predicates are pushed down, we should get a ProjectionExec on top of
+    // a LocalLimitExec wrapping the UnionExec.
+    let scan1 = TestScanBuilder::new(schema()).with_support(true).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(true).build();
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+    let projection = vec![1, 0];
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, union)
+            .with_fetch(Some(5))
+            .apply_projection(Some(projection))
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, projection=[b@1, a@0], fetch=5
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - ProjectionExec: expr=[b@1 as b, a@0 as a]
+          -   LocalLimitExec: fetch=5
+          -     UnionExec
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_fetch_not_fully_pushed_through_union() {
+    // When a FilterExec with fetch wraps a UnionExec but children don't support
+    // pushdown, the FilterExec remains with its fetch — no LocalLimitExec needed.
+    let scan1 = TestScanBuilder::new(schema()).with_support(false).build();
+    let scan2 = TestScanBuilder::new(schema()).with_support(false).build();
+    let union = UnionExec::try_new(vec![scan1, scan2]).unwrap();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, union)
+            .with_fetch(Some(8))
+            .build()
+            .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, fetch=8
+        -   UnionExec
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - LocalLimitExec: fetch=8
+          -   UnionExec
+          -     FilterExec: a@0 = foo
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     FilterExec: a@0 = foo
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -3146,6 +3492,346 @@ fn test_pushdown_with_empty_group_by() {
 }
 
 #[test]
+fn test_pushdown_through_aggregate_with_reordered_input_columns() {
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+
+    // Reorder scan output from (a, b, c) to (c, a, b)
+    let reordered_schema = Arc::new(Schema::new(vec![
+        Field::new("c", DataType::Float64, false),
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let projection = Arc::new(
+        ProjectionExec::try_new(
+            vec![
+                (col("c", &schema()).unwrap(), "c".to_string()),
+                (col("a", &schema()).unwrap(), "a".to_string()),
+                (col("b", &schema()).unwrap(), "b".to_string()),
+            ],
+            scan,
+        )
+        .unwrap(),
+    );
+
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(
+            count_udaf(),
+            vec![col("c", &reordered_schema).unwrap()],
+        )
+        .schema(reordered_schema.clone())
+        .alias("cnt")
+        .build()
+        .map(Arc::new)
+        .unwrap(),
+    ];
+
+    // Group by a@1, b@2 (input indices in reordered schema)
+    let group_by = PhysicalGroupBy::new_single(vec![
+        (col("a", &reordered_schema).unwrap(), "a".to_string()),
+        (col("b", &reordered_schema).unwrap(), "b".to_string()),
+    ]);
+
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            aggregate_expr,
+            vec![None],
+            projection,
+            reordered_schema,
+        )
+        .unwrap(),
+    );
+
+    // Filter on b@1 in aggregate's output schema (a@0, b@1, cnt@2)
+    // The grouping expr for b references input index 2, but output index is 1.
+    let agg_output_schema = aggregate.schema();
+    let predicate = col_lit_predicate("b", "bar", &agg_output_schema);
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+
+    // The filter should be pushed down
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar
+        -   AggregateExec: mode=Final, gby=[a@1 as a, b@2 as b], aggr=[cnt]
+        -     ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - AggregateExec: mode=Final, gby=[a@1 as a, b@2 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          -   ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
+    "
+    );
+}
+
+#[test]
+fn test_pushdown_through_aggregate_grouping_sets_with_reordered_input() {
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+
+    let reordered_schema = Arc::new(Schema::new(vec![
+        Field::new("c", DataType::Float64, false),
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let projection = Arc::new(
+        ProjectionExec::try_new(
+            vec![
+                (col("c", &schema()).unwrap(), "c".to_string()),
+                (col("a", &schema()).unwrap(), "a".to_string()),
+                (col("b", &schema()).unwrap(), "b".to_string()),
+            ],
+            scan,
+        )
+        .unwrap(),
+    );
+
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(
+            count_udaf(),
+            vec![col("c", &reordered_schema).unwrap()],
+        )
+        .schema(reordered_schema.clone())
+        .alias("cnt")
+        .build()
+        .map(Arc::new)
+        .unwrap(),
+    ];
+
+    // Use grouping sets (a, b) and (b).
+    let group_by = PhysicalGroupBy::new(
+        vec![
+            (col("a", &reordered_schema).unwrap(), "a".to_string()),
+            (col("b", &reordered_schema).unwrap(), "b".to_string()),
+        ],
+        vec![
+            (
+                Arc::new(Literal::new(ScalarValue::Utf8(None))),
+                "a".to_string(),
+            ),
+            (
+                Arc::new(Literal::new(ScalarValue::Utf8(None))),
+                "b".to_string(),
+            ),
+        ],
+        vec![vec![false, false], vec![true, false]],
+        true,
+    );
+
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            aggregate_expr,
+            vec![None],
+            projection,
+            reordered_schema,
+        )
+        .unwrap(),
+    );
+
+    let agg_output_schema = aggregate.schema();
+
+    // Filter on b (present in all grouping sets) should be pushed down
+    let predicate = col_lit_predicate("b", "bar", &agg_output_schema);
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate.clone()).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: b@1 = bar
+        -   AggregateExec: mode=Final, gby=[(a@1 as a, b@2 as b), (NULL as a, b@2 as b)], aggr=[cnt]
+        -     ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - AggregateExec: mode=Final, gby=[(a@1 as a, b@2 as b), (NULL as a, b@2 as b)], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          -   ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
+    "
+    );
+
+    // Filter on a (missing from second grouping set) should not be pushed down
+    let predicate = col_lit_predicate("a", "foo", &agg_output_schema);
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   AggregateExec: mode=Final, gby=[(a@1 as a, b@2 as b), (NULL as a, b@2 as b)], aggr=[cnt]
+        -     ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: a@0 = foo
+          -   AggregateExec: mode=Final, gby=[(a@1 as a, b@2 as b), (NULL as a, b@2 as b)], aggr=[cnt]
+          -     ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    "
+    );
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/21065.
+///
+/// Given a plan similar to the following, ensure that the filter is pushed down
+/// through an AggregateExec whose input columns are reordered by a ProjectionExec.
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_through_aggregate_with_reordered_input() {
+    // Build side
+    let build_batches = vec![record_batch!(("a", Utf8, ["h1", "h2"])).unwrap()];
+    let build_schema =
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Probe side
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["h1", "h2", "h3", "h4"]),
+            ("value", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("value", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // ProjectionExec reorders (a, value) → (value, a)
+    let reordered_schema = Arc::new(Schema::new(vec![
+        Field::new("value", DataType::Float64, false),
+        Field::new("a", DataType::Utf8, false),
+    ]));
+    let projection = Arc::new(
+        ProjectionExec::try_new(
+            vec![
+                (col("value", &probe_schema).unwrap(), "value".to_string()),
+                (col("a", &probe_schema).unwrap(), "a".to_string()),
+            ],
+            probe_scan,
+        )
+        .unwrap(),
+    );
+
+    // AggregateExec: GROUP BY a@1, min(value@0)
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(
+            min_udaf(),
+            vec![col("value", &reordered_schema).unwrap()],
+        )
+        .schema(reordered_schema.clone())
+        .alias("min_value")
+        .build()
+        .map(Arc::new)
+        .unwrap(),
+    ];
+    let group_by = PhysicalGroupBy::new_single(vec![(
+        col("a", &reordered_schema).unwrap(), // a@1 in input
+        "a".to_string(),
+    )]);
+
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            aggregate_expr,
+            vec![None],
+            projection,
+            reordered_schema,
+        )
+        .unwrap(),
+    );
+
+    // Aggregate output schema: (a@0, min_value@1)
+    let agg_output_schema = aggregate.schema();
+
+    // Join the build and probe side
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            aggregate,
+            vec![(
+                col("a", &build_schema).unwrap(),
+                col("a", &agg_output_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // The HashJoin's dynamic filter on `a` should push
+    // through the aggregate and reach the probe-side DataSource.
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true
+        -   AggregateExec: mode=Single, gby=[a@1 as a], aggr=[min_value]
+        -     ProjectionExec: expr=[value@1 as value, a@0 as a]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, value], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true
+          -   AggregateExec: mode=Single, gby=[a@1 as a], aggr=[min_value]
+          -     ProjectionExec: expr=[value@1 as value, a@0 as a]
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, value], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    "
+    );
+
+    // Actually execute the plan to verify the dynamic filter is populated
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+
+    let session_config = SessionConfig::new().with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(session_config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    stream.next().await.unwrap().unwrap();
+
+    // After execution, the dynamic filter should be populated with values
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true
+    -   AggregateExec: mode=Single, gby=[a@1 as a], aggr=[min_value]
+    -     ProjectionExec: expr=[value@1 as value, a@0 as a]
+    -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, value], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= h1 AND a@0 <= h2 AND a@0 IN (SET) ([h1, h2]) ]
+    "
+    );
+}
+
+#[test]
 fn test_pushdown_with_computed_grouping_key() {
     // Test filter pushdown with computed grouping expression
     // SELECT (c + 1.0) as c_plus_1, count(*) FROM table WHERE c > 5.0 GROUP BY (c + 1.0)
@@ -3980,7 +4666,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
 
         // Get the HashJoinExec to check the dynamic filter
         let hash_join = plan
-            .as_any()
             .downcast_ref::<HashJoinExec>()
             .expect("Plan should be HashJoinExec");
 
@@ -4085,4 +4770,379 @@ async fn test_filter_with_projection_pushdown() {
         "+------+", "| size |", "+------+", "| 10   |", "| 20   |", "+------+",
     ];
     assert_batches_eq!(expected, &result);
+}
+
+/// Test that ExecutionPlan::apply_expressions() can discover dynamic filters across the plan tree
+#[tokio::test]
+async fn test_discover_dynamic_filters_via_expressions_api() {
+    use datafusion_common::JoinType;
+    use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    fn count_dynamic_filters(plan: &Arc<dyn ExecutionPlan>) -> usize {
+        let mut count = 0;
+
+        // Check expressions from this node using apply_expressions
+        let _ = plan.apply_expressions(&mut |expr| {
+            if let Some(_df) = expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>() {
+                count += 1;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        });
+
+        // Recursively visit children
+        for child in plan.children() {
+            count += count_dynamic_filters(child);
+        }
+
+        count
+    }
+
+    // Create build side (left)
+    let build_batches =
+        vec![record_batch!(("a", Utf8, ["foo", "bar"]), ("b", Int32, [1, 2])).unwrap()];
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let build_scan = TestScanBuilder::new(build_schema.clone())
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side (right)
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["foo", "bar", "baz", "qux"]),
+            ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(probe_schema.clone())
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create HashJoinExec
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            vec![(
+                col("a", &build_schema).unwrap(),
+                col("a", &probe_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Before optimization: no dynamic filters
+    let count_before = count_dynamic_filters(&plan);
+    assert_eq!(
+        count_before, 0,
+        "Before optimization, should have no dynamic filters"
+    );
+
+    // Apply filter pushdown optimization (this creates dynamic filters)
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
+    let optimized_plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+
+    // After optimization: should discover dynamic filters
+    // We expect 2 dynamic filters:
+    // 1. In the HashJoinExec (producer)
+    // 2. In the DataSourceExec (consumer, pushed down to the probe side)
+    let count_after = count_dynamic_filters(&optimized_plan);
+    assert_eq!(
+        count_after, 2,
+        "After optimization, should discover exactly 2 dynamic filters (1 in HashJoinExec, 1 in DataSourceExec), found {count_after}"
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_left_join() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Create build side with limited values
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+    ];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side with more values (some won't match)
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create HashJoinExec with Left join and CollectLeft mode
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            Arc::clone(&probe_scan),
+            on,
+            None,
+            &JoinType::Left,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Expect the dynamic filter predicate to be pushed down into the probe side DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@0), (b@1, b@1)]
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@0), (b@1, b@1)]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    ",
+    );
+
+    // Actually apply the optimization and execute the plan
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+
+    // Test that dynamic filter linking survives with_new_children
+    let children = plan.children().into_iter().map(Arc::clone).collect();
+    let plan = plan.with_new_children(children).unwrap();
+
+    let config = SessionConfig::new().with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+
+    // After execution, verify the dynamic filter was populated with bounds and IN-list
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@0), (b@1, b@1)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    "
+    );
+
+    // Verify result correctness: left join preserves all build (left) rows.
+    // All build rows match probe rows here, so we get 2 matched rows.
+    // The dynamic filter pruned unmatched probe rows (ac, ad) at scan time,
+    // which is safe because those probe rows would never match any build row.
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +----+----+-----+----+----+-----+
+    | a  | b  | c   | a  | b  | e   |
+    +----+----+-----+----+----+-----+
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    +----+----+-----+----+----+-----+
+    "
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_left_semi_join() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Create build side with limited values
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+    ];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side with more values (some won't match)
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create HashJoinExec with LeftSemi join and CollectLeft mode
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            Arc::clone(&probe_scan),
+            on,
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Expect the dynamic filter predicate to be pushed down into the probe side DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(a@0, a@0), (b@1, b@1)]
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(a@0, a@0), (b@1, b@1)]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    ",
+    );
+
+    // Actually apply the optimization and execute the plan
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+
+    // Test that dynamic filter linking survives with_new_children
+    let children = plan.children().into_iter().map(Arc::clone).collect();
+    let plan = plan.with_new_children(children).unwrap();
+
+    let config = SessionConfig::new().with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+
+    // After execution, verify the dynamic filter was populated with bounds and IN-list
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(a@0, a@0), (b@1, b@1)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    "
+    );
+
+    // Verify result correctness: left semi join returns only build (left) rows
+    // that have at least one matching probe row. Output schema is build-side columns only.
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +----+----+-----+
+    | a  | b  | c   |
+    +----+----+-----+
+    | aa | ba | 1.0 |
+    | ab | bb | 2.0 |
+    +----+----+-----+
+    "
+    );
 }

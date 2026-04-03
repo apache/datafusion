@@ -31,7 +31,7 @@ use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, Result, not_impl_err, plan_err};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
-use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
+use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
@@ -193,15 +193,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect::<Result<Vec<Expr>>>()?
         } else {
             // 'group by all' groups wrt. all select expressions except 'AggregateFunction's.
-            // Filter and collect non-aggregate select expressions
+            // Filter and collect non-aggregate select expressions.
             select_exprs
                 .iter()
-                .filter(|select_expr| match select_expr {
-                    Expr::AggregateFunction(_) => false,
-                    Expr::Alias(Alias { expr, name: _, .. }) => {
-                        !matches!(**expr, Expr::AggregateFunction(_))
-                    }
-                    _ => true,
+                .filter(|select_expr| {
+                    find_aggregate_exprs(std::iter::once(*select_expr)).is_empty()
                 })
                 .cloned()
                 .collect()
@@ -261,7 +257,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             select_exprs: mut select_exprs_post_aggr,
             having_expr: having_expr_post_aggr,
             qualify_expr: qualify_expr_post_aggr,
-            order_by_exprs: order_by_rex,
+            order_by_exprs: mut order_by_rex,
         } = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
             self.aggregate(
                 &base_plan,
@@ -297,14 +293,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        // The outer expressions we will search through for window functions.
-        // Window functions may be sourced from the SELECT list or from the QUALIFY expression.
-        let windows_expr_haystack = select_exprs_post_aggr
-            .iter()
-            .chain(qualify_expr_post_aggr.iter());
         // All of the window expressions (deduplicated and rewritten to reference aggregates as
-        // columns from input).
-        let window_func_exprs = find_window_exprs(windows_expr_haystack);
+        // columns from input). Window functions may be sourced from the SELECT list, QUALIFY
+        // expression, or ORDER BY.
+        let window_func_exprs = find_window_exprs(
+            select_exprs_post_aggr
+                .iter()
+                .chain(qualify_expr_post_aggr.iter())
+                .chain(order_by_rex.iter().map(|s| &s.expr)),
+        );
 
         // Process window functions after aggregation as they can reference
         // aggregate functions in their body
@@ -319,14 +316,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
                 .collect::<Result<Vec<Expr>>>()?;
 
+            order_by_rex = order_by_rex
+                .into_iter()
+                .map(|sort_expr| {
+                    Ok(sort_expr.with_expr(rebase_expr(
+                        &sort_expr.expr,
+                        &window_func_exprs,
+                        &plan,
+                    )?))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
             plan
         };
 
         // Process QUALIFY clause after window functions
         // QUALIFY filters the results of window functions, similar to how HAVING filters aggregates
         let plan = if let Some(qualify_expr) = qualify_expr_post_aggr {
-            // Validate that QUALIFY is used with window functions
-            if window_func_exprs.is_empty() {
+            // Validate that QUALIFY is used with window functions in SELECT or QUALIFY
+            let qualify_window_func_exprs = find_window_exprs(
+                select_exprs_post_aggr
+                    .iter()
+                    .chain(std::iter::once(&qualify_expr)),
+            );
+            if qualify_window_func_exprs.is_empty() {
                 return plan_err!(
                     "QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
                 );
@@ -579,9 +592,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } else {
                 let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
 
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut projection_exprs = match &aggr_expr_using_columns {
                     Some(exprs) => (*exprs).clone(),
                     None => {
+                        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                         let mut columns = HashSet::new();
                         for expr in &aggr_expr {
                             expr.apply(|expr| {
@@ -1056,13 +1072,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .iter()
                     .find_map(|select_expr| {
                         // Only consider aliased expressions
-                        if let Expr::Alias(alias) = select_expr
-                            && alias.expr.as_ref() == &rewritten_expr
-                        {
-                            // Use the alias name
-                            return Some(Expr::Column(Column::new_unqualified(
-                                alias.name.clone(),
-                            )));
+                        if let Expr::Alias(alias) = select_expr {
+                            let rewritten_unaliased = match &rewritten_expr {
+                                Expr::Alias(a) => a.expr.as_ref(),
+                                other => other,
+                            };
+                            if alias.expr.as_ref() == rewritten_unaliased {
+                                return Some(Expr::Column(Column::new_unqualified(
+                                    alias.name.clone(),
+                                )));
+                            }
                         }
                         None
                     })

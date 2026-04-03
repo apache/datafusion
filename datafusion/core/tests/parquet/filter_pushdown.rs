@@ -63,7 +63,7 @@ async fn single_file() {
 
     // Set the row group size smaller so can test with fewer rows
     let props = WriterProperties::builder()
-        .set_max_row_group_size(1024)
+        .set_max_row_group_row_count(Some(1024))
         .build();
 
     // Only create the parquet file once as it is fairly large
@@ -230,7 +230,7 @@ async fn single_file_small_data_pages() {
 
     // Set a low row count limit to improve page filtering
     let props = WriterProperties::builder()
-        .set_max_row_group_size(2048)
+        .set_max_row_group_row_count(Some(2048))
         .set_data_page_row_count_limit(512)
         .set_write_batch_size(512)
         .build();

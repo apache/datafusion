@@ -23,7 +23,7 @@ use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{any::Any, vec};
+use std::vec;
 
 use super::common::SharedMemoryReservation;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -49,6 +49,7 @@ use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err,
@@ -435,8 +436,7 @@ enum BatchPartitionerState {
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
 /// executions and runs.
-pub const REPARTITION_RANDOM_STATE: SeededRandomState =
-    SeededRandomState::with_seeds(0, 0, 0, 0);
+pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
@@ -545,12 +545,21 @@ impl BatchPartitioner {
         })
     }
 
-    /// Actual implementation of [`partition`](Self::partition).
+    /// Returns an iterator of `(partition_index, RecordBatch)` pairs for the given batch.
     ///
-    /// The reason this was pulled out is that we need to have a variant of `partition` that works w/ sync functions,
-    /// and one that works w/ async. Using an iterator as an intermediate representation was the best way to achieve
-    /// this (so we don't need to clone the entire implementation).
-    fn partition_iter(
+    /// This is useful for async consumers that want to separate CPU-bound partitioning
+    /// from I/O. For example, you can iterate results on the async side and send them
+    /// through a channel, while performing file I/O on a blocking task:
+    ///
+    /// ```ignore
+    /// for result in partitioner.partition_iter(batch)? {
+    ///     let (partition, batch) = result?;
+    ///     tx.send((partition, batch)).await?;
+    /// }
+    /// ```
+    ///
+    /// The sync [`partition`](Self::partition) method is implemented on top of this.
+    pub fn partition_iter(
         &mut self,
         batch: RecordBatch,
     ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
@@ -902,16 +911,27 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to hash partition expressions if this is a hash repartition
+        if let Partitioning::Hash(exprs, _) = self.partitioning() {
+            let mut tnr = TreeNodeRecursion::Continue;
+            for expr in exprs {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+            return Ok(tnr);
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -1086,11 +1106,11 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             let partition_count = self.partitioning().partition_count();
             if partition_count == 0 {
-                return Ok(Statistics::new_unknown(&self.schema()));
+                return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
             }
 
             assert_or_internal_err!(
@@ -1100,7 +1120,7 @@ impl ExecutionPlan for RepartitionExec {
                 partition_count
             );
 
-            let mut stats = self.input.partition_statistics(None)?;
+            let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
 
             // Distribute statistics across partitions
             stats.num_rows = stats
@@ -1121,7 +1141,7 @@ impl ExecutionPlan for RepartitionExec {
                 .map(|_| ColumnStatistics::new_unknown())
                 .collect();
 
-            Ok(stats)
+            Ok(Arc::new(stats))
         } else {
             self.input.partition_statistics(None)
         }
@@ -2616,7 +2636,6 @@ mod test {
     use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     /// Asserts that the plan is as expected
     ///
@@ -2694,7 +2713,6 @@ mod test {
 
     #[tokio::test]
     async fn test_preserve_order_with_spilling() -> Result<()> {
-        use datafusion_execution::TaskContext;
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
         // Create sorted input data across multiple partitions
@@ -2821,7 +2839,6 @@ mod test {
 
     #[tokio::test]
     async fn test_hash_partitioning_with_spilling() -> Result<()> {
-        use datafusion_execution::TaskContext;
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
         // Create input data similar to the round-robin test

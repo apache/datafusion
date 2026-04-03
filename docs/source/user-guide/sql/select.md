@@ -86,7 +86,7 @@ SELECT a FROM table WHERE a > 10
 
 ## JOIN clause
 
-DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN`, `CROSS JOIN`, `LEFT SEMI JOIN`, `RIGHT SEMI JOIN`, `LEFT ANTI JOIN`, and `RIGHT ANTI JOIN`.
+DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN`, `CROSS JOIN`, `LEFT SEMI JOIN`, `RIGHT SEMI JOIN`, `LEFT ANTI JOIN`, `RIGHT ANTI JOIN`, and `LATERAL JOIN`.
 
 The following examples are based on this table:
 
@@ -237,6 +237,94 @@ SELECT * FROM x RIGHT ANTI JOIN x y ON x.column_1 = y.column_1;
 +----------+----------+
 +----------+----------+
 ```
+
+### LATERAL JOIN
+
+A `LATERAL JOIN` allows the right-hand side of a join to reference columns from
+the left-hand side. Conceptually, the subquery on the right is evaluated once
+for each row of the left-hand table, which makes it possible to "parameterize" a
+subquery with values from preceding tables.
+
+The `LATERAL` keyword is required; DataFusion does not implicitly detect
+correlation in `FROM` clause subqueries.
+
+The following examples use these tables:
+
+```sql
+CREATE TABLE departments(id INT, name TEXT) AS VALUES (1, 'HR'), (2, 'Eng'), (3, 'Sales');
+CREATE TABLE employees(id INT, dept_id INT, name TEXT) AS VALUES
+  (10, 1, 'Alice'), (20, 1, 'Bob'), (30, 2, 'Carol');
+```
+
+#### Comma syntax
+
+The most concise form places `LATERAL` after a comma in the `FROM` clause.
+Rows from the left table that have no matching rows in the subquery are excluded
+(inner join semantics).
+
+```sql
+SELECT d.name AS dept, e.name AS emp
+FROM departments d, LATERAL (
+    SELECT employees.name FROM employees WHERE employees.dept_id = d.id
+) AS e
+ORDER BY dept, emp;
++------+-------+
+| dept | emp   |
++------+-------+
+| Eng  | Carol |
+| HR   | Alice |
+| HR   | Bob   |
++------+-------+
+```
+
+#### CROSS JOIN LATERAL
+
+Equivalent to the comma syntax above.
+
+```sql
+SELECT d.name AS dept, e.name AS emp
+FROM departments d
+CROSS JOIN LATERAL (
+    SELECT employees.name FROM employees WHERE employees.dept_id = d.id
+) AS e
+ORDER BY dept, emp;
++------+-------+
+| dept | emp   |
++------+-------+
+| Eng  | Carol |
+| HR   | Alice |
+| HR   | Bob   |
++------+-------+
+```
+
+#### JOIN LATERAL ... ON
+
+`JOIN LATERAL` with an `ON` clause applies the `ON` condition as an additional
+filter after the lateral subquery is evaluated.
+
+```sql
+SELECT d.name AS dept, sub.emp, sub.cnt
+FROM departments d
+JOIN LATERAL (
+    SELECT count(*) AS cnt, min(employees.name) AS emp
+    FROM employees WHERE employees.dept_id = d.id
+) AS sub ON sub.cnt > 0
+ORDER BY dept;
++------+-------+-----+
+| dept | emp   | cnt |
++------+-------+-----+
+| Eng  | Carol | 1   |
+| HR   | Alice | 2   |
++------+-------+-----+
+```
+
+#### Limitations
+
+The following patterns are not yet supported:
+
+- `LEFT JOIN LATERAL` (lateral join with outer join semantics).
+- Outer references in the `SELECT` list of the lateral subquery (e.g., `LATERAL (SELECT outer.col + 1)`).
+- `HAVING` in lateral subqueries.
 
 ## GROUP BY clause
 

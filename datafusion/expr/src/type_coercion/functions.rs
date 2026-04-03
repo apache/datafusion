@@ -33,7 +33,7 @@ use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
-    type_coercion::binary::comparison_coercion_numeric,
+    type_coercion::binary::comparison_coercion,
     type_coercion::binary::string_coercion,
 };
 use itertools::Itertools as _;
@@ -221,12 +221,12 @@ pub fn data_types(
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
             return plan_err!(
-                "function '{}' has signature {type_signature:?} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
+                "function '{}' has signature {type_signature} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
                 function_name.as_ref()
             );
         } else {
             return plan_err!(
-                "Function '{}' has signature {type_signature:?} which does not support zero arguments",
+                "Function '{}' has signature {type_signature} which does not support zero arguments",
                 function_name.as_ref()
             );
         }
@@ -302,7 +302,7 @@ fn try_coerce_types(
 
     // none possible -> Error
     plan_err!(
-        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {} to the signature {type_signature:?} failed",
+        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {} to the signature {type_signature} failed",
         current_types.iter().join(", ")
     )
 }
@@ -317,7 +317,7 @@ fn get_valid_types_with_udf<F: UDFCoercionExt>(
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
                 return exec_err!(
-                    "Function '{}' user-defined coercion failed with {:?}",
+                    "Function '{}' user-defined coercion failed with: {}",
                     func.name(),
                     e.strip_backtrace()
                 );
@@ -502,7 +502,7 @@ fn get_valid_types(
                     new_types.push(DataType::Utf8);
                 } else {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::String but NativeType::received NativeType::{logical_data_type}"
+                        "Function '{function_name}' expects String but received {logical_data_type}"
                     );
                 }
             }
@@ -562,7 +562,7 @@ fn get_valid_types(
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
+                        "Function '{function_name}' expects Numeric but received {logical_data_type}"
                     );
                 }
 
@@ -583,7 +583,7 @@ fn get_valid_types(
                 valid_type = DataType::Float64;
             } else if !logical_data_type.is_numeric() {
                 return plan_err!(
-                    "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
+                    "Function '{function_name}' expects Numeric but received {logical_data_type}"
                 );
             }
 
@@ -593,7 +593,7 @@ fn get_valid_types(
             function_length_check(function_name, current_types.len(), *num)?;
             let mut target_type = current_types[0].to_owned();
             for data_type in current_types.iter().skip(1) {
-                if let Some(dt) = comparison_coercion_numeric(&target_type, data_type) {
+                if let Some(dt) = comparison_coercion(&target_type, data_type) {
                     target_type = dt;
                 } else {
                     return plan_err!(
@@ -928,6 +928,13 @@ fn coerced_from<'a>(
         (Timestamp(_, Some(_)), Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8) => {
             Some(type_into.clone())
         }
+        // Null can be coerced to any target type, provided the cast is valid.
+        // This mirrors null_coercion() in binary comparison coercion
+        // (expr-common/src/type_coercion/binary.rs) and is the symmetric
+        // counterpart of the (Null, _) arm above. Without this, untyped
+        // placeholders ($1, $foo) inside function calls fail signature matching
+        // because their Null type doesn't match any Exact(...) variant.
+        (_, Null) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
         _ => None,
     }
 }
@@ -937,7 +944,7 @@ mod tests {
     use crate::Volatility;
 
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::IntervalUnit;
     use datafusion_common::{
         assert_contains,
         types::{logical_binary, logical_int64},
@@ -954,6 +961,36 @@ mod tests {
         for case in cases {
             assert_eq!(coerced_from(&case.0, &case.1), Some(case.0));
         }
+    }
+
+    #[test]
+    fn test_coerced_from_null() {
+        // Null should coerce to Interval (the motivating case)
+        assert_eq!(
+            coerced_from(
+                &DataType::Interval(IntervalUnit::MonthDayNano),
+                &DataType::Null
+            ),
+            Some(DataType::Interval(IntervalUnit::MonthDayNano))
+        );
+
+        // Null should coerce to Date32
+        assert_eq!(
+            coerced_from(&DataType::Date32, &DataType::Null),
+            Some(DataType::Date32)
+        );
+
+        // Null should coerce to Timestamp with timezone
+        assert_eq!(
+            coerced_from(
+                &DataType::Timestamp(TimeUnit::Microsecond, Some("+00".into())),
+                &DataType::Null
+            ),
+            Some(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some("+00".into())
+            ))
+        );
     }
 
     #[test]
@@ -1056,7 +1093,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             got.to_string(),
-            "Function 'test' expects NativeType::Numeric but received NativeType::String"
+            "Function 'test' expects Numeric but received String"
         );
 
         // Fallbacks to float64 if the arg is of type null.
@@ -1076,7 +1113,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             got.to_string(),
-            "Function 'test' expects NativeType::Numeric but received NativeType::Timestamp(s)"
+            "Function 'test' expects Numeric but received Timestamp(s)"
         );
 
         Ok(())

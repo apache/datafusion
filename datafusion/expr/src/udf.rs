@@ -67,7 +67,7 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(other.inner.as_any())
+        self.inner.as_ref().dyn_eq(other.inner.as_ref() as &dyn Any)
     }
 }
 
@@ -217,7 +217,7 @@ impl ScalarUDF {
         self.inner.return_field_from_args(args)
     }
 
-    /// Do the function rewrite
+    /// Returns this scalar function's simplification result.
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
     pub fn simplify(
@@ -261,7 +261,7 @@ impl ScalarUDF {
             let expected_type = return_field.data_type();
             assert_or_internal_err!(
                 result_data_type == *expected_type,
-                "Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
+                "Function '{}' returned value of type '{}' while the following type was promised at planning time and expected: '{}'",
                 self.name(),
                 result_data_type,
                 expected_type
@@ -360,7 +360,7 @@ impl ScalarUDF {
 
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
-        self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
+        self.inner().downcast_ref::<AsyncScalarUDF>()
     }
 
     /// Returns placement information for this function.
@@ -471,7 +471,6 @@ pub struct ReturnFieldArgs<'a> {
 ///
 /// /// Implement the ScalarUDFImpl trait for AddOne
 /// impl ScalarUDFImpl for AddOne {
-///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "add_one" }
 ///    fn signature(&self) -> &Signature { &self.signature }
 ///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -495,10 +494,7 @@ pub struct ReturnFieldArgs<'a> {
 /// // Call the function `add_one(col)`
 /// let expr = add_one.call(vec![col("a")]);
 /// ```
-pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
-    /// Returns this object as an [`Any`] trait object
-    fn as_any(&self) -> &dyn Any;
-
+pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns this function's name
     fn name(&self) -> &str;
 
@@ -988,6 +984,25 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     }
 }
 
+impl dyn ScalarUDFImpl {
+    /// Returns `true` if the implementation is of type `T`.
+    ///
+    /// Works correctly when called on `Arc<dyn ScalarUDFImpl>` via auto-deref.
+    pub fn is<T: ScalarUDFImpl>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast to a concrete type `T`, returning `None` if the
+    /// implementation is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn ScalarUDFImpl>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: ScalarUDFImpl>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// ScalarUDF that adds an alias to the underlying function. It is better to
 /// implement [`ScalarUDFImpl`], which supports aliases, directly if possible.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1012,10 +1027,6 @@ impl AliasedScalarUDFImpl {
 
 #[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl ScalarUDFImpl for AliasedScalarUDFImpl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -1132,10 +1143,6 @@ mod tests {
         signature: Signature,
     }
     impl ScalarUDFImpl for TestScalarUDFImpl {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             self.name
         }

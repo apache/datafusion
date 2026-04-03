@@ -21,12 +21,13 @@
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType, file_stream::FileStream,
+    file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
     source::DataSource, statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
 };
@@ -78,7 +79,9 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Result;
+/// # use datafusion_common::tree_node::TreeNodeRecursion;
 /// # use datafusion_datasource::file::FileSource;
+/// # use datafusion_physical_plan::PhysicalExpr;
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -109,6 +112,7 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
+/// #  fn apply_expressions(&self, _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 /// #  }
 /// # impl ParquetSource {
 /// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
@@ -584,7 +588,11 @@ impl DataSource for FileScanConfig {
 
         let opener = source.create_file_opener(object_store, self, partition)?;
 
-        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        let stream = FileStreamBuilder::new(self)
+            .with_partition(partition)
+            .with_file_opener(opener)
+            .with_metrics(source.metrics())
+            .build()?;
         Ok(Box::pin(cooperative(stream)))
     }
 
@@ -777,7 +785,7 @@ impl DataSource for FileScanConfig {
         SchedulingType::Cooperative
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             // Get statistics for a specific partition
             // Note: FileGroup statistics include partition columns (computed from partition_values)
@@ -787,22 +795,28 @@ impl DataSource for FileScanConfig {
                 // Project the statistics based on the projection
                 let output_schema = self.projected_schema()?;
                 return if let Some(projection) = self.file_source.projection() {
-                    projection.project_statistics(stat.clone(), &output_schema)
+                    Ok(Arc::new(
+                        projection.project_statistics(stat.clone(), &output_schema)?,
+                    ))
                 } else {
-                    Ok(stat.clone())
+                    Ok(Arc::new(stat.clone()))
                 };
             }
             // If no statistics available for this partition, return unknown
-            Ok(Statistics::new_unknown(self.projected_schema()?.as_ref()))
+            Ok(Arc::new(Statistics::new_unknown(
+                self.projected_schema()?.as_ref(),
+            )))
         } else {
             // Return aggregate statistics across all partitions
             let statistics = self.statistics();
             let projection = self.file_source.projection();
             let output_schema = self.projected_schema()?;
             if let Some(projection) = &projection {
-                projection.project_statistics(statistics.clone(), &output_schema)
+                Ok(Arc::new(
+                    projection.project_statistics(statistics.clone(), &output_schema)?,
+                ))
             } else {
-                Ok(statistics)
+                Ok(Arc::new(statistics))
             }
         }
     }
@@ -922,6 +936,14 @@ impl DataSource for FileScanConfig {
             ..self.clone()
         };
         Some(Arc::new(new_config))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the file source
+        self.file_source.apply_expressions(f)
     }
 }
 
@@ -1522,13 +1544,12 @@ mod tests {
     };
 
     use arrow::datatypes::Field;
+    use datafusion_common::ColumnStatistics;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, internal_err};
-    use datafusion_expr::{Operator, SortExpr};
+    use datafusion_expr::SortExpr;
     use datafusion_physical_expr::create_physical_sort_expr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
-    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     #[derive(Clone)]
     struct InexactSortPushdownSource {
@@ -1583,6 +1604,13 @@ mod tests {
             Ok(SortOrderPushdownResult::Inexact {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 

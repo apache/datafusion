@@ -17,7 +17,6 @@
 
 use arrow::compute::kernels::length::length;
 use arrow::datatypes::DataType;
-use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::types::logical_string;
@@ -70,10 +69,6 @@ impl OctetLengthFunc {
 }
 
 impl ScalarUDFImpl for OctetLengthFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "octet_length"
     }

@@ -18,7 +18,7 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
-use std::{any::Any, sync::Arc, task::Poll};
+use std::{sync::Arc, task::Poll};
 
 use super::utils::{
     BatchSplitter, BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer,
@@ -41,11 +41,13 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -269,10 +271,6 @@ impl ExecutionPlan for CrossJoinExec {
         "CrossJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -283,6 +281,14 @@ impl ExecutionPlan for CrossJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // CrossJoin has no join conditions or expressions
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -374,12 +380,13 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // Get the all partitions statistics of the left
-        let left_stats = self.left.partition_statistics(None)?;
-        let right_stats = self.right.partition_statistics(partition)?;
+        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
+        let right_stats =
+            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
 
-        Ok(stats_cartesian_product(left_stats, right_stats))
+        Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
@@ -447,32 +454,34 @@ fn stats_cartesian_product(
     // Min, max and distinct_count on the other hand are invariants.
     let cross_join_stats = left_col_stats
         .into_iter()
-        .map(|s| ColumnStatistics {
-            null_count: s.null_count.multiply(&right_row_count),
-            distinct_count: s.distinct_count,
-            min_value: s.min_value,
-            max_value: s.max_value,
-            sum_value: s
-                .sum_value
-                .get_value()
-                // Cast the row count into the same type as any existing sum value
-                .and_then(|v| {
-                    Precision::<ScalarValue>::from(right_row_count)
-                        .cast_to(&v.data_type())
-                        .ok()
-                })
-                .map(|row_count| s.sum_value.multiply(&row_count))
-                .unwrap_or(Precision::Absent),
-            byte_size: Precision::Absent,
+        .map(|s| {
+            let widened_sum = s.sum_value.cast_to_sum_type();
+            ColumnStatistics {
+                null_count: s.null_count.multiply(&right_row_count),
+                distinct_count: s.distinct_count,
+                min_value: s.min_value,
+                max_value: s.max_value,
+                sum_value: widened_sum
+                    .get_value()
+                    // Cast the row count into the same type as any existing sum value
+                    .and_then(|v| {
+                        Precision::<ScalarValue>::from(right_row_count)
+                            .cast_to(&v.data_type())
+                            .ok()
+                    })
+                    .map(|row_count| widened_sum.multiply(&row_count))
+                    .unwrap_or(Precision::Absent),
+                byte_size: Precision::Absent,
+            }
         })
         .chain(right_col_stats.into_iter().map(|s| {
+            let widened_sum = s.sum_value.cast_to_sum_type();
             ColumnStatistics {
                 null_count: s.null_count.multiply(&left_row_count),
                 distinct_count: s.distinct_count,
                 min_value: s.min_value,
                 max_value: s.max_value,
-                sum_value: s
-                    .sum_value
+                sum_value: widened_sum
                     .get_value()
                     // Cast the row count into the same type as any existing sum value
                     .and_then(|v| {
@@ -480,7 +489,7 @@ fn stats_cartesian_product(
                             .cast_to(&v.data_type())
                             .ok()
                     })
-                    .map(|row_count| s.sum_value.multiply(&row_count))
+                    .map(|row_count| widened_sum.multiply(&row_count))
                     .unwrap_or(Precision::Absent),
                 byte_size: Precision::Absent,
             }
@@ -862,6 +871,49 @@ mod tests {
         };
 
         assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_stats_cartesian_product_unsigned_sum_widens_to_u64() {
+        let left_row_count = 2;
+        let right_row_count = 3;
+
+        let left = Statistics {
+            num_rows: Precision::Exact(left_row_count),
+            total_byte_size: Precision::Exact(10),
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Exact(2),
+                max_value: Precision::Exact(ScalarValue::UInt32(Some(10))),
+                min_value: Precision::Exact(ScalarValue::UInt32(Some(1))),
+                sum_value: Precision::Exact(ScalarValue::UInt32(Some(7))),
+                null_count: Precision::Exact(0),
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        let right = Statistics {
+            num_rows: Precision::Exact(right_row_count),
+            total_byte_size: Precision::Exact(10),
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Exact(3),
+                max_value: Precision::Exact(ScalarValue::UInt32(Some(12))),
+                min_value: Precision::Exact(ScalarValue::UInt32(Some(0))),
+                sum_value: Precision::Exact(ScalarValue::UInt32(Some(11))),
+                null_count: Precision::Exact(0),
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        let result = stats_cartesian_product(left, right);
+
+        assert_eq!(
+            result.column_statistics[0].sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(21)))
+        );
+        assert_eq!(
+            result.column_statistics[1].sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(22)))
+        );
     }
 
     #[tokio::test]

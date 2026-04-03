@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::array::{ArrayRef, AsArray, Int64Array};
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType::Int64;
@@ -65,10 +64,6 @@ impl FactorialFunc {
 }
 
 impl ScalarUDFImpl for FactorialFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "factorial"
     }

@@ -21,8 +21,10 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
+mod builder;
+mod metrics;
+
 use std::collections::VecDeque;
-use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -30,18 +32,18 @@ use std::task::{Context, Poll};
 use crate::PartitionedFile;
 use crate::file_scan_config::FileScanConfig;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::error::Result;
+use datafusion_common::Result;
 use datafusion_execution::RecordBatchStream;
-use datafusion_physical_plan::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
-};
+use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 
 use arrow::record_batch::RecordBatch;
-use datafusion_common::instant::Instant;
 
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{FutureExt as _, Stream, StreamExt as _, ready};
+
+pub use builder::FileStreamBuilder;
+pub use metrics::{FileStreamMetrics, StartableTime};
 
 /// A stream that iterates record batch by record batch, file over file.
 pub struct FileStream {
@@ -67,26 +69,18 @@ pub struct FileStream {
 
 impl FileStream {
     /// Create a new `FileStream` using the give `FileOpener` to scan underlying files
+    #[deprecated(since = "54.0.0", note = "Use FileStreamBuilder instead")]
     pub fn new(
         config: &FileScanConfig,
         partition: usize,
         file_opener: Arc<dyn FileOpener>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        let projected_schema = config.projected_schema()?;
-
-        let file_group = config.file_groups[partition].clone();
-
-        Ok(Self {
-            file_iter: file_group.into_inner().into_iter().collect(),
-            projected_schema,
-            remain: config.limit,
-            file_opener,
-            state: FileStreamState::Idle,
-            file_stream_metrics: FileStreamMetrics::new(metrics, partition),
-            baseline_metrics: BaselineMetrics::new(metrics, partition),
-            on_error: OnError::Fail,
-        })
+        FileStreamBuilder::new(config)
+            .with_partition(partition)
+            .with_file_opener(file_opener)
+            .with_metrics(metrics)
+            .build()
     }
 
     /// Specify the behavior when an error occurs opening or scanning a file
@@ -98,10 +92,6 @@ impl FileStream {
         self
     }
 
-    /// Begin opening the next file in parallel while decoding the current file in FileStream.
-    ///
-    /// Since file opening is mostly IO (and may involve a
-    /// bunch of sequential IO), it can be parallelized with decoding.
     fn start_next_file(&mut self) -> Option<Result<FileOpenFuture>> {
         let part_file = self.file_iter.pop_front()?;
         Some(self.file_opener.open(part_file))
@@ -110,46 +100,30 @@ impl FileStream {
     fn poll_inner(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             match &mut self.state {
-                FileStreamState::Idle => {
-                    self.file_stream_metrics.time_opening.start();
-
-                    match self.start_next_file().transpose() {
-                        Ok(Some(future)) => self.state = FileStreamState::Open { future },
-                        Ok(None) => return Poll::Ready(None),
-                        Err(e) => {
-                            self.state = FileStreamState::Error;
-                            return Poll::Ready(Some(Err(e)));
-                        }
+                FileStreamState::Idle => match self.start_next_file().transpose() {
+                    Ok(Some(future)) => {
+                        self.file_stream_metrics.time_opening.start();
+                        self.state = FileStreamState::Open { future };
                     }
-                }
+                    Ok(None) => return Poll::Ready(None),
+                    Err(e) => {
+                        self.state = FileStreamState::Error;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                },
                 FileStreamState::Open { future } => match ready!(future.poll_unpin(cx)) {
                     Ok(reader) => {
-                        // include time needed to start opening in `start_next_file`
+                        self.file_stream_metrics.files_opened.add(1);
                         self.file_stream_metrics.time_opening.stop();
-                        let next = self.start_next_file().transpose();
                         self.file_stream_metrics.time_scanning_until_data.start();
                         self.file_stream_metrics.time_scanning_total.start();
-
-                        match next {
-                            Ok(Some(next_future)) => {
-                                self.state = FileStreamState::Scan {
-                                    reader,
-                                    next: Some(NextOpen::Pending(next_future)),
-                                };
-                            }
-                            Ok(None) => {
-                                self.state = FileStreamState::Scan { reader, next: None };
-                            }
-                            Err(e) => {
-                                self.state = FileStreamState::Error;
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                        }
+                        self.state = FileStreamState::Scan { reader };
                     }
                     Err(e) => {
                         self.file_stream_metrics.file_open_errors.add(1);
                         match self.on_error {
                             OnError::Skip => {
+                                self.file_stream_metrics.files_processed.add(1);
                                 self.file_stream_metrics.time_opening.stop();
                                 self.state = FileStreamState::Idle
                             }
@@ -160,14 +134,7 @@ impl FileStream {
                         }
                     }
                 },
-                FileStreamState::Scan { reader, next } => {
-                    // We need to poll the next `FileOpenFuture` here to drive it forward
-                    if let Some(next_open_future) = next
-                        && let NextOpen::Pending(f) = next_open_future
-                        && let Poll::Ready(reader) = f.as_mut().poll(cx)
-                    {
-                        *next_open_future = NextOpen::Ready(reader);
-                    }
+                FileStreamState::Scan { reader } => {
                     match ready!(reader.poll_next_unpin(cx)) {
                         Some(Ok(batch)) => {
                             self.file_stream_metrics.time_scanning_until_data.stop();
@@ -179,6 +146,12 @@ impl FileStream {
                                         batch
                                     } else {
                                         let batch = batch.slice(0, *remain);
+                                        // Count this file and all remaining files
+                                        // we will never open.
+                                        let done = 1 + self.file_iter.len();
+                                        self.file_stream_metrics
+                                            .files_processed
+                                            .add(done);
                                         self.state = FileStreamState::Limit;
                                         *remain = 0;
                                         batch
@@ -195,27 +168,10 @@ impl FileStream {
                             self.file_stream_metrics.time_scanning_total.stop();
 
                             match self.on_error {
-                                // If `OnError::Skip` we skip the file as soon as we hit the first error
-                                OnError::Skip => match mem::take(next) {
-                                    Some(future) => {
-                                        self.file_stream_metrics.time_opening.start();
-
-                                        match future {
-                                            NextOpen::Pending(future) => {
-                                                self.state =
-                                                    FileStreamState::Open { future }
-                                            }
-                                            NextOpen::Ready(reader) => {
-                                                self.state = FileStreamState::Open {
-                                                    future: Box::pin(std::future::ready(
-                                                        reader,
-                                                    )),
-                                                }
-                                            }
-                                        }
-                                    }
-                                    None => return Poll::Ready(None),
-                                },
+                                OnError::Skip => {
+                                    self.file_stream_metrics.files_processed.add(1);
+                                    self.state = FileStreamState::Idle;
+                                }
                                 OnError::Fail => {
                                     self.state = FileStreamState::Error;
                                     return Poll::Ready(Some(Err(err)));
@@ -223,28 +179,10 @@ impl FileStream {
                             }
                         }
                         None => {
+                            self.file_stream_metrics.files_processed.add(1);
                             self.file_stream_metrics.time_scanning_until_data.stop();
                             self.file_stream_metrics.time_scanning_total.stop();
-
-                            match mem::take(next) {
-                                Some(future) => {
-                                    self.file_stream_metrics.time_opening.start();
-
-                                    match future {
-                                        NextOpen::Pending(future) => {
-                                            self.state = FileStreamState::Open { future }
-                                        }
-                                        NextOpen::Ready(reader) => {
-                                            self.state = FileStreamState::Open {
-                                                future: Box::pin(std::future::ready(
-                                                    reader,
-                                                )),
-                                            }
-                                        }
-                                    }
-                                }
-                                None => return Poll::Ready(None),
-                            }
+                            self.state = FileStreamState::Idle;
                         }
                     }
                 }
@@ -300,14 +238,6 @@ pub trait FileOpener: Unpin + Send + Sync {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture>;
 }
 
-/// Represents the state of the next `FileOpenFuture`. Since we need to poll
-/// this future while scanning the current file, we need to store the result if it
-/// is ready
-pub enum NextOpen {
-    Pending(FileOpenFuture),
-    Ready(Result<BoxStream<'static, Result<RecordBatch>>>),
-}
-
 pub enum FileStreamState {
     /// The idle state, no file is currently being read
     Idle,
@@ -322,10 +252,6 @@ pub enum FileStreamState {
     Scan {
         /// The reader instance
         reader: BoxStream<'static, Result<RecordBatch>>,
-        /// A [`FileOpenFuture`] for the next file to be processed.
-        /// This allows the next file to be opened in parallel while the
-        /// current file is read.
-        next: Option<NextOpen>,
     },
     /// Encountered an error
     Error,
@@ -334,121 +260,11 @@ pub enum FileStreamState {
 }
 
 /// A timer that can be started and stopped.
-pub struct StartableTime {
-    pub metrics: Time,
-    // use for record each part cost time, will eventually add into 'metrics'.
-    pub start: Option<Instant>,
-}
-
-impl StartableTime {
-    pub fn start(&mut self) {
-        assert!(self.start.is_none());
-        self.start = Some(Instant::now());
-    }
-
-    pub fn stop(&mut self) {
-        if let Some(start) = self.start.take() {
-            self.metrics.add_elapsed(start);
-        }
-    }
-}
-
-/// Metrics for [`FileStream`]
-///
-/// Note that all of these metrics are in terms of wall clock time
-/// (not cpu time) so they include time spent waiting on I/O as well
-/// as other operators.
-///
-/// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
-pub struct FileStreamMetrics {
-    /// Wall clock time elapsed for file opening.
-    ///
-    /// Time between when [`FileOpener::open`] is called and when the
-    /// [`FileStream`] receives a stream for reading.
-    ///
-    /// If there are multiple files being scanned, the stream
-    /// will open the next file in the background while scanning the
-    /// current file. This metric will only capture time spent opening
-    /// while not also scanning.
-    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
-    pub time_opening: StartableTime,
-    /// Wall clock time elapsed for file scanning + first record batch of decompression + decoding
-    ///
-    /// Time between when the [`FileStream`] requests data from the
-    /// stream and when the first [`RecordBatch`] is produced.
-    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
-    pub time_scanning_until_data: StartableTime,
-    /// Total elapsed wall clock time for scanning + record batch decompression / decoding
-    ///
-    /// Sum of time between when the [`FileStream`] requests data from
-    /// the stream and when a [`RecordBatch`] is produced for all
-    /// record batches in the stream. Note that this metric also
-    /// includes the time of the parent operator's execution.
-    pub time_scanning_total: StartableTime,
-    /// Wall clock time elapsed for data decompression + decoding
-    ///
-    /// Time spent waiting for the FileStream's input.
-    pub time_processing: StartableTime,
-    /// Count of errors opening file.
-    ///
-    /// If using `OnError::Skip` this will provide a count of the number of files
-    /// which were skipped and will not be included in the scan results.
-    pub file_open_errors: Count,
-    /// Count of errors scanning file
-    ///
-    /// If using `OnError::Skip` this will provide a count of the number of files
-    /// which were skipped and will not be included in the scan results.
-    pub file_scan_errors: Count,
-}
-
-impl FileStreamMetrics {
-    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
-        let time_opening = StartableTime {
-            metrics: MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_opening", partition),
-            start: None,
-        };
-
-        let time_scanning_until_data = StartableTime {
-            metrics: MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_scanning_until_data", partition),
-            start: None,
-        };
-
-        let time_scanning_total = StartableTime {
-            metrics: MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_scanning_total", partition),
-            start: None,
-        };
-
-        let time_processing = StartableTime {
-            metrics: MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_processing", partition),
-            start: None,
-        };
-
-        let file_open_errors =
-            MetricBuilder::new(metrics).counter("file_open_errors", partition);
-
-        let file_scan_errors =
-            MetricBuilder::new(metrics).counter("file_scan_errors", partition);
-
-        Self {
-            time_opening,
-            time_scanning_until_data,
-            time_scanning_total,
-            time_processing,
-            file_open_errors,
-            file_scan_errors,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::PartitionedFile;
-    use crate::file_scan_config::FileScanConfigBuilder;
+    use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
     use crate::tests::make_partition;
+    use crate::{PartitionedFile, TableSchema};
     use datafusion_common::error::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -456,7 +272,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
+    use crate::file_stream::{FileOpenFuture, FileOpener, FileStreamBuilder, OnError};
     use crate::test_util::MockSource;
     use arrow::array::RecordBatch;
     use arrow::datatypes::Schema;
@@ -576,7 +392,7 @@ mod tests {
 
             let on_error = self.on_error;
 
-            let table_schema = crate::table_schema::TableSchema::new(file_schema, vec![]);
+            let table_schema = TableSchema::new(file_schema, vec![]);
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
@@ -585,10 +401,12 @@ mod tests {
             .with_limit(self.limit)
             .build();
             let metrics_set = ExecutionPlanMetricsSet::new();
-            let file_stream =
-                FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)
-                    .unwrap()
-                    .with_on_error(on_error);
+            let file_stream = FileStreamBuilder::new(&config)
+                .with_partition(0)
+                .with_file_opener(Arc::new(self.opener))
+                .with_metrics(&metrics_set)
+                .with_on_error(on_error)
+                .build()?;
 
             file_stream
                 .collect::<Vec<_>>()
@@ -607,6 +425,23 @@ mod tests {
             .result()
             .await
             .expect("error executing stream")
+    }
+
+    /// Create the smallest valid file scan config for builder validation tests.
+    fn builder_test_config() -> FileScanConfig {
+        let table_schema = TableSchema::new(Arc::new(Schema::empty()), vec![]);
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_file(PartitionedFile::new("mock_file", 10))
+        .build()
+    }
+
+    /// Convenience helper to keep builder error assertions focused on the
+    /// specific missing or invalid input under test.
+    fn builder_error(builder: FileStreamBuilder<'_>) -> String {
+        builder.build().err().unwrap().to_string()
     }
 
     #[tokio::test]
@@ -902,5 +737,37 @@ mod tests {
         ], &batches);
 
         Ok(())
+    }
+
+    #[test]
+    fn builder_requires_partition_file_opener_and_metrics() {
+        let config = builder_test_config();
+
+        let err = builder_error(FileStreamBuilder::new(&config));
+        assert!(err.contains("FileStreamBuilder missing required partition"));
+
+        let err = builder_error(FileStreamBuilder::new(&config).with_partition(0));
+        assert!(err.contains("FileStreamBuilder missing required file_opener"));
+
+        let err = builder_error(
+            FileStreamBuilder::new(&config)
+                .with_partition(0)
+                .with_file_opener(Arc::new(TestOpener::default())),
+        );
+        assert!(err.contains("FileStreamBuilder missing required metrics"));
+    }
+
+    #[test]
+    fn builder_errors_on_invalid_partition() {
+        let config = builder_test_config();
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let err = builder_error(
+            FileStreamBuilder::new(&config)
+                .with_partition(1)
+                .with_file_opener(Arc::new(TestOpener::default()))
+                .with_metrics(&metrics),
+        );
+        assert!(err.contains("FileStreamBuilder invalid partition index: 1"));
     }
 }

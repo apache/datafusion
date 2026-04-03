@@ -488,6 +488,7 @@ impl FileGroup {
     ///
     /// Note: May return fewer groups than `max_target_partitions` when the
     /// number of unique partition values is less than the target.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     pub fn group_by_partition_values(
         self,
         max_target_partitions: usize,

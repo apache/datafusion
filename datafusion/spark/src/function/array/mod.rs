@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod array_contains;
 pub mod repeat;
 pub mod shuffle;
 pub mod slice;
@@ -24,6 +25,7 @@ use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
+make_udf_function!(array_contains::SparkArrayContains, spark_array_contains);
 make_udf_function!(spark_array::SparkArray, array);
 make_udf_function!(shuffle::SparkShuffle, shuffle);
 make_udf_function!(repeat::SparkArrayRepeat, array_repeat);
@@ -32,6 +34,11 @@ make_udf_function!(slice::SparkSlice, slice);
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
+    export_functions!((
+        spark_array_contains,
+        "Returns true if the array contains the element (Spark semantics).",
+        array element
+    ));
     export_functions!((array, "Returns an array with the given elements.", args));
     export_functions!((
         shuffle,
@@ -51,5 +58,11 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![array(), shuffle(), array_repeat(), slice()]
+    vec![
+        spark_array_contains(),
+        array(),
+        shuffle(),
+        array_repeat(),
+        slice(),
+    ]
 }

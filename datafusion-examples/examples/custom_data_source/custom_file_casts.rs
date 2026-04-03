@@ -40,7 +40,7 @@ use datafusion_physical_expr_adapter::{
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 
 // Example showing how to implement custom casting rules to adapt file schemas.
 // This example enforces that casts must be strictly widening: if the file type is Int64 and the table type is Int32, it will error

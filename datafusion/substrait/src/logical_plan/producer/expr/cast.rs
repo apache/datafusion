@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type};
+use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type_from_field};
 use crate::variation_const::DEFAULT_TYPE_VARIATION_REF;
 use datafusion::common::{DFSchemaRef, ScalarValue};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
@@ -29,7 +29,7 @@ pub fn from_cast(
     cast: &Cast,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let Cast { expr, data_type } = cast;
+    let Cast { expr, field } = cast;
     // since substrait Null must be typed, so if we see a cast(null, dt), we make it a typed null
     if let Expr::Literal(lit, _) = expr.as_ref() {
         // only the untyped(a null scalar value) null literal need this special handling
@@ -39,8 +39,8 @@ pub fn from_cast(
             let lit = Literal {
                 nullable: true,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                literal_type: Some(LiteralType::Null(to_substrait_type(
-                    producer, data_type, true,
+                literal_type: Some(LiteralType::Null(to_substrait_type_from_field(
+                    producer, field,
                 )?)),
             };
             return Ok(Expression {
@@ -51,7 +51,7 @@ pub fn from_cast(
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type(producer, data_type, true)?),
+                r#type: Some(to_substrait_type_from_field(producer, field)?),
                 input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ThrowException.into(),
             },
@@ -64,11 +64,11 @@ pub fn from_try_cast(
     cast: &TryCast,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let TryCast { expr, data_type } = cast;
+    let TryCast { expr, field } = cast;
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type(producer, data_type, true)?),
+                r#type: Some(to_substrait_type_from_field(producer, field)?),
                 input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ReturnNull.into(),
             },
@@ -80,7 +80,7 @@ pub fn from_try_cast(
 mod tests {
     use super::*;
     use crate::logical_plan::producer::{
-        DefaultSubstraitProducer, to_substrait_extended_expr,
+        DefaultSubstraitProducer, to_substrait_extended_expr, to_substrait_type,
     };
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::DFSchema;
