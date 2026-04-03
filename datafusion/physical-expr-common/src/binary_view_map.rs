@@ -42,7 +42,7 @@ impl ArrowBytesViewSet {
 
     /// Inserts each value from `values` into the set
     pub fn insert(&mut self, values: &ArrayRef) {
-        fn make_payload_fn(_value: Option<&[u8]>) {}
+        fn make_payload_fn() {}
         fn observe_payload_fn(_payload: ()) {}
         self.0
             .insert_if_new(values, make_payload_fn, observe_payload_fn);
@@ -209,7 +209,7 @@ where
         make_payload_fn: MP,
         observe_payload_fn: OP,
     ) where
-        MP: FnMut(Option<&[u8]>) -> V,
+        MP: FnMut() -> V,
         OP: FnMut(V),
     {
         // Sanity check array type
@@ -248,7 +248,7 @@ where
         mut make_payload_fn: MP,
         mut observe_payload_fn: OP,
     ) where
-        MP: FnMut(Option<&[u8]>) -> V,
+        MP: FnMut() -> V,
         OP: FnMut(V),
         B: ByteViewType,
     {
@@ -266,6 +266,35 @@ where
 
         // Get raw views buffer for direct comparison
         let input_views = values.views();
+        let input_buffers = values.data_buffers();
+
+        // Decode input value bytes directly from view + buffers,
+        // avoiding the overhead of values.value(i) accessor.
+        let input_value_bytes = |idx: usize| -> &[u8] {
+            let view = input_views[idx];
+            let len = view as u32;
+            if len <= 12 {
+                // Inline: bytes are stored at offset 4 in the view.
+                // Reference the view in input_views (not a stack copy)
+                // so the returned slice has a valid lifetime.
+                // SAFETY: input_views[idx] is valid for the function's lifetime,
+                // and the inline data occupies bytes 4..4+len of the u128 view.
+                unsafe {
+                    let ptr = (input_views.as_ptr().add(idx)) as *const u8;
+                    std::slice::from_raw_parts(ptr.add(4), len as usize)
+                }
+            } else {
+                let byte_view = ByteView::from(view);
+                let buf_idx = byte_view.buffer_index as usize;
+                let offset = byte_view.offset as usize;
+                // SAFETY: view comes from a valid array
+                unsafe {
+                    input_buffers
+                        .get_unchecked(buf_idx)
+                        .get_unchecked(offset..offset + len as usize)
+                }
+            }
+        };
 
         // Ensure lengths are equivalent
         assert_eq!(values.len(), self.hashes_buffer.len());
@@ -279,7 +308,7 @@ where
                 let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
                     payload
                 } else {
-                    let payload = make_payload_fn(None);
+                    let payload = make_payload_fn();
                     let null_index = self.views.len();
                     self.views.push(0);
                     self.nulls.append_null();
@@ -329,8 +358,7 @@ where
                         } else {
                             &in_progress[offset..offset + stored_len]
                         };
-                        let input_value: &[u8] = values.value(i).as_ref();
-                        stored_value == input_value
+                        stored_value == input_value_bytes(i)
                     })
                     .map(|entry| entry.payload)
             };
@@ -339,11 +367,18 @@ where
                 payload
             } else {
                 // no existing value, make a new one
-                let value: &[u8] = values.value(i).as_ref();
-                let payload = make_payload_fn(Some(value));
-
-                // Create view pointing to our buffers
-                let new_view = self.append_value(value);
+                let (new_view, payload) = if len <= 12 {
+                    // Inline string: the view is self-contained, no need
+                    // to decode bytes or copy to buffers — just reuse the
+                    // input view directly.
+                    self.views.push(view_u128);
+                    self.nulls.append_non_null();
+                    (view_u128, make_payload_fn())
+                } else {
+                    let value = input_value_bytes(i);
+                    let new_view = self.append_value(value);
+                    (new_view, make_payload_fn())
+                };
                 let new_header = Entry {
                     view: new_view,
                     hash,
@@ -726,16 +761,12 @@ mod tests {
             }
 
             // insert the values into the map, recording what we did
-            let mut seen_new_strings = vec![];
             let mut seen_indexes = vec![];
             self.map.insert_if_new(
                 &arr,
-                |s| {
-                    let value = s
-                        .map(|s| String::from_utf8(s.to_vec()).expect("Non utf8 string"));
+                || {
                     let index = next_index;
                     next_index += 1;
-                    seen_new_strings.push(value);
                     TestPayload { index }
                 },
                 |payload| {
@@ -744,7 +775,6 @@ mod tests {
             );
 
             assert_eq!(actual_seen_indexes, seen_indexes);
-            assert_eq!(actual_new_strings, seen_new_strings);
         }
 
         /// Call `self.map.into_array()` validating that the strings are in the same
