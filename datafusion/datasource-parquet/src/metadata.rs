@@ -22,7 +22,6 @@ use crate::{
     ObjectStoreFetch, apply_file_schema_type_coercions, coerce_int96_to_resolution,
 };
 use arrow::array::{Array, ArrayRef, BooleanArray};
-use arrow::compute::and;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
@@ -649,8 +648,16 @@ fn has_any_exact_match(
 
     let scalar_array = value.to_scalar().ok()?;
     let eq_mask = eq(&scalar_array, &array).ok()?;
-    let combined_mask = and(&eq_mask, exactness).ok()?;
-    Some(combined_mask.true_count() > 0)
+    // Combine the two masks using BooleanBuffer bitwise AND, treating null as false
+    let eq_buf = match eq_mask.nulls() {
+        Some(nulls) => eq_mask.values() & nulls.inner(),
+        None => eq_mask.values().clone(),
+    };
+    let exact_buf = match exactness.nulls() {
+        Some(nulls) => exactness.values() & nulls.inner(),
+        None => exactness.values().clone(),
+    };
+    Some(BooleanArray::new(&eq_buf & &exact_buf, None).has_true())
 }
 
 /// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].

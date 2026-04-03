@@ -20,7 +20,8 @@ use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
-use arrow::compute::{and, filter, is_not_null};
+use arrow::array::BooleanArray;
+use arrow::compute::{filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
@@ -280,7 +281,10 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
         match (means.null_count() > 0, weights.null_count() > 0) {
             // Both have nulls
             (true, true) => {
-                let predicate = and(&is_not_null(&means)?, &is_not_null(&weights)?)?;
+                let predicate = BooleanArray::new(
+                    is_not_null(&means)?.values() & is_not_null(&weights)?.values(),
+                    None,
+                );
                 means = filter(&means, &predicate)?;
                 weights = filter(&weights, &predicate)?;
             }

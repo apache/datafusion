@@ -27,8 +27,9 @@ use crate::TableProvider;
 use arrow::array::{
     Array, ArrayRef, BooleanArray, RecordBatch as ArrowRecordBatch, UInt64Array,
 };
+use arrow::buffer::BooleanBuffer;
+use arrow::compute::filter_record_batch;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
@@ -515,7 +516,7 @@ fn evaluate_filters_to_mask(
         return Ok(None);
     }
 
-    let mut combined_mask: Option<BooleanArray> = None;
+    let mut combined_buf: Option<BooleanBuffer> = None;
 
     for filter_expr in filters {
         let physical_expr =
@@ -523,23 +524,29 @@ fn evaluate_filters_to_mask(
 
         let result = physical_expr.evaluate(batch)?;
         let array = result.into_array(batch.num_rows())?;
-        let bool_array = array
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .ok_or_else(|| {
-                datafusion_common::DataFusionError::Internal(
-                    "Filter did not evaluate to boolean".to_string(),
-                )
-            })?
-            .clone();
+        let bool_array =
+            array
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .ok_or_else(|| {
+                    datafusion_common::DataFusionError::Internal(
+                        "Filter did not evaluate to boolean".to_string(),
+                    )
+                })?;
 
-        combined_mask = Some(match combined_mask {
-            Some(existing) => and(&existing, &bool_array)?,
-            None => bool_array,
-        });
+        // Convert to BooleanBuffer, treating null as false
+        let buf = match bool_array.nulls() {
+            Some(nulls) => bool_array.values() & nulls.inner(),
+            None => bool_array.values().clone(),
+        };
+
+        match &mut combined_buf {
+            Some(existing) => *existing &= &buf,
+            None => combined_buf = Some(buf),
+        }
     }
 
-    Ok(combined_mask)
+    Ok(combined_buf.map(|buf| BooleanArray::new(buf, None)))
 }
 
 /// Returns a single row with the count of affected rows.

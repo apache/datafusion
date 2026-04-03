@@ -25,7 +25,7 @@ use arrow::array::{
     Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder, UInt64Array,
     downcast_array,
 };
-use arrow::compute::{and, filter, is_not_null};
+use arrow::compute::{filter, is_not_null};
 use arrow::datatypes::{FieldRef, Float64Type, UInt64Type};
 use arrow::{
     array::ArrayRef,
@@ -174,7 +174,10 @@ impl Accumulator for CorrelationAccumulator {
         // calculation logic in children accumulators, and calling only
         // calculation part from Correlation
         let values = if values[0].null_count() != 0 || values[1].null_count() != 0 {
-            let mask = and(&is_not_null(&values[0])?, &is_not_null(&values[1])?)?;
+            let mask = BooleanArray::new(
+                is_not_null(&values[0])?.values() & is_not_null(&values[1])?.values(),
+                None,
+            );
             let values1 = filter(&values[0], &mask)?;
             let values2 = filter(&values[1], &mask)?;
 
@@ -267,7 +270,10 @@ impl Accumulator for CorrelationAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = if values[0].null_count() != 0 || values[1].null_count() != 0 {
-            let mask = and(&is_not_null(&values[0])?, &is_not_null(&values[1])?)?;
+            let mask = BooleanArray::new(
+                is_not_null(&values[0])?.values() & is_not_null(&values[1])?.values(),
+                None,
+            );
             let values1 = filter(&values[0], &mask)?;
             let values2 = filter(&values[1], &mask)?;
 

@@ -54,7 +54,7 @@ use arrow::array::{
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{self, FilterBuilder, and, take};
+use arrow::compute::{self, FilterBuilder, take};
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
@@ -1788,19 +1788,26 @@ pub(super) fn equal_rows_arr(
     let arr_left = take(first_left.as_ref(), indices_left, None)?;
     let arr_right = take(first_right.as_ref(), indices_right, None)?;
 
-    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
+    let first_eq = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
 
-    // Use map and try_fold to iterate over the remaining pairs of arrays.
-    // In each iteration, take is used on the pair of arrays and their equality is determined.
-    // The results are then folded (combined) using the and function to get a final equality result.
-    equal = iter
-        .map(|(left, right)| {
-            let arr_left = take(left.as_ref(), indices_left, None)?;
-            let arr_right = take(right.as_ref(), indices_right, None)?;
-            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equality)
-        })
-        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
+    // Accumulate equality results using BooleanBuffer bitwise AND, treating null as false.
+    // This avoids allocating intermediate BooleanArrays with null handling.
+    let to_filter_buf = |arr: &BooleanArray| -> BooleanBuffer {
+        match arr.nulls() {
+            Some(nulls) => arr.values() & nulls.inner(),
+            None => arr.values().clone(),
+        }
+    };
 
+    let mut equal_buf = to_filter_buf(&first_eq);
+    for (left, right) in iter {
+        let arr_left = take(left.as_ref(), indices_left, None)?;
+        let arr_right = take(right.as_ref(), indices_right, None)?;
+        let eq_result = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
+        equal_buf &= &to_filter_buf(&eq_result);
+    }
+
+    let equal = BooleanArray::new(equal_buf, None);
     let filter_builder = FilterBuilder::new(&equal).optimize().build();
 
     let left_filtered = filter_builder.filter(indices_left)?;
