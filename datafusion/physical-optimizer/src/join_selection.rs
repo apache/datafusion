@@ -563,10 +563,14 @@ fn apply_subrules(
     subrules: &Vec<Box<PipelineFixerSubrule>>,
     config_options: &ConfigOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let original = Arc::clone(&input);
     for subrule in subrules {
         input = subrule(input, config_options)?;
     }
-    Ok(Transformed::yes(input))
+
+    let transformed = !Arc::ptr_eq(&original, &input);
+
+    Ok(Transformed::new_transformed(input, transformed))
 }
 
 // See tests in datafusion/core/tests/physical_optimizer

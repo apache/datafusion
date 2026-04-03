@@ -1260,30 +1260,30 @@ config_namespace! {
     }
 }
 
-impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
+impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
-    fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
-        let duration_format = match self.duration_format.as_str() {
+    fn try_from(options: &'a FormatOptions) -> Result<Self> {
+        let duration_format = match options.duration_format.as_str() {
             "pretty" => arrow::util::display::DurationFormat::Pretty,
             "iso8601" => arrow::util::display::DurationFormat::ISO8601,
             _ => {
                 return _config_err!(
                     "Invalid duration format: {}. Valid values are pretty or iso8601",
-                    self.duration_format
+                    options.duration_format
                 );
             }
         };
 
-        Ok(arrow::util::display::FormatOptions::new()
-            .with_display_error(self.safe)
-            .with_null(&self.null)
-            .with_date_format(self.date_format.as_deref())
-            .with_datetime_format(self.datetime_format.as_deref())
-            .with_timestamp_format(self.timestamp_format.as_deref())
-            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
-            .with_time_format(self.time_format.as_deref())
+        Ok(Self::new()
+            .with_display_error(options.safe)
+            .with_null(&options.null)
+            .with_date_format(options.date_format.as_deref())
+            .with_datetime_format(options.datetime_format.as_deref())
+            .with_timestamp_format(options.timestamp_format.as_deref())
+            .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
+            .with_time_format(options.time_format.as_deref())
             .with_duration_format(duration_format)
-            .with_types_info(self.types_info))
+            .with_types_info(options.types_info))
     }
 }
 

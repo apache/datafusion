@@ -15,11 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Specialized Sort Merge Join stream for Semi/Anti joins.
-//!
-//! Used internally by `SortMergeJoinExec` for semi/anti join types.
+//! This module contains code that enables DataFusion's extension type capabilities.
 
-pub(crate) mod stream;
+mod array_formatter_factory;
 
-#[cfg(test)]
-mod tests;
+pub use array_formatter_factory::*;

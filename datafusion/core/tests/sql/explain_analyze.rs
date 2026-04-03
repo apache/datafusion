@@ -69,7 +69,7 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=Partial, gby=[c1@0 as c1]",
-        "reduction_factor=5.1% (5/99)"
+        "reduction_factor=5.05% (5/99)"
     );
 
     {
@@ -887,7 +887,8 @@ async fn parquet_explain_analyze() {
         &formatted,
         "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
     );
-    assert_contains!(&formatted, "scan_efficiency_ratio=14%");
+    assert_contains!(&formatted, "output_rows_skew=0%");
+    assert_contains!(&formatted, "scan_efficiency_ratio=13.99%");
 
     // The order of metrics is expected to be the same as the actual pruning order
     // (file-> row-group -> page)

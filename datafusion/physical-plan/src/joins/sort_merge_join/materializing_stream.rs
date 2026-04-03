@@ -45,14 +45,14 @@ use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
 use arrow::compute::{
-    self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, is_not_null,
+    self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, interleave,
     take, take_arrays,
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::ipc::reader::StreamReader;
-use datafusion_common::config::SpillCompression;
+use datafusion_common::cast::as_uint64_array;
 use datafusion_common::{
-    HashSet, JoinType, NullEquality, Result, exec_err, internal_err, not_impl_err,
+    JoinType, NullEquality, Result, exec_err, internal_err, not_impl_err,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -132,10 +132,6 @@ pub(super) struct StreamedBatch {
     pub num_output_rows: usize,
     /// Index of currently scanned batch from buffered data
     pub buffered_batch_idx: Option<usize>,
-    /// Indices that found a match for the given join filter
-    /// Used for semi joins to keep track the streaming index which got a join filter match
-    /// and already emitted to the output.
-    pub join_filter_matched_idxs: HashSet<u64>,
 }
 
 impl StreamedBatch {
@@ -148,7 +144,6 @@ impl StreamedBatch {
             output_indices: vec![],
             num_output_rows: 0,
             buffered_batch_idx: None,
-            join_filter_matched_idxs: HashSet::new(),
         }
     }
 
@@ -160,7 +155,6 @@ impl StreamedBatch {
             output_indices: vec![],
             num_output_rows: 0,
             buffered_batch_idx: None,
-            join_filter_matched_idxs: HashSet::new(),
         }
     }
 
@@ -282,9 +276,12 @@ pub(super) enum BufferedBatchState {
     Spilled(RefCountedTempFile),
 }
 
-/// Sort-Merge join stream that consumes streamed and buffered data streams
-/// and produces joined output stream.
-pub(super) struct SortMergeJoinStream {
+/// Sort-Merge join stream for Inner/Left/Right/Full joins.
+///
+/// Named "materializing" because it builds explicit `(streamed, buffered)` row
+/// pairs in [`JoinedRecordBatches`] to produce output columns from both sides
+/// of the join.
+pub(super) struct MaterializingSortMergeJoinStream {
     // ========================================================================
     // PROPERTIES:
     // These fields are initialized at the start and remain constant throughout
@@ -428,16 +425,19 @@ impl JoinedRecordBatches {
         }
     }
 
-    /// Pushes a batch with null metadata (Full join null-joined rows only)
+    /// Pushes a batch with null metadata (rows that need no filter correction)
     ///
-    /// These buffered rows had NO matching streamed rows. Since we can't group
-    /// by input row (no input row exists), we use null metadata as a sentinel.
+    /// Used for: (1) Full join buffered rows with no streamed match, and
+    /// (2) outer join streamed rows with no buffered match. These rows are
+    /// already in final form but must flow through the deferred filtering
+    /// pipeline to preserve output ordering. Null metadata causes
+    /// get_corrected_filter_mask() to pass them through unchanged.
     ///
     /// Maintains invariant: N rows → N metadata entries (nulls)
     fn push_batch_with_null_metadata(&mut self, batch: RecordBatch, join_type: JoinType) {
         debug_assert!(
-            join_type == JoinType::Full,
-            "push_batch_with_null_metadata should only be called for Full joins"
+            matches!(join_type, JoinType::Left | JoinType::Right | JoinType::Full),
+            "push_batch_with_null_metadata should only be called for deferred-filtered joins"
         );
 
         let num_rows = batch.num_rows();
@@ -450,7 +450,7 @@ impl JoinedRecordBatches {
             .expect("Failed to push batch to BatchCoalescer");
     }
 
-    /// Pushes a batch with filter metadata (filtered outer/semi/anti/mark joins)
+    /// Pushes a batch with filter metadata (filtered outer joins)
     ///
     /// Deferred filtering: An input row may join with multiple buffered rows, but we
     /// don't know yet if all matches failed the filter. We track metadata so
@@ -468,19 +468,8 @@ impl JoinedRecordBatches {
         join_type: JoinType,
     ) {
         debug_assert!(
-            matches!(
-                join_type,
-                JoinType::Left
-                    | JoinType::LeftSemi
-                    | JoinType::LeftMark
-                    | JoinType::Right
-                    | JoinType::RightSemi
-                    | JoinType::RightMark
-                    | JoinType::LeftAnti
-                    | JoinType::RightAnti
-                    | JoinType::Full
-            ),
-            "push_batch_with_filter_metadata should only be called for outer/semi/anti/mark joins that need deferred filtering"
+            matches!(join_type, JoinType::Left | JoinType::Right | JoinType::Full),
+            "push_batch_with_filter_metadata should only be called for outer joins that need deferred filtering"
         );
 
         debug_assert_eq!(
@@ -506,7 +495,7 @@ impl JoinedRecordBatches {
     /// No deferred filtering needed. Either every join match is output (Inner),
     /// or null-joined rows are handled separately. No need to track which input
     /// row produced which output row.
-    fn push_batch_without_metadata(&mut self, batch: RecordBatch, _join_type: JoinType) {
+    fn push_batch_without_metadata(&mut self, batch: RecordBatch) {
         self.joined_batches
             .push_batch(batch)
             .expect("Failed to push batch to BatchCoalescer");
@@ -519,13 +508,13 @@ impl JoinedRecordBatches {
         self.debug_assert_empty_consistency();
     }
 }
-impl RecordBatchStream for SortMergeJoinStream {
+impl RecordBatchStream for MaterializingSortMergeJoinStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 }
 
-impl Stream for SortMergeJoinStream {
+impl Stream for MaterializingSortMergeJoinStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -547,15 +536,35 @@ impl Stream for SortMergeJoinStream {
                         match self.current_ordering {
                             Ordering::Less | Ordering::Equal => {
                                 if !streamed_exhausted {
+                                    // Batch deferred filtering: process_filtered_batches()
+                                    // only when >= batch_size rows have accumulated.
+                                    // Without this gate, unique keys cause per-row pipeline
+                                    // execution (concat + correct_mask + filter_by_type),
+                                    // which dominates runtime.
+                                    //
+                                    // Accumulated rows are bounded to ~2*batch_size:
+                                    // one batch_size worth from freeze_dequeuing_buffered()
+                                    // (when an input batch is fully consumed), plus up to
+                                    // batch_size pairs accumulating toward the next freeze.
+                                    // This does not reintroduce the unbounded buffering
+                                    // fixed by PR #20482. Exhausted state flushes remainder.
                                     if needs_deferred_filtering(
                                         &self.filter,
                                         self.join_type,
                                     ) {
-                                        match self.process_filtered_batches()? {
-                                            Poll::Ready(Some(batch)) => {
-                                                return Poll::Ready(Some(Ok(batch)));
+                                        let accumulated = self.num_unfrozen_pairs()
+                                            + self
+                                                .joined_record_batches
+                                                .filter_metadata
+                                                .filter_mask
+                                                .len();
+                                        if accumulated >= self.batch_size {
+                                            match self.process_filtered_batches()? {
+                                                Poll::Ready(Some(batch)) => {
+                                                    return Poll::Ready(Some(Ok(batch)));
+                                                }
+                                                Poll::Ready(None) | Poll::Pending => {}
                                             }
-                                            Poll::Ready(None) | Poll::Pending => {}
                                         }
                                     }
 
@@ -734,11 +743,9 @@ impl Stream for SortMergeJoinStream {
     }
 }
 
-impl SortMergeJoinStream {
+impl MaterializingSortMergeJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub fn try_new(
-        // Configured via `datafusion.execution.spill_compression`.
-        spill_compression: SpillCompression,
         schema: SchemaRef,
         sort_options: Vec<SortOptions>,
         null_equality: NullEquality,
@@ -751,16 +758,19 @@ impl SortMergeJoinStream {
         batch_size: usize,
         join_metrics: SortMergeJoinMetrics,
         reservation: MemoryReservation,
+        spill_manager: SpillManager,
         runtime_env: Arc<RuntimeEnv>,
     ) -> Result<Self> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
-        let spill_manager = SpillManager::new(
-            Arc::clone(&runtime_env),
-            join_metrics.spill_metrics().clone(),
-            Arc::clone(&buffered_schema),
-        )
-        .with_compression_type(spill_compression);
+        debug_assert!(
+            matches!(
+                join_type,
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full
+            ),
+            "MaterializingSortMergeJoinStream does not handle {join_type:?}; \
+             semi/anti/mark joins use BitwiseSortMergeJoinStream"
+        );
         Ok(Self {
             state: SortMergeJoinState::Init,
             sort_options,
@@ -1053,68 +1063,20 @@ impl SortMergeJoinStream {
         let mut join_streamed = false;
         // Whether to join buffered rows
         let mut join_buffered = false;
-        // For Mark join we store a dummy id to indicate the row has a match
-        let mut mark_row_as_match = false;
 
         // determine whether we need to join streamed/buffered rows
         match self.current_ordering {
             Ordering::Less => {
                 if matches!(
                     self.join_type,
-                    JoinType::Left
-                        | JoinType::Right
-                        | JoinType::Full
-                        | JoinType::LeftAnti
-                        | JoinType::RightAnti
-                        | JoinType::LeftMark
-                        | JoinType::RightMark
+                    JoinType::Left | JoinType::Right | JoinType::Full
                 ) {
                     join_streamed = !self.streamed_joined;
                 }
             }
             Ordering::Equal => {
-                if matches!(
-                    self.join_type,
-                    JoinType::LeftSemi
-                        | JoinType::LeftMark
-                        | JoinType::RightSemi
-                        | JoinType::RightMark
-                ) {
-                    mark_row_as_match = matches!(
-                        self.join_type,
-                        JoinType::LeftMark | JoinType::RightMark
-                    );
-                    // if the join filter is specified then its needed to output the streamed index
-                    // only if it has not been emitted before
-                    // the `join_filter_matched_idxs` keeps track on if streamed index has a successful
-                    // filter match and prevents the same index to go into output more than once
-                    if self.filter.is_some() {
-                        join_streamed = !self
-                            .streamed_batch
-                            .join_filter_matched_idxs
-                            .contains(&(self.streamed_batch.idx as u64))
-                            && !self.streamed_joined;
-                        // if the join filter specified there can be references to buffered columns
-                        // so buffered columns are needed to access them
-                        join_buffered = join_streamed;
-                    } else {
-                        join_streamed = !self.streamed_joined;
-                    }
-                }
-                if matches!(
-                    self.join_type,
-                    JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full
-                ) {
-                    join_streamed = true;
-                    join_buffered = true;
-                };
-
-                if matches!(self.join_type, JoinType::LeftAnti | JoinType::RightAnti)
-                    && self.filter.is_some()
-                {
-                    join_streamed = !self.streamed_joined;
-                    join_buffered = join_streamed;
-                }
+                join_streamed = true;
+                join_buffered = true;
             }
             Ordering::Greater => {
                 if self.join_type == JoinType::Full {
@@ -1162,12 +1124,9 @@ impl SortMergeJoinStream {
             } else {
                 Some(self.buffered_data.scanning_batch_idx)
             };
-            // For Mark join we store a dummy id to indicate the row has a match
-            let scanning_idx = mark_row_as_match.then_some(0);
-
             self.streamed_batch.append_output_pair(
                 scanning_batch_idx,
-                scanning_idx,
+                None,
                 self.batch_size,
             );
             self.buffered_data.scanning_finish();
@@ -1267,209 +1226,294 @@ impl SortMergeJoinStream {
 
     // Produces and stages record batch for all output indices found
     // for current streamed batch and clears staged output indices.
+    //
+    // Null-joined chunks (no buffered match) are pushed immediately.
+    // Matched chunks are collected and processed together in
+    // freeze_streamed_matched() to amortize filter evaluation overhead.
     fn freeze_streamed(&mut self) -> Result<()> {
-        for chunk in self.streamed_batch.output_indices.iter_mut() {
-            // The row indices of joined streamed batch
-            let left_indices = chunk.streamed_indices.finish();
+        let mut matched_chunks: Vec<(usize, UInt64Array, UInt64Array)> = Vec::new();
+        let mut total_matched_rows: usize = 0;
 
+        for chunk in self.streamed_batch.output_indices.iter_mut() {
+            let left_indices = chunk.streamed_indices.finish();
             if left_indices.is_empty() {
                 continue;
             }
-
-            let mut left_columns = if let Some(range) = is_contiguous_range(&left_indices)
-            {
-                // When indices form a contiguous range (common for the streamed
-                // side which advances sequentially), use zero-copy slice instead
-                // of the O(n) take kernel.
-                self.streamed_batch
-                    .batch
-                    .slice(range.start, range.len())
-                    .columns()
-                    .to_vec()
-            } else {
-                take_arrays(self.streamed_batch.batch.columns(), &left_indices, None)?
-            };
-
-            // The row indices of joined buffered batch
             let right_indices: UInt64Array = chunk.buffered_indices.finish();
-            let mut right_columns =
-                if matches!(self.join_type, JoinType::LeftMark | JoinType::RightMark) {
-                    vec![Arc::new(is_not_null(&right_indices)?) as ArrayRef]
-                } else if matches!(
-                    self.join_type,
-                    JoinType::LeftSemi
-                        | JoinType::LeftAnti
-                        | JoinType::RightAnti
-                        | JoinType::RightSemi
-                ) {
-                    vec![]
-                } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
-                    fetch_right_columns_by_idxs(
-                        &self.buffered_data,
-                        buffered_idx,
-                        &right_indices,
-                    )?
+
+            if chunk.buffered_batch_idx.is_none() {
+                let left_columns =
+                    materialize_left_columns(&self.streamed_batch.batch, &left_indices)?;
+                let right_columns =
+                    create_unmatched_columns(&self.buffered_schema, left_indices.len());
+
+                let columns = if self.join_type != JoinType::Right {
+                    [left_columns, right_columns].concat()
                 } else {
-                    // If buffered batch none, meaning it is null joined batch.
-                    // We need to create null arrays for buffered columns to join with streamed rows.
-                    create_unmatched_columns(
-                        self.join_type,
-                        &self.buffered_schema,
-                        right_indices.len(),
-                    )
+                    [right_columns, left_columns].concat()
+                };
+                let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+
+                // Null-joined rows (no buffered match) need no filter correction,
+                // but must flow through the same pipeline as matched rows to
+                // preserve output ordering. Use null metadata as a sentinel so
+                // get_corrected_filter_mask() passes them through unchanged.
+                if needs_deferred_filtering(&self.filter, self.join_type) {
+                    self.joined_record_batches
+                        .push_batch_with_null_metadata(batch, self.join_type);
+                } else {
+                    self.joined_record_batches
+                        .push_batch_without_metadata(batch);
+                }
+                continue;
+            }
+
+            total_matched_rows += left_indices.len();
+            matched_chunks.push((
+                chunk.buffered_batch_idx.unwrap(),
+                left_indices,
+                right_indices,
+            ));
+        }
+
+        if !matched_chunks.is_empty() {
+            self.freeze_streamed_matched(&matched_chunks, total_matched_rows)?;
+        }
+
+        self.streamed_batch.output_indices.clear();
+        self.streamed_batch.num_output_rows = 0;
+        Ok(())
+    }
+
+    /// Materializes columns, evaluates the join filter, and pushes output
+    /// for all matched chunks in a single batch. This avoids per-chunk
+    /// RecordBatch construction and filter evaluation, which dominates
+    /// cost when keys are near-unique (1 row per chunk).
+    fn freeze_streamed_matched(
+        &mut self,
+        matched_chunks: &[(usize, UInt64Array, UInt64Array)],
+        total_matched_rows: usize,
+    ) -> Result<()> {
+        debug_assert!(
+            !matched_chunks.is_empty(),
+            "caller guards this with an is_empty check before calling"
+        );
+        debug_assert!(
+            matched_chunks.iter().all(|(idx, left, right)| {
+                left.len() == right.len() && *idx < self.buffered_data.batches.len()
+            }),
+            "left/right indices are built in pairs from the same streamed×buffered cross, \
+             and batch_idx comes from iterating buffered_data.batches"
+        );
+        debug_assert_eq!(
+            matched_chunks
+                .iter()
+                .map(|(_, l, _)| l.len())
+                .sum::<usize>(),
+            total_matched_rows,
+            "total_matched_rows is accumulated from the same chunks in freeze_streamed"
+        );
+
+        let combined_left_indices = if matched_chunks.len() == 1 {
+            matched_chunks[0].1.clone()
+        } else {
+            let refs: Vec<&dyn Array> =
+                matched_chunks.iter().map(|c| &c.1 as &dyn Array).collect();
+            as_uint64_array(&compute::concat(&refs)?)?.clone()
+        };
+
+        let left_columns =
+            materialize_left_columns(&self.streamed_batch.batch, &combined_left_indices)?;
+
+        let right_columns =
+            self.materialize_right_columns(matched_chunks, total_matched_rows)?;
+
+        let filter_columns = if self.join_type == JoinType::Right {
+            get_filter_columns(&self.filter, &right_columns, &left_columns)
+        } else {
+            get_filter_columns(&self.filter, &left_columns, &right_columns)
+        };
+
+        let columns = if self.join_type != JoinType::Right {
+            [left_columns, right_columns].concat()
+        } else {
+            [right_columns, left_columns].concat()
+        };
+        let output_batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+
+        if !filter_columns.is_empty() {
+            if let Some(f) = &self.filter {
+                let filter_batch =
+                    RecordBatch::try_new(Arc::clone(f.schema()), filter_columns)?;
+                let filter_result = f
+                    .expression()
+                    .evaluate(&filter_batch)?
+                    .into_array(filter_batch.num_rows())?;
+
+                let pre_mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+
+                let mask = if pre_mask.null_count() > 0 {
+                    compute::prep_null_mask_filter(pre_mask)
+                } else {
+                    pre_mask.clone()
                 };
 
-            // Prepare the columns we apply join filter on later.
-            // Only for joined rows between streamed and buffered.
-            let filter_columns = if let Some(buffered_batch_idx) =
-                chunk.buffered_batch_idx
-            {
-                if self.join_type != JoinType::Right {
-                    if matches!(
-                        self.join_type,
-                        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
-                    ) {
-                        let right_cols = fetch_right_columns_by_idxs(
-                            &self.buffered_data,
-                            buffered_batch_idx,
-                            &right_indices,
-                        )?;
-
-                        get_filter_columns(&self.filter, &left_columns, &right_cols)
-                    } else if matches!(
-                        self.join_type,
-                        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
-                    ) {
-                        let right_cols = fetch_right_columns_by_idxs(
-                            &self.buffered_data,
-                            buffered_batch_idx,
-                            &right_indices,
-                        )?;
-
-                        get_filter_columns(&self.filter, &right_cols, &left_columns)
+                if needs_deferred_filtering(&self.filter, self.join_type) {
+                    // Full join uses pre_mask (preserving nulls) for
+                    // get_corrected_filter_mask; other outer joins use mask.
+                    let mask_to_use = if self.join_type != JoinType::Full {
+                        &mask
                     } else {
-                        get_filter_columns(&self.filter, &left_columns, &right_columns)
-                    }
-                } else {
-                    get_filter_columns(&self.filter, &right_columns, &left_columns)
-                }
-            } else {
-                // This chunk is totally for null joined rows (outer join), we don't need to apply join filter.
-                // Any join filter applied only on either streamed or buffered side will be pushed already.
-                vec![]
-            };
-
-            let columns = if self.join_type != JoinType::Right {
-                left_columns.extend(right_columns);
-                left_columns
-            } else {
-                right_columns.extend(left_columns);
-                right_columns
-            };
-
-            let output_batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
-            // Apply join filter if any
-            if !filter_columns.is_empty() {
-                if let Some(f) = &self.filter {
-                    // Construct batch with only filter columns
-                    let filter_batch =
-                        RecordBatch::try_new(Arc::clone(f.schema()), filter_columns)?;
-
-                    let filter_result = f
-                        .expression()
-                        .evaluate(&filter_batch)?
-                        .into_array(filter_batch.num_rows())?;
-
-                    // The boolean selection mask of the join filter result
-                    let pre_mask =
-                        datafusion_common::cast::as_boolean_array(&filter_result)?;
-
-                    // If there are nulls in join filter result, exclude them from selecting
-                    // the rows to output.
-                    let mask = if pre_mask.null_count() > 0 {
-                        compute::prep_null_mask_filter(
-                            datafusion_common::cast::as_boolean_array(&filter_result)?,
-                        )
-                    } else {
-                        pre_mask.clone()
+                        pre_mask
                     };
 
-                    // Push the filtered batch which contains rows passing join filter to the output
-                    // For outer/semi/anti/mark joins with deferred filtering, push the unfiltered batch with metadata
-                    // For INNER joins, filter immediately and push without metadata
-                    let needs_deferred_filtering = matches!(
+                    self.joined_record_batches.push_batch_with_filter_metadata(
+                        output_batch,
+                        &combined_left_indices,
+                        mask_to_use,
+                        self.streamed_batch_counter.load(Relaxed),
                         self.join_type,
-                        JoinType::Left
-                            | JoinType::LeftSemi
-                            | JoinType::Right
-                            | JoinType::RightSemi
-                            | JoinType::LeftAnti
-                            | JoinType::RightAnti
-                            | JoinType::LeftMark
-                            | JoinType::RightMark
-                            | JoinType::Full
                     );
+                } else {
+                    let filtered_batch = filter_record_batch(&output_batch, &mask)?;
+                    self.joined_record_batches
+                        .push_batch_without_metadata(filtered_batch);
+                }
 
-                    if needs_deferred_filtering {
-                        // Outer/semi/anti/mark joins: push unfiltered batch with metadata for deferred filtering
-                        let mask_to_use = if self.join_type != JoinType::Full {
-                            &mask
-                        } else {
-                            pre_mask
-                        };
+                // Track which buffered rows had all filter matches fail,
+                // so full join can emit them as null-joined later.
+                if self.join_type == JoinType::Full {
+                    let mut offset = 0usize;
+                    for (batch_idx, _left, right) in matched_chunks {
+                        let chunk_len = right.len();
+                        let buffered_batch = &mut self.buffered_data.batches[*batch_idx];
 
-                        self.joined_record_batches.push_batch_with_filter_metadata(
-                            output_batch,
-                            &left_indices,
-                            mask_to_use,
-                            self.streamed_batch_counter.load(Relaxed),
-                            self.join_type,
-                        );
-                    } else {
-                        // INNER joins: filter immediately and push without metadata
-                        let filtered_batch = filter_record_batch(&output_batch, &mask)?;
-                        self.joined_record_batches
-                            .push_batch_without_metadata(filtered_batch, self.join_type);
-                    }
-
-                    // For outer joins, we need to push the null joined rows to the output if
-                    // all joined rows are failed on the join filter.
-                    // I.e., if all rows joined from a streamed row are failed with the join filter,
-                    // we need to join it with nulls as buffered side.
-                    if self.join_type == JoinType::Full {
-                        let buffered_batch = &mut self.buffered_data.batches
-                            [chunk.buffered_batch_idx.unwrap()];
-
-                        for i in 0..pre_mask.len() {
-                            // If the buffered row is not joined with streamed side,
-                            // skip it.
-                            if right_indices.is_null(i) {
+                        for i in 0..chunk_len {
+                            if right.is_null(i) {
                                 continue;
                             }
-
-                            let buffered_index = right_indices.value(i);
-
+                            let buffered_index = right.value(i);
                             buffered_batch.join_filter_not_matched_map.insert(
                                 buffered_index,
                                 *buffered_batch
                                     .join_filter_not_matched_map
                                     .get(&buffered_index)
                                     .unwrap_or(&true)
-                                    && !pre_mask.value(i),
+                                    && !pre_mask.value(offset + i),
                             );
                         }
+                        offset += chunk_len;
                     }
+                    debug_assert_eq!(
+                        offset, total_matched_rows,
+                        "offset must advance through every chunk exactly once"
+                    );
                 }
+            }
+        } else {
+            self.joined_record_batches
+                .push_batch_without_metadata(output_batch);
+        }
+
+        Ok(())
+    }
+
+    /// Materializes right-side columns across all matched chunks.
+    ///
+    /// When chunks reference a single buffered batch, indices are concatenated
+    /// for a single fetch. When multiple batches are involved, `interleave`
+    /// gathers columns across sources. A null-row sentinel at source index 0
+    /// handles null right indices (unmatched streamed rows).
+    fn materialize_right_columns(
+        &self,
+        matched_chunks: &[(usize, UInt64Array, UInt64Array)],
+        total_matched_rows: usize,
+    ) -> Result<Vec<ArrayRef>> {
+        let first_batch_idx = matched_chunks[0].0;
+        let single_source = matched_chunks.iter().all(|c| c.0 == first_batch_idx);
+
+        if single_source {
+            let combined_right_indices = if matched_chunks.len() == 1 {
+                matched_chunks[0].2.clone()
             } else {
-                self.joined_record_batches
-                    .push_batch_without_metadata(output_batch, self.join_type);
+                let refs: Vec<&dyn Array> =
+                    matched_chunks.iter().map(|c| &c.2 as &dyn Array).collect();
+                as_uint64_array(&compute::concat(&refs)?)?.clone()
+            };
+            return fetch_right_columns_by_idxs(
+                &self.buffered_data,
+                first_batch_idx,
+                &combined_right_indices,
+            );
+        }
+
+        // Multiple source batches: map each buffered_batch_idx to a
+        // contiguous source index, reserving source 0 for a null sentinel.
+        let mut batch_idx_to_source: HashMap<usize, usize> = HashMap::new();
+        let mut source_batches: Vec<usize> = Vec::new();
+        for (batch_idx, _, _) in matched_chunks {
+            batch_idx_to_source.entry(*batch_idx).or_insert_with(|| {
+                let idx = source_batches.len() + 1;
+                source_batches.push(*batch_idx);
+                idx
+            });
+        }
+
+        let mut interleave_indices: Vec<(usize, usize)> =
+            Vec::with_capacity(total_matched_rows);
+        for (batch_idx, _, right) in matched_chunks {
+            let source = batch_idx_to_source[batch_idx];
+            for i in 0..right.len() {
+                if right.is_null(i) {
+                    interleave_indices.push((0, 0));
+                } else {
+                    interleave_indices.push((source, right.value(i) as usize));
+                }
             }
         }
 
-        self.streamed_batch.output_indices.clear();
-        self.streamed_batch.num_output_rows = 0;
+        let num_right_cols = self.buffered_schema.fields().len();
+        let mut right_columns = Vec::with_capacity(num_right_cols);
 
-        Ok(())
+        // Read each source batch once (spilled batches require disk I/O).
+        let source_data: Vec<Option<RecordBatch>> = source_batches
+            .iter()
+            .map(|&idx| {
+                let bb = &self.buffered_data.batches[idx];
+                match &bb.batch {
+                    BufferedBatchState::InMemory(batch) => Some(batch.clone()),
+                    BufferedBatchState::Spilled(spill_file) => {
+                        let file = BufReader::new(File::open(spill_file.path()).ok()?);
+                        let reader = StreamReader::try_new(file, None).ok()?;
+                        reader.into_iter().next()?.ok()
+                    }
+                }
+            })
+            .collect();
+
+        for col_idx in 0..num_right_cols {
+            let dtype = self.buffered_schema.field(col_idx).data_type();
+            let null_array = new_null_array(dtype, 1);
+
+            let mut source_arrays: Vec<&dyn Array> =
+                Vec::with_capacity(source_batches.len() + 1);
+            source_arrays.push(null_array.as_ref());
+
+            for data in &source_data {
+                match data {
+                    Some(batch) => source_arrays.push(batch.column(col_idx).as_ref()),
+                    None => {
+                        return internal_err!(
+                            "Failed to read spilled buffered batch during interleave"
+                        );
+                    }
+                }
+            }
+
+            right_columns.push(interleave(&source_arrays, &interleave_indices)?);
+        }
+
+        Ok(right_columns)
     }
 
     fn filter_joined_batch(&mut self) -> Result<RecordBatch> {
@@ -1556,7 +1600,6 @@ impl SortMergeJoinStream {
             corrected_mask,
             self.join_type,
             &self.schema,
-            &self.streamed_schema,
             &self.buffered_schema,
         )?;
 
@@ -1567,20 +1610,24 @@ impl SortMergeJoinStream {
     }
 }
 
-fn create_unmatched_columns(
-    join_type: JoinType,
-    schema: &SchemaRef,
-    size: usize,
-) -> Vec<ArrayRef> {
-    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
-        vec![Arc::new(BooleanArray::from(vec![false; size])) as ArrayRef]
+/// Materialize left (streamed) columns using slice or take.
+fn materialize_left_columns(
+    batch: &RecordBatch,
+    indices: &UInt64Array,
+) -> Result<Vec<ArrayRef>> {
+    if let Some(range) = is_contiguous_range(indices) {
+        Ok(batch.slice(range.start, range.len()).columns().to_vec())
     } else {
-        schema
-            .fields()
-            .iter()
-            .map(|f| new_null_array(f.data_type(), size))
-            .collect::<Vec<_>>()
+        Ok(take_arrays(batch.columns(), indices, None)?)
     }
+}
+
+fn create_unmatched_columns(schema: &SchemaRef, size: usize) -> Vec<ArrayRef> {
+    schema
+        .fields()
+        .iter()
+        .map(|f| new_null_array(f.data_type(), size))
+        .collect::<Vec<_>>()
 }
 
 fn produce_buffered_null_batch(
