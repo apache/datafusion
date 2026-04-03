@@ -365,7 +365,7 @@ where
 }
 
 /// Try to apply arithmetic in-place on `right` array with a scalar `left`.
-/// The operation is `result[i] = op(scalar_left, right[i])`, stored in `right`'s buffer.
+/// The operation is `result\[i\] = op(scalar_left, right\[i\])`, stored in `right`'s buffer.
 /// Returns `Ok(result)` on success, or `Err(right)` if in-place not possible.
 fn try_apply_inplace_scalar_rhs(
     right: ArrayRef,
@@ -379,7 +379,7 @@ fn try_apply_inplace_scalar_rhs(
 }
 
 /// Try to apply arithmetic in-place on `right` array using values from `left` array.
-/// The operation is `result[i] = op(left[i], right[i])`, stored in `right`'s buffer.
+/// The operation is `result\[i\] = op(left\[i\], right\[i\])`, stored in `right`'s buffer.
 /// Returns `Ok(result)` on success, or `Err(right)` if in-place not possible.
 fn try_apply_inplace_array_rhs(
     left: &ArrayRef,
@@ -392,7 +392,7 @@ fn try_apply_inplace_array_rhs(
     dispatch_inplace_binary!(right, left, op, try_inplace_binary_rhs)
 }
 
-/// Attempt in-place mutation on the right PrimitiveArray: result[i] = op(scalar, right[i]).
+/// Attempt in-place mutation on the right PrimitiveArray: result\[i\] = op(scalar, right\[i\]).
 fn try_inplace_unary_rhs<T: ArrowPrimitiveType>(
     array: ArrayRef,
     scalar: T::Native,
@@ -431,7 +431,7 @@ where
     }
 }
 
-/// Attempt in-place mutation on the right PrimitiveArray: result[i] = op(left[i], right[i]).
+/// Attempt in-place mutation on the right PrimitiveArray: result\[i\] = op(left\[i\], right\[i\]).
 /// Note: parameter order is (right_owned, left_ref) to match the dispatch_inplace_binary macro.
 fn try_inplace_binary_rhs<T: ArrowPrimitiveType>(
     right: ArrayRef,
@@ -473,7 +473,7 @@ where
     let right_slice = builder.values_slice_mut();
     let left_values = left_primitive.values();
 
-    // Note: op(left[i], right[i]) — left is the first operand
+    // Note: op(left\[i\], right\[i\]) — left is the first operand
     right_slice
         .iter_mut()
         .zip(left_values.iter())

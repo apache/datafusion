@@ -23,7 +23,6 @@ use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
-use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{SlicesIterator, cast, filter_record_batch};
@@ -173,11 +172,12 @@ enum BoolOp {
     Or,
 }
 
-/// Try in-place bitwise AND/OR on boolean arrays when neither side has nulls
-/// and both have zero offset. Tries left first, then right.
-/// Falls back to the standard kleene kernel otherwise.
-fn boolean_op_inplace(left: ArrayRef, right: ArrayRef, op: BoolOp) -> Result<ArrayRef> {
-    // Only optimize the non-null, zero-offset case
+/// Try in-place bitwise AND/OR on boolean arrays when neither side has nulls.
+/// Uses `BooleanBuffer`'s `BitAndAssign`/`BitOrAssign` which internally attempts
+/// `Buffer::into_mutable()` for in-place mutation, falling back to allocation if shared.
+/// Falls back to standard kleene kernel when nulls are present.
+fn boolean_op_inplace(left: ArrayRef, right: &ArrayRef, op: BoolOp) -> Result<ArrayRef> {
+    // Only optimize the non-null case; kleene logic is needed when nulls are present
     if left.null_count() != 0 || right.null_count() != 0 || left.len() != right.len() {
         let kleene_fn = match op {
             BoolOp::And => and_kleene,
@@ -191,78 +191,18 @@ fn boolean_op_inplace(left: ArrayRef, right: ArrayRef, op: BoolOp) -> Result<Arr
     let right_bool = as_boolean_array(&right)
         .expect("boolean_op_inplace failed to downcast right array");
 
-    if left_bool.offset() != 0 || right_bool.offset() != 0 {
-        let kleene_fn = match op {
-            BoolOp::And => and_kleene,
-            BoolOp::Or => or_kleene,
-        };
-        return Ok(boolean_op(&left, &right, kleene_fn)?);
-    }
-
-    let len = left_bool.len();
-    let byte_len = len.div_ceil(8);
-
-    // Try left first
-    let other_bytes = right_bool.values().inner().as_slice();
-    let left_clone = left_bool.clone();
+    let right_values = right_bool.values();
+    // Clone left BooleanBuffer (cheap Arc clone), then drop ArrayRef to
+    // reduce refcount so BitAndAssign/BitOrAssign can mutate in-place.
+    let mut left_values = left_bool.values().clone();
     drop(left);
-    let (left_values, _nulls) = left_clone.into_parts();
-    match left_values.into_inner().into_mutable() {
-        Ok(mut mutable) => {
-            apply_bool_assign(mutable.as_slice_mut(), other_bytes, byte_len, op);
-            Ok(Arc::new(BooleanArray::new(
-                BooleanBuffer::new(mutable.into(), 0, len),
-                None,
-            )))
-        }
-        Err(left_buf) => {
-            // Left buffer shared — try right
-            let left_bytes = left_buf.as_slice();
-            let right_clone = right_bool.clone();
-            drop(right);
-            let (right_values, _nulls) = right_clone.into_parts();
-            match right_values.into_inner().into_mutable() {
-                Ok(mut mutable) => {
-                    // AND/OR are commutative, so we can swap operands
-                    apply_bool_assign(mutable.as_slice_mut(), left_bytes, byte_len, op);
-                    Ok(Arc::new(BooleanArray::new(
-                        BooleanBuffer::new(mutable.into(), 0, len),
-                        None,
-                    )))
-                }
-                Err(right_buf) => {
-                    // Both shared — fall back
-                    let left_arr =
-                        BooleanArray::new(BooleanBuffer::new(left_buf, 0, len), None);
-                    let right_arr =
-                        BooleanArray::new(BooleanBuffer::new(right_buf, 0, len), None);
-                    let kleene_fn = match op {
-                        BoolOp::And => and_kleene,
-                        BoolOp::Or => or_kleene,
-                    };
-                    Ok(boolean_op(&left_arr, &right_arr, kleene_fn)?)
-                }
-            }
-        }
-    }
-}
 
-#[inline]
-fn apply_bool_assign(dst: &mut [u8], src: &[u8], byte_len: usize, op: BoolOp) {
     match op {
-        BoolOp::And => {
-            dst[..byte_len]
-                .iter_mut()
-                .zip(&src[..byte_len])
-                .for_each(|(d, s)| *d &= s);
-        }
-        BoolOp::Or => {
-            dst[..byte_len]
-                .iter_mut()
-                .zip(&src[..byte_len])
-                .for_each(|(d, s)| *d |= s);
-        }
+        BoolOp::And => left_values &= right_values,
+        BoolOp::Or => left_values |= right_values,
     }
+
+    Ok(Arc::new(BooleanArray::new(left_values, None)))
 }
 
 /// Returns true if both operands are Date types (Date32 or Date64)
@@ -793,7 +733,7 @@ impl BinaryExpr {
             | NotLikeMatch | NotILikeMatch => unreachable!(),
             And => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op_inplace(left, right, BoolOp::And)
+                    boolean_op_inplace(left, &right, BoolOp::And)
                 } else {
                     internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -805,7 +745,7 @@ impl BinaryExpr {
             }
             Or => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op_inplace(left, right, BoolOp::Or)
+                    boolean_op_inplace(left, &right, BoolOp::Or)
                 } else {
                     internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
