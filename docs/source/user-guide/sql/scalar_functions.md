@@ -2415,6 +2415,26 @@ current_date()
     SELECT current_date();
 ```
 
+#### Example
+
+```sql
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-23     |
++----------------+
+
+-- The current date is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-24     |
++----------------+
+```
+
 #### Aliases
 
 - today
@@ -2431,6 +2451,26 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 current_time()
     (optional) SET datafusion.execution.time_zone = '+00:00';
     SELECT current_time();
+```
+
+#### Example
+
+```sql
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 06:30:00.123456789 |
++--------------------+
+
+-- The current time is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 15:30:00.123456789 |
++--------------------+
 ```
 
 ### `current_timestamp`
@@ -2537,6 +2577,23 @@ date_part(part, expression)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
+#### Example
+
+```sql
+> SELECT date_part('year', '2024-05-01T00:00:00');
++-----------------------------------------------------+
+| date_part(Utf8("year"),Utf8("2024-05-01T00:00:00")) |
++-----------------------------------------------------+
+| 2024                                                |
++-----------------------------------------------------+
+> SELECT extract(day FROM timestamp '2024-05-01T00:00:00');
++----------------------------------------------------+
+| date_part(Utf8("DAY"),Utf8("2024-05-01T00:00:00")) |
++----------------------------------------------------+
+| 1                                                  |
++----------------------------------------------------+
+```
+
 #### Alternative Syntax
 
 ```sql
@@ -2581,6 +2638,23 @@ date_trunc(precision, expression)
   - microsecond / MICROSECOND
 
 - **expression**: Timestamp or time expression to operate on. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SELECT date_trunc('month', '2024-05-15T10:30:00');
++-----------------------------------------------+
+| date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
++-----------------------------------------------+
+| 2024-05-01T00:00:00                           |
++-----------------------------------------------+
+> SELECT date_trunc('hour', '2024-05-15T10:30:00');
++----------------------------------------------+
+| date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
++----------------------------------------------+
+| 2024-05-15T10:00:00                          |
++----------------------------------------------+
+```
 
 #### Aliases
 
@@ -2692,6 +2766,26 @@ The `now()` return value is determined at query time and will return the same ti
 
 ```sql
 now()
+```
+
+#### Example
+
+```sql
+> SELECT now();
++----------------------------------+
+| now()                            |
++----------------------------------+
+| 2024-12-23T06:30:00.123456789    |
++----------------------------------+
+
+-- The timezone of the returned timestamp depends on the session time zone
+> SET datafusion.execution.time_zone = 'America/New_York';
+> SELECT now();
++--------------------------------------+
+| now()                                |
++--------------------------------------+
+| 2024-12-23T01:30:00.123456789-05:00  |
++--------------------------------------+
 ```
 
 #### Aliases
