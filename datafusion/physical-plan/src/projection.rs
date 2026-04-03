@@ -1178,7 +1178,8 @@ mod tests {
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, lit,
+        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, ProducerKind, binary,
+        col, lit,
     };
 
     #[test]
@@ -1757,6 +1758,7 @@ mod tests {
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::clone(&col_a)],
             lit(true),
+            ProducerKind::HashJoin,
         ));
         // Initial state should be lit(true)
         let current = dynamic_filter.current()?;

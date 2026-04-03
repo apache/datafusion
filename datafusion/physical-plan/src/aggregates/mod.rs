@@ -52,7 +52,9 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    Column, DynamicFilterPhysicalExpr, ProducerKind, lit,
+};
 use datafusion_physical_expr::{
     ConstExpr, EquivalenceProperties, physical_exprs_contains,
 };
@@ -1167,7 +1169,11 @@ impl AggregateExec {
 
         if !aggr_dyn_filters.is_empty() {
             self.dynamic_filter = Some(Arc::new(AggrDynFilter {
-                filter: Arc::new(DynamicFilterPhysicalExpr::new(all_cols, lit(true))),
+                filter: Arc::new(DynamicFilterPhysicalExpr::new(
+                    all_cols,
+                    lit(true),
+                    ProducerKind::Aggregate,
+                )),
                 supported_accumulators_info: aggr_dyn_filters,
             }))
         }

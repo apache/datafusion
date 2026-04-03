@@ -85,7 +85,9 @@ use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumula
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
-use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    Column, DynamicFilterPhysicalExpr, ProducerKind, lit,
+};
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
@@ -837,7 +839,11 @@ impl HashJoinExec {
         // Dynamic filter will be created from build side values (left side) and applied to probe side (right side)
         let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
-        Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
+        Arc::new(DynamicFilterPhysicalExpr::new(
+            right_keys,
+            lit(true),
+            ProducerKind::HashJoin,
+        ))
     }
 
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {

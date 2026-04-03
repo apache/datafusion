@@ -1971,7 +1971,7 @@ mod tests {
     use datafusion_expr::{Expr, cast, is_null, try_cast};
     use datafusion_functions_nested::expr_fn::{array_has, make_array};
     use datafusion_physical_expr::expressions::{
-        self as phys_expr, DynamicFilterPhysicalExpr,
+        self as phys_expr, DynamicFilterPhysicalExpr, ProducerKind,
     };
     use datafusion_physical_expr::planner::logical2physical;
     use itertools::Itertools;
@@ -2978,9 +2978,11 @@ mod tests {
             .iter()
             .map(|c| Arc::new(c.clone()) as Arc<dyn PhysicalExpr>)
             .collect_vec();
-        let dynamic_phys_expr =
-            Arc::new(DynamicFilterPhysicalExpr::new(children, phys_expr))
-                as Arc<dyn PhysicalExpr>;
+        let dynamic_phys_expr = Arc::new(DynamicFilterPhysicalExpr::new(
+            children,
+            phys_expr,
+            ProducerKind::HashJoin,
+        )) as Arc<dyn PhysicalExpr>;
         // Simulate the partition value substitution that would happen in ParquetOpener
         let remapped_expr = dynamic_phys_expr
             .children()

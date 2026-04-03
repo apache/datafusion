@@ -5146,3 +5146,182 @@ async fn test_hashjoin_dynamic_filter_pushdown_left_semi_join() {
     "
     );
 }
+
+/// Helper: build and optimize a HashJoin plan with dynamic filter pushdown + buffering enabled.
+/// Returns the optimized plan ready for execution.
+fn build_buffered_hash_join_plan(
+    build_scan: Arc<dyn ExecutionPlan>,
+    probe_scan: Arc<dyn ExecutionPlan>,
+    build_schema: &SchemaRef,
+    probe_schema: &SchemaRef,
+    join_type: JoinType,
+    config: &ConfigOptions,
+) -> Arc<dyn ExecutionPlan> {
+    use datafusion_common::NullEquality;
+    use datafusion_physical_optimizer::hash_join_buffering::HashJoinBuffering;
+
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            vec![(
+                col("a", build_schema).unwrap(),
+                col("a", probe_schema).unwrap(),
+            )],
+            None,
+            &join_type,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Apply dynamic filter pushdown so the probe scan receives the dynamic filter
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(join, config)
+        .unwrap();
+
+    // Apply buffering so BufferExec wraps the probe side
+    HashJoinBuffering::new().optimize(plan, config).unwrap()
+}
+
+/// Test that BufferExec correctly waits for a HashJoin dynamic filter before buffering,
+/// and that the query produces correct results.
+#[tokio::test]
+async fn test_buffer_exec_waits_for_hash_join_dynamic_filter() {
+    let build_batches =
+        vec![record_batch!(("a", Utf8, ["aa", "ab"]), ("b", Int32, [1, 2])).unwrap()];
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac"]),
+            ("c", Float64, [1.0, 2.0, 3.0])
+        )
+        .unwrap(),
+    ];
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.hash_join_buffering_capacity = 1024 * 1024;
+    config.execution.hash_join_buffering_dynamic_filter_wait_ms = usize::MAX;
+
+    let plan = build_buffered_hash_join_plan(
+        build_scan,
+        probe_scan,
+        &build_schema,
+        &probe_schema,
+        JoinType::Inner,
+        &config,
+    );
+
+    let session_config = SessionConfig::from(config);
+    let session_ctx = SessionContext::new_with_config(session_config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let task_ctx = session_ctx.state().task_ctx();
+    let batches = collect(plan, task_ctx).await.unwrap();
+
+    // "ac" has no match on build side so only "aa" and "ab" rows appear
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+    insta::assert_snapshot!(result, @r"
+    +----+---+----+-----+
+    | a  | b | a  | c   |
+    +----+---+----+-----+
+    | aa | 1 | aa | 1.0 |
+    | ab | 2 | ab | 2.0 |
+    +----+---+----+-----+
+    ");
+}
+
+/// Test that BufferExec + HashJoin with a TopK above does not deadlock.
+/// The TopK filter is above BufferExec, so it is NOT in the child subtree
+/// and will not be waited on.
+#[tokio::test]
+async fn test_buffer_exec_hash_join_with_topk_above_no_deadlock() {
+    let build_batches = vec![
+        record_batch!(("a", Utf8, ["aa", "ab", "ac"]), ("b", Int32, [1, 2, 3])).unwrap(),
+    ];
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.hash_join_buffering_capacity = 1024 * 1024;
+    config.execution.hash_join_buffering_dynamic_filter_wait_ms = usize::MAX;
+
+    let plan = build_buffered_hash_join_plan(
+        build_scan,
+        probe_scan,
+        &build_schema,
+        &probe_schema,
+        JoinType::Inner,
+        &config,
+    );
+
+    // Wrap with TopK (SortExec with fetch) above the join
+    let sort_expr =
+        PhysicalSortExpr::new(col("a", &plan.schema()).unwrap(), SortOptions::default());
+    let topk = Arc::new(
+        SortExec::new(LexOrdering::new(vec![sort_expr]).unwrap(), plan)
+            .with_fetch(Some(2)),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let session_config = SessionConfig::from(config);
+    let session_ctx = SessionContext::new_with_config(session_config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let task_ctx = session_ctx.state().task_ctx();
+
+    // Should complete without deadlock
+    let batches =
+        tokio::time::timeout(std::time::Duration::from_secs(10), collect(topk, task_ctx))
+            .await
+            .expect("should not deadlock")
+            .unwrap();
+
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+}

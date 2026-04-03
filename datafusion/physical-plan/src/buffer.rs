@@ -36,6 +36,7 @@ use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, ProducerKind};
 use datafusion_physical_expr_common::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet,
 };
@@ -191,9 +192,27 @@ impl ExecutionPlan for BufferExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let wait_ms = context
+            .session_config()
+            .options()
+            .execution
+            .hash_join_buffering_dynamic_filter_wait_ms;
         let mem_reservation = MemoryConsumer::new(format!("BufferExec[{partition}]"))
             .register(context.memory_pool());
         let in_stream = self.input.execute(partition, context)?;
+
+        // Collect hash join dynamic filters from the child subtree.
+        // We wait on these before starting to buffer so that the filter is fully populated
+        // before the background task begins polling the input, allowing the scan to benefit
+        // from the dynamic filter and skip reading unnecessary data.
+        // We only wait on HashJoin filters because they are guaranteed to be fully populated
+        // before the probe side starts. TopK and Aggregate filters are populated incrementally
+        // during execution and waiting on them would cause a deadlock.
+        let hash_join_filters = if wait_ms > 0 {
+            collect_hash_join_dynamic_filters(self.input.as_ref())
+        } else {
+            vec![]
+        };
 
         // Set up the metrics for the stream.
         let curr_mem_in = Arc::new(AtomicUsize::new(0));
@@ -226,8 +245,13 @@ impl ExecutionPlan for BufferExec {
             }
         });
         // Buffer the input.
-        let out_stream =
-            MemoryBufferedStream::new(in_stream, self.capacity, mem_reservation);
+        let out_stream = MemoryBufferedStream::new(
+            in_stream,
+            self.capacity,
+            mem_reservation,
+            hash_join_filters,
+            wait_ms,
+        );
         // Update in the metrics that when an element gets out, some memory gets freed.
         let out_stream = out_stream.inspect_ok(move |v| {
             curr_mem_out.fetch_sub(v.get_array_memory_size(), Ordering::Relaxed);
@@ -298,6 +322,26 @@ impl ExecutionPlan for BufferExec {
     }
 }
 
+/// Walks the plan tree rooted at `plan` and collects all [`DynamicFilterPhysicalExpr`]s
+/// with [`ProducerKind::HashJoin`] found in expressions of any node in the subtree.
+fn collect_hash_join_dynamic_filters(
+    plan: &dyn ExecutionPlan,
+) -> Vec<DynamicFilterPhysicalExpr> {
+    let mut filters = vec![];
+    let _ = plan.apply_expressions(&mut |expr| {
+        if let Some(df) = expr.as_any().downcast_ref::<DynamicFilterPhysicalExpr>()
+            && df.producer_kind() == ProducerKind::HashJoin
+        {
+            filters.push(df.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    for child in plan.children() {
+        filters.extend(collect_hash_join_dynamic_filters(child.as_ref()));
+    }
+    filters
+}
+
 /// Represents anything that occupies a capacity in a [MemoryBufferedStream].
 pub trait SizedMessage {
     fn size(&self) -> usize;
@@ -325,10 +369,14 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
     /// Builds a new [MemoryBufferedStream] with the provided capacity and event handler.
     ///
     /// This immediately spawns a Tokio task that will start consumption of the input stream.
+    /// If `dynamic_filters` is non-empty, the task will wait for all of them to complete
+    /// before beginning to poll the input stream.
     pub fn new(
         mut input: impl Stream<Item = Result<T>> + Unpin + Send + 'static,
         capacity: usize,
         memory_reservation: MemoryReservation,
+        dynamic_filters: Vec<DynamicFilterPhysicalExpr>,
+        dynamic_filter_wait_ms: usize,
     ) -> Self {
         let semaphore = Arc::new(Semaphore::new(capacity));
         let (batch_tx, batch_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -336,6 +384,19 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
         let memory_reservation = Arc::new(memory_reservation);
         let memory_reservation_clone = Arc::clone(&memory_reservation);
         let task = SpawnedTask::spawn(async move {
+            // Wait for all hash join dynamic filters to be fully populated before
+            // starting to buffer, so the input scan can benefit from the filters.
+            for filter in &dynamic_filters {
+                if dynamic_filter_wait_ms == usize::MAX {
+                    filter.wait_complete().await;
+                } else {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_millis(dynamic_filter_wait_ms as u64),
+                        filter.wait_complete(),
+                    )
+                    .await;
+                }
+            }
             loop {
                 // Select on both the input stream and the channel being closed.
                 // By down this, we abort polling the input as soon as the consumer channel is
@@ -439,7 +500,7 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (_, res) = memory_pool_and_reservation();
 
-        let buffered = MemoryBufferedStream::new(input, 4, res);
+        let buffered = MemoryBufferedStream::new(input, 4, res, vec![], usize::MAX);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 2);
         Ok(())
@@ -450,7 +511,7 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (_, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res, vec![], usize::MAX);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 4);
 
@@ -467,7 +528,7 @@ mod tests {
         let input = futures::stream::iter([25, 1, 2, 3]).map(Ok);
         let (_, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res, vec![], usize::MAX);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 1);
         pull_ok_msg(&mut buffered).await?;
@@ -479,7 +540,7 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (_, res) = bounded_memory_pool_and_reservation(7);
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res, vec![], usize::MAX);
         wait_for_buffering().await;
 
         pull_ok_msg(&mut buffered).await?;
@@ -496,7 +557,7 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (_, res) = bounded_memory_pool_and_reservation(7);
 
-        let mut buffered = MemoryBufferedStream::new(input, 3, res);
+        let mut buffered = MemoryBufferedStream::new(input, 3, res, vec![], usize::MAX);
         wait_for_buffering().await;
         pull_ok_msg(&mut buffered).await?;
 
@@ -519,7 +580,7 @@ mod tests {
         let input = futures::stream::iter([3, 3, 3, 3]).map(Ok);
         let (_, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 2, res);
+        let mut buffered = MemoryBufferedStream::new(input, 2, res, vec![], usize::MAX);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 1);
         pull_ok_msg(&mut buffered).await?;
@@ -551,7 +612,7 @@ mod tests {
         });
         let (_, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res, vec![], usize::MAX);
         wait_for_buffering().await;
 
         pull_ok_msg(&mut buffered).await?;
@@ -566,7 +627,7 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (pool, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res, vec![], usize::MAX);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 4);
         assert_eq!(pool.reserved(), 10);

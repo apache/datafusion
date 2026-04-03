@@ -67,7 +67,9 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    DynamicFilterPhysicalExpr, ProducerKind, lit,
+};
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -982,7 +984,7 @@ impl SortExec {
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();
         Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
-            DynamicFilterPhysicalExpr::new(children, lit(true)),
+            DynamicFilterPhysicalExpr::new(children, lit(true), ProducerKind::TopK),
         ))))
     }
 

@@ -28,6 +28,26 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::DynHash;
 
+/// Identifies which kind of operator produced a [`DynamicFilterPhysicalExpr`].
+///
+/// This is used by operators like [`BufferExec`] to decide whether it is safe
+/// to wait for a dynamic filter to complete before starting execution.
+/// Only [`ProducerKind::HashJoin`] filters are guaranteed to be fully populated
+/// before the probe side starts, making them safe to wait on.
+/// [`ProducerKind::TopK`] and [`ProducerKind::Aggregate`] filters are populated
+/// incrementally during execution and waiting on them would cause a deadlock.
+///
+/// [`BufferExec`]: datafusion_physical_plan::buffer::BufferExec
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProducerKind {
+    /// Produced by a hash join build side. Safe to wait on — fully populated before probe starts.
+    HashJoin,
+    /// Produced by a TopK operator. Not safe to wait on — populated incrementally.
+    TopK,
+    /// Produced by an aggregate operator. Not safe to wait on — may never complete.
+    Aggregate,
+}
+
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilterState {
@@ -55,7 +75,7 @@ impl FilterState {
 /// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
 ///
 /// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
     /// This is necessary because the dynamic filter may be initialized with a placeholder (e.g. `lit(true)`)
@@ -74,6 +94,8 @@ pub struct DynamicFilterPhysicalExpr {
     /// But this can have overhead in production, so it's only included in our tests.
     data_type: Arc<RwLock<Option<DataType>>>,
     nullable: Arc<RwLock<Option<bool>>>,
+    /// The kind of operator that produced this dynamic filter.
+    producer_kind: ProducerKind,
 }
 
 #[derive(Debug)]
@@ -168,6 +190,7 @@ impl DynamicFilterPhysicalExpr {
     pub fn new(
         children: Vec<Arc<dyn PhysicalExpr>>,
         inner: Arc<dyn PhysicalExpr>,
+        producer_kind: ProducerKind,
     ) -> Self {
         let (state_watch, _) = watch::channel(FilterState::InProgress { generation: 1 });
         Self {
@@ -177,6 +200,7 @@ impl DynamicFilterPhysicalExpr {
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
+            producer_kind,
         }
     }
 
@@ -289,6 +313,11 @@ impl DynamicFilterPhysicalExpr {
         let _ = rx.wait_for(|state| state.generation() > current_gen).await;
     }
 
+    /// Returns the [`ProducerKind`] of this dynamic filter.
+    pub fn producer_kind(&self) -> ProducerKind {
+        self.producer_kind
+    }
+
     /// Wait asynchronously until this dynamic filter is marked as complete.
     ///
     /// This method returns immediately if the filter is already complete.
@@ -372,6 +401,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
+            producer_kind: self.producer_kind,
         }))
     }
 
@@ -478,6 +508,7 @@ mod test {
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![col("a", &table_schema).unwrap()],
             expr as Arc<dyn PhysicalExpr>,
+            ProducerKind::HashJoin,
         ));
         // Simulate two `ParquetSource` files with different filter schemas
         // Both of these should hit the same inner `PhysicalExpr` even after `update()` is called
@@ -632,6 +663,7 @@ mod test {
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![],
             lit(42) as Arc<dyn PhysicalExpr>,
+            ProducerKind::HashJoin,
         ));
 
         // Mark as complete immediately
@@ -667,6 +699,7 @@ mod test {
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             expr as Arc<dyn PhysicalExpr>,
+            ProducerKind::HashJoin,
         ));
 
         // Clone the Arc (two references to the same DynamicFilterPhysicalExpr)
@@ -730,6 +763,7 @@ mod test {
         let filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![],
             lit(true) as Arc<dyn PhysicalExpr>,
+            ProducerKind::HashJoin,
         ));
 
         // Initially, only one reference to the inner Arc exists

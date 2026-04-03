@@ -1065,7 +1065,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::assert_batches_eq;
-    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::expressions::{ProducerKind, col};
     use futures::TryStreamExt;
 
     /// This test ensures the size calculation is correct for RecordBatches with multiple columns.
@@ -1142,7 +1142,7 @@ mod tests {
             runtime,
             &metrics,
             Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
-                DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+                DynamicFilterPhysicalExpr::new(vec![], lit(true), ProducerKind::TopK),
             )))),
         )?;
 
@@ -1215,7 +1215,11 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
 
         // Create a dynamic filter that we'll check for completion
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(true),
+            ProducerKind::TopK,
+        ));
         let dynamic_filter_clone = Arc::clone(&dynamic_filter);
 
         // Create a TopK instance

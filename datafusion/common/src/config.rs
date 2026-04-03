@@ -684,6 +684,17 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// How long (in milliseconds) the probe-side buffer should wait for hash join dynamic
+        /// filters to be fully populated before starting to buffer data.
+        ///
+        /// When `hash_join_buffering_capacity` is enabled and dynamic filters are present below
+        /// the buffer, waiting for the filter to complete allows the input scan to benefit from
+        /// the filter and skip reading unnecessary data.
+        ///
+        /// Set to 0 to disable waiting (buffer immediately, same as previous behavior).
+        /// Set to `usize::MAX` to wait indefinitely until the filter is complete.
+        pub hash_join_buffering_dynamic_filter_wait_ms: usize, default = usize::MAX
     }
 }
 

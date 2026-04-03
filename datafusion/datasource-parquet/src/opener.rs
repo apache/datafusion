@@ -1588,7 +1588,7 @@ mod test {
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
-        expressions::{Column, DynamicFilterPhysicalExpr, Literal},
+        expressions::{Column, DynamicFilterPhysicalExpr, Literal, ProducerKind},
         planner::logical2physical,
         projection::ProjectionExprs,
     };
@@ -1922,6 +1922,7 @@ mod test {
         Arc::new(DynamicFilterPhysicalExpr::new(
             expr.children().into_iter().map(Arc::clone).collect(),
             expr,
+            ProducerKind::HashJoin,
         ))
     }
 
