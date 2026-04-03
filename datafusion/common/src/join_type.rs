@@ -67,6 +67,11 @@ pub enum JoinType {
     ///
     /// [1]: http://btw2017.informatik.uni-stuttgart.de/slidesandpapers/F1-10-37/paper_web.pdf
     LeftMark,
+    /// Right Mark Join
+    ///
+    /// Same logic as the LeftMark Join above, however it returns a record for each record from the
+    /// right input.
+    RightMark,
 }
 
 impl JoinType {
@@ -87,13 +92,41 @@ impl JoinType {
             JoinType::RightSemi => JoinType::LeftSemi,
             JoinType::LeftAnti => JoinType::RightAnti,
             JoinType::RightAnti => JoinType::LeftAnti,
-            JoinType::LeftMark => {
-                unreachable!("LeftMark join type does not support swapping")
-            }
+            JoinType::LeftMark => JoinType::RightMark,
+            JoinType::RightMark => JoinType::LeftMark,
         }
     }
 
-    /// Does the join type support swapping  inputs?
+    /// Whether each side of the join is preserved for ON-clause filter pushdown.
+    ///
+    /// It is only correct to push ON-clause filters below a join for preserved
+    /// inputs.
+    ///
+    /// # "Preserved" input definition
+    ///
+    /// A join side is preserved if the join returns all or a subset of the rows
+    /// from that side, such that each output row directly maps to an input row.
+    /// If a side is not preserved, the join can produce extra null rows that
+    /// don't map to any input row.
+    ///
+    /// # Return Value
+    ///
+    /// A tuple of booleans - (left_preserved, right_preserved).
+    pub fn on_lr_is_preserved(&self) -> (bool, bool) {
+        match self {
+            JoinType::Inner => (true, true),
+            JoinType::Left => (false, true),
+            JoinType::Right => (true, false),
+            JoinType::Full => (false, false),
+            JoinType::LeftSemi | JoinType::RightSemi => (true, true),
+            JoinType::LeftAnti => (false, true),
+            JoinType::RightAnti => (true, false),
+            JoinType::LeftMark => (false, true),
+            JoinType::RightMark => (true, false),
+        }
+    }
+
+    /// Does the join type support swapping inputs?
     pub fn supports_swap(&self) -> bool {
         matches!(
             self,
@@ -105,6 +138,8 @@ impl JoinType {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         )
     }
 }
@@ -121,6 +156,7 @@ impl Display for JoinType {
             JoinType::LeftAnti => "LeftAnti",
             JoinType::RightAnti => "RightAnti",
             JoinType::LeftMark => "LeftMark",
+            JoinType::RightMark => "RightMark",
         };
         write!(f, "{join_type}")
     }
@@ -141,6 +177,7 @@ impl FromStr for JoinType {
             "LEFTANTI" => Ok(JoinType::LeftAnti),
             "RIGHTANTI" => Ok(JoinType::RightAnti),
             "LEFTMARK" => Ok(JoinType::LeftMark),
+            "RIGHTMARK" => Ok(JoinType::RightMark),
             _ => _not_impl_err!("The join type {s} does not exist or is not implemented"),
         }
     }

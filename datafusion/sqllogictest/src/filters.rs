@@ -120,10 +120,10 @@ pub fn should_skip_record<D: AsyncDB>(
         if !loc.file().contains(&filter.file_substring) {
             continue;
         }
-        if let Some(line_num) = filter.line_number {
-            if loc.line() != line_num {
-                continue;
-            }
+        if let Some(line_num) = filter.line_number
+            && loc.line() != line_num
+        {
+            continue;
         }
 
         // This filter matches both file name substring and the exact
@@ -142,12 +142,11 @@ fn statement_is_skippable(statement: &Statement) -> bool {
 
     // Cannot skip SELECT INTO statements, as they can also create tables
     // that further test cases will use.
-    if let SqlStatement::Query(v) = sql_stmt.as_ref() {
-        if let SetExpr::Select(v) = v.body.as_ref() {
-            if v.into.is_some() {
-                return false;
-            }
-        }
+    if let SqlStatement::Query(v) = sql_stmt.as_ref()
+        && let SetExpr::Select(v) = v.body.as_ref()
+        && v.into.is_some()
+    {
+        return false;
     }
 
     // Only SELECT and EXPLAIN statements can be skipped, as any other

@@ -20,11 +20,11 @@ use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
-use datafusion_common::exec_err;
+use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::exec_err;
 use datafusion_common::{arrow_datafusion_err, plan_err};
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
+use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -48,7 +48,7 @@ use std::sync::Arc;
             | [B]                                               |
             +---------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
     argument(
@@ -66,7 +66,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   - **U**: swap the meaning of x* and x*?"#
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexpMatchFunc {
     signature: Signature,
 }
@@ -119,10 +119,7 @@ impl ScalarUDFImpl for RegexpMatchFunc {
         })
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         let len = args
             .iter()
@@ -155,29 +152,35 @@ impl ScalarUDFImpl for RegexpMatchFunc {
 
 pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
-        2 => {
-            regexp::regexp_match(&args[0], &args[1], None)
-                .map_err(|e| arrow_datafusion_err!(e))
-        }
+        2 => regexp::regexp_match(&args[0], &args[1], None)
+            .map_err(|e| arrow_datafusion_err!(e)),
         3 => {
             match args[2].data_type() {
                 DataType::Utf8View => {
                     if args[2].as_string_view().iter().any(|s| s == Some("g")) {
-                        return plan_err!("regexp_match() does not support the \"global\" option");
+                        return plan_err!(
+                            "regexp_match() does not support the \"global\" option"
+                        );
                     }
                 }
                 DataType::Utf8 => {
                     if args[2].as_string::<i32>().iter().any(|s| s == Some("g")) {
-                        return plan_err!("regexp_match() does not support the \"global\" option");
+                        return plan_err!(
+                            "regexp_match() does not support the \"global\" option"
+                        );
                     }
                 }
                 DataType::LargeUtf8 => {
                     if args[2].as_string::<i64>().iter().any(|s| s == Some("g")) {
-                        return plan_err!("regexp_match() does not support the \"global\" option");
+                        return plan_err!(
+                            "regexp_match() does not support the \"global\" option"
+                        );
                     }
                 }
                 e => {
-                    return plan_err!("regexp_match was called with unexpected data type {e:?}");
+                    return plan_err!(
+                        "regexp_match was called with unexpected data type {e:?}"
+                    );
                 }
             }
 
@@ -254,6 +257,9 @@ mod tests {
             regexp_match(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
                 .expect_err("unsupported flag should have failed");
 
-        assert_eq!(re_err.strip_backtrace(), "Error during planning: regexp_match() does not support the \"global\" option");
+        assert_eq!(
+            re_err.strip_backtrace(),
+            "Error during planning: regexp_match() does not support the \"global\" option"
+        );
     }
 }

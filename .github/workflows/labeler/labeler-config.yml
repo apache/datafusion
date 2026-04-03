@@ -58,11 +58,11 @@ execution:
 
 datasource:
   - changed-files:
-      - any-glob-to-any-file: ['datafusion/datasource/**/*', 'datafusion/datasource-avro/**/*', 'datafusion/datasource-csv/**/*', 'datafusion/datasource-json/**/*', 'datafusion/datasource-parquet/**/*']
+      - any-glob-to-any-file: ['datafusion/datasource/**/*', 'datafusion/datasource-avro/**/*', 'datafusion/datasource-arrow/**/*', 'datafusion/datasource-csv/**/*', 'datafusion/datasource-json/**/*', 'datafusion/datasource-parquet/**/*']
 
 functions:
   - changed-files:
-      - any-glob-to-any-file: ['datafusion/functions/**/*', 'datafusion/functions-aggregate/**/*', 'datafusion/functions-aggregate-common', 'datafusion/functions-nested', 'datafusion/functions-table/**/*', 'datafusion/functions-window/**/*', 'datafusion/functions-window-common/**/*']
+      - any-glob-to-any-file: ['datafusion/functions/**/*', 'datafusion/functions-aggregate/**/*', 'datafusion/functions-aggregate-common/**/*', 'datafusion/functions-nested/**/*', 'datafusion/functions-table/**/*', 'datafusion/functions-window/**/*', 'datafusion/functions-window-common/**/*']
 
 
 optimizer:

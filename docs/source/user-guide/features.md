@@ -43,7 +43,7 @@
 - [x] Filter (`WHERE`)
 - [x] Filter post-aggregate (`HAVING`)
 - [x] Sorting (`ORDER BY`)
-- [x] Limit (`LIMIT`
+- [x] Limit (`LIMIT`)
 - [x] Aggregate (`GROUP BY`)
 - [x] cast /try_cast
 - [x] [`VALUES` lists](https://www.postgresql.org/docs/current/queries-values.html)
@@ -93,7 +93,8 @@
 - [x] Memory limits enforced
 - [x] Spilling (to disk) Sort
 - [x] Spilling (to disk) Grouping
-- [ ] Spilling (to disk) Joins
+- [x] Spilling (to disk) Sort Merge Join
+- [ ] Spilling (to disk) Hash Join
 
 ## Data Sources
 

@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{as_string_array, ArrayRef, Int32Array, StringArray},
+    array::{ArrayRef, Int32Array, StringArray, as_string_array},
     compute::SortOptions,
     record_batch::RecordBatch,
 };
@@ -28,7 +28,7 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::cast::as_int32_array;
 use datafusion_execution::memory_pool::GreedyMemoryPool;
@@ -188,7 +188,7 @@ impl SortTest {
     }
 
     fn with_sort_columns(mut self, sort_columns: Vec<&str>) -> Self {
-        self.sort_columns = sort_columns.iter().map(|s| s.to_string()).collect();
+        self.sort_columns = sort_columns.iter().map(|s| (*s).to_string()).collect();
         self
     }
 
@@ -232,18 +232,15 @@ impl SortTest {
             .expect("at least one batch");
         let schema = first_batch.schema();
 
-        let sort_ordering = LexOrdering::new(
-            self.sort_columns
-                .iter()
-                .map(|c| PhysicalSortExpr {
-                    expr: col(c, &schema).unwrap(),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: true,
-                    },
-                })
-                .collect(),
-        );
+        let sort_ordering =
+            LexOrdering::new(self.sort_columns.iter().map(|c| PhysicalSortExpr {
+                expr: col(c, &schema).unwrap(),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            }))
+            .unwrap();
 
         let exec = MemorySourceConfig::try_new_exec(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::new(sort_ordering, exec));

@@ -20,7 +20,7 @@ use std::fmt;
 use arrow::datatypes::FieldRef;
 use datafusion_common::{Column, TableReference};
 
-use crate::{expr::WildcardOptions, Expr};
+use crate::{Expr, expr::WildcardOptions};
 
 /// Represents a SELECT expression in a SQL query.
 ///
@@ -44,10 +44,8 @@ use crate::{expr::WildcardOptions, Expr};
 /// let wildcard = SelectExpr::Wildcard(WildcardOptions::default());
 ///
 /// // SELECT mytable.*
-/// let qualified = SelectExpr::QualifiedWildcard(
-///     "mytable".into(),
-///     WildcardOptions::default()
-/// );
+/// let qualified =
+///     SelectExpr::QualifiedWildcard("mytable".into(), WildcardOptions::default());
 ///
 /// // SELECT col1
 /// let expr = SelectExpr::Expression(col("col1").into());

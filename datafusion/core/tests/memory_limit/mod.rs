@@ -23,11 +23,13 @@ use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
+mod repartition_mem_limit;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
+use datafusion::config::SpillCompression;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
@@ -37,19 +39,19 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
-use datafusion_common::{assert_contains, Result};
+use datafusion_catalog::streaming::StreamingTable;
+use datafusion_common::{Result, assert_contains};
+use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::collect as collect_batches;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
@@ -84,7 +86,8 @@ async fn group_by_none() {
     TestCase::new()
         .with_query("select median(request_bytes) from t")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  AggregateStream"
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  AggregateStream",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -96,7 +99,7 @@ async fn group_by_row_hash() {
     TestCase::new()
         .with_query("select count(*) from t GROUP BY response_bytes")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
         ])
         .with_memory_limit(2_000)
         .run()
@@ -109,7 +112,7 @@ async fn group_by_hash() {
         // group by dict column
         .with_query("select count(*) from t GROUP BY service, host, pod, container")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
         ])
         .with_memory_limit(1_000)
         .run()
@@ -122,7 +125,8 @@ async fn join_by_key_multiple_partitions() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -136,7 +140,8 @@ async fn join_by_key_single_partition() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -149,7 +154,7 @@ async fn join_by_expression() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service != t2.service")
         .with_expected_errors(vec![
-           "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]",
+           "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -161,7 +166,8 @@ async fn cross_join() {
     TestCase::new()
         .with_query("select t1.*, t2.* from t t1 CROSS JOIN t t2")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  CrossJoinExec",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -217,7 +223,7 @@ async fn symmetric_hash_join() {
             "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  SymmetricHashJoinStream",
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  SymmetricHashJoinStream",
         ])
         .with_memory_limit(1_000)
         .with_scenario(Scenario::AccessLogStreaming)
@@ -235,7 +241,7 @@ async fn sort_preserving_merge() {
     // so only a merge is needed
         .with_query("select * from t ORDER BY a ASC NULLS LAST, b ASC NULLS LAST LIMIT 10")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  SortPreservingMergeExec",
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  SortPreservingMergeExec",
         ])
         // provide insufficient memory to merge
         .with_memory_limit(partition_size / 2)
@@ -314,7 +320,8 @@ async fn sort_spill_reservation() {
 
     test.clone()
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:",
             "B for ExternalSorterMerge",
         ])
         .with_config(config)
@@ -344,7 +351,8 @@ async fn oom_recursive_cte() {
         SELECT * FROM nodes;",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  RecursiveQuery",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  RecursiveQuery",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -396,7 +404,7 @@ async fn oom_with_tracked_consumer_pool() {
         .with_expected_errors(vec![
             "Failed to allocate additional",
             "for ParquetSink(ArrowColumnWriter)",
-            "Additional allocation failed with top memory consumers (across reservations) as:\n  ParquetSink(ArrowColumnWriter)"
+            "Additional allocation failed", "with top memory consumers (across reservations) as:\n  ParquetSink(ArrowColumnWriter)"
         ])
         .with_memory_pool(Arc::new(
             TrackConsumersPool::new(
@@ -545,10 +553,11 @@ async fn test_external_sort_zero_merge_reservation() {
 // Tests for disk limit (`max_temp_directory_size` in `DiskManager`)
 // ------------------------------------------------------------------
 
-// Create a new `SessionContext` with speicified disk limit and memory pool limit
+// Create a new `SessionContext` with specified disk limit, memory pool limit, and spill compression codec
 async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
+    spill_compression: SpillCompression,
 ) -> Result<SessionContext> {
     let disk_manager = DiskManagerBuilder::default()
         .with_mode(DiskManagerMode::OsTmpDirectory)
@@ -565,11 +574,16 @@ async fn setup_context(
         disk_manager: Arc::new(disk_manager),
         cache_manager: runtime.cache_manager.clone(),
         object_store_registry: runtime.object_store_registry.clone(),
+        #[cfg(feature = "parquet_encryption")]
+        parquet_encryption_factory_registry: runtime
+            .parquet_encryption_factory_registry
+            .clone(),
     });
 
     let config = SessionConfig::new()
         .with_sort_spill_reservation_bytes(64 * 1024) // 256KB
         .with_sort_in_place_threshold_bytes(0)
+        .with_spill_compression(spill_compression)
         .with_batch_size(64) // To reduce test memory usage
         .with_target_partitions(1);
 
@@ -580,18 +594,24 @@ async fn setup_context(
 /// (specified by `max_temp_directory_size` in `DiskManager`)
 #[tokio::test]
 async fn test_disk_spill_limit_reached() -> Result<()> {
-    let ctx = setup_context(1024 * 1024, 1024 * 1024).await?; // 1MB disk limit, 1MB memory limit
+    let spill_compression = SpillCompression::Uncompressed;
+    let ctx = setup_context(1024 * 1024, 1024 * 1024, spill_compression).await?; // 1MB disk limit, 1MB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
         .await
         .unwrap();
 
-    let err = df.collect().await.unwrap_err();
-    assert_contains!(
-    err.to_string(),
-    "The used disk space during the spilling process has exceeded the allowable limit"
-    );
+    let error_message = df.collect().await.unwrap_err().to_string();
+    for expected in [
+        "The used disk space during the spilling process has exceeded the allowable limit",
+        "datafusion.runtime.max_temp_directory_size",
+    ] {
+        assert!(
+            error_message.contains(expected),
+            "'{expected}' is not contained by '{error_message}'"
+        );
+    }
 
     Ok(())
 }
@@ -602,7 +622,8 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
 #[tokio::test]
 async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let disk_spill_limit = 1024 * 1024; // 1MB
-    let ctx = setup_context(disk_spill_limit, 128 * 1024).await?; // 1MB disk limit, 128KB memory limit
+    let spill_compression = SpillCompression::Uncompressed;
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 10000) as t1(v1) order by v1")
@@ -630,6 +651,77 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     Ok(())
 }
 
+/// External query should succeed using zstd as spill compression codec and
+/// and all temporary spill files are properly cleaned up after execution.
+/// Note: This test does not inspect file contents (e.g. magic number),
+/// as spill files are automatically deleted on drop.
+#[tokio::test]
+async fn test_spill_file_compressed_with_zstd() -> Result<()> {
+    let disk_spill_limit = 1024 * 1024; // 1MB
+    let spill_compression = SpillCompression::Zstd;
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, zstd
+
+    let df = ctx
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    let task_ctx = ctx.task_ctx();
+    let _ = collect_batches(Arc::clone(&plan), task_ctx)
+        .await
+        .expect("Query execution failed");
+
+    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
+    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+
+    println!("spill count {spill_count}");
+    assert!(spill_count > 0);
+    assert!((spilled_bytes as u64) < disk_spill_limit);
+
+    // Verify that all temporary files have been properly cleaned up by checking
+    // that the total disk usage tracked by the disk manager is zero
+    let current_disk_usage = ctx.runtime_env().disk_manager.used_disk_space();
+    assert_eq!(current_disk_usage, 0);
+
+    Ok(())
+}
+
+/// External query should succeed using lz4_frame as spill compression codec and
+/// and all temporary spill files are properly cleaned up after execution.
+/// Note: This test does not inspect file contents (e.g. magic number),
+/// as spill files are automatically deleted on drop.
+#[tokio::test]
+async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
+    let disk_spill_limit = 1024 * 1024; // 1MB
+    let spill_compression = SpillCompression::Lz4Frame;
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, lz4_frame
+
+    let df = ctx
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    let task_ctx = ctx.task_ctx();
+    let _ = collect_batches(Arc::clone(&plan), task_ctx)
+        .await
+        .expect("Query execution failed");
+
+    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
+    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+
+    println!("spill count {spill_count}");
+    assert!(spill_count > 0);
+    assert!((spilled_bytes as u64) < disk_spill_limit);
+
+    // Verify that all temporary files have been properly cleaned up by checking
+    // that the total disk usage tracked by the disk manager is zero
+    let current_disk_usage = ctx.runtime_env().disk_manager.used_disk_space();
+    assert_eq!(current_disk_usage, 0);
+
+    Ok(())
+}
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
@@ -726,7 +818,7 @@ impl TestCase {
 
     /// Specify an expected plan to review
     pub fn with_expected_plan(mut self, expected_plan: &[&str]) -> Self {
-        self.expected_plan = expected_plan.iter().map(|s| s.to_string()).collect();
+        self.expected_plan = expected_plan.iter().map(|s| (*s).to_string()).collect();
         self
     }
 
@@ -890,16 +982,13 @@ impl Scenario {
                     descending: false,
                     nulls_first: false,
                 };
-                let sort_information = vec![LexOrdering::new(vec![
-                    PhysicalSortExpr {
-                        expr: col("a", &schema).unwrap(),
-                        options,
-                    },
-                    PhysicalSortExpr {
-                        expr: col("b", &schema).unwrap(),
-                        options,
-                    },
-                ])];
+                let sort_information = vec![
+                    [
+                        PhysicalSortExpr::new(col("a", &schema).unwrap(), options),
+                        PhysicalSortExpr::new(col("b", &schema).unwrap(), options),
+                    ]
+                    .into(),
+                ];
 
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)
@@ -975,7 +1064,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
     let batch_size = 50;
 
     let mut i = 0;
-    let gen = std::iter::from_fn(move || {
+    let batch_gen = std::iter::from_fn(move || {
         // create values like
         // 0000000001
         // 0000000002
@@ -998,7 +1087,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
 
     let num_batches = 5;
 
-    let batches: Vec<_> = gen.take(num_batches).collect();
+    let batches: Vec<_> = batch_gen.take(num_batches).collect();
 
     batches.iter().enumerate().for_each(|(i, batch)| {
         println!("Dict batch[{i}] size is: {}", batch.get_array_memory_size());
@@ -1013,9 +1102,9 @@ fn batches_byte_size(batches: &[RecordBatch]) -> usize {
 }
 
 #[derive(Debug)]
-struct DummyStreamPartition {
-    schema: SchemaRef,
-    batches: Vec<RecordBatch>,
+pub(crate) struct DummyStreamPartition {
+    pub(crate) schema: SchemaRef,
+    pub(crate) batches: Vec<RecordBatch>,
 }
 
 impl PartitionStream for DummyStreamPartition {

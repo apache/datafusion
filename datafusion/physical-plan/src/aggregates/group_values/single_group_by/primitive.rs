@@ -16,19 +16,19 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
-    PrimitiveArray,
+    ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
+    cast::AsArray,
 };
-use arrow::datatypes::{i256, DataType};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::hash_table::HashTable;
+use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -87,7 +87,6 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// is obvious in high cardinality group by situation.
     /// More details can see:
     /// <https://github.com/apache/datafusion/issues/15961>
-    ///
     map: HashTable<(usize, u64)>,
     /// The group index of the null value if any
     null_group: Option<usize>,
@@ -130,7 +129,9 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |&(g, _)| unsafe { self.values.get_unchecked(g).is_eq(key) },
+                        |&(g, h)| unsafe {
+                            hash == h && self.values.get_unchecked(g).is_eq(key)
+                        },
                         |&(_, h)| h,
                     );
 
@@ -214,11 +215,10 @@ where
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
-    fn clear_shrink(&mut self, batch: &RecordBatch) {
-        let count = batch.num_rows();
+    fn clear_shrink(&mut self, num_rows: usize) {
         self.values.clear();
-        self.values.shrink_to(count);
+        self.values.shrink_to(num_rows);
         self.map.clear();
-        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
     }
 }

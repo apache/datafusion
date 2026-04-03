@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_datafusion_err, Column, Result};
+use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
@@ -43,7 +43,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok(left)
     }
 
-    fn parse_relation_join(
+    pub(crate) fn parse_relation_join(
         &self,
         left: LogicalPlan,
         join: Join,
@@ -95,7 +95,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             JoinOperator::FullOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
-            JoinOperator::CrossJoin => self.parse_cross_join(left, right),
+            JoinOperator::CrossJoin(JoinConstraint::None) => {
+                self.parse_cross_join(left, right)
+            }
             other => not_impl_err!("Unsupported JOIN operator {other:?}"),
         }
     }
@@ -142,7 +144,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                         "Expected identifier in USING clause"
                                     )
                                 })
-                                .map(|ident| self.ident_normalizer.normalize(ident.clone()))
+                                .map(|ident| Column::from_name(self.ident_normalizer.normalize(ident.clone())))
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;

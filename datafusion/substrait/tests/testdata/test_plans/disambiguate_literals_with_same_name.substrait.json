@@ -1,0 +1,287 @@
+{
+  "extensionUris": [{
+    "extensionUriAnchor": 1,
+    "uri": "/functions_comparison.yaml"
+  }],
+  "extensions": [{
+    "extensionFunction": {
+      "extensionUriReference": 1,
+      "functionAnchor": 1,
+      "name": "equal:any_any"
+    }
+  }],
+  "relations": [{
+    "root": {
+      "input": {
+        "project": {
+          "common": {
+            "emit": {
+              "outputMapping": [4, 5, 6, 7]
+            }
+          },
+          "input": {
+            "join": {
+              "common": {
+                "direct": {
+                }
+              },
+              "left": {
+                "set": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "inputs": [{
+                    "project": {
+                      "common": {
+                        "emit": {
+                          "outputMapping": [1, 2]
+                        }
+                      },
+                      "input": {
+                        "read": {
+                          "common": {
+                            "direct": {
+                            }
+                          },
+                          "baseSchema": {
+                            "names": ["A"],
+                            "struct": {
+                              "types": [{
+                                "i32": {
+                                  "typeVariationReference": 0,
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }],
+                              "typeVariationReference": 0,
+                              "nullability": "NULLABILITY_REQUIRED"
+                            }
+                          },
+                          "namedTable": {
+                            "names": ["A"]
+                          }
+                        }
+                      },
+                      "expressions": [{
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 0
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "literal": {
+                          "null": {
+                            "string": {
+                              "typeVariationReference": 0,
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          },
+                          "nullable": false,
+                          "typeVariationReference": 0
+                        }
+                      }]
+                    }
+                  }, {
+                    "project": {
+                      "common": {
+                        "emit": {
+                          "outputMapping": [2, 3]
+                        }
+                      },
+                      "input": {
+                        "read": {
+                          "common": {
+                            "direct": {
+                            }
+                          },
+                          "baseSchema": {
+                            "names": ["A", "C"],
+                            "struct": {
+                              "types": [{
+                                "i32": {
+                                  "typeVariationReference": 0,
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }, {
+                                "i32": {
+                                  "typeVariationReference": 0,
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }],
+                              "typeVariationReference": 0,
+                              "nullability": "NULLABILITY_REQUIRED"
+                            }
+                          },
+                          "namedTable": {
+                            "names": ["B"]
+                          }
+                        }
+                      },
+                      "expressions": [{
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 0
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "cast": {
+                          "type": {
+                            "string": {
+                              "typeVariationReference": 0,
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          },
+                          "input": {
+                            "selection": {
+                              "directReference": {
+                                "structField": {
+                                  "field": 1
+                                }
+                              },
+                              "rootReference": {
+                              }
+                            }
+                          },
+                          "failureBehavior": "FAILURE_BEHAVIOR_THROW_EXCEPTION"
+                        }
+                      }]
+                    }
+                  }],
+                  "op": "SET_OP_UNION_ALL"
+                }
+              },
+              "right": {
+                "read": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "baseSchema": {
+                    "names": ["A", "D"],
+                    "struct": {
+                      "types": [{
+                        "i32": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      }, {
+                        "i32": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      }],
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": ["C"]
+                  }
+                }
+              },
+              "expression": {
+                "scalarFunction": {
+                  "functionReference": 1,
+                  "args": [],
+                  "outputType": {
+                    "bool": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  },
+                  "arguments": [{
+                    "value": {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 0
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }
+                  }, {
+                    "value": {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 2
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }
+                  }],
+                  "options": []
+                }
+              },
+              "type": "JOIN_TYPE_LEFT"
+            }
+          },
+          "expressions": [{
+            "selection": {
+              "directReference": {
+                "structField": {
+                  "field": 0
+                }
+              },
+              "rootReference": {
+              }
+            }
+          }, {
+            "selection": {
+              "directReference": {
+                "structField": {
+                  "field": 1
+                }
+              },
+              "rootReference": {
+              }
+            }
+          }, {
+            "selection": {
+              "directReference": {
+                "structField": {
+                  "field": 3
+                }
+              },
+              "rootReference": {
+              }
+            }
+          }, {
+            "literal": {
+              "null": {
+                "string": {
+                  "typeVariationReference": 0,
+                  "nullability": "NULLABILITY_NULLABLE"
+                }
+              },
+              "nullable": false,
+              "typeVariationReference": 0
+            }
+          }]
+        }
+      },
+      "names": ["A", "C", "D", "E"]
+    }
+  }],
+  "expectedTypeUrls": [],
+  "version": {
+    "majorNumber": 0,
+    "minorNumber": 74,
+    "patchNumber": 0,
+    "gitHash": "",
+    "producer": "isthmus"
+  },
+  "parameterBindings": []
+}

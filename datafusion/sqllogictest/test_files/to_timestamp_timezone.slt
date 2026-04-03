@@ -1,0 +1,204 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## to_timestamp timezone tests
+##########
+
+## Reset timezone for other tests
+statement ok
+RESET datafusion.execution.time_zone
+
+## Test 1: Default timezone (None) with naive timestamp
+## Naive timestamps (without explicit timezone) should be interpreted as UTC by default
+query P
+SELECT to_timestamp('2020-09-08T13:42:29');
+----
+2020-09-08T13:42:29
+
+## Test 2: Explicit UTC timezone ('Z' suffix)
+## Explicit timezone should be respected regardless of session timezone
+query P
+SELECT to_timestamp('2020-09-08T13:42:29Z');
+----
+2020-09-08T13:42:29
+
+## Test 3: Explicit timezone offset (+05:00)
+## Explicit offset should be respected - this is 13:42:29+05:00 which is 08:42:29 UTC
+query P
+SELECT to_timestamp('2020-09-08T13:42:29+05:00');
+----
+2020-09-08T08:42:29
+
+## Test 4: Explicit timezone offset without colon (+0500)
+## Should handle offset formats without colons
+query P
+SELECT to_timestamp('2020-09-08T13:42:29+0500');
+----
+2020-09-08T08:42:29
+
+## Test 5: Negative timezone offset
+query P
+SELECT to_timestamp('2020-09-08T13:42:29-03:30');
+----
+2020-09-08T17:12:29
+
+## Test 6: Configure session timezone to America/New_York
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+## Test 7: Naive timestamp with configured timezone
+## '2020-09-08T13:42:29' in America/New_York is EDT (UTC-4)
+## So this should become '2020-09-08T13:42:29-04:00'
+query P
+SELECT to_timestamp('2020-09-08T13:42:29');
+----
+2020-09-08T13:42:29-04:00
+
+## Test 8: Explicit UTC should be transformed to configured timezone
+query P
+SELECT to_timestamp('2020-09-08T13:42:29Z');
+----
+2020-09-08T09:42:29-04:00
+
+## Test 9: Explicit offset should be transformed to configured timezone
+query P
+SELECT to_timestamp('2020-09-08T13:42:29+05:00');
+----
+2020-09-08T04:42:29-04:00
+
+## Test 10: Check arrow_typeof returns timstamp in configured timezone
+## Result should be Timestamp(Nanosecond, "America/New_York") regardless of input timezone
+query T
+SELECT arrow_typeof(to_timestamp('2020-09-08T13:42:29Z'));
+----
+Timestamp(ns, "America/New_York")
+
+## Test 11: Configure to offset-based timezone
+statement ok
+SET datafusion.execution.time_zone = '+05:30';
+
+## Test 12: Naive timestamp with offset-based configured timezone
+query P
+SELECT to_timestamp('2020-09-08T13:42:29');
+----
+2020-09-08T13:42:29+05:30
+
+## Test 13: Reset to None
+statement ok
+RESET datafusion.execution.time_zone
+
+## Test 14: Naive timestamp
+query P
+SELECT to_timestamp('2020-09-08T13:42:29');
+----
+2020-09-08T13:42:29
+
+query P
+SELECT to_timestamp('2020-09-08T13:42:29Z');
+----
+2020-09-08T13:42:29
+
+query P
+SELECT to_timestamp('2020-09-08T13:42:29+05:00');
+----
+2020-09-08T08:42:29
+
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+## Test 15: to_timestamp with format string - naive timestamp with session timezone
+
+query P
+SELECT to_timestamp('2020-09-08 13:42:29', '%Y-%m-%d %H:%M:%S');
+----
+2020-09-08T13:42:29-04:00
+
+## Test 16: to_timestamp with format string - explicit timezone should be respected
+statement ok
+SET datafusion.execution.time_zone = 'UTC';
+
+query P
+SELECT to_timestamp('2020-09-08 13:42:29 +0000', '%Y-%m-%d %H:%M:%S %z');
+----
+2020-09-08T13:42:29Z
+
+query P
+SELECT to_timestamp('2020-09-08 13:42:29 America/Toronto', '%Y-%m-%d %H:%M:%S %Z');
+----
+2020-09-08T17:42:29Z
+
+query error Error parsing timestamp from '2020-09-08 13:42:29America/Toronto' using format '%Y-%m-%d %H:%M:%S%Z': '%Z' is only supported at the end of the format string preceded by a space
+SELECT to_timestamp('2020-09-08 13:42:29America/Toronto', '%Y-%m-%d %H:%M:%S%Z');
+
+## Test 17: Test all precision variants respect timezone
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+## to_timestamp_seconds
+query P
+SELECT to_timestamp_seconds('2020-09-08T13:42:29');
+----
+2020-09-08T13:42:29-04:00
+
+## to_timestamp_millis
+query P
+SELECT to_timestamp_millis('2020-09-08T13:42:29.123');
+----
+2020-09-08T13:42:29.123-04:00
+
+## to_timestamp_micros
+query P
+SELECT to_timestamp_micros('2020-09-08T13:42:29.123456');
+----
+2020-09-08T13:42:29.123456-04:00
+
+## to_timestamp_nanos
+query P
+SELECT to_timestamp_nanos('2020-09-08T13:42:29.123456789');
+----
+2020-09-08T13:42:29.123456789-04:00
+
+## test integers
+query T
+select arrow_typeof(to_timestamp_seconds(61))
+----
+Timestamp(s, "America/New_York")
+
+query T
+select arrow_typeof(to_timestamp_millis(61))
+----
+Timestamp(ms, "America/New_York")
+
+query T
+select arrow_typeof(to_timestamp_micros(61))
+----
+Timestamp(µs, "America/New_York")
+
+query T
+select arrow_typeof(to_timestamp_nanos(61))
+----
+Timestamp(ns, "America/New_York")
+
+query T
+select arrow_typeof(to_timestamp(61))
+----
+Timestamp(ns, "America/New_York")
+
+## Reset timezone for other tests
+statement ok
+RESET datafusion.execution.time_zone

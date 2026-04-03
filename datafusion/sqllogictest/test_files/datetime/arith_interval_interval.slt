@@ -1,0 +1,27 @@
+# interval + interval → interval
+# Add intervals
+# interval '1 day' + interval '1 hour' → 1 day 01:00:00
+
+query ?
+SELECT interval '1 day' + interval '1 hour'
+----
+1 days 1 hours
+
+query T
+SELECT arrow_typeof(interval '1 day' + interval '1 hour')
+----
+Interval(MonthDayNano)
+
+# interval - interval → interval
+# Subtract intervals
+# interval '1 day' - interval '1 hour' → 1 day -01:00:00
+
+query ?
+SELECT interval '1 day' - interval '1 hour'
+----
+1 days -1 hours
+
+query T
+SELECT arrow_typeof(interval '1 day' - interval '1 hour')
+----
+Interval(MonthDayNano)

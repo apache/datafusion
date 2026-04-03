@@ -17,13 +17,17 @@
   under the License.
 -->
 
-# `datafusion-proto`: Apache DataFusion Protobuf Serialization / Deserialization
+# Apache DataFusion Protobuf Serialization / Deserialization
 
-This crate contains code to convert [Apache DataFusion] plans to and from
-bytes, which can be useful for sending plans over the network, for example
-when building a distributed query engine.
+[Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
+
+This crate contains code to convert DataFusion plans to and from bytes using [Protocol Buffers],
+which can be useful for sending plans over the network, for example when building a distributed
+query engine.
 
 See [API Docs] for details and examples.
 
-[apache datafusion]: https://datafusion.apache.org
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
+[protocol buffers]: https://protobuf.dev/
 [api docs]: http://docs.rs/datafusion-proto/latest

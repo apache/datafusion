@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::utils::NameTracker;
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::utils::NameTracker;
 use async_recursion::async_recursion;
-use datafusion::common::{not_impl_err, Column};
+use datafusion::common::{Column, not_impl_err};
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use std::collections::HashSet;

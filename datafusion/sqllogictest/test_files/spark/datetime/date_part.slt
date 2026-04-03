@@ -1,0 +1,276 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# YEAR
+query I
+SELECT date_part('YEAR'::string, '2000-01-01'::date);
+----
+2000
+
+query I
+SELECT date_part('YEARS'::string, '2000-01-01'::date);
+----
+2000
+
+query I
+SELECT date_part('Y'::string, '2000-01-01'::date);
+----
+2000
+
+query I
+SELECT date_part('YR'::string, '2000-01-01'::date);
+----
+2000
+
+query I
+SELECT date_part('YRS'::string, '2000-01-01'::date);
+----
+2000
+
+# YEAROFWEEK
+query I
+SELECT date_part('YEAROFWEEK'::string, '2000-01-01'::date);
+----
+1999
+
+# QUARTER
+query I
+SELECT date_part('QUARTER'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('QTR'::string, '2000-01-01'::date);
+----
+1
+
+# MONTH
+query I
+SELECT date_part('MONTH'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('MON'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('MONS'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('MONTHS'::string, '2000-01-01'::date);
+----
+1
+
+# WEEK
+query I
+SELECT date_part('WEEK'::string, '2000-01-01'::date);
+----
+52
+
+query I
+SELECT date_part('WEEKS'::string, '2000-01-01'::date);
+----
+52
+
+query I
+SELECT date_part('W'::string, '2000-01-01'::date);
+----
+52
+
+# DAYS
+query I
+SELECT date_part('DAY'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('D'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('DAYS'::string, '2000-01-01'::date);
+----
+1
+
+# DAYOFWEEK
+query I
+SELECT date_part('DAYOFWEEK'::string, '2000-01-01'::date);
+----
+7
+
+query I
+SELECT date_part('DOW'::string, '2000-01-01'::date);
+----
+7
+
+# DAYOFWEEK_ISO
+query I
+SELECT date_part('DAYOFWEEK_ISO'::string, '2000-01-01'::date);
+----
+6
+
+query I
+SELECT date_part('DOW_ISO'::string, '2000-01-01'::date);
+----
+6
+
+# DOY
+query I
+SELECT date_part('DOY'::string, '2000-01-01'::date);
+----
+1
+
+# HOUR
+query I
+SELECT date_part('HOUR'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+query I
+SELECT date_part('H'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+query I
+SELECT date_part('HOURS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+query I
+SELECT date_part('HR'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+query I
+SELECT date_part('HRS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+# MINUTE
+query I
+SELECT date_part('MINUTE'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+query I
+SELECT date_part('M'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+query I
+SELECT date_part('MIN'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+query I
+SELECT date_part('MINS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+query I
+SELECT date_part('MINUTES'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+# SECOND
+query I
+SELECT date_part('SECOND'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+query I
+SELECT date_part('S'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+query I
+SELECT date_part('SEC'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+query I
+SELECT date_part('SECONDS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+query I
+SELECT date_part('SECS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+# NULL input
+query I
+SELECT date_part('year'::string, NULL::timestamp);
+----
+NULL
+
+query error Internal error: First argument of `DATE_PART` must be non-null scalar Utf8
+SELECT date_part(NULL::string, '2000-01-01'::date);
+
+# Invalid part
+query error DataFusion error: Execution error: Date part 'test' not supported
+SELECT date_part('test'::string, '2000-01-01'::date);
+
+query I
+SELECT date_part('year', column1)
+FROM VALUES
+('2022-03-15'::date),
+('1999-12-31'::date),
+('2000-01-01'::date),
+(NULL::date);
+----
+2022
+1999
+2000
+NULL
+
+query I
+SELECT date_part('minutes', column1)
+FROM VALUES
+('2022-03-15 12:30:45'::timestamp),
+('1999-12-31 12:32:45'::timestamp),
+('2000-01-01 12:00:45'::timestamp),
+(NULL::timestamp);
+----
+30
+32
+0
+NULL
+
+# alias datepart
+query I
+SELECT datepart('YEAR'::string, '2000-01-01'::date);
+----
+2000
+
+query I
+SELECT datepart('year', column1)
+FROM VALUES
+('2022-03-15'::date),
+('1999-12-31'::date),
+('2000-01-01'::date),
+(NULL::date);
+----
+2022
+1999
+2000
+NULL

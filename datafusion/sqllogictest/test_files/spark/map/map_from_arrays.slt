@@ -1,0 +1,136 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Spark doctests
+query ?
+SELECT map_from_arrays(array(1.0, 3.0), array('2', '4'));
+----
+{1.0: 2, 3.0: 4}
+
+query ?
+SELECT map_from_arrays(array(2, 5), array('a', 'b'));
+----
+{2: a, 5: b}
+
+query ?
+SELECT map_from_arrays(array(1, 2), array('a', NULL));
+----
+{1: a, 2: NULL}
+
+query ?
+SELECT map_from_arrays(cast(array() as array<int>), cast(array() as array<string>));
+----
+{}
+
+# Tests with DataType:Null input arrays
+query ?
+SELECT map_from_arrays(NULL, NULL);
+----
+NULL
+
+query ?
+SELECT map_from_arrays(array(1), NULL);
+----
+NULL
+
+query ?
+SELECT map_from_arrays(NULL, array(1));
+----
+NULL
+
+# Tests with different inner lists lengths
+query error DataFusion error: Execution error: map_deduplicate_keys: keys and values lists in the same row must have equal lengths
+SELECT map_from_arrays(array(1, 2, 3), array('a', 'b'));
+
+query error DataFusion error: Execution error: map_deduplicate_keys: keys and values lists in the same row must have equal lengths
+SELECT map_from_arrays(array(), array('a', 'b'));
+
+query error DataFusion error: Execution error: map_deduplicate_keys: keys and values lists in the same row must have equal lengths
+SELECT map_from_arrays(array(1, 2, 3), array());
+
+query error DataFusion error: Execution error: map_deduplicate_keys: keys and values lists in the same row must have equal lengths
+select map_from_arrays(a, b)
+from values 
+    (array[1], array[1]),
+    (array[2, 3, 4], array[2, 3]),
+    (array[5], array[4])
+as tab(a, b);
+
+#Test with multiple rows: good, empty and nullable
+query ?
+select map_from_arrays(a, b)
+from values 
+    (array[1], array['a']), 
+    (NULL, NULL),
+    (array[1,2,3], NULL),
+    (NULL, array['b', 'c']), 
+    (array[4, 5], array['d', 'e']), 
+    (array[], array[]),
+    (array[6, 7, 8], array['f', 'g', 'h']) 
+as tab(a, b);
+----
+{1: a}
+NULL
+NULL
+NULL
+{4: d, 5: e}
+{}
+{6: f, 7: g, 8: h}
+
+# Test with complex types
+query ?
+SELECT map_from_arrays(array(array('a', 'b'), array('c', 'd')), array(struct(1, 2, 3), struct(4, 5, 6)));
+----
+{[a, b]: {c0: 1, c1: 2, c2: 3}, [c, d]: {c0: 4, c1: 5, c2: 6}}
+
+# Test with nested function calls
+query ?
+SELECT
+    map_from_arrays(
+        array['outer_key1', 'outer_key2'],
+        array[
+            -- value for outer_key1: a map itself
+            map_from_arrays(
+                array['inner_a', 'inner_b'],
+                array[1, 2]
+            ),
+            -- value for outer_key2: another map
+            map_from_arrays(
+                array['inner_x', 'inner_y', 'inner_z'],
+                array[10, 20, 30]
+            )
+        ]
+    ) AS nested_map;
+----
+{outer_key1: {inner_a: 1, inner_b: 2}, outer_key2: {inner_x: 10, inner_y: 20, inner_z: 30}}
+
+# Test with duplicate keys
+query ?
+SELECT map_from_arrays(array(true, false, true), array('a', NULL, 'b'));
+----
+{false: NULL, true: b}
+
+# Tests with different list types
+query ?
+SELECT map_from_arrays(arrow_cast(array(2, 5), 'LargeList(Int32)'), arrow_cast(array('a', 'b'), 'FixedSizeList(2, Utf8)'));
+----
+{2: a, 5: b}
+
+query ?
+SELECT map_from_arrays(arrow_cast(array('a', 'b', 'c'), 'FixedSizeList(3, Utf8)'), arrow_cast(array(1, 2, 3), 'LargeList(Int32)'));
+----
+{a: 1, b: 2, c: 3}

@@ -183,7 +183,7 @@ FROM
 and return _true_ or _false_.
 Rows that evaluate to _false_ or NULL are filtered from results.
 The `WHERE` clause supports correlated and non-correlated subqueries
-as well as scalar and non-scalar subqueries (depending on the the operator used
+as well as scalar and non-scalar subqueries (depending on the operator used
 in the predicate expression).
 
 ```sql
@@ -293,7 +293,7 @@ returned by aggregate functions in the `SELECT` clause to the result of the
 subquery and return _true_ or _false_.
 Rows that evaluate to _false_ are filtered from results.
 The `HAVING` clause supports correlated and non-correlated subqueries
-as well as scalar and non-scalar subqueries (depending on the the operator used
+as well as scalar and non-scalar subqueries (depending on the operator used
 in the predicate expression).
 
 ```sql

@@ -21,10 +21,10 @@ use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow::array::{Array, ArrayRef, ListArray};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{cast::as_map_array, exec_err, internal_err, Result};
+use datafusion_common::{Result, cast::as_map_array, exec_err, internal_err};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -57,7 +57,7 @@ SELECT map_values(map([100, 5], [42, 43]));
         description = "Map expression. Can be a constant, column, or function, and any combination of map operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(crate) struct MapValuesFunc {
     signature: Signature,
 }
@@ -111,10 +111,7 @@ impl ScalarUDFImpl for MapValuesFunc {
         .into())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(map_values_inner)(&args.args)
     }
 

@@ -17,7 +17,7 @@
 
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -64,7 +64,7 @@ select struct(a as field_a, b) from t;
         description = "Expression to include in the output struct. Can be a constant, column, or function, any combination of arithmetic or string operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StructFunc {
     signature: Signature,
     aliases: Vec<String>,

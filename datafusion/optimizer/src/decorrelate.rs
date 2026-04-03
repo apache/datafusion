@@ -26,17 +26,16 @@ use crate::simplify_expressions::ExprSimplifier;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{plan_err, Column, DFSchemaRef, HashMap, Result, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, HashMap, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    expr, lit, BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator,
+    BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan, LogicalPlanBuilder,
+    Operator, expr, lit,
 };
-use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// This struct rewrite the sub query plan by pull up the correlated
 /// expressions(contains outer reference columns) from the inner subquery's
@@ -494,9 +493,12 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
                         if func.name() == "count" {
-                            Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                            Transformed::yes(Expr::Literal(
+                                ScalarValue::Int64(Some(0)),
+                                None,
+                            ))
                         } else {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
+                            Transformed::yes(Expr::Literal(ScalarValue::Null, None))
                         }
                     }
                     _ => Transformed::no(expr),
@@ -506,8 +508,9 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         let result_expr = result_expr.unalias();
-        let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+        let info = SimplifyContext::builder()
+            .with_schema(Arc::clone(schema))
+            .build();
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
@@ -540,8 +543,9 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         if result_expr.ne(expr) {
-            let props = ExecutionProps::new();
-            let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+            let info = SimplifyContext::builder()
+                .with_schema(Arc::clone(schema))
+                .build();
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
@@ -581,16 +585,15 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         .data()?;
 
     let pull_up_expr = if result_expr.ne(filter_expr) {
-        let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(schema);
+        let info = SimplifyContext::builder().with_schema(schema).build();
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
             // evaluate to false or null on empty batch, no need to pull up
-            Expr::Literal(ScalarValue::Null)
-            | Expr::Literal(ScalarValue::Boolean(Some(false))) => None,
+            Expr::Literal(ScalarValue::Null, _)
+            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => None,
             // evaluate to true on empty batch, need to pull up the expr
-            Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+            Expr::Literal(ScalarValue::Boolean(Some(true)), _) => {
                 for (name, exprs) in input_expr_result_map_for_count_bug {
                     expr_result_map_for_count_bug.insert(name.clone(), exprs.clone());
                 }
@@ -605,7 +608,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
                             Box::new(result_expr.clone()),
                             Box::new(input_expr.clone()),
                         )],
-                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null, None))),
                     });
                     let expr_key = new_expr.schema_name().to_string();
                     expr_result_map_for_count_bug.insert(expr_key, new_expr);

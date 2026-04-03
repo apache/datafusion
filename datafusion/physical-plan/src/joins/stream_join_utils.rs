@@ -22,20 +22,24 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
+use crate::joins::MapOffset;
+use crate::joins::join_hash_map::{
+    contain_hashes, get_matched_indices, get_matched_indices_with_limit_offset,
+    update_from_iter,
+};
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
-use crate::{metrics, ExecutionPlan};
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::{ExecutionPlan, metrics};
 
 use arrow::array::{
-    ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch,
+    ArrowPrimitiveType, BooleanArray, BooleanBufferBuilder, NativeAdapter,
+    PrimitiveArray, RecordBatch,
 };
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::memory::estimate_memory_size;
-use datafusion_common::{
-    arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
-};
+use datafusion_common::{HashSet, JoinSide, Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
@@ -47,26 +51,61 @@ use hashbrown::HashTable;
 
 /// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
 impl JoinHashMapType for PruningJoinHashMap {
-    type NextType = VecDeque<u64>;
-
     // Extend with zero
     fn extend_zero(&mut self, len: usize) {
         self.next.resize(self.next.len() + len, 0)
     }
 
-    /// Get mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut HashTable<(u64, u64)>, &mut Self::NextType) {
-        (&mut self.map, &mut self.next)
+    fn update_from_iter<'a>(
+        &mut self,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
+        deleted_offset: usize,
+    ) {
+        let slice: &mut [u64] = self.next.make_contiguous();
+        update_from_iter::<u64>(&mut self.map, slice, iter, deleted_offset);
     }
 
-    /// Get a reference to the hash map.
-    fn get_map(&self) -> &HashTable<(u64, u64)> {
-        &self.map
+    fn get_matched_indices<'a>(
+        &self,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
+        deleted_offset: Option<usize>,
+    ) -> (Vec<u32>, Vec<u64>) {
+        // Flatten the deque
+        let next: Vec<u64> = self.next.iter().copied().collect();
+        get_matched_indices::<u64>(&self.map, &next, iter, deleted_offset)
     }
 
-    /// Get a reference to the next.
-    fn get_list(&self) -> &Self::NextType {
-        &self.next
+    fn get_matched_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        limit: usize,
+        offset: MapOffset,
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<MapOffset> {
+        // Flatten the deque
+        let next: Vec<u64> = self.next.iter().copied().collect();
+        get_matched_indices_with_limit_offset::<u64>(
+            &self.map,
+            &next,
+            hash_values,
+            limit,
+            offset,
+            input_indices,
+            match_indices,
+        )
+    }
+
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
+        contain_hashes(&self.map, hash_values)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
     }
 }
 
@@ -259,7 +298,7 @@ pub fn map_origin_col_to_filter_col(
 ///    the [`convert_filter_columns`] function.
 /// 5. Searches for the converted filter expression in the filter expression using the
 ///    [`check_filter_expr_contains_sort_information`] function.
-/// 6. If an exact match is found, returns the converted filter expression as [`Some(Arc<dyn PhysicalExpr>)`].
+/// 6. If an exact match is found, returns the converted filter expression as `Some(Arc<dyn PhysicalExpr>)`.
 /// 7. If all columns are not included or an exact match is not found, returns [`None`].
 ///
 /// Examples:
@@ -628,7 +667,6 @@ pub fn combine_two_batches(
 /// * `visited` - A hash set to store the visited indices.
 /// * `offset` - An offset to the indices in the `PrimitiveArray`.
 /// * `indices` - The input `PrimitiveArray` of type `T` which stores the indices to be recorded.
-///
 pub fn record_visited_indices<T: ArrowPrimitiveType>(
     visited: &mut HashSet<usize>,
     offset: usize,
@@ -656,25 +694,25 @@ pub struct StreamJoinMetrics {
     pub(crate) right: StreamJoinSideMetrics,
     /// Memory used by sides in bytes
     pub(crate) stream_memory_usage: metrics::Gauge,
-    /// Number of batches produced by this operator
-    pub(crate) output_batches: metrics::Count,
     /// Number of rows produced by this operator
-    pub(crate) output_rows: metrics::Count,
+    pub(crate) baseline_metrics: BaselineMetrics,
 }
 
 impl StreamJoinMetrics {
     pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
         let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+            MetricBuilder::new(metrics).counter("left_input_batches", partition);
+        let input_rows =
+            MetricBuilder::new(metrics).counter("left_input_rows", partition);
         let left = StreamJoinSideMetrics {
             input_batches,
             input_rows,
         };
 
         let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+            MetricBuilder::new(metrics).counter("right_input_batches", partition);
+        let input_rows =
+            MetricBuilder::new(metrics).counter("right_input_rows", partition);
         let right = StreamJoinSideMetrics {
             input_batches,
             input_rows,
@@ -683,17 +721,11 @@ impl StreamJoinMetrics {
         let stream_memory_usage =
             MetricBuilder::new(metrics).gauge("stream_memory_usage", partition);
 
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
-
-        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
-
         Self {
             left,
             right,
-            output_batches,
             stream_memory_usage,
-            output_rows,
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
         }
     }
 }
@@ -996,46 +1028,54 @@ pub mod tests {
         let left_schema = Arc::new(left_schema);
         let right_schema = Arc::new(right_schema);
 
-        assert!(build_filter_input_order(
-            JoinSide::Left,
-            &filter,
-            &left_schema,
-            &PhysicalSortExpr {
-                expr: col("la1", left_schema.as_ref())?,
-                options: SortOptions::default(),
-            }
-        )?
-        .is_some());
-        assert!(build_filter_input_order(
-            JoinSide::Left,
-            &filter,
-            &left_schema,
-            &PhysicalSortExpr {
-                expr: col("lt1", left_schema.as_ref())?,
-                options: SortOptions::default(),
-            }
-        )?
-        .is_none());
-        assert!(build_filter_input_order(
-            JoinSide::Right,
-            &filter,
-            &right_schema,
-            &PhysicalSortExpr {
-                expr: col("ra1", right_schema.as_ref())?,
-                options: SortOptions::default(),
-            }
-        )?
-        .is_some());
-        assert!(build_filter_input_order(
-            JoinSide::Right,
-            &filter,
-            &right_schema,
-            &PhysicalSortExpr {
-                expr: col("rb1", right_schema.as_ref())?,
-                options: SortOptions::default(),
-            }
-        )?
-        .is_none());
+        assert!(
+            build_filter_input_order(
+                JoinSide::Left,
+                &filter,
+                &left_schema,
+                &PhysicalSortExpr {
+                    expr: col("la1", left_schema.as_ref())?,
+                    options: SortOptions::default(),
+                }
+            )?
+            .is_some()
+        );
+        assert!(
+            build_filter_input_order(
+                JoinSide::Left,
+                &filter,
+                &left_schema,
+                &PhysicalSortExpr {
+                    expr: col("lt1", left_schema.as_ref())?,
+                    options: SortOptions::default(),
+                }
+            )?
+            .is_none()
+        );
+        assert!(
+            build_filter_input_order(
+                JoinSide::Right,
+                &filter,
+                &right_schema,
+                &PhysicalSortExpr {
+                    expr: col("ra1", right_schema.as_ref())?,
+                    options: SortOptions::default(),
+                }
+            )?
+            .is_some()
+        );
+        assert!(
+            build_filter_input_order(
+                JoinSide::Right,
+                &filter,
+                &right_schema,
+                &PhysicalSortExpr {
+                    expr: col("rb1", right_schema.as_ref())?,
+                    options: SortOptions::default(),
+                }
+            )?
+            .is_none()
+        );
 
         Ok(())
     }

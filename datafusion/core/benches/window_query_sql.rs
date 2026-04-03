@@ -15,23 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-extern crate arrow;
-extern crate datafusion;
-
 mod data_utils;
-use crate::criterion::Criterion;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::create_table_provider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use parking_lot::Mutex;
+use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
+#[expect(clippy::needless_pass_by_value)]
 fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
-    criterion::black_box(rt.block_on(df.collect()).unwrap());
+    black_box(rt.block_on(df.collect()).unwrap());
 }
 
 fn create_context(

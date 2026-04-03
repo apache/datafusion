@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    to_substrait_named_struct, DefaultSubstraitProducer, SubstraitProducer,
+    DefaultSubstraitProducer, SubstraitProducer, to_substrait_named_struct,
 };
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{LogicalPlan, SubqueryAlias};
-use substrait::proto::{plan_rel, Plan, PlanRel, Rel, RelRoot};
+use substrait::proto::{Plan, PlanRel, Rel, RelRoot, plan_rel};
 use substrait::version;
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
@@ -36,7 +36,7 @@ pub fn to_substrait_plan(
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
             input: Some(*producer.handle_plan(plan)?),
-            names: to_substrait_named_struct(plan.schema())?.names,
+            names: to_substrait_named_struct(&mut producer, plan.schema())?.names,
         })),
     }];
 
@@ -44,12 +44,13 @@ pub fn to_substrait_plan(
     let extensions = producer.get_extensions();
     Ok(Box::new(Plan {
         version: Some(version::version_with_producer("datafusion")),
-        extension_uris: vec![],
+        extension_urns: vec![],
         extensions: extensions.into(),
         relations: plan_rels,
         advanced_extensions: None,
         expected_type_urls: vec![],
         parameter_bindings: vec![],
+        type_aliases: vec![],
     }))
 }
 

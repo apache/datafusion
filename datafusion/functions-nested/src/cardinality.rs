@@ -25,13 +25,13 @@ use arrow::datatypes::{
     DataType,
     DataType::{LargeList, List, Map, Null, UInt64},
 };
+use datafusion_common::Result;
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::exec_err;
-use datafusion_common::utils::{take_function_args, ListCoercion};
-use datafusion_common::Result;
+use datafusion_common::utils::{ListCoercion, take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -58,7 +58,6 @@ impl Cardinality {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![],
         }
     }
 }
@@ -80,10 +79,9 @@ impl Cardinality {
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Cardinality {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for Cardinality {
@@ -107,15 +105,8 @@ impl ScalarUDFImpl for Cardinality {
         Ok(UInt64)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(cardinality_inner)(&args.args)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -123,11 +114,10 @@ impl ScalarUDFImpl for Cardinality {
     }
 }
 
-/// Cardinality SQL function
-pub fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("cardinality", args)?;
     match array.data_type() {
-        Null => Ok(Arc::new(UInt64Array::from_value(0, array.len()))),
+        Null => Ok(Arc::new(UInt64Array::new_null(array.len()))),
         List(_) => {
             let list_array = as_list_array(array)?;
             generic_list_cardinality::<i32>(list_array)
@@ -159,9 +149,14 @@ fn generic_list_cardinality<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let result = array
         .iter()
-        .map(|arr| match crate::utils::compute_array_dims(arr)? {
-            Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
-            None => Ok(None),
+        .map(|arr| match arr {
+            Some(arr) if arr.is_empty() => Ok(Some(0u64)),
+            arr => match crate::utils::compute_array_dims(arr)? {
+                Some(vector) => {
+                    Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>()))
+                }
+                None => Ok(None),
+            },
         })
         .collect::<Result<UInt64Array>>()?;
     Ok(Arc::new(result) as ArrayRef)

@@ -22,17 +22,40 @@ use std::fmt::{self, Debug, Display};
 use crate::{Result, ScalarValue};
 
 use crate::error::_plan_err;
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use crate::utils::aggregate::precision_add;
+use arrow::datatypes::{DataType, Schema};
 
 /// Represents a value with a degree of certainty. `Precision` is used to
 /// propagate information the precision of statistical values.
 #[derive(Clone, PartialEq, Eq, Default, Copy)]
 pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
-    /// The exact value is known
+    /// The exact value is known. Used for guaranteeing correctness.
+    ///
+    /// Comes from definitive sources such as:
+    /// - Parquet file metadata (row counts, byte sizes)
+    /// - In-memory RecordBatch data (actual row counts, byte sizes, null counts)
+    /// - and more...
     Exact(T),
-    /// The value is not known exactly, but is likely close to this value
+    /// The value is not known exactly, but is likely close to this value.
+    /// Used for cost-based optimizations.
+    ///
+    /// Some operations that would result in `Inexact(T)` would be:
+    /// - Applying a filter (selectivity is unknown)
+    /// - Mixing exact and inexact values in arithmetic
+    /// - and more...
     Inexact(T),
-    /// Nothing is known about the value
+    /// Nothing is known about the value. This is the default state.
+    ///
+    /// Acts as an absorbing element in arithmetic -> any operation
+    /// involving `Absent` yields `Absent`. [`Precision::to_inexact`]
+    /// on `Absent` returns `Absent`, not `Inexact` — it represents
+    /// a fundamentally different state.
+    ///
+    /// Common sources include:
+    /// - Data sources without statistics
+    /// - Parquet columns missing from file metadata
+    /// - Statistics that cannot be derived for an operation (e.g.,
+    ///   `distinct_count` after a union, `total_byte_size` for joins)
     #[default]
     Absent,
 }
@@ -120,10 +143,15 @@ impl Precision<usize> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn add(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a + b),
+            (Precision::Exact(a), Precision::Exact(b)) => a.checked_add(*b).map_or_else(
+                || Precision::Inexact(a.saturating_add(*b)),
+                Precision::Exact,
+            ),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a + b),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(a.saturating_add(*b))
+            }
             (_, _) => Precision::Absent,
         }
     }
@@ -133,10 +161,15 @@ impl Precision<usize> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn sub(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a - b),
+            (Precision::Exact(a), Precision::Exact(b)) => a.checked_sub(*b).map_or_else(
+                || Precision::Inexact(a.saturating_sub(*b)),
+                Precision::Exact,
+            ),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a - b),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(a.saturating_sub(*b))
+            }
             (_, _) => Precision::Absent,
         }
     }
@@ -146,10 +179,15 @@ impl Precision<usize> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn multiply(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a * b),
+            (Precision::Exact(a), Precision::Exact(b)) => a.checked_mul(*b).map_or_else(
+                || Precision::Inexact(a.saturating_mul(*b)),
+                Precision::Exact,
+            ),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a * b),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(a.saturating_mul(*b))
+            }
             (_, _) => Precision::Absent,
         }
     }
@@ -168,15 +206,22 @@ impl Precision<ScalarValue> {
     /// Calculates the sum of two (possibly inexact) [`ScalarValue`] values,
     /// conservatively propagating exactness information. If one of the input
     /// values is [`Precision::Absent`], the result is `Absent` too.
+    ///
+    /// Uses [`ScalarValue::add_checked`] so that integer overflow returns
+    /// an error (mapped to `Absent`) instead of silently wrapping.
+    ///
+    /// For performance-sensitive paths prefer `precision_add` which
+    /// avoids the Arrow array round-trip.
     pub fn add(&self, other: &Precision<ScalarValue>) -> Precision<ScalarValue> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => {
-                a.add(b).map(Precision::Exact).unwrap_or(Precision::Absent)
-            }
+            (Precision::Exact(a), Precision::Exact(b)) => a
+                .add_checked(b)
+                .map(Precision::Exact)
+                .unwrap_or(Precision::Absent),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
             | (Precision::Inexact(a), Precision::Inexact(b)) => a
-                .add(b)
+                .add_checked(b)
                 .map(Precision::Inexact)
                 .unwrap_or(Precision::Absent),
             (_, _) => Precision::Absent,
@@ -268,9 +313,14 @@ impl From<Precision<usize>> for Precision<ScalarValue> {
 /// and the transformations output are not always predictable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statistics {
-    /// The number of table rows.
+    /// The number of rows estimated to be scanned.
     pub num_rows: Precision<usize>,
-    /// Total bytes of the table rows.
+    /// The total bytes of the output data.
+    ///
+    /// Note that this is not the same as the total bytes that may be scanned,
+    /// processed, etc.
+    /// E.g. we may read 1GB of data from a Parquet file but the Arrow data
+    /// the node produces may be 2GB; it's this 2GB that is tracked here.
     pub total_byte_size: Precision<usize>,
     /// Statistics on a column level.
     ///
@@ -299,6 +349,31 @@ impl Statistics {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: Statistics::unknown_column(schema),
+        }
+    }
+
+    /// Calculates `total_byte_size` based on the schema and `num_rows`.
+    /// If any of the columns has non-primitive width, `total_byte_size` is set to inexact.
+    pub fn calculate_total_byte_size(&mut self, schema: &Schema) {
+        let mut row_size = Some(0);
+        for field in schema.fields() {
+            match field.data_type().primitive_width() {
+                Some(width) => {
+                    row_size = row_size.map(|s| s + width);
+                }
+                None => {
+                    row_size = None;
+                    break;
+                }
+            }
+        }
+        match row_size {
+            None => {
+                self.total_byte_size = self.total_byte_size.to_inexact();
+            }
+            Some(size) => {
+                self.total_byte_size = self.num_rows.multiply(&Precision::Exact(size));
+            }
         }
     }
 
@@ -347,12 +422,17 @@ impl Statistics {
     /// For example, if we had statistics for columns `{"a", "b", "c"}`,
     /// projecting to `vec![2, 1]` would return statistics for columns `{"c",
     /// "b"}`.
-    pub fn project(mut self, projection: Option<&Vec<usize>>) -> Self {
-        let Some(projection) = projection else {
+    pub fn project(self, projection: Option<&impl AsRef<[usize]>>) -> Self {
+        let projection = projection.map(AsRef::as_ref);
+        self.project_impl(projection)
+    }
+
+    fn project_impl(mut self, projection: Option<&[usize]>) -> Self {
+        let Some(projection) = projection.map(AsRef::as_ref) else {
             return self;
         };
 
-        #[allow(clippy::large_enum_variant)]
+        #[expect(clippy::large_enum_variant)]
         enum Slot {
             /// The column is taken and put into the specified statistics location
             Taken(usize),
@@ -366,7 +446,7 @@ impl Statistics {
             .map(Slot::Present)
             .collect();
 
-        for idx in projection {
+        for idx in projection.iter() {
             let next_idx = self.column_statistics.len();
             let slot = std::mem::replace(
                 columns.get_mut(*idx).expect("projection out of bounds"),
@@ -391,12 +471,14 @@ impl Statistics {
     /// parameter to compute global statistics in a multi-partition setting.
     pub fn with_fetch(
         mut self,
-        schema: SchemaRef,
         fetch: Option<usize>,
         skip: usize,
         n_partitions: usize,
     ) -> Result<Self> {
         let fetch_val = fetch.unwrap_or(usize::MAX);
+
+        // Get the ratio of rows after / rows before on a per-partition basis
+        let num_rows_before = self.num_rows;
 
         self.num_rows = match self {
             Statistics {
@@ -431,8 +513,7 @@ impl Statistics {
                     // At this point we know that we were given a `fetch` value
                     // as the `None` case would go into the branch above. Since
                     // the input has more rows than `fetch + skip`, the number
-                    // of rows will be the `fetch`, but we won't be able to
-                    // predict the other statistics.
+                    // of rows will be the `fetch`, other statistics will have to be downgraded to inexact.
                     check_num_rows(
                         fetch_val.checked_mul(n_partitions),
                         // We know that we have an estimate for the number of rows:
@@ -445,8 +526,55 @@ impl Statistics {
                 ..
             } => check_num_rows(fetch.and_then(|v| v.checked_mul(n_partitions)), false),
         };
-        self.column_statistics = Statistics::unknown_column(&schema);
-        self.total_byte_size = Precision::Absent;
+        let ratio: f64 = match (num_rows_before, self.num_rows) {
+            (
+                Precision::Exact(nr_before) | Precision::Inexact(nr_before),
+                Precision::Exact(nr_after) | Precision::Inexact(nr_after),
+            ) => {
+                if nr_before == 0 {
+                    0.0
+                } else {
+                    nr_after as f64 / nr_before as f64
+                }
+            }
+            _ => 0.0,
+        };
+        self.column_statistics = self
+            .column_statistics
+            .into_iter()
+            .map(|cs| {
+                let mut cs = cs.to_inexact();
+                // Scale byte_size by the row ratio
+                cs.byte_size = match cs.byte_size {
+                    Precision::Exact(n) | Precision::Inexact(n) => {
+                        Precision::Inexact((n as f64 * ratio) as usize)
+                    }
+                    Precision::Absent => Precision::Absent,
+                };
+                cs
+            })
+            .collect();
+
+        // Compute total_byte_size as sum of column byte_size values if all are present,
+        // otherwise fall back to scaling the original total_byte_size
+        let sum_scan_bytes: Option<usize> = self
+            .column_statistics
+            .iter()
+            .map(|cs| cs.byte_size.get_value().copied())
+            .try_fold(0usize, |acc, val| val.map(|v| acc + v));
+
+        self.total_byte_size = match sum_scan_bytes {
+            Some(sum) => Precision::Inexact(sum),
+            None => {
+                // Fall back to scaling original total_byte_size if not all columns have byte_size
+                match &self.total_byte_size {
+                    Precision::Exact(n) | Precision::Inexact(n) => {
+                        Precision::Inexact((*n as f64 * ratio) as usize)
+                    }
+                    Precision::Absent => Precision::Absent,
+                }
+            }
+        };
         Ok(self)
     }
 
@@ -456,23 +584,6 @@ impl Statistics {
     /// If not, maybe you can call `SchemaMapper::map_column_statistics` to make them consistent.
     ///
     /// Returns an error if the statistics do not match the specified schemas.
-    pub fn try_merge_iter<'a, I>(items: I, schema: &Schema) -> Result<Statistics>
-    where
-        I: IntoIterator<Item = &'a Statistics>,
-    {
-        let mut items = items.into_iter();
-
-        let Some(init) = items.next() else {
-            return Ok(Statistics::new_unknown(schema));
-        };
-        items.try_fold(init.clone(), |acc: Statistics, item_stats: &Statistics| {
-            acc.try_merge(item_stats)
-        })
-    }
-
-    /// Merge this Statistics value with another Statistics value.
-    ///
-    /// Returns an error if the statistics do not match (different schemas).
     ///
     /// # Example
     /// ```
@@ -480,64 +591,111 @@ impl Statistics {
     /// # use arrow::datatypes::{Field, Schema, DataType};
     /// # use datafusion_common::stats::Precision;
     /// let stats1 = Statistics::default()
-    ///   .with_num_rows(Precision::Exact(1))
-    ///   .with_total_byte_size(Precision::Exact(2))
-    ///   .add_column_statistics(ColumnStatistics::new_unknown()
-    ///      .with_null_count(Precision::Exact(3))
-    ///      .with_min_value(Precision::Exact(ScalarValue::from(4)))
-    ///      .with_max_value(Precision::Exact(ScalarValue::from(5)))
-    ///   );
+    ///     .with_num_rows(Precision::Exact(10))
+    ///     .add_column_statistics(
+    ///         ColumnStatistics::new_unknown()
+    ///             .with_min_value(Precision::Exact(ScalarValue::from(1)))
+    ///             .with_max_value(Precision::Exact(ScalarValue::from(100)))
+    ///             .with_sum_value(Precision::Exact(ScalarValue::from(500))),
+    ///     );
     ///
     /// let stats2 = Statistics::default()
-    ///   .with_num_rows(Precision::Exact(10))
-    ///   .with_total_byte_size(Precision::Inexact(20))
-    ///   .add_column_statistics(ColumnStatistics::new_unknown()
-    ///       // absent null count
-    ///      .with_min_value(Precision::Exact(ScalarValue::from(40)))
-    ///      .with_max_value(Precision::Exact(ScalarValue::from(50)))
-    ///   );
+    ///     .with_num_rows(Precision::Exact(20))
+    ///     .add_column_statistics(
+    ///         ColumnStatistics::new_unknown()
+    ///             .with_min_value(Precision::Exact(ScalarValue::from(5)))
+    ///             .with_max_value(Precision::Exact(ScalarValue::from(200)))
+    ///             .with_sum_value(Precision::Exact(ScalarValue::from(1000))),
+    ///     );
     ///
-    /// let merged_stats = stats1.try_merge(&stats2).unwrap();
-    /// let expected_stats = Statistics::default()
-    ///   .with_num_rows(Precision::Exact(11))
-    ///   .with_total_byte_size(Precision::Inexact(22)) // inexact in stats2 --> inexact
-    ///   .add_column_statistics(
-    ///     ColumnStatistics::new_unknown()
-    ///       .with_null_count(Precision::Absent) // missing from stats2 --> absent
-    ///       .with_min_value(Precision::Exact(ScalarValue::from(4)))
-    ///       .with_max_value(Precision::Exact(ScalarValue::from(50)))
-    ///   );
+    /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+    /// let merged = Statistics::try_merge_iter(
+    ///     &[stats1, stats2],
+    ///     &schema,
+    /// ).unwrap();
     ///
-    /// assert_eq!(merged_stats, expected_stats)
+    /// assert_eq!(merged.num_rows, Precision::Exact(30));
+    /// assert_eq!(merged.column_statistics[0].min_value,
+    ///     Precision::Exact(ScalarValue::from(1)));
+    /// assert_eq!(merged.column_statistics[0].max_value,
+    ///     Precision::Exact(ScalarValue::from(200)));
+    /// assert_eq!(merged.column_statistics[0].sum_value,
+    ///     Precision::Exact(ScalarValue::from(1500)));
     /// ```
-    pub fn try_merge(self, other: &Statistics) -> Result<Self> {
-        let Self {
-            mut num_rows,
-            mut total_byte_size,
-            mut column_statistics,
-        } = self;
+    pub fn try_merge_iter<'a, I>(items: I, schema: &Schema) -> Result<Statistics>
+    where
+        I: IntoIterator<Item = &'a Statistics>,
+    {
+        let items: Vec<&Statistics> = items.into_iter().collect();
 
-        // Accumulate statistics for subsequent items
-        num_rows = num_rows.add(&other.num_rows);
-        total_byte_size = total_byte_size.add(&other.total_byte_size);
-
-        if column_statistics.len() != other.column_statistics.len() {
-            return _plan_err!(
-                "Cannot merge statistics with different number of columns: {} vs {}",
-                column_statistics.len(),
-                other.column_statistics.len()
-            );
+        if items.is_empty() {
+            return Ok(Statistics::new_unknown(schema));
+        }
+        if items.len() == 1 {
+            return Ok(items[0].clone());
         }
 
-        for (item_col_stats, col_stats) in other
+        let num_cols = items[0].column_statistics.len();
+        // Validate all items have the same number of columns
+        for (i, stat) in items.iter().enumerate().skip(1) {
+            if stat.column_statistics.len() != num_cols {
+                return _plan_err!(
+                    "Cannot merge statistics with different number of columns: {} vs {} (item {})",
+                    num_cols,
+                    stat.column_statistics.len(),
+                    i
+                );
+            }
+        }
+
+        // Aggregate usize fields (cheap arithmetic)
+        let mut num_rows = Precision::Exact(0usize);
+        let mut total_byte_size = Precision::Exact(0usize);
+        for stat in &items {
+            num_rows = num_rows.add(&stat.num_rows);
+            total_byte_size = total_byte_size.add(&stat.total_byte_size);
+        }
+
+        let first = items[0];
+        let mut column_statistics: Vec<ColumnStatistics> = first
             .column_statistics
             .iter()
-            .zip(column_statistics.iter_mut())
-        {
-            col_stats.null_count = col_stats.null_count.add(&item_col_stats.null_count);
-            col_stats.max_value = col_stats.max_value.max(&item_col_stats.max_value);
-            col_stats.min_value = col_stats.min_value.min(&item_col_stats.min_value);
-            col_stats.sum_value = col_stats.sum_value.add(&item_col_stats.sum_value);
+            .map(|cs| ColumnStatistics {
+                null_count: cs.null_count,
+                max_value: cs.max_value.clone(),
+                min_value: cs.min_value.clone(),
+                sum_value: cs.sum_value.clone(),
+                distinct_count: cs.distinct_count,
+                byte_size: cs.byte_size,
+            })
+            .collect();
+
+        // Accumulate all statistics in a single pass.
+        // Uses precision_add for sum (reuses the lhs accumulator for
+        // direct numeric addition), while preserving the NDV update
+        // ordering required by estimate_ndv_with_overlap.
+        for stat in items.iter().skip(1) {
+            for (col_idx, col_stats) in column_statistics.iter_mut().enumerate() {
+                let item_cs = &stat.column_statistics[col_idx];
+
+                col_stats.null_count = col_stats.null_count.add(&item_cs.null_count);
+
+                // NDV must be computed before min/max update (needs pre-merge ranges)
+                col_stats.distinct_count = match (
+                    col_stats.distinct_count.get_value(),
+                    item_cs.distinct_count.get_value(),
+                ) {
+                    (Some(&l), Some(&r)) => Precision::Inexact(
+                        estimate_ndv_with_overlap(col_stats, item_cs, l, r)
+                            .unwrap_or_else(|| usize::max(l, r)),
+                    ),
+                    _ => Precision::Absent,
+                };
+                col_stats.min_value = col_stats.min_value.min(&item_cs.min_value);
+                col_stats.max_value = col_stats.max_value.max(&item_cs.max_value);
+                precision_add(&mut col_stats.sum_value, &item_cs.sum_value);
+                col_stats.byte_size = col_stats.byte_size.add(&item_cs.byte_size);
+            }
         }
 
         Ok(Statistics {
@@ -546,6 +704,96 @@ impl Statistics {
             column_statistics,
         })
     }
+}
+
+/// Estimates the combined number of distinct values (NDV) when merging two
+/// column statistics, using range overlap to avoid double-counting shared values.
+///
+/// Assumes values are distributed uniformly within each input's
+/// `[min, max]` range (the standard assumption when only summary
+/// statistics are available). Under uniformity the fraction of an input's
+/// distinct values that land in a sub-range equals the fraction of
+/// the range that sub-range covers.
+///
+/// The combined value space is split into three disjoint regions:
+///
+/// ```text
+///   |-- only A --|-- overlap --|-- only B --|
+/// ```
+///
+/// * **Only in A/B** - values outside the other input's range
+///   contribute `(1 - overlap_a) * NDV_a` and `(1 - overlap_b) * NDV_b`.
+/// * **Overlap** - both inputs may produce values here. We take
+///   `max(overlap_a * NDV_a, overlap_b * NDV_b)` rather than the
+///   sum because values in the same sub-range are likely shared
+///   (the smaller set is assumed to be a subset of the larger).
+///
+/// The formula ranges between `[max(NDV_a, NDV_b), NDV_a + NDV_b]`,
+/// from full overlap to no overlap.
+///
+/// ```text
+/// NDV = max(overlap_a * NDV_a, overlap_b * NDV_b)   [intersection]
+///     + (1 - overlap_a) * NDV_a                      [only in A]
+///     + (1 - overlap_b) * NDV_b                      [only in B]
+/// ```
+///
+/// Returns `None` when min/max are absent or distance is unsupported
+/// (e.g. strings), in which case the caller should fall back to a simpler
+/// estimate.
+pub fn estimate_ndv_with_overlap(
+    left: &ColumnStatistics,
+    right: &ColumnStatistics,
+    ndv_left: usize,
+    ndv_right: usize,
+) -> Option<usize> {
+    let left_min = left.min_value.get_value()?;
+    let left_max = left.max_value.get_value()?;
+    let right_min = right.min_value.get_value()?;
+    let right_max = right.max_value.get_value()?;
+
+    let range_left = left_max.distance(left_min)?;
+    let range_right = right_max.distance(right_min)?;
+
+    // Constant columns (range == 0) can't use the proportional overlap
+    // formula below, so check interval overlap directly instead.
+    if range_left == 0 || range_right == 0 {
+        let overlaps = left_min <= right_max && right_min <= left_max;
+        return Some(if overlaps {
+            usize::max(ndv_left, ndv_right)
+        } else {
+            ndv_left + ndv_right
+        });
+    }
+
+    let overlap_min = if left_min >= right_min {
+        left_min
+    } else {
+        right_min
+    };
+    let overlap_max = if left_max <= right_max {
+        left_max
+    } else {
+        right_max
+    };
+
+    // Disjoint ranges: no overlap, NDVs are additive
+    if overlap_min > overlap_max {
+        return Some(ndv_left + ndv_right);
+    }
+
+    let overlap_range = overlap_max.distance(overlap_min)? as f64;
+
+    let overlap_left = overlap_range / range_left as f64;
+    let overlap_right = overlap_range / range_right as f64;
+
+    let intersection = f64::max(
+        overlap_left * ndv_left as f64,
+        overlap_right * ndv_right as f64,
+    );
+    let only_left = (1.0 - overlap_left) * ndv_left as f64;
+    let only_right = (1.0 - overlap_right) * ndv_right as f64;
+
+    Some((intersection + only_left + only_right).round() as usize)
 }
 
 /// Creates an estimate of the number of rows in the output using the given
@@ -599,6 +847,11 @@ impl Display for Statistics {
                 } else {
                     s
                 };
+                let s = if cs.byte_size != Precision::Absent {
+                    format!("{} ScanBytes={}", s, cs.byte_size)
+                } else {
+                    s
+                };
 
                 s + ")"
             })
@@ -628,6 +881,21 @@ pub struct ColumnStatistics {
     pub sum_value: Precision<ScalarValue>,
     /// Number of distinct values
     pub distinct_count: Precision<usize>,
+    /// Estimated size of this column's data in bytes for the output.
+    ///
+    /// Note that this is not the same as the total bytes that may be scanned,
+    /// processed, etc.
+    ///
+    /// E.g. we may read 1GB of data from a Parquet file but the Arrow data
+    /// the node produces may be 2GB; it's this 2GB that is tracked here.
+    ///
+    /// Currently this is accurately calculated for primitive types only.
+    /// For complex types (like Utf8, List, Struct, etc), this value may be
+    /// absent or inexact (e.g. estimated from the size of the data in the source Parquet files).
+    ///
+    /// This value is automatically scaled when operations like limits or
+    /// filters reduce the number of rows (see [`Statistics::with_fetch`]).
+    pub byte_size: Precision<usize>,
 }
 
 impl ColumnStatistics {
@@ -650,6 +918,7 @@ impl ColumnStatistics {
             min_value: Precision::Absent,
             sum_value: Precision::Absent,
             distinct_count: Precision::Absent,
+            byte_size: Precision::Absent,
         }
     }
 
@@ -683,6 +952,13 @@ impl ColumnStatistics {
         self
     }
 
+    /// Set the scan byte size
+    /// This should initially be set to the total size of the column.
+    pub fn with_byte_size(mut self, byte_size: Precision<usize>) -> Self {
+        self.byte_size = byte_size;
+        self
+    }
+
     /// If the exactness of a [`ColumnStatistics`] instance is lost, this
     /// function relaxes the exactness of all information by converting them
     /// [`Precision::Inexact`].
@@ -692,6 +968,7 @@ impl ColumnStatistics {
         self.min_value = self.min_value.to_inexact();
         self.sum_value = self.sum_value.to_inexact();
         self.distinct_count = self.distinct_count.to_inexact();
+        self.byte_size = self.byte_size.to_inexact();
         self
     }
 }
@@ -781,11 +1058,21 @@ mod tests {
         let precision2 = Precision::Inexact(23);
         let precision3 = Precision::Exact(30);
         let absent_precision = Precision::Absent;
+        let precision_max_exact = Precision::Exact(usize::MAX);
+        let precision_max_inexact = Precision::Exact(usize::MAX);
 
         assert_eq!(precision1.add(&precision2), Precision::Inexact(65));
         assert_eq!(precision1.add(&precision3), Precision::Exact(72));
         assert_eq!(precision2.add(&precision3), Precision::Inexact(53));
         assert_eq!(precision1.add(&absent_precision), Precision::Absent);
+        assert_eq!(
+            precision_max_exact.add(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
+        assert_eq!(
+            precision_max_inexact.add(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
     }
 
     #[test]
@@ -817,6 +1104,8 @@ mod tests {
 
         assert_eq!(precision1.sub(&precision2), Precision::Inexact(19));
         assert_eq!(precision1.sub(&precision3), Precision::Exact(12));
+        assert_eq!(precision2.sub(&precision1), Precision::Inexact(0));
+        assert_eq!(precision3.sub(&precision1), Precision::Inexact(0));
         assert_eq!(precision1.sub(&absent_precision), Precision::Absent);
     }
 
@@ -845,12 +1134,22 @@ mod tests {
         let precision1 = Precision::Exact(6);
         let precision2 = Precision::Inexact(3);
         let precision3 = Precision::Exact(5);
+        let precision_max_exact = Precision::Exact(usize::MAX);
+        let precision_max_inexact = Precision::Exact(usize::MAX);
         let absent_precision = Precision::Absent;
 
         assert_eq!(precision1.multiply(&precision2), Precision::Inexact(18));
         assert_eq!(precision1.multiply(&precision3), Precision::Exact(30));
         assert_eq!(precision2.multiply(&precision3), Precision::Inexact(15));
         assert_eq!(precision1.multiply(&absent_precision), Precision::Absent);
+        assert_eq!(
+            precision_max_exact.multiply(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
+        assert_eq!(
+            precision_max_inexact.multiply(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
     }
 
     #[test]
@@ -896,9 +1195,11 @@ mod tests {
             Precision::Exact(ScalarValue::Int64(None)),
         );
         // Overflow returns error
-        assert!(Precision::Exact(ScalarValue::Int32(Some(256)))
-            .cast_to(&DataType::Int8)
-            .is_err());
+        assert!(
+            Precision::Exact(ScalarValue::Int32(Some(256)))
+                .cast_to(&DataType::Int8)
+                .is_err()
+        );
     }
 
     #[test]
@@ -911,15 +1212,13 @@ mod tests {
         // Precision<ScalarValue> is not copy (requires .clone())
         let precision: Precision<ScalarValue> =
             Precision::Exact(ScalarValue::Int64(Some(42)));
-        // Clippy would complain about this if it were Copy
-        #[allow(clippy::redundant_clone)]
         let p2 = precision.clone();
         assert_eq!(precision, p2);
     }
 
     #[test]
     fn test_project_none() {
-        let projection = None;
+        let projection: Option<Vec<usize>> = None;
         let stats = make_stats(vec![10, 20, 30]).project(projection.as_ref());
         assert_eq!(stats, make_stats(vec![10, 20, 30]));
     }
@@ -961,11 +1260,12 @@ mod tests {
             min_value: Precision::Exact(ScalarValue::Int64(Some(64))),
             sum_value: Precision::Exact(ScalarValue::Int64(Some(4600))),
             distinct_count: Precision::Exact(100),
+            byte_size: Precision::Exact(800),
         }
     }
 
     #[test]
-    fn test_try_merge_basic() {
+    fn test_try_merge() {
         // Create a schema with two columns
         let schema = Arc::new(Schema::new(vec![
             Field::new("col1", DataType::Int32, false),
@@ -983,6 +1283,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
                     distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(40),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(2),
@@ -990,6 +1291,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int32(Some(10))),
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(1000))),
                     distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(40),
                 },
             ],
         };
@@ -1004,6 +1306,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int32(Some(-10))),
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(600))),
                     distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(60),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(3),
@@ -1011,6 +1314,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int32(Some(5))),
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(1200))),
                     distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(60),
                 },
             ],
         };
@@ -1074,6 +1378,7 @@ mod tests {
                 min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
                 sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
                 distinct_count: Precision::Absent,
+                byte_size: Precision::Exact(40),
             }],
         };
 
@@ -1086,6 +1391,7 @@ mod tests {
                 min_value: Precision::Exact(ScalarValue::Int32(Some(-10))),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                byte_size: Precision::Inexact(60),
             }],
         };
 
@@ -1106,7 +1412,7 @@ mod tests {
             col_stats.min_value,
             Precision::Inexact(ScalarValue::Int32(Some(-10)))
         );
-        assert!(matches!(col_stats.sum_value, Precision::Absent));
+        assert_eq!(col_stats.sum_value, Precision::Absent);
     }
 
     #[test]
@@ -1150,6 +1456,1059 @@ mod tests {
         let items = vec![stats1, stats2];
 
         let e = Statistics::try_merge_iter(&items, &schema).unwrap_err();
-        assert_contains!(e.to_string(), "Error during planning: Cannot merge statistics with different number of columns: 0 vs 1");
+        assert_contains!(
+            e.to_string(),
+            "Error during planning: Cannot merge statistics with different number of columns: 0 vs 1"
+        );
+    }
+
+    #[test]
+    fn test_try_merge_distinct_count_absent() {
+        // Create statistics with known distinct counts
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .with_total_byte_size(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_distinct_count(Precision::Exact(5)),
+            );
+
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(15))
+            .with_total_byte_size(Precision::Exact(150))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(20))))
+                    .with_distinct_count(Precision::Exact(7)),
+            );
+
+        // Merge statistics
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged_stats =
+            Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+
+        // Verify the results
+        assert_eq!(merged_stats.num_rows, Precision::Exact(25));
+        assert_eq!(merged_stats.total_byte_size, Precision::Exact(250));
+
+        let col_stats = &merged_stats.column_statistics[0];
+        assert_eq!(col_stats.null_count, Precision::Exact(0));
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Exact(ScalarValue::Int32(Some(1)))
+        );
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Exact(ScalarValue::Int32(Some(20)))
+        );
+        // Overlap-based NDV: ranges [1,10] and [5,20], overlap [5,10]
+        // range_left=9, range_right=15, overlap=5
+        // overlap_left=5*(5/9)=2.78, overlap_right=7*(5/15)=2.33
+        // result = max(2.78, 2.33) + (5-2.78) + (7-2.33) = 9.67 -> 10
+        assert_eq!(col_stats.distinct_count, Precision::Inexact(10));
+    }
+
+    #[test]
+    fn test_try_merge_ndv_disjoint_ranges() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_distinct_count(Precision::Exact(5)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(20))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(30))))
+                    .with_distinct_count(Precision::Exact(8)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // No overlap -> sum of NDVs
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(13)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_identical_ranges() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+                    .with_distinct_count(Precision::Exact(50)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+                    .with_distinct_count(Precision::Exact(30)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // Full overlap -> max(50, 30) = 50
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(50)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_partial_overlap() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+                    .with_distinct_count(Precision::Exact(80)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(50))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(150))))
+                    .with_distinct_count(Precision::Exact(60)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // overlap=[50,100], range_left=100, range_right=100, overlap_range=50
+        // overlap_left=80*(50/100)=40, overlap_right=60*(50/100)=30
+        // result = max(40,30) + (80-40) + (60-30) = 40 + 40 + 30 = 110
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(110)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_missing_min_max() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown().with_distinct_count(Precision::Exact(5)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown().with_distinct_count(Precision::Exact(8)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // No min/max -> fallback to max(5, 8)
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(8)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_non_numeric_types() {
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Utf8(Some(
+                        "aaa".to_string(),
+                    ))))
+                    .with_max_value(Precision::Exact(ScalarValue::Utf8(Some(
+                        "zzz".to_string(),
+                    ))))
+                    .with_distinct_count(Precision::Exact(5)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Utf8(Some(
+                        "bbb".to_string(),
+                    ))))
+                    .with_max_value(Precision::Exact(ScalarValue::Utf8(Some(
+                        "yyy".to_string(),
+                    ))))
+                    .with_distinct_count(Precision::Exact(8)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        // distance() unsupported for strings -> fallback to max
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(8)
+        );
+    }
+
+    #[test]
+    fn test_try_merge_ndv_constant_columns() {
+        // Same constant: [5,5]+[5,5] -> max
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_distinct_count(Precision::Exact(1)),
+            );
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_distinct_count(Precision::Exact(1)),
+            );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(1)
+        );
+
+        // Different constants: [5,5]+[10,10] -> sum
+        let stats3 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_distinct_count(Precision::Exact(1)),
+            );
+        let stats4 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_distinct_count(Precision::Exact(1)),
+            );
+
+        let merged = Statistics::try_merge_iter([&stats3, &stats4], &schema).unwrap();
+        assert_eq!(
+            merged.column_statistics[0].distinct_count,
+            Precision::Inexact(2)
+        );
+    }
+
+    #[test]
+    fn test_with_fetch_basic_preservation() {
+        // Test that column statistics and byte size are preserved (as inexact) when applying fetch
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(10),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(5050))),
+                    distinct_count: Precision::Exact(50),
+                    byte_size: Precision::Exact(4000),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(20),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(200))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(10))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(10100))),
+                    distinct_count: Precision::Exact(75),
+                    byte_size: Precision::Exact(8000),
+                },
+            ],
+        };
+
+        // Apply fetch of 100 rows (10% of original)
+        let result = original_stats.clone().with_fetch(Some(100), 0, 1).unwrap();
+
+        // Check num_rows
+        assert_eq!(result.num_rows, Precision::Exact(100));
+
+        // Check total_byte_size is computed as sum of scaled column byte_size values
+        // Column 1: 4000 * 0.1 = 400, Column 2: 8000 * 0.1 = 800, Sum = 1200
+        assert_eq!(result.total_byte_size, Precision::Inexact(1200));
+
+        // Check column statistics are preserved but marked as inexact
+        assert_eq!(result.column_statistics.len(), 2);
+
+        // First column
+        assert_eq!(
+            result.column_statistics[0].null_count,
+            Precision::Inexact(10)
+        );
+        assert_eq!(
+            result.column_statistics[0].max_value,
+            Precision::Inexact(ScalarValue::Int32(Some(100)))
+        );
+        assert_eq!(
+            result.column_statistics[0].min_value,
+            Precision::Inexact(ScalarValue::Int32(Some(0)))
+        );
+        assert_eq!(
+            result.column_statistics[0].sum_value,
+            Precision::Inexact(ScalarValue::Int32(Some(5050)))
+        );
+        assert_eq!(
+            result.column_statistics[0].distinct_count,
+            Precision::Inexact(50)
+        );
+
+        // Second column
+        assert_eq!(
+            result.column_statistics[1].null_count,
+            Precision::Inexact(20)
+        );
+        assert_eq!(
+            result.column_statistics[1].max_value,
+            Precision::Inexact(ScalarValue::Int64(Some(200)))
+        );
+        assert_eq!(
+            result.column_statistics[1].min_value,
+            Precision::Inexact(ScalarValue::Int64(Some(10)))
+        );
+        assert_eq!(
+            result.column_statistics[1].sum_value,
+            Precision::Inexact(ScalarValue::Int64(Some(10100)))
+        );
+        assert_eq!(
+            result.column_statistics[1].distinct_count,
+            Precision::Inexact(75)
+        );
+    }
+
+    #[test]
+    fn test_with_fetch_inexact_input() {
+        // Test that inexact input statistics remain inexact
+        let original_stats = Statistics {
+            num_rows: Precision::Inexact(1000),
+            total_byte_size: Precision::Inexact(8000),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Inexact(10),
+                max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                min_value: Precision::Inexact(ScalarValue::Int32(Some(0))),
+                sum_value: Precision::Inexact(ScalarValue::Int32(Some(5050))),
+                distinct_count: Precision::Inexact(50),
+                byte_size: Precision::Inexact(4000),
+            }],
+        };
+
+        let result = original_stats.clone().with_fetch(Some(500), 0, 1).unwrap();
+
+        // Check num_rows is inexact
+        assert_eq!(result.num_rows, Precision::Inexact(500));
+
+        // Check total_byte_size is computed as sum of scaled column byte_size values
+        // Column 1: 4000 * 0.5 = 2000, Sum = 2000
+        assert_eq!(result.total_byte_size, Precision::Inexact(2000));
+
+        // Column stats remain inexact
+        assert_eq!(
+            result.column_statistics[0].null_count,
+            Precision::Inexact(10)
+        );
+    }
+
+    #[test]
+    fn test_with_fetch_skip_all_rows() {
+        // Test when skip >= num_rows (all rows are skipped)
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats.clone().with_fetch(Some(50), 100, 1).unwrap();
+
+        assert_eq!(result.num_rows, Precision::Exact(0));
+        // When ratio is 0/100 = 0, byte size should be 0
+        assert_eq!(result.total_byte_size, Precision::Inexact(0));
+    }
+
+    #[test]
+    fn test_with_fetch_no_limit() {
+        // Test when fetch is None and skip is 0 (no limit applied)
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
+
+        // Stats should be unchanged when no fetch and no skip
+        assert_eq!(result.num_rows, Precision::Exact(100));
+        assert_eq!(result.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_with_fetch_with_skip() {
+        // Test with both skip and fetch
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        // Skip 200, fetch 300, so we get rows 200-500
+        let result = original_stats
+            .clone()
+            .with_fetch(Some(300), 200, 1)
+            .unwrap();
+
+        assert_eq!(result.num_rows, Precision::Exact(300));
+        // Column 1: byte_size 800 * (300/500) = 240, Sum = 240
+        assert_eq!(result.total_byte_size, Precision::Inexact(240));
+    }
+
+    #[test]
+    fn test_with_fetch_multi_partition() {
+        // Test with multiple partitions
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000), // per partition
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        // Fetch 100 per partition, 4 partitions = 400 total
+        let result = original_stats.clone().with_fetch(Some(100), 0, 4).unwrap();
+
+        assert_eq!(result.num_rows, Precision::Exact(400));
+        // Column 1: byte_size 800 * 0.4 = 320, Sum = 320
+        assert_eq!(result.total_byte_size, Precision::Inexact(320));
+    }
+
+    #[test]
+    fn test_with_fetch_absent_stats() {
+        // Test with absent statistics
+        let original_stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        let result = original_stats.clone().with_fetch(Some(100), 0, 1).unwrap();
+
+        // With absent input stats, output should be inexact estimate
+        assert_eq!(result.num_rows, Precision::Inexact(100));
+        assert_eq!(result.total_byte_size, Precision::Absent);
+        // Column stats should remain absent
+        assert_eq!(result.column_statistics[0].null_count, Precision::Absent);
+    }
+
+    #[test]
+    fn test_with_fetch_fetch_exceeds_rows() {
+        // Test when fetch is larger than available rows after skip
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        // Skip 50, fetch 100, but only 50 rows remain
+        let result = original_stats.clone().with_fetch(Some(100), 50, 1).unwrap();
+
+        assert_eq!(result.num_rows, Precision::Exact(50));
+        // 50/100 = 0.5, so 800 * 0.5 = 400
+        assert_eq!(result.total_byte_size, Precision::Inexact(400));
+    }
+
+    #[test]
+    fn test_with_fetch_preserves_all_column_stats() {
+        // Comprehensive test that all column statistic fields are preserved
+        let original_col_stats = ColumnStatistics {
+            null_count: Precision::Exact(42),
+            max_value: Precision::Exact(ScalarValue::Int32(Some(999))),
+            min_value: Precision::Exact(ScalarValue::Int32(Some(-100))),
+            sum_value: Precision::Exact(ScalarValue::Int32(Some(123456))),
+            distinct_count: Precision::Exact(789),
+            byte_size: Precision::Exact(4000),
+        };
+
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![original_col_stats.clone()],
+        };
+
+        let result = original_stats.with_fetch(Some(250), 0, 1).unwrap();
+
+        let result_col_stats = &result.column_statistics[0];
+
+        // All values should be preserved but marked as inexact
+        assert_eq!(result_col_stats.null_count, Precision::Inexact(42));
+        assert_eq!(
+            result_col_stats.max_value,
+            Precision::Inexact(ScalarValue::Int32(Some(999)))
+        );
+        assert_eq!(
+            result_col_stats.min_value,
+            Precision::Inexact(ScalarValue::Int32(Some(-100)))
+        );
+        assert_eq!(
+            result_col_stats.sum_value,
+            Precision::Inexact(ScalarValue::Int32(Some(123456)))
+        );
+        assert_eq!(result_col_stats.distinct_count, Precision::Inexact(789));
+    }
+
+    #[test]
+    fn test_byte_size_to_inexact() {
+        let col_stats = ColumnStatistics {
+            null_count: Precision::Exact(10),
+            max_value: Precision::Absent,
+            min_value: Precision::Absent,
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            byte_size: Precision::Exact(5000),
+        };
+
+        let inexact = col_stats.to_inexact();
+        assert_eq!(inexact.byte_size, Precision::Inexact(5000));
+    }
+
+    #[test]
+    fn test_with_byte_size_builder() {
+        let col_stats =
+            ColumnStatistics::new_unknown().with_byte_size(Precision::Exact(8192));
+        assert_eq!(col_stats.byte_size, Precision::Exact(8192));
+    }
+
+    #[test]
+    fn test_with_fetch_scales_byte_size() {
+        // Test that byte_size is scaled by the row ratio in with_fetch
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(10),
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(4000),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(20),
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(8000),
+                },
+            ],
+        };
+
+        // Apply fetch of 100 rows (10% of original)
+        let result = original_stats.with_fetch(Some(100), 0, 1).unwrap();
+
+        // byte_size should be scaled: 4000 * 0.1 = 400, 8000 * 0.1 = 800
+        assert_eq!(
+            result.column_statistics[0].byte_size,
+            Precision::Inexact(400)
+        );
+        assert_eq!(
+            result.column_statistics[1].byte_size,
+            Precision::Inexact(800)
+        );
+
+        // total_byte_size should be computed as sum of byte_size values: 400 + 800 = 1200
+        assert_eq!(result.total_byte_size, Precision::Inexact(1200));
+    }
+
+    #[test]
+    fn test_with_fetch_total_byte_size_fallback() {
+        // Test that total_byte_size falls back to scaling when not all columns have byte_size
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(10),
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(4000),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(20),
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent, // One column has no byte_size
+                },
+            ],
+        };
+
+        // Apply fetch of 100 rows (10% of original)
+        let result = original_stats.with_fetch(Some(100), 0, 1).unwrap();
+
+        // total_byte_size should fall back to scaling: 8000 * 0.1 = 800
+        assert_eq!(result.total_byte_size, Precision::Inexact(800));
+    }
+
+    #[test]
+    fn test_try_merge_iter_basic() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, false),
+            Field::new("col2", DataType::Int32, false),
+        ]));
+
+        let stats1 = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(40),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(2),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(200))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(10))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(1000))),
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(40),
+                },
+            ],
+        };
+
+        let stats2 = Statistics {
+            num_rows: Precision::Exact(15),
+            total_byte_size: Precision::Exact(150),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(2),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(120))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(-10))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(600))),
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(60),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(3),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(180))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(5))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(1200))),
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(60),
+                },
+            ],
+        };
+
+        let items = vec![&stats1, &stats2];
+        let summary_stats = Statistics::try_merge_iter(items, &schema).unwrap();
+
+        assert_eq!(summary_stats.num_rows, Precision::Exact(25));
+        assert_eq!(summary_stats.total_byte_size, Precision::Exact(250));
+
+        let col1_stats = &summary_stats.column_statistics[0];
+        assert_eq!(col1_stats.null_count, Precision::Exact(3));
+        assert_eq!(
+            col1_stats.max_value,
+            Precision::Exact(ScalarValue::Int32(Some(120)))
+        );
+        assert_eq!(
+            col1_stats.min_value,
+            Precision::Exact(ScalarValue::Int32(Some(-10)))
+        );
+        assert_eq!(
+            col1_stats.sum_value,
+            Precision::Exact(ScalarValue::Int32(Some(1100)))
+        );
+
+        let col2_stats = &summary_stats.column_statistics[1];
+        assert_eq!(col2_stats.null_count, Precision::Exact(5));
+        assert_eq!(
+            col2_stats.max_value,
+            Precision::Exact(ScalarValue::Int32(Some(200)))
+        );
+        assert_eq!(
+            col2_stats.min_value,
+            Precision::Exact(ScalarValue::Int32(Some(5)))
+        );
+        assert_eq!(
+            col2_stats.sum_value,
+            Precision::Exact(ScalarValue::Int32(Some(2200)))
+        );
+    }
+
+    #[test]
+    fn test_try_merge_iter_mixed_precision() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let stats1 = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Inexact(100),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(1),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+                min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Exact(40),
+            }],
+        };
+
+        let stats2 = Statistics {
+            num_rows: Precision::Inexact(15),
+            total_byte_size: Precision::Exact(150),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Inexact(2),
+                max_value: Precision::Inexact(ScalarValue::Int32(Some(120))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(-10))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Inexact(60),
+            }],
+        };
+
+        let items = vec![&stats1, &stats2];
+        let summary_stats = Statistics::try_merge_iter(items, &schema).unwrap();
+
+        assert_eq!(summary_stats.num_rows, Precision::Inexact(25));
+        assert_eq!(summary_stats.total_byte_size, Precision::Inexact(250));
+
+        let col_stats = &summary_stats.column_statistics[0];
+        assert_eq!(col_stats.null_count, Precision::Inexact(3));
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Inexact(ScalarValue::Int32(Some(120)))
+        );
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Inexact(ScalarValue::Int32(Some(-10)))
+        );
+        // sum_value becomes Absent because stats2 has Absent sum
+        assert_eq!(col_stats.sum_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_try_merge_iter_empty() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let items: Vec<&Statistics> = vec![];
+        let summary_stats = Statistics::try_merge_iter(items, &schema).unwrap();
+
+        assert_eq!(summary_stats.num_rows, Precision::Absent);
+        assert_eq!(summary_stats.total_byte_size, Precision::Absent);
+        assert_eq!(summary_stats.column_statistics.len(), 1);
+        assert_eq!(
+            summary_stats.column_statistics[0].null_count,
+            Precision::Absent
+        );
+    }
+
+    #[test]
+    fn test_try_merge_iter_single_item() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let stats = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(1),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
+                distinct_count: Precision::Exact(10),
+                byte_size: Precision::Exact(40),
+            }],
+        };
+
+        let items = vec![&stats];
+        let summary_stats = Statistics::try_merge_iter(items, &schema).unwrap();
+
+        assert_eq!(summary_stats, stats);
+    }
+
+    #[test]
+    fn test_try_merge_iter_mismatched_columns() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let stats1 = Statistics::default();
+        let stats2 =
+            Statistics::default().add_column_statistics(ColumnStatistics::new_unknown());
+
+        let items = vec![&stats1, &stats2];
+        let e = Statistics::try_merge_iter(items, &schema).unwrap_err();
+        assert_contains!(
+            e.to_string(),
+            "Cannot merge statistics with different number of columns: 0 vs 1"
+        );
+    }
+
+    #[test]
+    fn test_try_merge_iter_three_items() {
+        // Verify that merging three items works correctly
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int64,
+            false,
+        )]));
+
+        let stats1 = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(1),
+                max_value: Precision::Exact(ScalarValue::Int64(Some(100))),
+                min_value: Precision::Exact(ScalarValue::Int64(Some(10))),
+                sum_value: Precision::Exact(ScalarValue::Int64(Some(500))),
+                distinct_count: Precision::Exact(8),
+                byte_size: Precision::Exact(80),
+            }],
+        };
+
+        let stats2 = Statistics {
+            num_rows: Precision::Exact(20),
+            total_byte_size: Precision::Exact(200),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(2),
+                max_value: Precision::Exact(ScalarValue::Int64(Some(200))),
+                min_value: Precision::Exact(ScalarValue::Int64(Some(5))),
+                sum_value: Precision::Exact(ScalarValue::Int64(Some(1000))),
+                distinct_count: Precision::Exact(15),
+                byte_size: Precision::Exact(160),
+            }],
+        };
+
+        let stats3 = Statistics {
+            num_rows: Precision::Exact(30),
+            total_byte_size: Precision::Exact(300),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(3),
+                max_value: Precision::Exact(ScalarValue::Int64(Some(150))),
+                min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+                sum_value: Precision::Exact(ScalarValue::Int64(Some(2000))),
+                distinct_count: Precision::Exact(25),
+                byte_size: Precision::Exact(240),
+            }],
+        };
+
+        let items = vec![&stats1, &stats2, &stats3];
+        let summary_stats = Statistics::try_merge_iter(items, &schema).unwrap();
+
+        assert_eq!(summary_stats.num_rows, Precision::Exact(60));
+        assert_eq!(summary_stats.total_byte_size, Precision::Exact(600));
+
+        let col_stats = &summary_stats.column_statistics[0];
+        assert_eq!(col_stats.null_count, Precision::Exact(6));
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Exact(ScalarValue::Int64(Some(200)))
+        );
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Exact(ScalarValue::Int64(Some(1)))
+        );
+        assert_eq!(
+            col_stats.sum_value,
+            Precision::Exact(ScalarValue::Int64(Some(3500)))
+        );
+        assert_eq!(col_stats.byte_size, Precision::Exact(480));
+        // Overlap-based NDV merge (pairwise left-to-right):
+        // stats1+stats2: [10,100]+[5,200] -> NDV=16, then +stats3: [5,200]+[1,150] -> NDV=29
+        assert_eq!(col_stats.distinct_count, Precision::Inexact(29));
+    }
+
+    #[test]
+    fn test_try_merge_iter_float_types() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Float64,
+            false,
+        )]));
+
+        let stats1 = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(80),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Float64(Some(99.9))),
+                min_value: Precision::Exact(ScalarValue::Float64(Some(1.1))),
+                sum_value: Precision::Exact(ScalarValue::Float64(Some(500.5))),
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Exact(80),
+            }],
+        };
+
+        let stats2 = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(80),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Float64(Some(200.0))),
+                min_value: Precision::Exact(ScalarValue::Float64(Some(0.5))),
+                sum_value: Precision::Exact(ScalarValue::Float64(Some(1000.0))),
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Exact(80),
+            }],
+        };
+
+        let items = vec![&stats1, &stats2];
+        let summary_stats = Statistics::try_merge_iter(items, &schema).unwrap();
+
+        let col_stats = &summary_stats.column_statistics[0];
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Exact(ScalarValue::Float64(Some(200.0)))
+        );
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Exact(ScalarValue::Float64(Some(0.5)))
+        );
+        assert_eq!(
+            col_stats.sum_value,
+            Precision::Exact(ScalarValue::Float64(Some(1500.5)))
+        );
+    }
+
+    #[test]
+    fn test_try_merge_iter_string_types() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col1", DataType::Utf8, false)]));
+
+        let stats1 = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Utf8(Some("dog".to_string()))),
+                min_value: Precision::Exact(ScalarValue::Utf8(Some("ant".to_string()))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Exact(100),
+            }],
+        };
+
+        let stats2 = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Utf8(Some("zebra".to_string()))),
+                min_value: Precision::Exact(ScalarValue::Utf8(Some("bat".to_string()))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Exact(100),
+            }],
+        };
+
+        let items = vec![&stats1, &stats2];
+        let summary_stats = Statistics::try_merge_iter(items, &schema).unwrap();
+
+        let col_stats = &summary_stats.column_statistics[0];
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("zebra".to_string())))
+        );
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("ant".to_string())))
+        );
+        assert_eq!(col_stats.sum_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_try_merge_iter_all_inexact() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let stats1 = Statistics {
+            num_rows: Precision::Inexact(10),
+            total_byte_size: Precision::Inexact(100),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Inexact(1),
+                max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                sum_value: Precision::Inexact(ScalarValue::Int32(Some(500))),
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Inexact(40),
+            }],
+        };
+
+        let stats2 = Statistics {
+            num_rows: Precision::Inexact(20),
+            total_byte_size: Precision::Inexact(200),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Inexact(2),
+                max_value: Precision::Inexact(ScalarValue::Int32(Some(200))),
+                min_value: Precision::Inexact(ScalarValue::Int32(Some(-5))),
+                sum_value: Precision::Inexact(ScalarValue::Int32(Some(1000))),
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Inexact(60),
+            }],
+        };
+
+        let items = vec![&stats1, &stats2];
+        let summary_stats = Statistics::try_merge_iter(items, &schema).unwrap();
+
+        assert_eq!(summary_stats.num_rows, Precision::Inexact(30));
+        assert_eq!(summary_stats.total_byte_size, Precision::Inexact(300));
+
+        let col_stats = &summary_stats.column_statistics[0];
+        assert_eq!(col_stats.null_count, Precision::Inexact(3));
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Inexact(ScalarValue::Int32(Some(200)))
+        );
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Inexact(ScalarValue::Int32(Some(-5)))
+        );
+        assert_eq!(
+            col_stats.sum_value,
+            Precision::Inexact(ScalarValue::Int32(Some(1500)))
+        );
     }
 }

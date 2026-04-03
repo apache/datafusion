@@ -21,6 +21,7 @@ mod field_reference;
 mod function_arguments;
 mod if_then;
 mod literal;
+mod nested;
 mod scalar_function;
 mod singular_or_list;
 mod subquery;
@@ -32,18 +33,19 @@ pub use field_reference::*;
 pub use function_arguments::*;
 pub use if_then::*;
 pub use literal::*;
+pub use nested::*;
 pub use scalar_function::*;
 pub use singular_or_list::*;
 pub use subquery::*;
 pub use window_function::*;
 
 use crate::extensions::Extensions;
-use crate::logical_plan::consumer::utils::rename_field;
 use crate::logical_plan::consumer::{
-    from_substrait_named_struct, DefaultSubstraitConsumer, SubstraitConsumer,
+    DefaultSubstraitConsumer, SubstraitConsumer, from_substrait_named_struct,
+    rename_field,
 };
 use datafusion::arrow::datatypes::Field;
-use datafusion::common::{not_impl_err, plan_err, substrait_err, DFSchema, DFSchemaRef};
+use datafusion::common::{DFSchema, DFSchemaRef, not_impl_err, plan_err, substrait_err};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Expr, ExprSchemable};
 use substrait::proto::expression::RexType;
@@ -88,12 +90,16 @@ pub async fn from_substrait_rex(
                 consumer.consume_subquery(expr.as_ref(), input_schema).await
             }
             RexType::Nested(expr) => consumer.consume_nested(expr, input_schema).await,
+            #[expect(deprecated)]
             RexType::Enum(expr) => consumer.consume_enum(expr, input_schema).await,
             RexType::DynamicParameter(expr) => {
                 consumer.consume_dynamic_parameter(expr, input_schema).await
             }
+            RexType::Lambda(_) | RexType::LambdaInvocation(_) => {
+                not_impl_err!("Lambda expressions are not yet supported")
+            }
         },
-        None => substrait_err!("Expression must set rex_type: {:?}", expression),
+        None => substrait_err!("Expression must set rex_type: {expression:?}"),
     }
 }
 
@@ -116,15 +122,14 @@ pub async fn from_substrait_extended_expr(
         return not_impl_err!("Type variation extensions are not supported");
     }
 
-    let consumer = DefaultSubstraitConsumer {
-        extensions: &extensions,
-        state,
-    };
+    let consumer = DefaultSubstraitConsumer::new(&extensions, state);
 
     let input_schema = DFSchemaRef::new(match &extended_expr.base_schema {
         Some(base_schema) => from_substrait_named_struct(&consumer, base_schema),
         None => {
-            plan_err!("required property `base_schema` missing from Substrait ExtendedExpression message")
+            plan_err!(
+                "required property `base_schema` missing from Substrait ExtendedExpression message"
+            )
         }
     }?);
 
@@ -137,22 +142,21 @@ pub async fn from_substrait_extended_expr(
                 not_impl_err!("Measure expressions are not yet supported")
             }
             None => {
-                plan_err!("required property `expr_type` missing from Substrait ExpressionReference message")
+                plan_err!(
+                    "required property `expr_type` missing from Substrait ExpressionReference message"
+                )
             }
         }?;
         let expr = consumer
             .consume_expression(scalar_expr, &input_schema)
             .await?;
-        let (output_type, expected_nullability) =
-            expr.data_type_and_nullable(&input_schema)?;
-        let output_field = Field::new("", output_type, expected_nullability);
+        let output_field = expr.to_field(&input_schema)?.1;
         let mut names_idx = 0;
         let output_field = rename_field(
             &output_field,
             &substrait_expr.output_names,
             expr_idx,
             &mut names_idx,
-            /*rename_self=*/ true,
         )?;
         exprs.push((expr, output_field));
     }
@@ -199,13 +203,13 @@ mod tests {
     use crate::logical_plan::consumer::*;
     use datafusion::common::DFSchema;
     use datafusion::logical_expr::Expr;
-    use substrait::proto::expression::window_function::BoundsType;
-    use substrait::proto::expression::RexType;
     use substrait::proto::Expression;
+    use substrait::proto::expression::RexType;
+    use substrait::proto::expression::window_function::BoundsType;
 
     #[tokio::test]
-    async fn window_function_with_range_unit_and_no_order_by(
-    ) -> datafusion::common::Result<()> {
+    async fn window_function_with_range_unit_and_no_order_by()
+    -> datafusion::common::Result<()> {
         let substrait = Expression {
             rex_type: Some(RexType::WindowFunction(
                 substrait::proto::expression::WindowFunction {
@@ -222,7 +226,7 @@ mod tests {
         // Just registering a single function (index 0) so that the plan
         // does not throw a "function not found" error.
         let mut extensions = Extensions::default();
-        extensions.register_function("count".to_string());
+        extensions.register_function("count");
         consumer.extensions = &extensions;
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
@@ -249,7 +253,7 @@ mod tests {
         let mut consumer = test_consumer();
 
         let mut extensions = Extensions::default();
-        extensions.register_function("count".to_string());
+        extensions.register_function("count");
         consumer.extensions = &extensions;
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {

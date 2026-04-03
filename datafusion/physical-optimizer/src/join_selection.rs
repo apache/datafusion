@@ -23,24 +23,22 @@
 //! pipeline-friendly ones. To achieve the second goal, it selects the proper
 //! `PartitionMode` and the build side using the available statistics for hash joins.
 
-use std::sync::Arc;
-
 use crate::PhysicalOptimizerRule;
-
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, JoinSide, JoinType};
+use datafusion_common::{JoinSide, JoinType, internal_err};
 use datafusion_expr_common::sort_properties::SortProperties;
-use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::execution_plan::EmissionType;
-use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use std::sync::Arc;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -49,7 +47,7 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 pub struct JoinSelection {}
 
 impl JoinSelection {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -57,11 +55,27 @@ impl JoinSelection {
 
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
 // TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is 8 times.
-/// Checks statistics for join swap.
+/// Checks whether join inputs should be swapped using available statistics.
+///
+/// It follows these steps:
+/// 1. Compare the in-memory sizes of both sides, and place the smaller side on
+///    the left (build) side.
+/// 2. If in-memory byte sizes are unavailable, fall back to row counts.
+/// 3. Do not reorder the join if neither statistic is available, or if
+///    `datafusion.optimizer.join_reordering` is disabled.
+///
+///
+/// Used configurations inside arg `config`
+/// - `config.optimizer.join_reordering`: allows or forbids statistics-driven join swapping
 pub(crate) fn should_swap_join_order(
     left: &dyn ExecutionPlan,
     right: &dyn ExecutionPlan,
+    config: &ConfigOptions,
 ) -> Result<bool> {
+    if !config.optimizer.join_reordering {
+        return Ok(false);
+    }
+
     // Get the left and right table's total bytes
     // If both the left and right tables contain total_byte_size statistics,
     // use `total_byte_size` to determine `should_swap_join_order`, else use `num_rows`
@@ -89,65 +103,21 @@ fn supports_collect_by_thresholds(
     threshold_byte_size: usize,
     threshold_num_rows: usize,
 ) -> bool {
-    // Currently we do not trust the 0 value from stats, due to stats collection might have bug
-    // TODO check the logic in datasource::get_statistics_with_limit()
     let Ok(stats) = plan.partition_statistics(None) else {
         return false;
     };
 
+    // Stats use `Precision<T>` to represent stats, where `Absent` means unknown.
+    // `Exact(0)` and `Inexact(0)` are both valid stats, and we should not treat
+    // them as unknown, `Absent` will return None (this is in regards to why
+    // `!=0` is not checked)
     if let Some(byte_size) = stats.total_byte_size.get_value() {
-        *byte_size != 0 && *byte_size < threshold_byte_size
+        *byte_size < threshold_byte_size
     } else if let Some(num_rows) = stats.num_rows.get_value() {
-        *num_rows != 0 && *num_rows < threshold_num_rows
+        *num_rows < threshold_num_rows
     } else {
         false
     }
-}
-
-/// Predicate that checks whether the given join type supports input swapping.
-#[deprecated(since = "45.0.0", note = "use JoinType::supports_swap instead")]
-#[allow(dead_code)]
-pub(crate) fn supports_swap(join_type: JoinType) -> bool {
-    join_type.supports_swap()
-}
-
-/// This function returns the new join type we get after swapping the given
-/// join's inputs.
-#[deprecated(since = "45.0.0", note = "use datafusion-functions-nested instead")]
-#[allow(dead_code)]
-pub(crate) fn swap_join_type(join_type: JoinType) -> JoinType {
-    join_type.swap()
-}
-
-/// This function swaps the inputs of the given join operator.
-/// This function is public so other downstream projects can use it
-/// to construct `HashJoinExec` with right side as the build side.
-#[deprecated(since = "45.0.0", note = "use HashJoinExec::swap_inputs instead")]
-pub fn swap_hash_join(
-    hash_join: &HashJoinExec,
-    partition_mode: PartitionMode,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    hash_join.swap_inputs(partition_mode)
-}
-
-/// Swaps inputs of `NestedLoopJoinExec` and wraps it into `ProjectionExec` is required
-#[deprecated(since = "45.0.0", note = "use NestedLoopJoinExec::swap_inputs")]
-#[allow(dead_code)]
-pub(crate) fn swap_nl_join(join: &NestedLoopJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
-    join.swap_inputs()
-}
-
-/// Swaps join sides for filter column indices and produces new `JoinFilter` (if exists).
-#[deprecated(since = "45.0.0", note = "use filter.map(JoinFilter::swap) instead")]
-#[allow(dead_code)]
-fn swap_join_filter(filter: Option<&JoinFilter>) -> Option<JoinFilter> {
-    filter.map(JoinFilter::swap)
-}
-
-#[deprecated(since = "45.0.0", note = "use JoinFilter::swap instead")]
-#[allow(dead_code)]
-pub(crate) fn swap_filter(filter: &JoinFilter) -> JoinFilter {
-    filter.swap()
 }
 
 impl PhysicalOptimizerRule for JoinSelection {
@@ -179,17 +149,8 @@ impl PhysicalOptimizerRule for JoinSelection {
         //   do not modify join sides.
         // - We will also swap left and right sides for cross joins so that the left
         //   side is the small side.
-        let config = &config.optimizer;
-        let collect_threshold_byte_size = config.hash_join_single_partition_threshold;
-        let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
         new_plan
-            .transform_up(|plan| {
-                statistical_join_selection_subrule(
-                    plan,
-                    collect_threshold_byte_size,
-                    collect_threshold_num_rows,
-                )
-            })
+            .transform_up(|plan| statistical_join_selection_subrule(plan, config))
             .data()
     }
 
@@ -208,59 +169,62 @@ impl PhysicalOptimizerRule for JoinSelection {
 /// `CollectLeft` mode is applicable. Otherwise, it will try to swap the join sides.
 /// When the `ignore_threshold` is false, this function will also check left
 /// and right sizes in bytes or rows.
+///
+/// Used configurations inside arg `config`
+/// - `config.optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
+/// - `config.optimizer.hash_join_single_partition_threshold_rows`: row threshold for `CollectLeft`
+/// - `config.optimizer.join_reordering`: allows or forbids input swapping
 pub(crate) fn try_collect_left(
     hash_join: &HashJoinExec,
     ignore_threshold: bool,
-    threshold_byte_size: usize,
-    threshold_num_rows: usize,
+    config: &ConfigOptions,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let left = hash_join.left();
     let right = hash_join.right();
+    let optimizer_config = &config.optimizer;
 
     let left_can_collect = ignore_threshold
         || supports_collect_by_thresholds(
             &**left,
-            threshold_byte_size,
-            threshold_num_rows,
+            optimizer_config.hash_join_single_partition_threshold,
+            optimizer_config.hash_join_single_partition_threshold_rows,
         );
     let right_can_collect = ignore_threshold
         || supports_collect_by_thresholds(
             &**right,
-            threshold_byte_size,
-            threshold_num_rows,
+            optimizer_config.hash_join_single_partition_threshold,
+            optimizer_config.hash_join_single_partition_threshold_rows,
         );
 
     match (left_can_collect, right_can_collect) {
         (true, true) => {
+            // Don't swap null-aware anti joins as they have specific side requirements
             if hash_join.join_type().supports_swap()
-                && should_swap_join_order(&**left, &**right)?
+                && !hash_join.null_aware
+                && should_swap_join_order(&**left, &**right, config)?
             {
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
             } else {
-                Ok(Some(Arc::new(HashJoinExec::try_new(
-                    Arc::clone(left),
-                    Arc::clone(right),
-                    hash_join.on().to_vec(),
-                    hash_join.filter().cloned(),
-                    hash_join.join_type(),
-                    hash_join.projection.clone(),
-                    PartitionMode::CollectLeft,
-                    hash_join.null_equals_null(),
-                )?)))
+                Ok(Some(Arc::new(
+                    hash_join
+                        .builder()
+                        .with_partition_mode(PartitionMode::CollectLeft)
+                        .build()?,
+                )))
             }
         }
-        (true, false) => Ok(Some(Arc::new(HashJoinExec::try_new(
-            Arc::clone(left),
-            Arc::clone(right),
-            hash_join.on().to_vec(),
-            hash_join.filter().cloned(),
-            hash_join.join_type(),
-            hash_join.projection.clone(),
-            PartitionMode::CollectLeft,
-            hash_join.null_equals_null(),
-        )?))),
+        (true, false) => Ok(Some(Arc::new(
+            hash_join
+                .builder()
+                .with_partition_mode(PartitionMode::CollectLeft)
+                .build()?,
+        ))),
         (false, true) => {
-            if hash_join.join_type().supports_swap() {
+            // Don't swap null-aware anti joins as they have specific side requirements
+            if optimizer_config.join_reordering
+                && hash_join.join_type().supports_swap()
+                && !hash_join.null_aware
+            {
                 hash_join.swap_inputs(PartitionMode::CollectLeft).map(Some)
             } else {
                 Ok(None)
@@ -275,58 +239,73 @@ pub(crate) fn try_collect_left(
 /// Checks if the join order should be swapped based on the join type and input statistics.
 /// If swapping is optimal and supported, creates a swapped partitioned hash join; otherwise,
 /// creates a standard partitioned hash join.
+///
+/// Used configurations inside arg `config`
+/// - `config.optimizer.join_reordering`: allows or forbids statistics-driven join swapping
 pub(crate) fn partitioned_hash_join(
     hash_join: &HashJoinExec,
+    config: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    if hash_join.join_type().supports_swap() && should_swap_join_order(&**left, &**right)?
+    // Don't swap null-aware anti joins as they have specific side requirements
+    if hash_join.join_type().supports_swap()
+        && !hash_join.null_aware
+        && should_swap_join_order(&**left, &**right, config)?
     {
         hash_join.swap_inputs(PartitionMode::Partitioned)
     } else {
-        Ok(Arc::new(HashJoinExec::try_new(
-            Arc::clone(left),
-            Arc::clone(right),
-            hash_join.on().to_vec(),
-            hash_join.filter().cloned(),
-            hash_join.join_type(),
-            hash_join.projection.clone(),
-            PartitionMode::Partitioned,
-            hash_join.null_equals_null(),
-        )?))
+        // Null-aware anti joins must use CollectLeft mode because they track probe-side state
+        // (probe_side_non_empty, probe_side_has_null) per-partition, but need global knowledge
+        // for correct null handling. With partitioning, a partition might not see probe rows
+        // even if the probe side is globally non-empty, leading to incorrect NULL row handling.
+        let partition_mode = if hash_join.null_aware {
+            PartitionMode::CollectLeft
+        } else {
+            PartitionMode::Partitioned
+        };
+
+        Ok(Arc::new(
+            hash_join
+                .builder()
+                .with_partition_mode(partition_mode)
+                .build()?,
+        ))
     }
 }
 
 /// This subrule tries to modify a given plan so that it can
-/// optimize hash and cross joins in the plan according to available statistical information.
+/// optimize hash and cross joins in the plan according to available statistical
+/// information.
+///
+/// Used configurations inside arg `config`
+/// - `config.optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
+/// - `config.optimizer.hash_join_single_partition_threshold_rows`: row threshold for `CollectLeft`
+/// - `config.optimizer.join_reordering`: allows or forbids input swapping
 fn statistical_join_selection_subrule(
     plan: Arc<dyn ExecutionPlan>,
-    collect_threshold_byte_size: usize,
-    collect_threshold_num_rows: usize,
+    config: &ConfigOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let transformed =
         if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
             match hash_join.partition_mode() {
-                PartitionMode::Auto => try_collect_left(
-                    hash_join,
-                    false,
-                    collect_threshold_byte_size,
-                    collect_threshold_num_rows,
-                )?
-                .map_or_else(
-                    || partitioned_hash_join(hash_join).map(Some),
-                    |v| Ok(Some(v)),
-                )?,
-                PartitionMode::CollectLeft => try_collect_left(hash_join, true, 0, 0)?
+                PartitionMode::Auto => try_collect_left(hash_join, false, config)?
                     .map_or_else(
-                        || partitioned_hash_join(hash_join).map(Some),
+                        || partitioned_hash_join(hash_join, config).map(Some),
+                        |v| Ok(Some(v)),
+                    )?,
+                PartitionMode::CollectLeft => try_collect_left(hash_join, true, config)?
+                    .map_or_else(
+                        || partitioned_hash_join(hash_join, config).map(Some),
                         |v| Ok(Some(v)),
                     )?,
                 PartitionMode::Partitioned => {
                     let left = hash_join.left();
                     let right = hash_join.right();
+                    // Don't swap null-aware anti joins as they have specific side requirements
                     if hash_join.join_type().supports_swap()
-                        && should_swap_join_order(&**left, &**right)?
+                        && !hash_join.null_aware
+                        && should_swap_join_order(&**left, &**right, config)?
                     {
                         hash_join
                             .swap_inputs(PartitionMode::Partitioned)
@@ -339,7 +318,7 @@ fn statistical_join_selection_subrule(
         } else if let Some(cross_join) = plan.as_any().downcast_ref::<CrossJoinExec>() {
             let left = cross_join.left();
             let right = cross_join.right();
-            if should_swap_join_order(&**left, &**right)? {
+            if should_swap_join_order(&**left, &**right, config)? {
                 cross_join.swap_inputs().map(Some)?
             } else {
                 None
@@ -348,7 +327,7 @@ fn statistical_join_selection_subrule(
             let left = nl_join.left();
             let right = nl_join.right();
             if nl_join.join_type().supports_swap()
-                && should_swap_join_order(&**left, &**right)?
+                && should_swap_join_order(&**left, &**right, config)?
             {
                 nl_join.swap_inputs().map(Some)?
             } else {
@@ -459,7 +438,7 @@ fn hash_join_convert_symmetric_subrule(
                             JoinSide::Right => hash_join.right().output_ordering(),
                             JoinSide::None => unreachable!(),
                         }
-                        .map(|p| LexOrdering::new(p.to_vec()))
+                        .cloned()
                     })
                     .flatten()
             };
@@ -474,7 +453,7 @@ fn hash_join_convert_symmetric_subrule(
                 hash_join.on().to_vec(),
                 hash_join.filter().cloned(),
                 hash_join.join_type(),
-                hash_join.null_equals_null(),
+                hash_join.null_equality(),
                 left_order,
                 right_order,
                 mode,
@@ -524,25 +503,21 @@ fn hash_join_convert_symmetric_subrule(
 ///           | Data Source  |--------------| Repartition  |
 ///           |              |              |              |
 ///           +--------------+              +--------------+
-///
 /// ```
 pub fn hash_join_swap_subrule(
     mut input: Arc<dyn ExecutionPlan>,
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        if hash_join.left.boundedness().is_unbounded()
-            && !hash_join.right.boundedness().is_unbounded()
-            && matches!(
-                *hash_join.join_type(),
-                JoinType::Inner
-                    | JoinType::Left
-                    | JoinType::LeftSemi
-                    | JoinType::LeftAnti
-            )
-        {
-            input = swap_join_according_to_unboundedness(hash_join)?;
-        }
+    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>()
+        && hash_join.left.boundedness().is_unbounded()
+        && !hash_join.right.boundedness().is_unbounded()
+        && !hash_join.null_aware // Don't swap null-aware anti joins
+        && matches!(
+            *hash_join.join_type(),
+            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
+        )
+    {
+        input = swap_join_according_to_unboundedness(hash_join)?;
     }
     Ok(input)
 }
@@ -562,7 +537,11 @@ pub(crate) fn swap_join_according_to_unboundedness(
     match (*partition_mode, *join_type) {
         (
             _,
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark
+            | JoinType::Full,
         ) => internal_err!("{join_type} join cannot be swapped for unbounded input."),
         (PartitionMode::Partitioned, _) => {
             hash_join.swap_inputs(PartitionMode::Partitioned)

@@ -23,7 +23,7 @@ use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use super::accumulate::NullState;
@@ -41,7 +41,7 @@ use super::accumulate::NullState;
 pub struct PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     /// values per group, stored as the native type
     values: Vec<T::Native>,
@@ -62,7 +62,7 @@ where
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
@@ -84,7 +84,7 @@ where
 impl<T, F> GroupsAccumulator for PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     fn update_batch(
         &mut self,
@@ -106,7 +106,8 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let value = &mut self.values[group_index];
+                // SAFETY: group_index is guaranteed to be in bounds
+                let value = unsafe { self.values.get_unchecked_mut(group_index) };
                 (self.prim_fn)(value, new_value);
             },
         );
@@ -117,7 +118,7 @@ where
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let values = emit_to.take_needed(&mut self.values);
         let nulls = self.null_state.build(emit_to);
-        let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
+        let values = PrimitiveArray::<T>::new(values.into(), nulls) // no copy
             .with_data_type(self.data_type.clone());
         Ok(Arc::new(values))
     }
@@ -142,7 +143,6 @@ where
     /// The state is:
     /// - self.prim_fn for all non null, non filtered values
     /// - null otherwise
-    ///
     fn convert_to_state(
         &self,
         values: &[ArrayRef],

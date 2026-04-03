@@ -18,16 +18,17 @@
 //! `cume_dist` window function implementation
 
 use arrow::datatypes::FieldRef;
+use datafusion_common::Result;
 use datafusion_common::arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::Result;
 use datafusion_expr::{
-    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_macros::user_doc;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
@@ -38,6 +39,7 @@ use std::sync::Arc;
 define_udwf_and_expr!(
     CumeDist,
     cume_dist,
+    cume_dist_udwf,
     "Calculates the cumulative distribution of a value in a group of values."
 );
 
@@ -46,13 +48,13 @@ define_udwf_and_expr!(
     doc_section(label = "Ranking Functions"),
     description = "Relative rank of the current row: (number of rows preceding or peer with the current row) / (total rows).",
     syntax_example = "cume_dist()",
-    sql_example = r#"```sql
-    --Example usage of the cume_dist window function:
-    SELECT salary,
-       cume_dist() OVER (ORDER BY salary) AS cume_dist
-    FROM employees;
-```
+    sql_example = r#"
 ```sql
+-- Example usage of the cume_dist window function:
+SELECT salary,
+    cume_dist() OVER (ORDER BY salary) AS cume_dist
+FROM employees;
+
 +--------+-----------+
 | salary | cume_dist |
 +--------+-----------+
@@ -60,9 +62,10 @@ define_udwf_and_expr!(
 | 50000  | 0.67      |
 | 70000  | 1.00      |
 +--------+-----------+
-```"#
+```
+"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CumeDist {
     signature: Signature,
 }
@@ -108,6 +111,10 @@ impl WindowUDFImpl for CumeDist {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 
@@ -161,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::single_range_in_vec_init)]
+    #[expect(clippy::single_range_in_vec_init)]
     fn test_cume_dist() -> Result<()> {
         test_f64_result(0, vec![], vec![])?;
 

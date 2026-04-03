@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-extern crate arrow;
-
-use crate::criterion::Criterion;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::lit;
 use datafusion_functions_nested::expr_fn::{array_replace_all, make_array};
+use std::hint::black_box;
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Construct large arrays for benchmarking
@@ -45,7 +42,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     from_array.clone(),
                     to_array.clone()
                 ),
-                *criterion::black_box(&expected_array)
+                *black_box(&expected_array)
             )
         })
     });

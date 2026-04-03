@@ -15,17 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::array::{ArrayRef, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use datafusion_common::DataFusionError;
+use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -66,16 +67,56 @@ fn invoke_repeat_with_args(
         .enumerate()
         .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
+    let config_options = Arc::new(ConfigOptions::default());
 
     string::repeat().invoke_with_args(ScalarFunctionArgs {
         args,
         arg_fields,
         number_rows: repeat_times as usize,
         return_field: Field::new("f", DataType::Utf8, true).into(),
+        config_options: Arc::clone(&config_options),
     })
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let repeat_fn = string::repeat();
+    let config_options = Arc::new(ConfigOptions::default());
+
+    // Scalar benchmarks (outside loop)
+    c.bench_function("repeat/scalar_utf8", |b| {
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("hello".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ],
+            arg_fields: vec![
+                Field::new("a", DataType::Utf8, false).into(),
+                Field::new("b", DataType::Int64, false).into(),
+            ],
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::clone(&config_options),
+        };
+        b.iter(|| black_box(repeat_fn.invoke_with_args(args.clone()).unwrap()))
+    });
+
+    c.bench_function("repeat/scalar_utf8view", |b| {
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("hello".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ],
+            arg_fields: vec![
+                Field::new("a", DataType::Utf8View, false).into(),
+                Field::new("b", DataType::Int64, false).into(),
+            ],
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::clone(&config_options),
+        };
+        b.iter(|| black_box(repeat_fn.invoke_with_args(args.clone()).unwrap()))
+    });
+
     for size in [1024, 4096] {
         // REPEAT 3 TIMES
         let repeat_times = 3;

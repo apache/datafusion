@@ -31,7 +31,7 @@ static INIT: Once = Once::new();
 
 // ===========================================================================
 // Test runners:
-// Runners are splitted into multiple tests to run in parallel
+// Runners are split into multiple tests to run in parallel
 // ===========================================================================
 
 #[test]
@@ -98,11 +98,9 @@ fn init_once() {
 fn spawn_test_process(test: &str) {
     init_once();
 
-    let test_path = format!(
-        "memory_limit::memory_limit_validation::sort_mem_validation::{}",
-        test
-    );
-    info!("Running test: {}", test_path);
+    let test_path =
+        format!("memory_limit::memory_limit_validation::sort_mem_validation::{test}");
+    info!("Running test: {test_path}");
 
     // Run the test command
     let output = Command::new("cargo")
@@ -125,7 +123,7 @@ fn spawn_test_process(test: &str) {
     let stdout = str::from_utf8(&output.stdout).unwrap_or("");
     let stderr = str::from_utf8(&output.stderr).unwrap_or("");
 
-    info!("{}", stdout);
+    info!("{stdout}");
 
     assert!(
         output.status.success(),

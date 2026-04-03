@@ -1,0 +1,115 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query T
+SELECT base64('Spark SQL'::string);
+----
+U3BhcmsgU1FM
+
+query T
+SELECT base64('Spark SQ'::string);
+----
+U3BhcmsgU1E=
+
+query T
+SELECT base64('Spark S'::string);
+----
+U3BhcmsgUw==
+
+query T
+SELECT base64('Spark SQL'::bytea);
+----
+U3BhcmsgU1FM
+
+query T
+SELECT base64(NULL::string);
+----
+NULL
+
+query T
+SELECT base64(NULL::bytea);
+----
+NULL
+
+query T
+SELECT base64(column1)
+FROM VALUES
+('Spark SQL'::bytea),
+('Spark SQ'::bytea),
+('Spark S'::bytea),
+(NULL::bytea);
+----
+U3BhcmsgU1FM
+U3BhcmsgU1E=
+U3BhcmsgUw==
+NULL
+
+query error Error during planning: Function 'base64' requires Binary, but received Int32 \(DataType: Int32\)
+SELECT base64(12::integer);
+
+
+query T
+SELECT arrow_cast(unbase64('U3BhcmsgU1FM'::string), 'Utf8');
+----
+Spark SQL
+
+query T
+SELECT arrow_cast(unbase64('U3BhcmsgU1E='::string), 'Utf8');
+----
+Spark SQ
+
+query T
+SELECT arrow_cast(unbase64('U3BhcmsgUw=='::string), 'Utf8');
+----
+Spark S
+
+query T
+SELECT arrow_cast(unbase64('U3BhcmsgU1FM'::bytea), 'Utf8');
+----
+Spark SQL
+
+query ?
+SELECT unbase64(NULL::string);
+----
+NULL
+
+query ?
+SELECT unbase64(NULL::bytea);
+----
+NULL
+
+query T
+SELECT arrow_cast(unbase64(column1), 'Utf8')
+FROM VALUES
+('U3BhcmsgU1FM'::string),
+('U3BhcmsgU1E='::string),
+('U3BhcmsgUw=='::string),
+(NULL::string);
+----
+Spark SQL
+Spark SQ
+Spark S
+NULL
+
+query error Failed to decode value using base64
+SELECT unbase64('123'::string);
+
+query error Failed to decode value using base64
+SELECT unbase64('123'::bytea);
+
+query error Error during planning: Function 'unbase64' requires Binary, but received Int32 \(DataType: Int32\)
+SELECT unbase64(12::integer);

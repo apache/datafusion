@@ -18,14 +18,14 @@
 # under the License.
 #
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}"
+
 rm -rf build 2> /dev/null
-rm -rf temp 2> /dev/null
-mkdir temp
-cp -rf source/* temp/
-# replace relative URLs with absolute URLs
-sed -i -e 's/\.\.\/\.\.\/\.\.\//https:\/\/github.com\/apache\/arrow-datafusion\/blob\/main\//g' temp/contributor-guide/index.md
 
-python rustdoc_trim.py
+# Keep the workspace dependency graph in sync with the codebase.
+scripts/generate_dependency_graph.sh
 
-make SOURCEDIR=`pwd`/temp SPHINXOPTS=-W html
+make html

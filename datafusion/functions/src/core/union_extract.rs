@@ -20,7 +20,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, UnionFields};
 use datafusion_common::cast::as_union_array;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, Result, ScalarValue,
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
 };
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
@@ -49,7 +49,7 @@ use datafusion_macros::user_doc;
         description = "String expression to operate on. Must be a constant."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UnionExtractFun {
     signature: Signature,
 }
@@ -117,9 +117,16 @@ impl ScalarUDFImpl for UnionExtractFun {
         let [array, target_name] = take_function_args("union_extract", args.args)?;
 
         let target_name = match target_name {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(target_name))) => Ok(target_name),
-            ColumnarValue::Scalar(ScalarValue::Utf8(None)) => exec_err!("union_extract second argument must be a non-null string literal, got a null instead"),
-            _ => exec_err!("union_extract second argument must be a non-null string literal, got {} instead", target_name.data_type()),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(target_name))) => {
+                Ok(target_name)
+            }
+            ColumnarValue::Scalar(ScalarValue::Utf8(None)) => exec_err!(
+                "union_extract second argument must be a non-null string literal, got a null instead"
+            ),
+            _ => exec_err!(
+                "union_extract second argument must be a non-null string literal, got {} instead",
+                target_name.data_type()
+            ),
         }?;
 
         match array {
@@ -169,10 +176,11 @@ fn find_field<'a>(fields: &'a UnionFields, name: &str) -> Result<(i8, &'a FieldR
 
 #[cfg(test)]
 mod tests {
-
     use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use std::sync::Arc;
 
     use super::UnionExtractFun;
 
@@ -181,13 +189,14 @@ mod tests {
     fn test_scalar_value() -> Result<()> {
         let fun = UnionExtractFun::new();
 
-        let fields = UnionFields::new(
+        let fields = UnionFields::try_new(
             vec![1, 3],
             vec![
                 Field::new("str", DataType::Utf8, false),
                 Field::new("int", DataType::Int32, false),
             ],
-        );
+        )
+        .unwrap();
 
         let args = vec![
             ColumnarValue::Scalar(ScalarValue::Union(
@@ -207,6 +216,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -229,6 +239,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -250,6 +261,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         assert_scalar(result, ScalarValue::new_utf8("42"));

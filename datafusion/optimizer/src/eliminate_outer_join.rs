@@ -52,7 +52,7 @@ use std::sync::Arc;
 pub struct EliminateOuterJoin;
 
 impl EliminateOuterJoin {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -118,7 +118,8 @@ impl OptimizerRule for EliminateOuterJoin {
                         on: join.on.clone(),
                         filter: join.filter.clone(),
                         schema: Arc::clone(&join.schema),
-                        null_equals_null: join.null_equals_null,
+                        null_equality: join.null_equality,
+                        null_aware: join.null_aware,
                     }));
                     Filter::try_new(filter.predicate, new_join)
                         .map(|f| Transformed::yes(LogicalPlan::Filter(f)))
@@ -289,8 +290,8 @@ fn extract_non_nullable_columns(
                 false,
             )
         }
-        Expr::Cast(Cast { expr, data_type: _ })
-        | Expr::TryCast(TryCast { expr, data_type: _ }) => extract_non_nullable_columns(
+        Expr::Cast(Cast { expr, field: _ })
+        | Expr::TryCast(TryCast { expr, field: _ }) => extract_non_nullable_columns(
             expr,
             non_nullable_cols,
             left_schema,
@@ -304,15 +305,15 @@ fn extract_non_nullable_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
-    use crate::OptimizerContext;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
+        Operator::{And, Or},
         binary_expr, cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
         try_cast,
-        Operator::{And, Or},
     };
 
     macro_rules! assert_optimized_plan_equal {

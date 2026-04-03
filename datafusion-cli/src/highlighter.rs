@@ -23,10 +23,11 @@ use std::{
 };
 
 use datafusion::sql::sqlparser::{
-    dialect::{dialect_from_str, Dialect, GenericDialect},
+    dialect::{Dialect, GenericDialect, dialect_from_str},
     keywords::Keyword,
     tokenizer::{Token, Tokenizer},
 };
+use datafusion_common::config;
 use rustyline::highlight::{CmdKind, Highlighter};
 
 /// The syntax highlighter.
@@ -36,8 +37,9 @@ pub struct SyntaxHighlighter {
 }
 
 impl SyntaxHighlighter {
-    pub fn new(dialect: &str) -> Self {
-        let dialect = dialect_from_str(dialect).unwrap_or(Box::new(GenericDialect {}));
+    pub fn new(dialect: &config::Dialect) -> Self {
+        let dialect =
+            dialect_from_str(dialect).unwrap_or_else(|| Box::new(GenericDialect {}));
         Self { dialect }
     }
 }
@@ -79,27 +81,32 @@ impl Highlighter for SyntaxHighlighter {
 }
 
 /// Convenient utility to return strings with [ANSI color](https://gist.github.com/JBlond/2fea43a3049b38287e5e9cefc87b2124).
-struct Color {}
+pub(crate) struct Color {}
 
 impl Color {
-    fn green(s: impl Display) -> String {
+    pub(crate) fn green(s: impl Display) -> String {
         format!("\x1b[92m{s}\x1b[0m")
     }
 
-    fn red(s: impl Display) -> String {
+    pub(crate) fn red(s: impl Display) -> String {
         format!("\x1b[91m{s}\x1b[0m")
+    }
+
+    pub(crate) fn gray(s: impl Display) -> String {
+        format!("\x1b[90m{s}\x1b[0m")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::SyntaxHighlighter;
+    use super::config::Dialect;
     use rustyline::highlight::Highlighter;
 
     #[test]
     fn highlighter_valid() {
         let s = "SElect col_a from tab_1;";
-        let highlighter = SyntaxHighlighter::new("generic");
+        let highlighter = SyntaxHighlighter::new(&Dialect::Generic);
         let out = highlighter.highlight(s, s.len());
         assert_eq!(
             "\u{1b}[91mSElect\u{1b}[0m col_a \u{1b}[91mfrom\u{1b}[0m tab_1;",
@@ -110,7 +117,7 @@ mod tests {
     #[test]
     fn highlighter_valid_with_new_line() {
         let s = "SElect col_a from tab_1\n WHERE col_b = 'なにか';";
-        let highlighter = SyntaxHighlighter::new("generic");
+        let highlighter = SyntaxHighlighter::new(&Dialect::Generic);
         let out = highlighter.highlight(s, s.len());
         assert_eq!(
             "\u{1b}[91mSElect\u{1b}[0m col_a \u{1b}[91mfrom\u{1b}[0m tab_1\n \u{1b}[91mWHERE\u{1b}[0m col_b = \u{1b}[92m'なにか'\u{1b}[0m;",
@@ -121,7 +128,7 @@ mod tests {
     #[test]
     fn highlighter_invalid() {
         let s = "SElect col_a from tab_1 WHERE col_b = ';";
-        let highlighter = SyntaxHighlighter::new("generic");
+        let highlighter = SyntaxHighlighter::new(&Dialect::Generic);
         let out = highlighter.highlight(s, s.len());
         assert_eq!("SElect col_a from tab_1 WHERE col_b = ';", out);
     }

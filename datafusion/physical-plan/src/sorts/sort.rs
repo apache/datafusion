@@ -24,20 +24,30 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use parking_lot::RwLock;
+
 use crate::common::spawn_buffered;
-use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
+use crate::execution_plan::{
+    Boundedness, CardinalityEffect, EmissionType, has_same_children_properties,
+};
 use crate::expressions::PhysicalSortExpr;
+use crate::filter_pushdown::{
+    ChildFilterDescription, FilterDescription, FilterPushdownPhase,
+};
 use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
 };
-use crate::projection::{make_with_child, update_expr, ProjectionExec};
-use crate::sorts::streaming_merge::StreamingMergeBuilder;
+use crate::projection::{ProjectionExec, make_with_child, update_ordering};
+use crate::sorts::IncrementalSortIterator;
+use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
-use crate::spill::spill_manager::SpillManager;
+use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::ReservationStream;
 use crate::topk::TopK;
+use crate::topk::TopKDynamicFilters;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
@@ -47,13 +57,18 @@ use crate::{
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_common::config::SpillCompression;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{
+    DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
+    unwrap_or_internal_err,
+};
+use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -119,7 +134,6 @@ impl ExternalSorterMetrics {
 ///    └─────┘
 ///
 /// in_mem_batches
-///
 /// ```
 ///
 /// # When data does not fit in available memory
@@ -200,7 +214,7 @@ struct ExternalSorter {
     /// Schema of the output (and the input)
     schema: SchemaRef,
     /// Sort expressions
-    expr: Arc<[PhysicalSortExpr]>,
+    expr: LexOrdering,
     /// The target number of rows for output batches
     batch_size: usize,
     /// If the in size of buffered memory batches is below this size,
@@ -217,12 +231,16 @@ struct ExternalSorter {
 
     /// During external sorting, in-memory intermediate data will be appended to
     /// this file incrementally. Once finished, this file will be moved to [`Self::finished_spill_files`].
-    in_progress_spill_file: Option<InProgressSpillFile>,
+    ///
+    /// this is a tuple of:
+    /// 1. `InProgressSpillFile` - the file that is being written to
+    /// 2. `max_record_batch_memory` - the maximum memory usage of a single batch in this spill file.
+    in_progress_spill_file: Option<(InProgressSpillFile, usize)>,
     /// If data has previously been spilled, the locations of the spill files (in
     /// Arrow IPC format)
     /// Within the same spill file, the data might be chunked into multiple batches,
     /// and ordered by sort keys.
-    finished_spill_files: Vec<RefCountedTempFile>,
+    finished_spill_files: Vec<SortedSpillFile>,
 
     // ========================================================================
     // EXECUTION RESOURCES:
@@ -248,7 +266,7 @@ struct ExternalSorter {
 impl ExternalSorter {
     // TODO: make a builder or some other nicer API to avoid the
     // clippy warning
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         partition_id: usize,
         schema: SchemaRef,
@@ -256,6 +274,8 @@ impl ExternalSorter {
         batch_size: usize,
         sort_spill_reservation_bytes: usize,
         sort_in_place_threshold_bytes: usize,
+        // Configured via `datafusion.execution.spill_compression`.
+        spill_compression: SpillCompression,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
@@ -272,14 +292,15 @@ impl ExternalSorter {
             Arc::clone(&runtime),
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
-        );
+        )
+        .with_compression_type(spill_compression);
 
         Ok(Self {
             schema,
             in_mem_batches: vec![],
             in_progress_spill_file: None,
             finished_spill_files: vec![],
-            expr: expr.into(),
+            expr,
             metrics,
             reservation,
             spill_manager,
@@ -321,14 +342,7 @@ impl ExternalSorter {
     /// 2. A combined streaming merge incorporating both in-memory
     ///    batches and data from spill files on disk.
     async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
-        // Release the memory reserved for merge back to the pool so
-        // there is some left when `in_mem_sort_stream` requests an
-        // allocation.
-        self.merge_reservation.free();
-
         if self.spilled_before() {
-            let mut streams = vec![];
-
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
             // them with the spilled files at the same time might cause OOM.
@@ -336,26 +350,29 @@ impl ExternalSorter {
                 self.sort_and_spill_in_mem_batches().await?;
             }
 
-            for spill in self.finished_spill_files.drain(..) {
-                if !spill.path().exists() {
-                    return internal_err!("Spill file {:?} does not exist", spill.path());
-                }
-                let stream = self.spill_manager.read_spill_as_stream(spill)?;
-                streams.push(stream);
-            }
-
-            let expressions: LexOrdering = self.expr.iter().cloned().collect();
-
+            // Transfer the pre-reserved merge memory to the streaming merge
+            // using `take()` instead of `new_empty()`. This ensures the merge
+            // stream starts with `sort_spill_reservation_bytes` already
+            // allocated, preventing starvation when concurrent sort partitions
+            // compete for pool memory. `take()` moves the bytes atomically
+            // without releasing them back to the pool, so other partitions
+            // cannot race to consume the freed memory.
             StreamingMergeBuilder::new()
-                .with_streams(streams)
+                .with_sorted_spill_files(std::mem::take(&mut self.finished_spill_files))
+                .with_spill_manager(self.spill_manager.clone())
                 .with_schema(Arc::clone(&self.schema))
-                .with_expressions(expressions.as_ref())
+                .with_expressions(&self.expr.clone())
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
                 .with_fetch(None)
-                .with_reservation(self.merge_reservation.new_empty())
+                .with_reservation(self.merge_reservation.take())
                 .build()
         } else {
+            // Release the memory reserved for merge back to the pool so
+            // there is some left when `in_mem_sort_stream` requests an
+            // allocation. Only needed for the non-spill path; the spill
+            // path transfers the reservation to the merge stream instead.
+            self.merge_reservation.free();
             self.in_mem_sort_stream(self.metrics.baseline.clone())
         }
     }
@@ -363,6 +380,12 @@ impl ExternalSorter {
     /// How much memory is buffered in this `ExternalSorter`?
     fn used(&self) -> usize {
         self.reservation.size()
+    }
+
+    /// How much memory is reserved for the merge phase?
+    #[cfg(test)]
+    fn merge_reservation_size(&self) -> usize {
+        self.merge_reservation.size()
     }
 
     /// How many bytes have been spilled to disk?
@@ -393,7 +416,7 @@ impl ExternalSorter {
         // Lazily initialize the in-progress spill file
         if self.in_progress_spill_file.is_none() {
             self.in_progress_spill_file =
-                Some(self.spill_manager.create_in_progress_file("Sorting")?);
+                Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
         }
 
         Self::organize_stringview_arrays(globally_sorted_batches)?;
@@ -403,31 +426,39 @@ impl ExternalSorter {
         let batches_to_spill = std::mem::take(globally_sorted_batches);
         self.reservation.free();
 
-        let in_progress_file = self.in_progress_spill_file.as_mut().ok_or_else(|| {
-            internal_datafusion_err!("In-progress spill file should be initialized")
-        })?;
+        let (in_progress_file, max_record_batch_size) =
+            self.in_progress_spill_file.as_mut().ok_or_else(|| {
+                internal_datafusion_err!("In-progress spill file should be initialized")
+            })?;
 
         for batch in batches_to_spill {
             in_progress_file.append_batch(&batch)?;
+
+            *max_record_batch_size =
+                (*max_record_batch_size).max(batch.get_sliced_size()?);
         }
 
-        if !globally_sorted_batches.is_empty() {
-            return internal_err!("This function consumes globally_sorted_batches, so it should be empty after taking.");
-        }
+        assert_or_internal_err!(
+            globally_sorted_batches.is_empty(),
+            "This function consumes globally_sorted_batches, so it should be empty after taking."
+        );
 
         Ok(())
     }
 
     /// Finishes the in-progress spill file and moves it to the finished spill files.
     async fn spill_finish(&mut self) -> Result<()> {
-        let mut in_progress_file =
+        let (mut in_progress_file, max_record_batch_memory) =
             self.in_progress_spill_file.take().ok_or_else(|| {
                 internal_datafusion_err!("Should be called after `spill_append`")
             })?;
         let spill_file = in_progress_file.finish()?;
 
         if let Some(spill_file) = spill_file {
-            self.finished_spill_files.push(spill_file);
+            self.finished_spill_files.push(SortedSpillFile {
+                file: spill_file,
+                max_record_batch_memory,
+            });
         }
 
         Ok(())
@@ -501,11 +532,10 @@ impl ExternalSorter {
     /// Sorts the in-memory batches and merges them into a single sorted run, then writes
     /// the result to spill files.
     async fn sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
-        if self.in_mem_batches.is_empty() {
-            return internal_err!(
-                "in_mem_batches must not be empty when attempting to sort and spill"
-            );
-        }
+        assert_or_internal_err!(
+            !self.in_mem_batches.is_empty(),
+            "in_mem_batches must not be empty when attempting to sort and spill"
+        );
 
         // Release the memory reserved for merge back to the pool so
         // there is some left when `in_mem_sort_stream` requests an
@@ -517,11 +547,10 @@ impl ExternalSorter {
             self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
-        if !self.in_mem_batches.is_empty() {
-            return internal_err!(
-                "in_mem_batches should be empty after constructing sorted stream"
-            );
-        }
+        assert_or_internal_err!(
+            self.in_mem_batches.is_empty(),
+            "in_mem_batches should be empty after constructing sorted stream"
+        );
         // 'global' here refers to all buffered batches when the memory limit is
         // reached. This variable will buffer the sorted batches after
         // sort-preserving merge and incrementally append to spill files.
@@ -529,7 +558,7 @@ impl ExternalSorter {
 
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
-            let sorted_size = get_reserved_byte_for_record_batch(&batch);
+            let sorted_size = get_reserved_bytes_for_record_batch(&batch)?;
             if self.reservation.try_grow(sorted_size).is_err() {
                 // Although the reservation is not enough, the batch is
                 // already in memory, so it's okay to combine it with previously
@@ -553,11 +582,10 @@ impl ExternalSorter {
         // Sanity check after spilling
         let buffers_cleared_property =
             self.in_mem_batches.is_empty() && globally_sorted_batches.is_empty();
-        if !buffers_cleared_property {
-            return internal_err!(
-                "in_mem_batches and globally_sorted_batches should be cleared before"
-            );
-        }
+        assert_or_internal_err!(
+            buffers_cleared_property,
+            "in_mem_batches and globally_sorted_batches should be cleared before"
+        );
 
         // Reserve headroom for next sort/merge
         self.reserve_memory_for_merge()?;
@@ -647,7 +675,7 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            return self.sort_batch_stream(batch, metrics, reservation);
+            return self.sort_batch_stream(batch, &metrics, reservation);
         }
 
         // If less than sort_in_place_threshold_bytes, concatenate and sort in place
@@ -656,10 +684,10 @@ impl ExternalSorter {
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
             self.reservation
-                .try_resize(get_reserved_byte_for_record_batch(&batch))
+                .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            return self.sort_batch_stream(batch, metrics, reservation);
+            return self.sort_batch_stream(batch, &metrics, reservation);
         }
 
         let streams = std::mem::take(&mut self.in_mem_batches)
@@ -668,18 +696,16 @@ impl ExternalSorter {
                 let metrics = self.metrics.baseline.intermediate();
                 let reservation = self
                     .reservation
-                    .split(get_reserved_byte_for_record_batch(&batch));
-                let input = self.sort_batch_stream(batch, metrics, reservation)?;
+                    .split(get_reserved_bytes_for_record_batch(&batch)?);
+                let input = self.sort_batch_stream(batch, &metrics, reservation)?;
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
 
-        let expressions: LexOrdering = self.expr.iter().cloned().collect();
-
         StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(Arc::clone(&self.schema))
-            .with_expressions(expressions.as_ref())
+            .with_expressions(&self.expr.clone())
             .with_metrics(metrics)
             .with_batch_size(self.batch_size)
             .with_fetch(None)
@@ -689,30 +715,64 @@ impl ExternalSorter {
 
     /// Sorts a single `RecordBatch` into a single stream.
     ///
-    /// `reservation` accounts for the memory used by this batch and
-    /// is released when the sort is complete
+    /// This may output multiple batches depending on the size of the
+    /// sorted data and the target batch size.
+    /// For single-batch output cases, `reservation` will be freed immediately after sorting,
+    /// as the batch will be output and is expected to be reserved by the consumer of the stream.
+    /// For multi-batch output cases, `reservation` will be grown to match the actual
+    /// size of sorted output, and as each batch is output, its memory will be freed from the reservation.
+    /// (This leads to the same behaviour, as futures are only evaluated when polled by the consumer.)
     fn sort_batch_stream(
         &self,
         batch: RecordBatch,
-        metrics: BaselineMetrics,
+        metrics: &BaselineMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
-            get_reserved_byte_for_record_batch(&batch),
+            get_reserved_bytes_for_record_batch(&batch)?,
             reservation.size()
         );
+
         let schema = batch.schema();
+        let expressions = self.expr.clone();
+        let batch_size = self.batch_size;
+        let output_row_metrics = metrics.output_rows().clone();
 
-        let expressions: LexOrdering = self.expr.iter().cloned().collect();
         let stream = futures::stream::once(async move {
-            let _timer = metrics.elapsed_compute().timer();
+            let schema = batch.schema();
 
-            let sorted = sort_batch(&batch, &expressions, None)?;
+            // Sort the batch immediately and get all output batches
+            let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
 
-            metrics.record_output(sorted.num_rows());
-            drop(batch);
-            drop(reservation);
-            Ok(sorted)
+            // Resize the reservation to match the actual sorted output size.
+            // Using try_resize avoids a release-then-reacquire cycle, which
+            // matters for MemoryPool implementations where grow/shrink have
+            // non-trivial cost (e.g. JNI calls in Comet).
+            let total_sorted_size: usize = sorted_batches
+                .iter()
+                .map(get_record_batch_memory_size)
+                .sum();
+            reservation
+                .try_resize(total_sorted_size)
+                .map_err(Self::err_with_oom_context)?;
+
+            // Wrap in ReservationStream to hold the reservation
+            Result::<_, DataFusionError>::Ok(Box::pin(ReservationStream::new(
+                Arc::clone(&schema),
+                Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&schema),
+                    futures::stream::iter(sorted_batches.into_iter().map(Ok)),
+                )),
+                reservation,
+            )) as SendableRecordBatchStream)
+        })
+        .try_flatten()
+        .map(move |batch| match batch {
+            Ok(batch) => {
+                output_row_metrics.add(batch.num_rows());
+                Ok(batch)
+            }
+            Err(e) => Err(e),
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
@@ -741,7 +801,7 @@ impl ExternalSorter {
         &mut self,
         input: &RecordBatch,
     ) -> Result<()> {
-        let size = get_reserved_byte_for_record_batch(input);
+        let size = get_reserved_bytes_for_record_batch(input)?;
 
         match self.reservation.try_grow(size) {
             Ok(_) => Ok(()),
@@ -765,7 +825,8 @@ impl ExternalSorter {
         match e {
             DataFusionError::ResourcesExhausted(_) => e.context(
                 "Not enough memory to continue external sort. \
-                    Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes"
+                    Consider increasing the memory limit config: 'datafusion.runtime.memory_limit', \
+                    or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'."
             ),
             // This is not an OOM error, so just return it as is.
             _ => e,
@@ -780,11 +841,29 @@ impl ExternalSorter {
 /// in sorting and merging. The sorted copies are in either row format or array format.
 /// Please refer to cursor.rs and stream.rs for more details. No matter what format the
 /// sorted copies are, they will use more memory than the original record batch.
-fn get_reserved_byte_for_record_batch(batch: &RecordBatch) -> usize {
-    // 2x may not be enough for some cases, but it's a good start.
+///
+/// This can basically be calculated as the sum of the actual space it takes in
+/// memory (which would be larger for a sliced batch), and the size of the actual data.
+pub(crate) fn get_reserved_bytes_for_record_batch_size(
+    record_batch_size: usize,
+    sliced_size: usize,
+) -> usize {
+    // Even 2x may not be enough for some cases, but it's a good enough estimation as a baseline.
     // If 2x is not enough, user can set a larger value for `sort_spill_reservation_bytes`
     // to compensate for the extra memory needed.
-    get_record_batch_memory_size(batch) * 2
+    record_batch_size + sliced_size
+}
+
+/// Estimate how much memory is needed to sort a `RecordBatch`.
+/// This will just call `get_reserved_bytes_for_record_batch_size` with the
+/// memory size of the record batch and its sliced size.
+pub(crate) fn get_reserved_bytes_for_record_batch(batch: &RecordBatch) -> Result<usize> {
+    batch.get_sliced_size().map(|sliced_size| {
+        get_reserved_bytes_for_record_batch_size(
+            get_record_batch_memory_size(batch),
+            sliced_size,
+        )
+    })
 }
 
 impl Debug for ExternalSorter {
@@ -809,15 +888,7 @@ pub fn sort_batch(
         .collect::<Result<Vec<_>>>()?;
 
     let indices = lexsort_to_indices(&sort_columns, fetch)?;
-    let mut columns = take_arrays(batch.columns(), &indices, None)?;
-
-    // The columns may be larger than the unsorted columns in `batch` especially for variable length
-    // data types due to exponential growth when building the sort columns. We shrink the columns
-    // to prevent memory reservation failures, as well as excessive memory allocation when running
-    // merges in `SortPreservingMergeStream`.
-    columns.iter_mut().for_each(|c| {
-        c.shrink_to_fit();
-    });
+    let columns = take_arrays(batch.columns(), &indices, None)?;
 
     let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
     Ok(RecordBatch::try_new_with_options(
@@ -825,6 +896,17 @@ pub fn sort_batch(
         columns,
         &options,
     )?)
+}
+
+/// Sort a batch and return the result as multiple batches of size `batch_size`.
+/// This is useful when you want to avoid creating one large sorted batch in memory,
+/// and instead want to process the sorted data in smaller chunks.
+pub fn sort_batch_chunked(
+    batch: &RecordBatch,
+    expressions: &LexOrdering,
+    batch_size: usize,
+) -> Result<Vec<RecordBatch>> {
+    IncrementalSortIterator::new(batch.clone(), expressions.clone(), batch_size).collect()
 }
 
 /// Sort execution plan.
@@ -845,9 +927,13 @@ pub struct SortExec {
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
     /// Normalized common sort prefix between the input and the sort expressions (only used with fetch)
-    common_sort_prefix: LexOrdering,
+    common_sort_prefix: Vec<PhysicalSortExpr>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
+    /// Filter matching the state of the sort for dynamic filter pushdown.
+    /// If `fetch` is `Some`, this will also be set and a TopK operator may be used.
+    /// If `fetch` is `None`, this will be `None`.
+    filter: Option<Arc<RwLock<TopKDynamicFilters>>>,
 }
 
 impl SortExec {
@@ -856,7 +942,8 @@ impl SortExec {
     pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
         let preserve_partitioning = false;
         let (cache, sort_prefix) =
-            Self::compute_properties(&input, expr.clone(), preserve_partitioning);
+            Self::compute_properties(&input, expr.clone(), preserve_partitioning)
+                .unwrap();
         Self {
             expr,
             input,
@@ -864,7 +951,8 @@ impl SortExec {
             preserve_partitioning,
             fetch: None,
             common_sort_prefix: sort_prefix,
-            cache,
+            cache: Arc::new(cache),
+            filter: None,
         }
     }
 
@@ -882,13 +970,34 @@ impl SortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
-        self.cache = self
-            .cache
-            .with_partitioning(Self::output_partitioning_helper(
-                &self.input,
-                self.preserve_partitioning,
-            ));
+        Arc::make_mut(&mut self.cache).partitioning =
+            Self::output_partitioning_helper(&self.input, self.preserve_partitioning);
         self
+    }
+
+    /// Add or reset `self.filter` to a new `TopKDynamicFilters`.
+    fn create_filter(&self) -> Arc<RwLock<TopKDynamicFilters>> {
+        let children = self
+            .expr
+            .iter()
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
+            .collect::<Vec<_>>();
+        Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+            DynamicFilterPhysicalExpr::new(children, lit(true)),
+        ))))
+    }
+
+    fn cloned(&self) -> Self {
+        SortExec {
+            input: Arc::clone(&self.input),
+            expr: self.expr.clone(),
+            metrics_set: self.metrics_set.clone(),
+            preserve_partitioning: self.preserve_partitioning,
+            common_sort_prefix: self.common_sort_prefix.clone(),
+            fetch: self.fetch,
+            cache: Arc::clone(&self.cache),
+            filter: self.filter.clone(),
+        }
     }
 
     /// Modify how many rows to include in the result
@@ -899,26 +1008,26 @@ impl SortExec {
     /// operation since rows that are not going to be included
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
-        let mut cache = self.cache.clone();
+        let mut cache = PlanProperties::clone(&self.cache);
         // If the SortExec can emit incrementally (that means the sort requirements
         // and properties of the input match), the SortExec can generate its result
         // without scanning the entire input when a fetch value exists.
         let is_pipeline_friendly = matches!(
-            self.cache.emission_type,
+            cache.emission_type,
             EmissionType::Incremental | EmissionType::Both
         );
         if fetch.is_some() && is_pipeline_friendly {
             cache = cache.with_boundedness(Boundedness::Bounded);
         }
-        SortExec {
-            input: Arc::clone(&self.input),
-            expr: self.expr.clone(),
-            metrics_set: self.metrics_set.clone(),
-            preserve_partitioning: self.preserve_partitioning,
-            common_sort_prefix: self.common_sort_prefix.clone(),
-            fetch,
-            cache,
-        }
+        let filter = fetch.is_some().then(|| {
+            // If we already have a filter, keep it. Otherwise, create a new one.
+            self.filter.clone().unwrap_or_else(|| self.create_filter())
+        });
+        let mut new_sort = self.cloned();
+        new_sort.fetch = fetch;
+        new_sort.cache = cache.into();
+        new_sort.filter = filter;
+        new_sort
     }
 
     /// Input schema
@@ -954,13 +1063,10 @@ impl SortExec {
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
         preserve_partitioning: bool,
-    ) -> (PlanProperties, LexOrdering) {
-        // Determine execution mode:
-        let requirement = LexRequirement::from(sort_exprs);
-
+    ) -> Result<(PlanProperties, Vec<PhysicalSortExpr>)> {
         let (sort_prefix, sort_satisfied) = input
             .equivalence_properties()
-            .extract_common_sort_prefix(&requirement);
+            .extract_common_sort_prefix(sort_exprs.clone())?;
 
         // The emission type depends on whether the input is already sorted:
         // - If already fully sorted, we can emit results in the same way as the input
@@ -989,25 +1095,22 @@ impl SortExec {
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
-        let sort_exprs = LexOrdering::from(requirement);
-        let eq_properties = input
-            .equivalence_properties()
-            .clone()
-            .with_reorder(sort_exprs);
+        let mut eq_properties = input.equivalence_properties().clone();
+        eq_properties.reorder(sort_exprs)?;
 
         // Get output partitioning:
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        (
+        Ok((
             PlanProperties::new(
                 eq_properties,
                 output_partitioning,
                 emission_type,
                 boundedness,
             ),
-            LexOrdering::from(sort_prefix),
-        )
+            sort_prefix,
+        ))
     }
 }
 
@@ -1018,14 +1121,38 @@ impl DisplayAs for SortExec {
                 let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
+                        write!(
+                            f,
+                            "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]",
+                            self.expr
+                        )?;
+                        if let Some(filter) = &self.filter
+                            && let Ok(current) = filter.read().expr().current()
+                            && !current.eq(&lit(true))
+                        {
+                            write!(f, ", filter=[{current}]")?;
+                        }
                         if !self.common_sort_prefix.is_empty() {
-                            write!(f, ", sort_prefix=[{}]", self.common_sort_prefix)
+                            write!(f, ", sort_prefix=[")?;
+                            let mut first = true;
+                            for sort_expr in &self.common_sort_prefix {
+                                if first {
+                                    first = false;
+                                } else {
+                                    write!(f, ", ")?;
+                                }
+                                write!(f, "{sort_expr}")?;
+                            }
+                            write!(f, "]")
                         } else {
                             Ok(())
                         }
                     }
-                    None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
+                    None => write!(
+                        f,
+                        "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]",
+                        self.expr
+                    ),
                 }
             }
             DisplayFormatType::TreeRender => match self.fetch {
@@ -1053,7 +1180,7 @@ impl ExecutionPlan for SortExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -1071,6 +1198,25 @@ impl ExecutionPlan for SortExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to sort expressions
+        let mut tnr = TreeNodeRecursion::Continue;
+        for sort_expr in &self.expr {
+            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+        }
+
+        // Apply to dynamic filter expression if present (when fetch is Some, TopK mode)
+        if let Some(filter) = &self.filter {
+            let filter_guard = filter.read();
+            tnr = tnr.visit_sibling(|| f(filter_guard.expr().as_ref()))?;
+        }
+
+        Ok(tnr)
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }
@@ -1079,9 +1225,35 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_sort = SortExec::new(self.expr.clone(), Arc::clone(&children[0]))
-            .with_fetch(self.fetch)
-            .with_preserve_partitioning(self.preserve_partitioning);
+        let mut new_sort = self.cloned();
+        assert_eq!(children.len(), 1, "SortExec should have exactly one child");
+        new_sort.input = Arc::clone(&children[0]);
+
+        if !has_same_children_properties(self.as_ref(), &children)? {
+            // Recompute the properties based on the new input since they may have changed
+            let (cache, sort_prefix) = Self::compute_properties(
+                &new_sort.input,
+                new_sort.expr.clone(),
+                new_sort.preserve_partitioning,
+            )?;
+            new_sort.cache = Arc::new(cache);
+            new_sort.common_sort_prefix = sort_prefix;
+        }
+
+        Ok(Arc::new(new_sort))
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let children = self.children().into_iter().cloned().collect();
+        let new_sort = self.with_new_children(children)?;
+        let mut new_sort = new_sort
+            .as_any()
+            .downcast_ref::<SortExec>()
+            .expect("cloned 1 lines above this line, we know the type")
+            .clone();
+        // Our dynamic filter and execution metrics are the state we need to reset.
+        new_sort.filter = Some(new_sort.create_filter());
+        new_sort.metrics_set = ExecutionPlanMetricsSet::new();
 
         Ok(Arc::new(new_sort))
     }
@@ -1091,7 +1263,12 @@ impl ExecutionPlan for SortExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start SortExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
 
         let mut input = self.input.execute(partition, Arc::clone(&context))?;
 
@@ -1099,12 +1276,10 @@ impl ExecutionPlan for SortExec {
 
         trace!("End SortExec's input.execute for partition: {partition}");
 
-        let requirement = &LexRequirement::from(self.expr.clone());
-
         let sort_satisfied = self
             .input
             .equivalence_properties()
-            .ordering_satisfy_requirement(requirement);
+            .ordering_satisfy(self.expr.clone())?;
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(
@@ -1115,6 +1290,7 @@ impl ExecutionPlan for SortExec {
             ))),
             (true, None) => Ok(input),
             (false, Some(fetch)) => {
+                let filter = self.filter.clone();
                 let mut topk = TopK::try_new(
                     partition,
                     input.schema(),
@@ -1124,6 +1300,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     context.runtime_env(),
                     &self.metrics_set,
+                    Arc::clone(&unwrap_or_internal_err!(filter)),
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -1148,6 +1325,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
+                    context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;
@@ -1170,25 +1348,14 @@ impl ExecutionPlan for SortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if !self.preserve_partitioning() {
-            return self.input.partition_statistics(None)?.with_fetch(
-                self.schema(),
-                self.fetch,
-                0,
-                1,
-            );
-        }
-        self.input.partition_statistics(partition)?.with_fetch(
-            self.schema(),
-            self.fetch,
-            0,
-            1,
-        )
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let p = if !self.preserve_partitioning() {
+            None
+        } else {
+            partition
+        };
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(p)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -1219,23 +1386,49 @@ impl ExecutionPlan for SortExec {
             return Ok(None);
         }
 
-        let mut updated_exprs = LexOrdering::default();
-        for sort in self.expr() {
-            let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)?
-            else {
-                return Ok(None);
-            };
-            updated_exprs.push(PhysicalSortExpr {
-                expr: new_expr,
-                options: sort.options,
-            });
-        }
+        let Some(updated_exprs) = update_ordering(self.expr.clone(), projection.expr())?
+        else {
+            return Ok(None);
+        };
 
         Ok(Some(Arc::new(
             SortExec::new(updated_exprs, make_with_child(projection, self.input())?)
                 .with_fetch(self.fetch())
                 .with_preserve_partitioning(self.preserve_partitioning()),
         )))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &datafusion_common::config::ConfigOptions,
+    ) -> Result<FilterDescription> {
+        if phase != FilterPushdownPhase::Post {
+            if self.fetch.is_some() {
+                return Ok(FilterDescription::all_unsupported(
+                    &parent_filters,
+                    &self.children(),
+                ));
+            }
+            return FilterDescription::from_children(parent_filters, &self.children());
+        }
+
+        // In Post phase: block parent filters when fetch is set,
+        // but still push the TopK dynamic filter (self-filter).
+        let mut child = if self.fetch.is_some() {
+            ChildFilterDescription::all_unsupported(&parent_filters)
+        } else {
+            ChildFilterDescription::from_child(&parent_filters, self.input())?
+        };
+
+        if let Some(filter) = &self.filter
+            && config.optimizer.enable_topk_dynamic_filter_pushdown
+        {
+            child = child.with_self_filter(filter.read().expr());
+        }
+
+        Ok(FilterDescription::new().with_child(child))
     }
 }
 
@@ -1248,33 +1441,39 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::collect;
+    use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
+    use crate::filter_pushdown::{FilterPushdownPhase, PushedDown};
     use crate::test;
-    use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
+    use crate::test::{assert_is_pending, make_partition};
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_primitive_array;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::RecordBatchStream;
-    use datafusion_physical_expr::expressions::{Column, Literal};
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool,
+    };
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::expressions::{Column, Literal};
 
-    use futures::{FutureExt, Stream};
+    use futures::{FutureExt, Stream, TryStreamExt};
     use insta::assert_snapshot;
 
     #[derive(Debug, Clone)]
     pub struct SortedUnboundedExec {
         schema: Schema,
         batch_size: u64,
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
     }
 
     impl DisplayAs for SortedUnboundedExec {
@@ -1291,9 +1490,9 @@ mod tests {
     impl SortedUnboundedExec {
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
             let mut eq_properties = EquivalenceProperties::new(schema);
-            eq_properties.add_new_orderings(vec![LexOrdering::new(vec![
-                PhysicalSortExpr::new_default(Arc::new(Column::new("c1", 0))),
-            ])]);
+            eq_properties.add_ordering([PhysicalSortExpr::new_default(Arc::new(
+                Column::new("c1", 0),
+            ))]);
             PlanProperties::new(
                 eq_properties,
                 Partitioning::UnknownPartitioning(1),
@@ -1314,7 +1513,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
 
@@ -1327,6 +1526,13 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(
@@ -1393,10 +1599,11 @@ mod tests {
         let schema = csv.schema();
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("i", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
 
@@ -1404,7 +1611,6 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].num_rows(), 400);
-
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
@@ -1439,10 +1645,11 @@ mod tests {
         let schema = input.schema();
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("i", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
 
@@ -1468,14 +1675,13 @@ mod tests {
         // bytes. We leave a little wiggle room for the actual numbers.
         assert!((3..=10).contains(&spill_count));
         assert!((9000..=10000).contains(&spilled_rows));
-        assert!((38000..=42000).contains(&spilled_bytes));
+        assert!((38000..=44000).contains(&spilled_bytes));
 
         let columns = result[0].columns();
 
         let i = as_primitive_array::<Int32Type>(&columns[0])?;
         assert_eq!(i.value(0), 0);
         assert_eq!(i.value(i.len() - 1), 81);
-
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
@@ -1488,13 +1694,24 @@ mod tests {
     #[tokio::test]
     async fn test_batch_reservation_error() -> Result<()> {
         // Pick a memory limit and sort_spill_reservation that make the first batch reservation fail.
-        // These values assume that the ExternalSorter will reserve 800 bytes for the first batch.
-        let expected_batch_reservation = 800;
         let merge_reservation: usize = 0; // Set to 0 for simplicity
-        let memory_limit: usize = expected_batch_reservation + merge_reservation - 1; // Just short of what we need
 
         let session_config =
             SessionConfig::new().with_sort_spill_reservation_bytes(merge_reservation);
+
+        let plan = test::scan_partitioned(1);
+
+        // Read the first record batch to determine the actual memory requirement
+        let expected_batch_reservation = {
+            let temp_ctx = Arc::new(TaskContext::default());
+            let mut stream = plan.execute(0, Arc::clone(&temp_ctx))?;
+            let first_batch = stream.next().await.unwrap()?;
+            get_reserved_bytes_for_record_batch(&first_batch)?
+        };
+
+        // Set memory limit just short of what we need
+        let memory_limit: usize = expected_batch_reservation + merge_reservation - 1;
+
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(memory_limit, 1.0)
             .build_arc()?;
@@ -1504,32 +1721,22 @@ mod tests {
                 .with_runtime(runtime),
         );
 
-        let plan = test::scan_partitioned(1);
-
-        // Read the first record batch to assert that our memory limit and sort_spill_reservation
-        // settings trigger the test scenario.
+        // Verify that our memory limit is insufficient
         {
             let mut stream = plan.execute(0, Arc::clone(&task_ctx))?;
             let first_batch = stream.next().await.unwrap()?;
-            let batch_reservation = get_reserved_byte_for_record_batch(&first_batch);
+            let batch_reservation = get_reserved_bytes_for_record_batch(&first_batch)?;
 
             assert_eq!(batch_reservation, expected_batch_reservation);
             assert!(memory_limit < (merge_reservation + batch_reservation));
         }
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
-                expr: col("i", &plan.schema())?,
-                options: SortOptions::default(),
-            }]),
+            [PhysicalSortExpr::new_default(col("i", &plan.schema())?)].into(),
             plan,
         ));
 
-        let result = collect(
-            Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
-            Arc::clone(&task_ctx),
-        )
-        .await;
+        let result = collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await;
 
         let err = result.unwrap_err();
         assert!(
@@ -1542,6 +1749,21 @@ mod tests {
             matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
             "Assertion failed: expected a ResourcesExhausted error, but got: {err:?}"
         );
+
+        // Verify external sorter error message when resource is exhausted
+        let config_vector = vec![
+            "datafusion.runtime.memory_limit",
+            "datafusion.execution.sort_spill_reservation_bytes",
+        ];
+        let error_message = err.message().to_string();
+        for config in config_vector.into_iter() {
+            assert!(
+                error_message.as_str().contains(config),
+                "Config: '{}' should be contained in error message: {}.",
+                config,
+                error_message.as_str()
+            );
+        }
 
         Ok(())
     }
@@ -1563,23 +1785,20 @@ mod tests {
 
         // The input has 200 partitions, each partition has a batch containing 100 rows.
         // Each row has a single Utf8 column, the Utf8 string values are roughly 42 bytes.
-        // The total size of the input is roughly 8.4 KB.
+        // The total size of the input is roughly 820 KB.
         let input = test::scan_partitioned_utf8(200);
         let schema = input.schema();
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("i", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
 
-        let result = collect(
-            Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
-            Arc::clone(&task_ctx),
-        )
-        .await?;
+        let result = collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await?;
 
         let num_rows = result.iter().map(|batch| batch.num_rows()).sum::<usize>();
         assert_eq!(num_rows, 20000);
@@ -1668,26 +1887,111 @@ mod tests {
 
             let sort_exec = Arc::new(
                 SortExec::new(
-                    LexOrdering::new(vec![PhysicalSortExpr {
+                    [PhysicalSortExpr {
                         expr: col("i", &schema)?,
                         options: SortOptions::default(),
-                    }]),
+                    }]
+                    .into(),
                     Arc::new(CoalescePartitionsExec::new(csv)),
                 )
                 .with_fetch(fetch),
             );
 
-            let result = collect(
-                Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
-                Arc::clone(&task_ctx),
-            )
-            .await?;
+            let result =
+                collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await?;
             assert_eq!(result.len(), 1);
 
             let metrics = sort_exec.metrics().unwrap();
             let did_it_spill = metrics.spill_count().unwrap_or(0) > 0;
             assert_eq!(did_it_spill, expect_spillage, "with fetch: {fetch:?}");
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_memory_reduction_per_batch() -> Result<()> {
+        // This test verifies that memory reservation is reduced for every batch emitted
+        // during the sort process. This is important to ensure we don't hold onto
+        // memory longer than necessary.
+
+        // Create a large enough batch that will be split into multiple output batches
+        let batch_size = 50; // Small batch size to force multiple output batches
+        let num_rows = 1000; // Create enough data for multiple batches
+
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(batch_size)
+                    .with_sort_in_place_threshold_bytes(usize::MAX), // Ensure we don't concat batches
+            ),
+        );
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create unsorted data
+        let mut values: Vec<i32> = (0..num_rows).collect();
+        values.reverse();
+
+        let input_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(values))],
+        )?;
+
+        let batches = vec![input_batch];
+
+        let sort_exec = Arc::new(SortExec::new(
+            [PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            }]
+            .into(),
+            TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&schema),
+                None,
+            )?,
+        ));
+
+        let mut stream = sort_exec.execute(0, Arc::clone(&task_ctx))?;
+
+        let mut previous_reserved = task_ctx.runtime_env().memory_pool.reserved();
+        let mut batch_count = 0;
+
+        // Collect batches and verify memory is reduced with each batch
+        while let Some(result) = stream.next().await {
+            let batch = result?;
+            batch_count += 1;
+
+            // Verify we got a non-empty batch
+            assert!(batch.num_rows() > 0, "Batch should not be empty");
+
+            let current_reserved = task_ctx.runtime_env().memory_pool.reserved();
+
+            // After the first batch, memory should be reducing or staying the same
+            // (it should not increase as we emit batches)
+            if batch_count > 1 {
+                assert!(
+                    current_reserved <= previous_reserved,
+                    "Memory reservation should decrease or stay same as batches are emitted. \
+                     Batch {batch_count}: previous={previous_reserved}, current={current_reserved}"
+                );
+            }
+
+            previous_reserved = current_reserved;
+        }
+
+        assert!(
+            batch_count > 1,
+            "Expected multiple batches to be emitted, got {batch_count}"
+        );
+
+        // Verify all memory is returned at the end
+        assert_eq!(
+            task_ctx.runtime_env().memory_pool.reserved(),
+            0,
+            "All memory should be returned after consuming all batches"
+        );
+
         Ok(())
     }
 
@@ -1711,16 +2015,16 @@ mod tests {
         let data: ArrayRef =
             Arc::new(vec![3, 2, 1].into_iter().map(Some).collect::<UInt64Array>());
 
-        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data]).unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data])?;
         let input =
-            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
-                .unwrap();
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("field_name", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             input,
         ));
 
@@ -1729,7 +2033,7 @@ mod tests {
         let expected_data: ArrayRef =
             Arc::new(vec![1, 2, 3].into_iter().map(Some).collect::<UInt64Array>());
         let expected_batch =
-            RecordBatch::try_new(Arc::clone(&schema), vec![expected_data]).unwrap();
+            RecordBatch::try_new(Arc::clone(&schema), vec![expected_data])?;
 
         // Data is correct
         assert_eq!(&vec![expected_batch], &result);
@@ -1768,7 +2072,7 @@ mod tests {
         )?;
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![
+            [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: SortOptions {
@@ -1783,7 +2087,8 @@ mod tests {
                         nulls_first: false,
                     },
                 },
-            ]),
+            ]
+            .into(),
             TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?,
         ));
 
@@ -1854,7 +2159,7 @@ mod tests {
         )?;
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![
+            [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: SortOptions {
@@ -1869,7 +2174,8 @@ mod tests {
                         nulls_first: false,
                     },
                 },
-            ]),
+            ]
+            .into(),
             TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
         ));
 
@@ -1933,10 +2239,11 @@ mod tests {
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             blocking_exec,
         ));
 
@@ -1964,12 +2271,13 @@ mod tests {
             RecordBatch::try_new_with_options(Arc::clone(&schema), vec![], &options)
                 .unwrap();
 
-        let expressions = LexOrdering::new(vec![PhysicalSortExpr {
+        let expressions = [PhysicalSortExpr {
             expr: Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
             options: SortOptions::default(),
-        }]);
+        }]
+        .into();
 
-        let result = sort_batch(&batch, expressions.as_ref(), None).unwrap();
+        let result = sort_batch(&batch, &expressions, None).unwrap();
         assert_eq!(result.num_rows(), 1);
     }
 
@@ -1980,32 +2288,655 @@ mod tests {
         let source = SortedUnboundedExec {
             schema: schema.clone(),
             batch_size: 2,
-            cache: SortedUnboundedExec::compute_properties(Arc::new(schema.clone())),
+            cache: Arc::new(SortedUnboundedExec::compute_properties(Arc::new(
+                schema.clone(),
+            ))),
         };
         let mut plan = SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            [PhysicalSortExpr::new_default(Arc::new(Column::new(
                 "c1", 0,
-            )))]),
+            )))]
+            .into(),
             Arc::new(source),
         );
         plan = plan.with_fetch(Some(9));
 
         let batches = collect(Arc::new(plan), task_ctx).await?;
-        assert_snapshot!(batches_to_string(&batches), @r#"
-            +----+
-            | c1 |
-            +----+
-            | 0  |
-            | 1  |
-            | 2  |
-            | 3  |
-            | 4  |
-            | 5  |
-            | 6  |
-            | 7  |
-            | 8  |
-            +----+
-            "#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+
+        | c1 |
+        +----+
+        | 0  |
+        | 1  |
+        | 2  |
+        | 3  |
+        | 4  |
+        | 5  |
+        | 6  |
+        | 7  |
+        | 8  |
+        +----+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_return_stream_with_batches_in_the_requested_size() -> Result<()> {
+        let batch_size = 100;
+
+        let create_task_ctx = |_: &[RecordBatch]| {
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(batch_size)
+                    .with_sort_in_place_threshold_bytes(usize::MAX),
+            )
+        };
+
+        // Smaller than batch size and require more than a single batch to get the requested batch size
+        test_sort_output_batch_size(10, batch_size / 4, create_task_ctx).await?;
+
+        // Not evenly divisible by batch size
+        test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
+
+        // Evenly divisible by batch size and is larger than 2 output batches
+        test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_return_stream_with_batches_in_the_requested_size_when_sorting_in_place()
+    -> Result<()> {
+        let batch_size = 100;
+
+        let create_task_ctx = |_: &[RecordBatch]| {
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(batch_size)
+                    .with_sort_in_place_threshold_bytes(usize::MAX - 1),
+            )
+        };
+
+        // Smaller than batch size and require more than a single batch to get the requested batch size
+        {
+            let metrics =
+                test_sort_output_batch_size(10, batch_size / 4, create_task_ctx).await?;
+
+            assert_eq!(
+                metrics.spill_count(),
+                Some(0),
+                "Expected no spills when sorting in place"
+            );
+        }
+
+        // Not evenly divisible by batch size
+        {
+            let metrics =
+                test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
+
+            assert_eq!(
+                metrics.spill_count(),
+                Some(0),
+                "Expected no spills when sorting in place"
+            );
+        }
+
+        // Evenly divisible by batch size and is larger than 2 output batches
+        {
+            let metrics =
+                test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
+
+            assert_eq!(
+                metrics.spill_count(),
+                Some(0),
+                "Expected no spills when sorting in place"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_return_stream_with_batches_in_the_requested_size_when_having_a_single_batch()
+    -> Result<()> {
+        let batch_size = 100;
+
+        let create_task_ctx = |_: &[RecordBatch]| {
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(batch_size))
+        };
+
+        // Smaller than batch size and require more than a single batch to get the requested batch size
+        {
+            let metrics = test_sort_output_batch_size(
+                // Single batch
+                1,
+                batch_size / 4,
+                create_task_ctx,
+            )
+            .await?;
+
+            assert_eq!(
+                metrics.spill_count(),
+                Some(0),
+                "Expected no spills when sorting in place"
+            );
+        }
+
+        // Not evenly divisible by batch size
+        {
+            let metrics = test_sort_output_batch_size(
+                // Single batch
+                1,
+                batch_size + 7,
+                create_task_ctx,
+            )
+            .await?;
+
+            assert_eq!(
+                metrics.spill_count(),
+                Some(0),
+                "Expected no spills when sorting in place"
+            );
+        }
+
+        // Evenly divisible by batch size and is larger than 2 output batches
+        {
+            let metrics = test_sort_output_batch_size(
+                // Single batch
+                1,
+                batch_size * 3,
+                create_task_ctx,
+            )
+            .await?;
+
+            assert_eq!(
+                metrics.spill_count(),
+                Some(0),
+                "Expected no spills when sorting in place"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_return_stream_with_batches_in_the_requested_size_when_having_to_spill()
+    -> Result<()> {
+        let batch_size = 100;
+
+        let create_task_ctx = |generated_batches: &[RecordBatch]| {
+            let batches_memory = generated_batches
+                .iter()
+                .map(|b| b.get_array_memory_size())
+                .sum::<usize>();
+
+            TaskContext::default()
+                .with_session_config(
+                    SessionConfig::new()
+                        .with_batch_size(batch_size)
+                        // To make sure there is no in place sorting
+                        .with_sort_in_place_threshold_bytes(1)
+                        .with_sort_spill_reservation_bytes(1),
+                )
+                .with_runtime(
+                    RuntimeEnvBuilder::default()
+                        .with_memory_limit(batches_memory, 1.0)
+                        .build_arc()
+                        .unwrap(),
+                )
+        };
+
+        // Smaller than batch size and require more than a single batch to get the requested batch size
+        {
+            let metrics =
+                test_sort_output_batch_size(10, batch_size / 4, create_task_ctx).await?;
+
+            assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
+        }
+
+        // Not evenly divisible by batch size
+        {
+            let metrics =
+                test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
+
+            assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
+        }
+
+        // Evenly divisible by batch size and is larger than 2 batches
+        {
+            let metrics =
+                test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
+
+            assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
+        }
+
+        Ok(())
+    }
+
+    async fn test_sort_output_batch_size(
+        number_of_batches: usize,
+        batch_size_to_generate: usize,
+        create_task_ctx: impl Fn(&[RecordBatch]) -> TaskContext,
+    ) -> Result<MetricsSet> {
+        let batches = (0..number_of_batches)
+            .map(|_| make_partition(batch_size_to_generate as i32))
+            .collect::<Vec<_>>();
+        let task_ctx = create_task_ctx(batches.as_slice());
+
+        let expected_batch_size = task_ctx.session_config().batch_size();
+
+        let (mut output_batches, metrics) =
+            run_sort_on_input(task_ctx, "i", batches).await?;
+
+        let last_batch = output_batches.pop().unwrap();
+
+        for batch in output_batches {
+            assert_eq!(batch.num_rows(), expected_batch_size);
+        }
+
+        let mut last_expected_batch_size =
+            (batch_size_to_generate * number_of_batches) % expected_batch_size;
+        if last_expected_batch_size == 0 {
+            last_expected_batch_size = expected_batch_size;
+        }
+        assert_eq!(last_batch.num_rows(), last_expected_batch_size);
+
+        Ok(metrics)
+    }
+
+    async fn run_sort_on_input(
+        task_ctx: TaskContext,
+        order_by_col: &str,
+        batches: Vec<RecordBatch>,
+    ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
+        let task_ctx = Arc::new(task_ctx);
+
+        // let task_ctx = env.
+        let schema = batches[0].schema();
+        let ordering: LexOrdering = [PhysicalSortExpr {
+            expr: col(order_by_col, &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }]
+        .into();
+        let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
+            ordering.clone(),
+            TestMemoryExec::try_new_exec(std::slice::from_ref(&batches), schema, None)?,
+        ));
+
+        let sorted_batches =
+            collect(Arc::clone(&sort_exec), Arc::clone(&task_ctx)).await?;
+
+        let metrics = sort_exec.metrics().expect("sort have metrics");
+
+        // assert output
+        {
+            let input_batches_concat = concat_batches(batches[0].schema_ref(), &batches)?;
+            let sorted_input_batch = sort_batch(&input_batches_concat, &ordering, None)?;
+
+            let sorted_batches_concat =
+                concat_batches(sorted_batches[0].schema_ref(), &sorted_batches)?;
+
+            assert_eq!(sorted_input_batch, sorted_batches_concat);
+        }
+
+        Ok((sorted_batches, metrics))
+    }
+
+    #[tokio::test]
+    async fn test_sort_batch_chunked_basic() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a batch with 1000 rows
+        let mut values: Vec<i32> = (0..1000).collect();
+        // Shuffle to make it unsorted
+        values.reverse();
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(values))],
+        )?;
+
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+
+        // Sort with batch_size = 250
+        let result_batches = sort_batch_chunked(&batch, &expressions, 250)?;
+
+        // Verify 4 batches are returned
+        assert_eq!(result_batches.len(), 4);
+
+        // Verify each batch has <= 250 rows
+        let mut total_rows = 0;
+        for (i, batch) in result_batches.iter().enumerate() {
+            assert!(
+                batch.num_rows() <= 250,
+                "Batch {} has {} rows, expected <= 250",
+                i,
+                batch.num_rows()
+            );
+            total_rows += batch.num_rows();
+        }
+
+        // Verify total row count matches input
+        assert_eq!(total_rows, 1000);
+
+        // Verify data is correctly sorted across all chunks
+        let concatenated = concat_batches(&schema, &result_batches)?;
+        let array = as_primitive_array::<Int32Type>(concatenated.column(0))?;
+        for i in 0..array.len() - 1 {
+            assert!(
+                array.value(i) <= array.value(i + 1),
+                "Array not sorted at position {}: {} > {}",
+                i,
+                array.value(i),
+                array.value(i + 1)
+            );
+        }
+        assert_eq!(array.value(0), 0);
+        assert_eq!(array.value(array.len() - 1), 999);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_batch_chunked_smaller_than_batch_size() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a batch with 50 rows
+        let values: Vec<i32> = (0..50).rev().collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(values))],
+        )?;
+
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+
+        // Sort with batch_size = 100
+        let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
+
+        // Should return exactly 1 batch
+        assert_eq!(result_batches.len(), 1);
+        assert_eq!(result_batches[0].num_rows(), 50);
+
+        // Verify it's correctly sorted
+        let array = as_primitive_array::<Int32Type>(result_batches[0].column(0))?;
+        for i in 0..array.len() - 1 {
+            assert!(array.value(i) <= array.value(i + 1));
+        }
+        assert_eq!(array.value(0), 0);
+        assert_eq!(array.value(49), 49);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_batch_chunked_exact_multiple() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a batch with 1000 rows
+        let values: Vec<i32> = (0..1000).rev().collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(values))],
+        )?;
+
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+
+        // Sort with batch_size = 100
+        let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
+
+        // Should return exactly 10 batches of 100 rows each
+        assert_eq!(result_batches.len(), 10);
+        for batch in &result_batches {
+            assert_eq!(batch.num_rows(), 100);
+        }
+
+        // Verify sorted correctly across all batches
+        let concatenated = concat_batches(&schema, &result_batches)?;
+        let array = as_primitive_array::<Int32Type>(concatenated.column(0))?;
+        for i in 0..array.len() - 1 {
+            assert!(array.value(i) <= array.value(i + 1));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_batch_chunked_empty_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let batch = RecordBatch::new_empty(Arc::clone(&schema));
+
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+
+        let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
+
+        // Empty input produces no output batches (0 chunks)
+        assert_eq!(result_batches.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_reserved_bytes_for_record_batch_with_sliced_batches() -> Result<()>
+    {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a larger batch then slice it
+        let large_array = Int32Array::from((0..1000).collect::<Vec<i32>>());
+        let sliced_array = large_array.slice(100, 50); // Take 50 elements starting at 100
+
+        let sliced_batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(sliced_array)])?;
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(large_array)])?;
+
+        let sliced_reserved = get_reserved_bytes_for_record_batch(&sliced_batch)?;
+        let reserved = get_reserved_bytes_for_record_batch(&batch)?;
+
+        // The reserved memory for the sliced batch should be less than that of the full batch
+        assert!(reserved > sliced_reserved);
+
+        Ok(())
+    }
+
+    /// Verifies that `ExternalSorter::sort()` transfers the pre-reserved
+    /// merge bytes to the merge stream via `take()`, rather than leaving
+    /// them in the sorter (via `new_empty()`).
+    ///
+    /// 1. Create a sorter with a tight memory pool and insert enough data
+    ///    to force spilling
+    /// 2. Verify `merge_reservation` holds the pre-reserved bytes before sort
+    /// 3. Call `sort()` to get the merge stream
+    /// 4. Verify `merge_reservation` is now 0 (bytes transferred to merge stream)
+    /// 5. Simulate contention: a competing consumer grabs all available pool memory
+    /// 6. Verify the merge stream still works (it uses its pre-reserved bytes
+    ///    as initial budget, not requesting from pool starting at 0)
+    ///
+    /// With `new_empty()` (before fix), step 4 fails: `merge_reservation`
+    /// still holds the bytes, the merge stream starts with 0 budget, and
+    /// those bytes become unaccounted-for reserved memory that nobody uses.
+    #[tokio::test]
+    async fn test_sort_merge_reservation_transferred_not_freed() -> Result<()> {
+        let sort_spill_reservation_bytes: usize = 10 * 1024; // 10 KB
+
+        // Pool: merge reservation (10KB) + enough room for sort to work.
+        // The room must accommodate batch data accumulation before spilling.
+        let sort_working_memory: usize = 40 * 1024; // 40 KB for sort operations
+        let pool_size = sort_spill_reservation_bytes + sort_working_memory;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .build_arc()?;
+
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+
+        let mut sorter = ExternalSorter::new(
+            0,
+            Arc::clone(&schema),
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into(),
+            128, // batch_size
+            sort_spill_reservation_bytes,
+            usize::MAX, // sort_in_place_threshold_bytes (high to avoid concat path)
+            SpillCompression::Uncompressed,
+            &metrics_set,
+            Arc::clone(&runtime),
+        )?;
+
+        // Insert enough data to force spilling.
+        let num_batches = 200;
+        for i in 0..num_batches {
+            let values: Vec<i32> = ((i * 100)..((i + 1) * 100)).rev().collect();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(values))],
+            )?;
+            sorter.insert_batch(batch).await?;
+        }
+
+        assert!(
+            sorter.spilled_before(),
+            "Test requires spilling to exercise the merge path"
+        );
+
+        // Before sort(), merge_reservation holds sort_spill_reservation_bytes.
+        assert!(
+            sorter.merge_reservation_size() >= sort_spill_reservation_bytes,
+            "merge_reservation should hold the pre-reserved bytes before sort()"
+        );
+
+        // Call sort() to get the merge stream. With the fix (take()),
+        // the pre-reserved merge bytes are transferred to the merge
+        // stream. Without the fix (free() + new_empty()), the bytes
+        // are released back to the pool and the merge stream starts
+        // with 0 bytes.
+        let merge_stream = sorter.sort().await?;
+
+        // THE KEY ASSERTION: after sort(), merge_reservation must be 0.
+        // This proves take() transferred the bytes to the merge stream,
+        // rather than them being freed back to the pool where other
+        // partitions could steal them.
+        assert_eq!(
+            sorter.merge_reservation_size(),
+            0,
+            "After sort(), merge_reservation should be 0 (bytes transferred \
+             to merge stream via take()). If non-zero, the bytes are still \
+             held by the sorter and will be freed on drop, allowing other \
+             partitions to steal them."
+        );
+
+        // Drop the sorter to free its reservations back to the pool.
+        drop(sorter);
+
+        // Simulate contention: another partition grabs ALL available
+        // pool memory. If the merge stream didn't receive the
+        // pre-reserved bytes via take(), it will fail when it tries
+        // to allocate memory for reading spill files.
+        let contender = MemoryConsumer::new("CompetingPartition").register(&pool);
+        let available = pool_size.saturating_sub(pool.reserved());
+        if available > 0 {
+            contender.try_grow(available).unwrap();
+        }
+
+        // The merge stream must still produce correct results despite
+        // the pool being fully consumed by the contender. This only
+        // works if sort() transferred the pre-reserved bytes to the
+        // merge stream (via take()) rather than freeing them.
+        let batches: Vec<RecordBatch> = merge_stream.try_collect().await?;
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows,
+            (num_batches * 100) as usize,
+            "Merge stream should produce all rows even under memory contention"
+        );
+
+        // Verify data is sorted
+        let merged = concat_batches(&schema, &batches)?;
+        let col = merged.column(0).as_primitive::<Int32Type>();
+        for i in 1..col.len() {
+            assert!(
+                col.value(i - 1) <= col.value(i),
+                "Output should be sorted, but found {} > {} at index {}",
+                col.value(i - 1),
+                col.value(i),
+                i
+            );
+        }
+
+        drop(contender);
+        Ok(())
+    }
+
+    fn make_sort_exec_with_fetch(fetch: Option<usize>) -> SortExec {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let input = Arc::new(EmptyExec::new(schema));
+        SortExec::new(
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
+            input,
+        )
+        .with_fetch(fetch)
+    }
+
+    #[test]
+    fn test_sort_with_fetch_blocks_filter_pushdown() -> Result<()> {
+        let sort = make_sort_exec_with_fetch(Some(10));
+        let desc = sort.gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![Arc::new(Column::new("a", 0))],
+            &ConfigOptions::new(),
+        )?;
+        // Sort with fetch (TopK) must not allow filters to be pushed below it.
+        assert!(matches!(
+            desc.parent_filters()[0][0].discriminant,
+            PushedDown::No
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_sort_without_fetch_allows_filter_pushdown() -> Result<()> {
+        let sort = make_sort_exec_with_fetch(None);
+        let desc = sort.gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![Arc::new(Column::new("a", 0))],
+            &ConfigOptions::new(),
+        )?;
+        // Plain sort (no fetch) is filter-commutative.
+        assert!(matches!(
+            desc.parent_filters()[0][0].discriminant,
+            PushedDown::Yes
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_sort_with_fetch_allows_topk_self_filter_in_post_phase() -> Result<()> {
+        let sort = make_sort_exec_with_fetch(Some(10));
+        assert!(sort.filter.is_some(), "TopK filter should be created");
+
+        let mut config = ConfigOptions::new();
+        config.optimizer.enable_topk_dynamic_filter_pushdown = true;
+        let desc = sort.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![Arc::new(Column::new("a", 0))],
+            &config,
+        )?;
+        // Parent filters are still blocked in the Post phase.
+        assert!(matches!(
+            desc.parent_filters()[0][0].discriminant,
+            PushedDown::No
+        ));
+        // But the TopK self-filter should be pushed down.
+        assert_eq!(desc.self_filters()[0].len(), 1);
         Ok(())
     }
 }

@@ -22,20 +22,23 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType, PlanProperties};
-use crate::display::{display_orderings, ProjectSchemaDisplay};
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::coop::make_cooperative;
+use crate::display::{ProjectSchemaDisplay, display_orderings};
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    all_alias_free_columns, new_projections_for_columns, update_expr, ProjectionExec,
+    ProjectionExec, all_alias_free_columns, new_projections_for_columns, update_ordering,
 };
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -66,7 +69,7 @@ pub struct StreamingTableExec {
     projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
     limit: Option<usize>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -99,7 +102,7 @@ impl StreamingTableExec {
             projected_output_ordering.into_iter().collect::<Vec<_>>();
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
-            &projected_output_ordering,
+            projected_output_ordering.clone(),
             &partitions,
             infinite,
         );
@@ -110,7 +113,7 @@ impl StreamingTableExec {
             projected_output_ordering,
             infinite,
             limit,
-            cache,
+            cache: Arc::new(cache),
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -146,7 +149,7 @@ impl StreamingTableExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        orderings: &[LexOrdering],
+        orderings: Vec<LexOrdering>,
         partitions: &[Arc<dyn PartitionStream>],
         infinite: bool,
     ) -> PlanProperties {
@@ -168,6 +171,7 @@ impl StreamingTableExec {
             EmissionType::Incremental,
             boundedness,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -234,7 +238,7 @@ impl ExecutionPlan for StreamingTableExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -244,6 +248,13 @@ impl ExecutionPlan for StreamingTableExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -262,7 +273,7 @@ impl ExecutionPlan for StreamingTableExec {
         partition: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.partitions[partition].execute(ctx);
+        let stream = self.partitions[partition].execute(Arc::clone(&ctx));
         let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.projected_schema),
@@ -272,16 +283,13 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         };
+        let stream = make_cooperative(projected_stream);
+
         Ok(match self.limit {
-            None => projected_stream,
+            None => stream,
             Some(fetch) => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-                Box::pin(LimitStream::new(
-                    projected_stream,
-                    0,
-                    Some(fetch),
-                    baseline_metrics,
-                ))
+                Box::pin(LimitStream::new(stream, 0, Some(fetch), baseline_metrics))
             }
         })
     }
@@ -300,26 +308,17 @@ impl ExecutionPlan for StreamingTableExec {
         let streaming_table_projections =
             self.projection().as_ref().map(|i| i.as_ref().to_vec());
         let new_projections = new_projections_for_columns(
-            projection,
+            projection.expr(),
             &streaming_table_projections
                 .unwrap_or_else(|| (0..self.schema().fields().len()).collect()),
         );
 
         let mut lex_orderings = vec![];
-        for lex_ordering in self.projected_output_ordering().into_iter() {
-            let mut orderings = LexOrdering::default();
-            for order in lex_ordering {
-                let Some(new_ordering) =
-                    update_expr(&order.expr, projection.expr(), false)?
-                else {
-                    return Ok(None);
-                };
-                orderings.push(PhysicalSortExpr {
-                    expr: new_ordering,
-                    options: order.options,
-                });
-            }
-            lex_orderings.push(orderings);
+        for ordering in self.projected_output_ordering().into_iter() {
+            let Some(ordering) = update_ordering(ordering, projection.expr())? else {
+                return Ok(None);
+            };
+            lex_orderings.push(ordering);
         }
 
         StreamingTableExec::try_new(
@@ -345,7 +344,7 @@ impl ExecutionPlan for StreamingTableExec {
             projected_output_ordering: self.projected_output_ordering.clone(),
             infinite: self.infinite,
             limit,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             metrics: self.metrics.clone(),
         }))
     }
@@ -356,7 +355,7 @@ mod test {
     use super::*;
     use crate::collect_partitioned;
     use crate::streaming::PartitionStream;
-    use crate::test::{make_partition, TestPartitionStream};
+    use crate::test::{TestPartitionStream, make_partition};
     use arrow::record_batch::RecordBatch;
 
     #[tokio::test]

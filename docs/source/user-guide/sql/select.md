@@ -35,10 +35,12 @@ DataFusion supports the following syntax for queries:
 [ [WHERE](#where-clause) condition ] <br/>
 [ [GROUP BY](#group-by-clause) grouping_element [, ...] ] <br/>
 [ [HAVING](#having-clause) condition] <br/>
+[ [QUALIFY](#qualify-clause) condition] <br/>
 [ [UNION](#union-clause) [ ALL | select ] <br/>
 [ [ORDER BY](#order-by-clause) expression [ ASC | DESC ][, ...] ] <br/>
 [ [LIMIT](#limit-clause) count ] <br/>
 [ [EXCLUDE | EXCEPT](#exclude-and-except-clause) ] <br/>
+[Pipe operators](#pipe-operators) <br/>
 
 </code>
 
@@ -84,7 +86,7 @@ SELECT a FROM table WHERE a > 10
 
 ## JOIN clause
 
-DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN` and `CROSS JOIN`.
+DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN`, `CROSS JOIN`, `LEFT SEMI JOIN`, `RIGHT SEMI JOIN`, `LEFT ANTI JOIN`, and `RIGHT ANTI JOIN`.
 
 The following examples are based on this table:
 
@@ -102,7 +104,7 @@ select * from x;
 The keywords `JOIN` or `INNER JOIN` define a join that only shows rows where there is a match in both tables.
 
 ```sql
-select * from x inner join x y ON x.column_1 = y.column_1;
+SELECT * FROM x INNER JOIN x y ON x.column_1 = y.column_1;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -116,7 +118,7 @@ The keywords `LEFT JOIN` or `LEFT OUTER JOIN` define a join that includes all ro
 is not a match in the right table. When there is no match, null values are produced for the right side of the join.
 
 ```sql
-select * from x left join x y ON x.column_1 = y.column_2;
+SELECT * FROM x LEFT JOIN x y ON x.column_1 = y.column_2;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -130,7 +132,7 @@ The keywords `RIGHT JOIN` or `RIGHT OUTER JOIN` define a join that includes all 
 is not a match in the left table. When there is no match, null values are produced for the left side of the join.
 
 ```sql
-select * from x right join x y ON x.column_1 = y.column_2;
+SELECT * FROM x RIGHT JOIN x y ON x.column_1 = y.column_2;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -145,7 +147,7 @@ The keywords `FULL JOIN` or `FULL OUTER JOIN` define a join that is effectively 
 either side of the join where there is not a match.
 
 ```sql
-select * from x full outer join x y ON x.column_1 = y.column_2;
+SELECT * FROM x FULL OUTER JOIN x y ON x.column_1 = y.column_2;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -156,11 +158,11 @@ select * from x full outer join x y ON x.column_1 = y.column_2;
 
 ### NATURAL JOIN
 
-A natural join defines an inner join based on common column names found between the input tables. When no common
-column names are found, it behaves like a cross join.
+A `NATURAL JOIN` defines an inner join based on common column names found between the input tables. When no common
+column names are found, it behaves like a `CROSS JOIN`.
 
 ```sql
-select * from x natural join x y;
+SELECT * FROM x NATURAL JOIN x y;
 +----------+----------+
 | column_1 | column_2 |
 +----------+----------+
@@ -170,16 +172,70 @@ select * from x natural join x y;
 
 ### CROSS JOIN
 
-A cross join produces a cartesian product that matches every row in the left side of the join with every row in the
+A `CROSS JOIN` produces a cartesian product that matches every row in the left side of the join with every row in the
 right side of the join.
 
 ```sql
-select * from x cross join x y;
+SELECT * FROM x CROSS JOIN x y;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
 | 1        | 2        | 1        | 2        |
 +----------+----------+----------+----------+
+```
+
+### LEFT SEMI JOIN
+
+The `LEFT SEMI JOIN` returns all rows from the left table that have at least one matching row in the right table, and
+projects only the columns from the left table.
+
+```sql
+SELECT * FROM x LEFT SEMI JOIN x y ON x.column_1 = y.column_1;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+```
+
+### RIGHT SEMI JOIN
+
+The `RIGHT SEMI JOIN` returns all rows from the right table that have at least one matching row in the left table, and
+only projects the columns from the right table.
+
+```sql
+SELECT * FROM x RIGHT SEMI JOIN x y ON x.column_1 = y.column_1;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+```
+
+### LEFT ANTI JOIN
+
+The `LEFT ANTI JOIN` returns all rows from the left table that do not have any matching row in the right table, projecting
+only the left table’s columns.
+
+```sql
+SELECT * FROM x LEFT ANTI JOIN x y ON x.column_1 = y.column_1;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
++----------+----------+
+```
+
+### RIGHT ANTI JOIN
+
+The `RIGHT ANTI JOIN` returns all rows from the right table that do not have any matching row in the left table, projecting
+only the right table’s columns.
+
+```sql
+SELECT * FROM x RIGHT ANTI JOIN x y ON x.column_1 = y.column_1;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
++----------+----------+
 ```
 
 ## GROUP BY clause
@@ -205,6 +261,14 @@ Example:
 
 ```sql
 SELECT a, b, MAX(c) FROM table GROUP BY a, b HAVING MAX(c) > 10
+```
+
+## QUALIFY clause
+
+Example:
+
+```sql
+SELECT ROW_NUMBER() OVER (PARTITION BY region) AS rk FROM table QUALIFY rk > 1;
 ```
 
 ## UNION clause
@@ -263,4 +327,216 @@ FROM table;
 ```sql
 SELECT * EXCLUDE(age, person)
 FROM table;
+```
+
+## Pipe operators
+
+Some SQL dialects (e.g. BigQuery) support the pipe operator `|>`.
+The SQL dialect can be set like this:
+
+```sql
+set datafusion.sql_parser.dialect = 'BigQuery';
+```
+
+DataFusion currently supports the following pipe operators:
+
+- [WHERE](#pipe_where)
+- [ORDER BY](#pipe_order_by)
+- [LIMIT](#pipe_limit)
+- [SELECT](#pipe_select)
+- [EXTEND](#pipe_extend)
+- [AS](#pipe_as)
+- [UNION](#pipe_union)
+- [INTERSECT](#pipe_intersect)
+- [EXCEPT](#pipe_except)
+- [AGGREGATE](#pipe_aggregate)
+- [JOIN](#pipe_join)
+
+(pipe_where)=
+
+### WHERE
+
+```sql
+select * from range(0,10)
+|> where value < 2;
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
++-------+
+```
+
+(pipe_order_by)=
+
+### ORDER BY
+
+```sql
+select * from range(0,3)
+|> order by value desc;
++-------+
+| value |
++-------+
+| 2     |
+| 1     |
+| 0     |
++-------+
+```
+
+(pipe_limit)=
+
+### LIMIT
+
+```sql
+select * from range(0,3)
+|> order by value desc
+|> limit 1;
++-------+
+| value |
++-------+
+| 2     |
++-------+
+```
+
+(pipe_select)=
+
+### SELECT
+
+```sql
+select * from range(0,3)
+|> select value + 10;
++---------------------------+
+| range().value + Int64(10) |
++---------------------------+
+| 10                        |
+| 11                        |
+| 12                        |
++---------------------------+
+```
+
+(pipe_extend)=
+
+### EXTEND
+
+```sql
+select * from range(0,3)
+|> extend -value AS minus_value;
++-------+-------------+
+| value | minus_value |
++-------+-------------+
+| 0     | 0           |
+| 1     | -1          |
+| 2     | -2          |
++-------+-------------+
+```
+
+(pipe_as)=
+
+### AS
+
+```sql
+select * from range(0,3)
+|> as my_range
+|> SELECT my_range.value;
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
++-------+
+```
+
+(pipe_union)=
+
+### UNION
+
+```sql
+select * from range(0,3)
+|> union all (
+  select * from range(3,6)
+);
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
+| 3     |
+| 4     |
+| 5     |
++-------+
+```
+
+(pipe_intersect)=
+
+### INTERSECT
+
+```sql
+select * from range(0,100)
+|> INTERSECT DISTINCT (
+  select 3
+);
++-------+
+| value |
++-------+
+| 3     |
++-------+
+```
+
+(pipe_except)=
+
+### EXCEPT
+
+```sql
+select * from range(0,10)
+|> EXCEPT DISTINCT (select * from range(5,10));
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
+| 3     |
+| 4     |
++-------+
+```
+
+(pipe_aggregate)=
+
+### AGGREGATE
+
+```sql
+select * from range(0,3)
+|> aggregate sum(value) AS total;
++-------+
+| total |
++-------+
+| 3     |
++-------+
+```
+
+(pipe_join)=
+
+### JOIN
+
+```sql
+(
+  SELECT 'apples' AS item, 2 AS sales
+  UNION ALL
+  SELECT 'bananas' AS item, 5 AS sales
+)
+|> AS produce_sales
+|> LEFT JOIN
+     (
+       SELECT 'apples' AS item, 123 AS id
+     ) AS produce_data
+   ON produce_sales.item = produce_data.item
+|> SELECT produce_sales.item, sales, id;
++--------+-------+------+
+| item   | sales | id   |
++--------+-------+------+
+| apples | 2     | 123  |
+| bananas| 5     | NULL |
++--------+-------+------+
 ```

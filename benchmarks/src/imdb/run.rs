@@ -18,14 +18,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{get_imdb_table_schema, get_query_sql, IMDB_TABLES};
-use crate::util::{BenchmarkRun, CommonOpt};
+use super::{
+    IMDB_QUERY_END_ID, IMDB_QUERY_START_ID, IMDB_TABLES, get_imdb_table_schema,
+    get_query_sql,
+};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
+use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
@@ -38,8 +41,8 @@ use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 
+use clap::Args;
 use log::info;
-use structopt::StructOpt;
 
 // hack to avoid `default_value is meaningless for bool` errors
 type BoolDefaultTrue = bool;
@@ -51,48 +54,49 @@ type BoolDefaultTrue = bool;
 /// [2] and [3].
 ///
 /// [1]: https://www.vldb.org/pvldb/vol9/p204-leis.pdf
-/// [2]: http://homepages.cwi.nl/~boncz/job/imdb.tgz
+/// [2]: https://event.cwi.nl/da/job/imdb.tgz
 /// [3]: https://db.in.tum.de/~leis/qo/job.tgz
 
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(verbatim_doc_comment)]
+#[derive(Debug, Args, Clone)]
+#[command(verbatim_doc_comment)]
 pub struct RunOpt {
     /// Query number. If not specified, runs all queries
-    #[structopt(short, long)]
-    query: Option<usize>,
+    #[arg(short, long)]
+    pub query: Option<usize>,
 
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// Path to data files
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    #[arg(required = true, short = 'p', long = "path")]
     path: PathBuf,
 
     /// File format: `csv` or `parquet`
-    #[structopt(short = "f", long = "format", default_value = "csv")]
+    #[arg(short = 'f', long = "format", default_value = "csv")]
     file_format: String,
 
     /// Load the data into a MemTable before executing the query
-    #[structopt(short = "m", long = "mem-table")]
+    #[arg(short = 'm', long = "mem-table")]
     mem_table: bool,
 
     /// Path to machine readable output file
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
-    #[structopt(short = "S", long = "disable-statistics")]
+    #[arg(short = 'S', long = "disable-statistics")]
     disable_statistics: bool,
 
     /// If true then hash join used, if false then sort merge join
     /// True by default.
-    #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
+    #[arg(short = 'j', long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
-}
 
-const IMDB_QUERY_START_ID: usize = 1;
-const IMDB_QUERY_END_ID: usize = 113;
+    /// How many bytes to buffer on the probe side of hash joins.
+    #[arg(long, default_value = "0")]
+    hash_join_buffering_capacity: usize,
+}
 
 fn map_query_id_to_str(query_id: usize) -> &'static str {
     match query_id {
@@ -306,8 +310,10 @@ impl RunOpt {
             .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
-        let rt_builder = self.common.runtime_env_builder()?;
-        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+        config.options_mut().execution.hash_join_buffering_capacity =
+            self.hash_join_buffering_capacity;
+        let rt = self.common.build_runtime()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -340,6 +346,9 @@ impl RunOpt {
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
         println!("Query {query_id} avg time: {avg:.2} ms");
+
+        // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
+        print_memory_stats();
 
         Ok(query_results)
     }
@@ -475,11 +484,6 @@ impl RunOpt {
     }
 }
 
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
-}
-
 #[cfg(test)]
 // Only run with "ci" mode when we have the data
 #[cfg(feature = "ci")]
@@ -519,6 +523,7 @@ mod tests {
             memory_limit: None,
             sort_spill_reservation_bytes: None,
             debug: false,
+            simulate_latency: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -529,6 +534,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            hash_join_buffering_capacity: 0,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(map_query_id_to_str(query))?;
@@ -536,7 +542,7 @@ mod tests {
             let plan = ctx.sql(&query).await?;
             let plan = plan.into_optimized_plan()?;
             let bytes = logical_plan_to_bytes(&plan)?;
-            let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
+            let plan2 = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
             let plan_formatted = format!("{}", plan.display_indent());
             let plan2_formatted = format!("{}", plan2.display_indent());
             assert_eq!(plan_formatted, plan2_formatted);
@@ -555,6 +561,7 @@ mod tests {
             memory_limit: None,
             sort_spill_reservation_bytes: None,
             debug: false,
+            simulate_latency: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -565,6 +572,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            hash_join_buffering_capacity: 0,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(map_query_id_to_str(query))?;
@@ -572,7 +580,7 @@ mod tests {
             let plan = ctx.sql(&query).await?;
             let plan = plan.create_physical_plan().await?;
             let bytes = physical_plan_to_bytes(plan.clone())?;
-            let plan2 = physical_plan_from_bytes(&bytes, &ctx)?;
+            let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
             let plan_formatted = format!("{}", displayable(plan.as_ref()).indent(false));
             let plan2_formatted =
                 format!("{}", displayable(plan2.as_ref()).indent(false));

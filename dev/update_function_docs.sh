@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -20,9 +20,11 @@
 
 set -e
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SOURCE_DIR}/../" && pwd
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "${ROOT_DIR}"
 
+# Load centralized tool versions
+source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
 TARGET_FILE="docs/source/user-guide/sql/aggregate_functions.md"
 PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- aggregate"
@@ -59,13 +61,62 @@ dev/update_function_docs.sh file for updating surrounding text.
 # Aggregate Functions
 
 Aggregate functions operate on a set of values to compute a single result.
+
+## Filter clause
+
+Aggregate functions support the SQL `FILTER (WHERE ...)` clause to restrict which input rows contribute to the aggregate result.
+
+```sql
+function([exprs]) FILTER (WHERE condition)
+```
+
+Example:
+
+```sql
+SELECT
+  sum(salary) FILTER (WHERE salary > 0) AS sum_positive_salaries,
+  count(*)    FILTER (WHERE active)     AS active_count
+FROM employees;
+```
+
+Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/`MAX` return `NULL`.
+
+## WITHIN GROUP / Ordered-set aggregates
+
+Some aggregate functions accept the SQL `WITHIN GROUP (ORDER BY ...)` clause to specify the ordering the
+aggregate relies on. In DataFusion this is opt-in: only aggregate functions whose implementation returns
+`true` from `AggregateUDFImpl::supports_within_group_clause()` accept the `WITHIN GROUP` clause. Attempting to
+use `WITHIN GROUP` with a regular aggregate (for example, `SELECT SUM(x) WITHIN GROUP (ORDER BY x)`) will fail
+during planning with an error: "WITHIN GROUP is only supported for ordered-set aggregate functions".
+
+Currently, the built-in aggregate functions that support `WITHIN GROUP` are:
+
+- `percentile_cont` — exact percentile aggregate (also available as `percentile_cont(column, percentile)`)
+- `approx_percentile_cont` — approximate percentile using the t-digest algorithm
+- `approx_percentile_cont_with_weight` — approximate weighted percentile using the t-digest algorithm
+
+Note: rank-like functions such as `rank()`, `dense_rank()`, and `percent_rank()` are window functions and
+use the `OVER (...)` clause; they are not ordered-set aggregates that accept `WITHIN GROUP` in DataFusion.
+
+Example (ordered-set aggregate):
+
+```sql
+percentile_cont(0.5) WITHIN GROUP (ORDER BY value)
+```
+
+Example (invalid usage — planner will error):
+
+```sql
+-- This will fail: SUM is not an ordered-set aggregate
+SELECT SUM(x) WITHIN GROUP (ORDER BY x) FROM t;
+```
 EOF
 
 echo "Running CLI and inserting aggregate function docs table"
 $PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND >> "$TARGET_FILE"
 
-echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+echo "Running prettier ${PRETTIER_VERSION}"
+npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
@@ -108,8 +159,8 @@ EOF
 echo "Running CLI and inserting scalar function docs table"
 $PRINT_SCALAR_FUNCTION_DOCS_COMMAND >> "$TARGET_FILE"
 
-echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+echo "Running prettier ${PRETTIER_VERSION}"
+npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
@@ -266,6 +317,17 @@ where **offset** is an non-negative integer.
 
 RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must specify exactly one column).
 
+## Filter clause for aggregate window functions
+
+Aggregate window functions support the SQL `FILTER (WHERE ...)` clause to include only rows that satisfy the predicate from the window frame in the aggregation.
+
+```sql
+sum(salary) FILTER (WHERE salary > 0)
+  OVER (PARTITION BY depname ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+```
+
+If no rows in the frame satisfy the filter for a given output row, `COUNT` yields `0` while `SUM`/`AVG`/`MIN`/`MAX` yield `NULL`.
+
 ## Aggregate functions
 
 All [aggregate functions](aggregate_functions.md) can be used as window functions.
@@ -275,7 +337,7 @@ EOF
 echo "Running CLI and inserting window function docs table"
 $PRINT_WINDOW_FUNCTION_DOCS_COMMAND >> "$TARGET_FILE"
 
-echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+echo "Running prettier ${PRETTIER_VERSION}"
+npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"

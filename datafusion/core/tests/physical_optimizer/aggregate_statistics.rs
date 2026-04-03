@@ -20,26 +20,38 @@ use std::sync::Arc;
 use crate::physical_optimizer::test_utils::TestAggregate;
 
 use arrow::array::Int32Array;
+use arrow::array::{Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::memory::MemTable;
 use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::assert_batches_eq;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
+use datafusion_common::stats::Precision;
+use datafusion_common::{ColumnStatistics, Result, Statistics};
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::TaskContext;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::Operator;
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::{self, cast};
-use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::aggregates::AggregateMode;
 use datafusion_physical_plan::aggregates::PhysicalGroupBy;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::common;
+use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::ExecutionPlan;
 
 /// Mock data using a MemorySourceConfig which has an exact count statistic
 fn mock_data() -> Result<Arc<DataSourceExec>> {
@@ -313,6 +325,231 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
 
     // check that the original ExecutionPlan was not replaced
     assert!(optimized.as_any().is::<AggregateExec>());
+
+    Ok(())
+}
+
+/// Tests that TopK aggregation correctly handles UTF-8 (string) types in both grouping keys and aggregate values.
+///
+/// The TopK optimization is designed to efficiently handle `GROUP BY ... ORDER BY aggregate LIMIT n` queries
+/// by maintaining only the top K groups during aggregation. However, not all type combinations are supported.
+///
+/// This test verifies two scenarios:
+/// 1. **Supported case**: UTF-8 grouping key with numeric aggregate (max/min) - should use TopK optimization
+/// 2. **Unsupported case**: UTF-8 grouping key with UTF-8 aggregate value - must gracefully fall back to
+///    standard aggregation without panicking
+///
+/// The fallback behavior is critical because attempting to use TopK with unsupported types could cause
+/// runtime panics. This test ensures the optimizer correctly detects incompatible types and chooses
+/// the appropriate execution path.
+#[tokio::test]
+async fn utf8_grouping_min_max_limit_fallbacks() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().optimizer.enable_topk_aggregation = true;
+    let ctx = SessionContext::new_with_config(config);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Utf8, false),
+            Field::new("val_str", DataType::Utf8, false),
+            Field::new("val_num", DataType::Int64, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["a", "b", "a"])),
+            Arc::new(StringArray::from(vec!["alpha", "bravo", "charlie"])),
+            Arc::new(Int64Array::from(vec![1, 2, 3])),
+        ],
+    )?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+
+    // Supported path: numeric min/max with UTF-8 grouping should still use TopK aggregation
+    // and return correct results.
+    let supported_df = ctx
+        .sql("SELECT g, max(val_num) AS m FROM t GROUP BY g ORDER BY m DESC LIMIT 1")
+        .await?;
+    let supported_batches = supported_df.collect().await?;
+    assert_batches_eq!(
+        &[
+            "+---+---+",
+            "| g | m |",
+            "+---+---+",
+            "| a | 3 |",
+            "+---+---+"
+        ],
+        &supported_batches
+    );
+
+    // Unsupported TopK value type: string min/max should fall back without panicking.
+    let unsupported_df = ctx
+        .sql("SELECT g, max(val_str) AS s FROM t GROUP BY g ORDER BY s DESC LIMIT 1")
+        .await?;
+    let unsupported_plan = unsupported_df.clone().create_physical_plan().await?;
+    let unsupported_batches = unsupported_df.collect().await?;
+
+    // Ensure the plan avoided the TopK-specific stream implementation.
+    let plan_display = displayable(unsupported_plan.as_ref())
+        .indent(true)
+        .to_string();
+    assert!(
+        !plan_display.contains("GroupedTopKAggregateStream"),
+        "Unsupported UTF-8 aggregate value should not use TopK: {plan_display}"
+    );
+
+    assert_batches_eq!(
+        &[
+            "+---+---------+",
+            "| g | s       |",
+            "+---+---------+",
+            "| a | charlie |",
+            "+---+---------+"
+        ],
+        &unsupported_batches
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_count_distinct_optimization() -> Result<()> {
+    struct TestCase {
+        name: &'static str,
+        distinct_count: Precision<usize>,
+        use_column_expr: bool,
+        expect_optimized: bool,
+        expected_value: Option<i64>,
+    }
+
+    let cases = vec![
+        TestCase {
+            name: "exact statistics",
+            distinct_count: Precision::Exact(42),
+            use_column_expr: true,
+            expect_optimized: true,
+            expected_value: Some(42),
+        },
+        TestCase {
+            name: "absent statistics",
+            distinct_count: Precision::Absent,
+            use_column_expr: true,
+            expect_optimized: false,
+            expected_value: None,
+        },
+        TestCase {
+            name: "inexact statistics",
+            distinct_count: Precision::Inexact(42),
+            use_column_expr: true,
+            expect_optimized: false,
+            expected_value: None,
+        },
+        TestCase {
+            name: "non-column expression with exact statistics",
+            distinct_count: Precision::Exact(42),
+            use_column_expr: false,
+            expect_optimized: false,
+            expected_value: None,
+        },
+    ];
+
+    for case in cases {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let statistics = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    distinct_count: case.distinct_count,
+                    null_count: Precision::Exact(10),
+                    ..Default::default()
+                },
+                ColumnStatistics::default(),
+            ],
+        };
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(ParquetSource::new(Arc::clone(&schema))),
+        )
+        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_statistics(statistics)
+        .build();
+
+        let source: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        let schema = source.schema();
+
+        let (agg_args, alias): (Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>>, _) =
+            if case.use_column_expr {
+                (vec![expressions::col("a", &schema)?], "COUNT(DISTINCT a)")
+            } else {
+                (
+                    vec![expressions::binary(
+                        expressions::col("a", &schema)?,
+                        Operator::Plus,
+                        expressions::col("b", &schema)?,
+                        &schema,
+                    )?],
+                    "COUNT(DISTINCT a + b)",
+                )
+            };
+
+        let count_distinct_expr = AggregateExprBuilder::new(count_udaf(), agg_args)
+            .schema(Arc::clone(&schema))
+            .alias(alias)
+            .distinct()
+            .build()?;
+
+        let partial_agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(count_distinct_expr.clone())],
+            vec![None],
+            source,
+            Arc::clone(&schema),
+        )?;
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(count_distinct_expr)],
+            vec![None],
+            Arc::new(partial_agg),
+            Arc::clone(&schema),
+        )?;
+
+        let conf = ConfigOptions::new();
+        let optimized =
+            AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+
+        if case.expect_optimized {
+            assert!(
+                optimized.as_any().is::<ProjectionExec>(),
+                "'{}': expected ProjectionExec",
+                case.name
+            );
+
+            if let Some(expected_val) = case.expected_value {
+                let task_ctx = Arc::new(TaskContext::default());
+                let result = common::collect(optimized.execute(0, task_ctx)?).await?;
+                assert_eq!(result.len(), 1, "'{}': expected 1 batch", case.name);
+                assert_eq!(
+                    as_int64_array(result[0].column(0)).unwrap().values(),
+                    &[expected_val],
+                    "'{}': unexpected value",
+                    case.name
+                );
+            }
+        } else {
+            assert!(
+                optimized.as_any().is::<AggregateExec>(),
+                "'{}': expected AggregateExec (not optimized)",
+                case.name
+            );
+        }
+    }
 
     Ok(())
 }

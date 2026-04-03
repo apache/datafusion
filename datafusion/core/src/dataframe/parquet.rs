@@ -42,13 +42,15 @@ impl DataFrame {
     /// use datafusion::dataframe::DataFrameWriteOptions;
     /// let ctx = SessionContext::new();
     /// // Sort the data by column "b" and write it to a new location
-    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
-    ///   .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
-    ///   .write_parquet(
-    ///     "output.parquet",
-    ///     DataFrameWriteOptions::new(),
-    ///     None, // can also specify parquet writing options here
-    /// ).await?;
+    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?
+    ///     .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///     .write_parquet(
+    ///         "output.parquet",
+    ///         DataFrameWriteOptions::new(),
+    ///         None, // can also specify parquet writing options here
+    ///     )
+    ///     .await?;
     /// # fs::remove_file("output.parquet")?;
     /// # Ok(())
     /// # }
@@ -74,6 +76,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.build_sink_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -86,7 +90,7 @@ impl DataFrame {
             plan,
             path.into(),
             file_type,
-            Default::default(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;
@@ -103,7 +107,6 @@ impl DataFrame {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use super::super::Result;
     use super::*;
@@ -116,10 +119,25 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{col, lit};
 
+    #[cfg(feature = "parquet_encryption")]
+    use datafusion_common::config::ConfigFileEncryptionProperties;
     use object_store::local::LocalFileSystem;
     use parquet::file::reader::FileReader;
     use tempfile::TempDir;
     use url::Url;
+
+    /// Helper to extract a metric value by name from aggregated metrics.
+    fn metric_usize(
+        aggregated: &datafusion_physical_expr_common::metrics::MetricsSet,
+        name: &str,
+    ) -> usize {
+        aggregated
+            .iter()
+            .find(|m| m.value().name() == name)
+            .unwrap_or_else(|| panic!("should have {name} metric"))
+            .value()
+            .as_usize()
+    }
 
     #[tokio::test]
     async fn filter_pushdown_dataframe() -> Result<()> {
@@ -146,7 +164,7 @@ mod tests {
         let plan = df.explain(false, false)?.collect().await?;
         // Filters all the way to Parquet
         let formatted = pretty::pretty_format_batches(&plan)?.to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"));
+        assert!(formatted.contains("FilterExec: id@0 = 1"), "{formatted}");
 
         Ok(())
     }
@@ -205,7 +223,7 @@ mod tests {
             &HashMap::from_iter(
                 [("datafusion.execution.batch_size", "10")]
                     .iter()
-                    .map(|(s1, s2)| (s1.to_string(), s2.to_string())),
+                    .map(|(s1, s2)| ((*s1).to_string(), (*s2).to_string())),
             ),
         )?);
         register_aggregate_csv(&ctx, "aggregate_test_100").await?;
@@ -243,6 +261,352 @@ mod tests {
 
             assert_eq!(written_rows as usize, rg_size);
         }
+
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[cfg(feature = "parquet_encryption")]
+    #[tokio::test]
+    async fn roundtrip_parquet_with_encryption(
+        #[values(false, true)] allow_single_file_parallelism: bool,
+    ) -> Result<()> {
+        use parquet::encryption::decrypt::FileDecryptionProperties;
+        use parquet::encryption::encrypt::FileEncryptionProperties;
+
+        let test_df = test_util::test_table().await?;
+
+        let schema = test_df.schema();
+        let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+        let column_key = b"1234567890123450".to_vec(); // 128bit/16
+
+        let mut encrypt = FileEncryptionProperties::builder(footer_key.clone());
+        let mut decrypt = FileDecryptionProperties::builder(footer_key.clone());
+
+        for field in schema.fields().iter() {
+            encrypt = encrypt.with_column_key(field.name().as_str(), column_key.clone());
+            decrypt = decrypt.with_column_key(field.name().as_str(), column_key.clone());
+        }
+
+        let encrypt = encrypt.build()?;
+        let decrypt = decrypt.build()?;
+
+        let df = test_df.clone();
+        let tmp_dir = TempDir::new()?;
+        let tempfile = tmp_dir.path().join("roundtrip.parquet");
+        let tempfile_str = tempfile.into_os_string().into_string().unwrap();
+
+        // Write encrypted parquet using write_parquet
+        let mut options = TableParquetOptions::default();
+        options.crypto.file_encryption =
+            Some(ConfigFileEncryptionProperties::from(&encrypt));
+        options.global.allow_single_file_parallelism = allow_single_file_parallelism;
+
+        df.write_parquet(
+            tempfile_str.as_str(),
+            DataFrameWriteOptions::new().with_single_file_output(true),
+            Some(options),
+        )
+        .await?;
+        let num_rows_written = test_df.count().await?;
+
+        // Read encrypted parquet
+        let ctx: SessionContext = SessionContext::new();
+        let read_options =
+            ParquetReadOptions::default().file_decryption_properties((&decrypt).into());
+
+        ctx.register_parquet("roundtrip_parquet", &tempfile_str, read_options.clone())
+            .await?;
+
+        let df_enc = ctx.sql("SELECT * FROM roundtrip_parquet").await?;
+        let num_rows_read = df_enc.count().await?;
+
+        assert_eq!(num_rows_read, num_rows_written);
+
+        // Read encrypted parquet and subset rows + columns
+        let encrypted_parquet_df = ctx.read_parquet(tempfile_str, read_options).await?;
+
+        // Select three columns and filter the results
+        // Test that the filter works as expected
+        let selected = encrypted_parquet_df
+            .clone()
+            .select_columns(&["c1", "c2", "c3"])?
+            .filter(col("c2").gt(lit(4)))?;
+
+        let num_rows_selected = selected.count().await?;
+        assert_eq!(num_rows_selected, 14);
+
+        Ok(())
+    }
+
+    /// Test FileOutputMode::SingleFile - explicitly request single file output
+    /// for paths WITHOUT file extensions. This verifies the fix for the regression
+    /// where extension heuristics ignored the explicit with_single_file_output(true).
+    #[tokio::test]
+    async fn test_file_output_mode_single_file() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+
+        // Path WITHOUT .parquet extension - this is the key scenario
+        let output_path = tmp_dir.path().join("data_no_ext");
+        let output_path_str = output_path.to_str().unwrap();
+
+        let df = ctx.read_batch(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?)?;
+
+        // Explicitly request single file output
+        df.write_parquet(
+            output_path_str,
+            DataFrameWriteOptions::new().with_single_file_output(true),
+            None,
+        )
+        .await?;
+
+        // Verify: output should be a FILE, not a directory
+        assert!(
+            output_path.is_file(),
+            "Expected single file at {:?}, but got is_file={}, is_dir={}",
+            output_path,
+            output_path.is_file(),
+            output_path.is_dir()
+        );
+
+        // Verify the file is readable as parquet
+        let file = std::fs::File::open(&output_path)?;
+        let reader = parquet::file::reader::SerializedFileReader::new(file)?;
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+        assert_eq!(metadata.file_metadata().num_rows(), 3);
+
+        Ok(())
+    }
+
+    /// Test FileOutputMode::Automatic - uses extension heuristic.
+    /// Path WITH extension -> single file; path WITHOUT extension -> directory.
+    #[tokio::test]
+    async fn test_file_output_mode_automatic() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        // Case 1: Path WITH extension -> should create single file (Automatic mode)
+        let output_with_ext = tmp_dir.path().join("data.parquet");
+        let df = ctx.read_batch(batch.clone())?;
+        df.write_parquet(
+            output_with_ext.to_str().unwrap(),
+            DataFrameWriteOptions::new(), // Automatic mode (default)
+            None,
+        )
+        .await?;
+
+        assert!(
+            output_with_ext.is_file(),
+            "Path with extension should be a single file, got is_file={}, is_dir={}",
+            output_with_ext.is_file(),
+            output_with_ext.is_dir()
+        );
+
+        // Case 2: Path WITHOUT extension -> should create directory (Automatic mode)
+        let output_no_ext = tmp_dir.path().join("data_dir");
+        let df = ctx.read_batch(batch)?;
+        df.write_parquet(
+            output_no_ext.to_str().unwrap(),
+            DataFrameWriteOptions::new(), // Automatic mode (default)
+            None,
+        )
+        .await?;
+
+        assert!(
+            output_no_ext.is_dir(),
+            "Path without extension should be a directory, got is_file={}, is_dir={}",
+            output_no_ext.is_file(),
+            output_no_ext.is_dir()
+        );
+
+        Ok(())
+    }
+
+    /// Test that ParquetSink exposes rows_written, bytes_written, and
+    /// elapsed_compute metrics via DataSinkExec.
+    #[tokio::test]
+    async fn test_parquet_sink_metrics() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use datafusion_execution::TaskContext;
+
+        use futures::TryStreamExt;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+        let output_path = tmp_dir.path().join("metrics_test.parquet");
+        let output_path_str = output_path.to_str().unwrap();
+
+        // Register a table with 100 rows
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ]));
+        let ids: Vec<i32> = (0..100).collect();
+        let vals: Vec<i32> = (100..200).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(Int32Array::from(vals)),
+            ],
+        )?;
+        ctx.register_batch("source", batch)?;
+
+        // Create the physical plan for COPY TO
+        let df = ctx
+            .sql(&format!(
+                "COPY source TO '{output_path_str}' STORED AS PARQUET"
+            ))
+            .await?;
+        let plan = df.create_physical_plan().await?;
+
+        // Execute the plan
+        let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+        let stream = plan.execute(0, task_ctx)?;
+        let _batches: Vec<_> = stream.try_collect().await?;
+
+        // Check metrics on the DataSinkExec (top-level plan)
+        let metrics = plan
+            .metrics()
+            .expect("DataSinkExec should return metrics from ParquetSink");
+        let aggregated = metrics.aggregate_by_name();
+
+        // rows_written should be 100
+        assert_eq!(
+            metric_usize(&aggregated, "rows_written"),
+            100,
+            "expected 100 rows written"
+        );
+
+        // bytes_written should be > 0
+        let bytes_written = metric_usize(&aggregated, "bytes_written");
+        assert!(
+            bytes_written > 0,
+            "expected bytes_written > 0, got {bytes_written}"
+        );
+
+        // elapsed_compute should be > 0
+        let elapsed = metric_usize(&aggregated, "elapsed_compute");
+        assert!(elapsed > 0, "expected elapsed_compute > 0");
+
+        Ok(())
+    }
+
+    /// Test that ParquetSink metrics work with single_file_parallelism enabled.
+    #[tokio::test]
+    async fn test_parquet_sink_metrics_parallel() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use datafusion_execution::TaskContext;
+
+        use futures::TryStreamExt;
+
+        let ctx = SessionContext::new();
+        ctx.sql("SET datafusion.execution.parquet.allow_single_file_parallelism = true")
+            .await?
+            .collect()
+            .await?;
+
+        let tmp_dir = TempDir::new()?;
+        let output_path = tmp_dir.path().join("metrics_parallel.parquet");
+        let output_path_str = output_path.to_str().unwrap();
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let ids: Vec<i32> = (0..50).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(ids))],
+        )?;
+        ctx.register_batch("source2", batch)?;
+
+        let df = ctx
+            .sql(&format!(
+                "COPY source2 TO '{output_path_str}' STORED AS PARQUET"
+            ))
+            .await?;
+        let plan = df.create_physical_plan().await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+        let stream = plan.execute(0, task_ctx)?;
+        let _batches: Vec<_> = stream.try_collect().await?;
+
+        let metrics = plan.metrics().expect("DataSinkExec should return metrics");
+        let aggregated = metrics.aggregate_by_name();
+
+        assert_eq!(metric_usize(&aggregated, "rows_written"), 50);
+        assert!(metric_usize(&aggregated, "bytes_written") > 0);
+
+        Ok(())
+    }
+
+    /// Test FileOutputMode::Directory - explicitly request directory output
+    /// even for paths WITH file extensions.
+    #[tokio::test]
+    async fn test_file_output_mode_directory() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+
+        // Path WITH .parquet extension but explicitly requesting directory output
+        let output_path = tmp_dir.path().join("output.parquet");
+        let output_path_str = output_path.to_str().unwrap();
+
+        let df = ctx.read_batch(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?)?;
+
+        // Explicitly request directory output (single_file_output = false)
+        df.write_parquet(
+            output_path_str,
+            DataFrameWriteOptions::new().with_single_file_output(false),
+            None,
+        )
+        .await?;
+
+        // Verify: output should be a DIRECTORY, not a single file
+        assert!(
+            output_path.is_dir(),
+            "Expected directory at {:?}, but got is_file={}, is_dir={}",
+            output_path,
+            output_path.is_file(),
+            output_path.is_dir()
+        );
+
+        // Verify the directory contains parquet file(s)
+        let entries: Vec<_> = std::fs::read_dir(&output_path)?
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            !entries.is_empty(),
+            "Directory should contain at least one file"
+        );
 
         Ok(())
     }

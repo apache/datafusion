@@ -17,56 +17,56 @@
   under the License.
 -->
 
-# Communication
+# Community Communication
 
 We welcome participation from everyone and encourage you to join us, ask
 questions, and get involved.
-
 All participation in the Apache DataFusion project is governed by the
 Apache Software Foundation's [code of
 conduct](https://www.apache.org/foundation/policies/conduct.html).
 
 ## GitHub
 
-The vast majority of communication occurs in the open on our
-[github repository](https://github.com/apache/datafusion) in the form of tickets, issues, discussions, and Pull Requests.
+The primary means of communication is the
+[GitHub repository](https://github.com/apache/datafusion) in the form of issues, discussions, and Pull Requests.
+Our repository is open to everyone. We encourage you to
+participate by reporting issues, asking questions, and contributing code.
 
-## Slack and Discord
+## Chat
 
-We use the Slack and Discord platforms for informal discussions and coordination. These are great places to
-meet other contributors and get guidance on where to contribute. It is important to note that any technical designs and
-decisions are made fully in the open, on GitHub.
+We also use the Discord and Slack platforms for lower latency, informal discussions and coordination.
+These are great places to
+meet other members of the community, ask questions, and brainstorm ideas.
+However, to ensure technical discussions are archived and accessible to everyone,
+all technical designs are recorded and formalized in GitHub issues.
 
-Most of us use the [ASF Slack
-workspace](https://s.apache.org/slack-invite) and the [Arrow Rust Discord
-server][discord-link] for discussions.
+### Discord
 
-There are specific channels for Arrow, DataFusion, and the DataFusion subprojects (Ballista, Comet, Python, etc).
+Historically, the most active discussion forum has been the [Arrow Rust Discord
+server][discord-link] which has specific channels for Arrow, DataFusion, and
+DataFusion subprojects such as Ballista, Comet, Python, etc.
+DataFusion specific channels are prefixed with the `#datafusion-` tag.
+We recommend new users join this server for real-time discussions with the community.
 
-In Slack we use these channels:
+### Slack
 
-- #arrow
-- #arrow-rust
-- #datafusion
-- #datafusion-ballista
-- #datafusion-comet
-- #datafusion-python
+Some of the community also uses the [ASF Slack workspace] for discussions. This
+has historically been much less active than the Discord server.
+Unfortunately, due to spammers, the ASF Slack workspace [requires an invitation]
+to join. We are happy to invite any community member -- please ask for an
+invitation in the Discord server.
 
-In Discord we use these channels:
+[asf slack workspace]: https://the-asf.slack.com/
+[requires an invitation]: https://s.apache.org/slack-invite
 
-- #ballista
-- #comet
-- #contrib-federation
-- #datafusion
-- #datafusion-python
-- #dolomite-optimizer
-- #general
-- #hiring
-- #incremental-materialized-views
+In Slack, we use these channels:
 
-Unfortunately, due to spammers, the ASF Slack workspace requires an invitation
-to join. We are happy to invite you -- please ask for an invitation in the
-Discord server.
+- `#arrow`
+- `#arrow-rust`
+- `#datafusion`
+- `#datafusion-ballista`
+- `#datafusion-comet`
+- `#datafusion-python`
 
 ### Job Board
 
@@ -77,8 +77,8 @@ Please feel free to post links to DataFusion related jobs there.
 ## Mailing Lists
 
 Like other Apache projects, we use [mailing lists] for certain purposes, most
-importantly release coordination. Other than the release process, most
-DataFusion mailing list traffic will simply link to a GitHub issue or PR where
+importantly release coordination and announcing new committers and PMC members.
+Other than these processes, most DataFusion mailing list traffic will link to a GitHub issue or PR where
 the actual discussion occurs. The project mailing lists are:
 
 - [`dev@datafusion.apache.org`](mailto:dev@datafusion.apache.org): the main

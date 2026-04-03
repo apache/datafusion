@@ -26,13 +26,16 @@ use super::{
     SendableRecordBatchStream,
 };
 use crate::display::DisplayableExecutionPlan;
+use crate::metrics::MetricType;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::instant::Instant;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{DataFusionError, Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExpr;
 
 use futures::StreamExt;
 
@@ -44,11 +47,13 @@ pub struct AnalyzeExec {
     verbose: bool,
     /// If statistics should be displayed
     show_statistics: bool,
+    /// Which metric categories should be displayed
+    metric_types: Vec<MetricType>,
     /// The input plan (the plan being analyzed)
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl AnalyzeExec {
@@ -56,6 +61,7 @@ impl AnalyzeExec {
     pub fn new(
         verbose: bool,
         show_statistics: bool,
+        metric_types: Vec<MetricType>,
         input: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> Self {
@@ -63,9 +69,10 @@ impl AnalyzeExec {
         AnalyzeExec {
             verbose,
             show_statistics,
+            metric_types,
             input,
             schema,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -126,7 +133,7 @@ impl ExecutionPlan for AnalyzeExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -134,9 +141,15 @@ impl ExecutionPlan for AnalyzeExec {
         vec![&self.input]
     }
 
-    /// AnalyzeExec is handled specially so this value is ignored
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![]
+        vec![Distribution::UnspecifiedDistribution]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -146,6 +159,7 @@ impl ExecutionPlan for AnalyzeExec {
         Ok(Arc::new(Self::new(
             self.verbose,
             self.show_statistics,
+            self.metric_types.clone(),
             children.pop().unwrap(),
             Arc::clone(&self.schema),
         )))
@@ -156,11 +170,11 @@ impl ExecutionPlan for AnalyzeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if 0 != partition {
-            return internal_err!(
-                "AnalyzeExec invalid partition. Expected 0, got {partition}"
-            );
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "AnalyzeExec invalid partition. Expected 0, got {partition}"
+        );
 
         // Gather futures that will run each input partition in
         // parallel (on a separate tokio task) using a JoinSet to
@@ -183,6 +197,7 @@ impl ExecutionPlan for AnalyzeExec {
         let captured_schema = Arc::clone(&self.schema);
         let verbose = self.verbose;
         let show_statistics = self.show_statistics;
+        let metric_types = self.metric_types.clone();
 
         // future that gathers the results from all the tasks in the
         // JoinSet that computes the overall row count and final
@@ -200,8 +215,9 @@ impl ExecutionPlan for AnalyzeExec {
                 show_statistics,
                 total_rows,
                 duration,
-                captured_input,
-                captured_schema,
+                &captured_input,
+                &captured_schema,
+                &metric_types,
             )
         };
 
@@ -218,8 +234,9 @@ fn create_output_batch(
     show_statistics: bool,
     total_rows: usize,
     duration: std::time::Duration,
-    input: Arc<dyn ExecutionPlan>,
-    schema: SchemaRef,
+    input: &Arc<dyn ExecutionPlan>,
+    schema: &SchemaRef,
+    metric_types: &[MetricType],
 ) -> Result<RecordBatch> {
     let mut type_builder = StringBuilder::with_capacity(1, 1024);
     let mut plan_builder = StringBuilder::with_capacity(1, 1024);
@@ -228,6 +245,7 @@ fn create_output_batch(
     type_builder.append_value("Plan with Metrics");
 
     let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref())
+        .set_metric_types(metric_types.to_vec())
         .set_show_statistics(show_statistics)
         .indent(verbose)
         .to_string();
@@ -239,6 +257,7 @@ fn create_output_batch(
         type_builder.append_value("Plan with Full Metrics");
 
         let annotated_plan = DisplayableExecutionPlan::with_full_metrics(input.as_ref())
+            .set_metric_types(metric_types.to_vec())
             .set_show_statistics(show_statistics)
             .indent(verbose)
             .to_string();
@@ -252,7 +271,7 @@ fn create_output_batch(
     }
 
     RecordBatch::try_new(
-        schema,
+        Arc::clone(schema),
         vec![
             Arc::new(type_builder.finish()),
             Arc::new(plan_builder.finish()),
@@ -268,7 +287,7 @@ mod tests {
         collect,
         test::{
             assert_is_pending,
-            exec::{assert_strong_count_converges_to_zero, BlockingExec},
+            exec::{BlockingExec, assert_strong_count_converges_to_zero},
         },
     };
 
@@ -283,7 +302,13 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let analyze_exec = Arc::new(AnalyzeExec::new(true, false, blocking_exec, schema));
+        let analyze_exec = Arc::new(AnalyzeExec::new(
+            true,
+            false,
+            vec![MetricType::SUMMARY, MetricType::DEV],
+            blocking_exec,
+            schema,
+        ));
 
         let fut = collect(analyze_exec, task_ctx);
         let mut fut = fut.boxed();

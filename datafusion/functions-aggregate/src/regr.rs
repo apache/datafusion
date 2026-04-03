@@ -17,27 +17,19 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
-use arrow::{
-    array::{ArrayRef, UInt64Array},
-    compute::cast,
-    datatypes::DataType,
-    datatypes::Field,
-};
-use datafusion_common::{
-    downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, HashMap, Result,
-    ScalarValue,
-};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
+use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use datafusion_common::cast::{as_float64_array, as_uint64_array};
+use datafusion_common::{HashMap, Result, ScalarValue};
+use datafusion_doc::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::{Arc, LazyLock};
 
@@ -58,25 +50,20 @@ make_regr_udaf_expr_and_func!(regr_sxx, regr_sxx_udaf, RegrType::SXX);
 make_regr_udaf_expr_and_func!(regr_syy, regr_syy_udaf, RegrType::SYY);
 make_regr_udaf_expr_and_func!(regr_sxy, regr_sxy_udaf, RegrType::SXY);
 
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Regr {
     signature: Signature,
     regr_type: RegrType,
     func_name: &'static str,
 }
 
-impl Debug for Regr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("regr")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
-}
-
 impl Regr {
     pub fn new(regr_type: RegrType, func_name: &'static str) -> Self {
         Self {
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::exact(
+                vec![DataType::Float64, DataType::Float64],
+                Volatility::Immutable,
+            ),
             regr_type,
             func_name,
         }
@@ -84,7 +71,6 @@ impl Regr {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[allow(clippy::upper_case_acronyms)]
 pub enum RegrType {
     /// Variant for `regr_slope` aggregate expression
     /// Returns the slope of the linear regression line for non-null pairs in aggregate columns.
@@ -143,6 +129,29 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
                     Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.",
 
                 "regr_slope(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+create table weekly_performance(day int, user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+select * from weekly_performance;
++-----+--------------+
+| day | user_signups |
++-----+--------------+
+| 1   | 60           |
+| 2   | 65           |
+| 3   | 70           |
+| 4   | 75           |
+| 5   | 80           |
++-----+--------------+
+
+SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;
++--------+
+| slope  |
++--------+
+| 5.0    |
++--------+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -156,6 +165,30 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
                     this function returns b.",
 
                 "regr_intercept(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+create table weekly_performance(week int, productivity_score int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+select * from weekly_performance;
++------+---------------------+
+| week | productivity_score  |
+| ---- | ------------------- |
+| 1    | 60                  |
+| 2    | 65                  |
+| 3    | 70                  |
+| 4    | 75                  |
+| 5    | 80                  |
++------+---------------------+
+
+SELECT regr_intercept(productivity_score, week) AS intercept FROM weekly_performance;
++----------+
+|intercept|
+|intercept |
++----------+
+|  55      |
++----------+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -167,6 +200,29 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
             DOC_SECTION_STATISTICAL,
             "Counts the number of non-null paired data points.",
             "regr_count(expression_y, expression_x)",
+        )
+        .with_sql_example(
+            r#"```sql
+create table daily_metrics(day int, user_signups int) as values (1,100), (2,120), (3, NULL), (4,110), (5,NULL);
+select * from daily_metrics;
++-----+---------------+
+| day | user_signups  |
+| --- | ------------- |
+| 1   | 100           |
+| 2   | 120           |
+| 3   | NULL          |
+| 4   | 110           |
+| 5   | NULL          |
++-----+---------------+
+
+SELECT regr_count(user_signups, day) AS valid_pairs FROM daily_metrics;
++-------------+
+| valid_pairs |
++-------------+
+| 3           |
++-------------+
+```
+"#
         )
         .with_standard_argument("expression_y", Some("Dependent variable"))
         .with_standard_argument("expression_x", Some("Independent variable"))
@@ -180,6 +236,29 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
                     "Computes the square of the correlation coefficient between the independent and dependent variables.",
 
                 "regr_r2(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+create table weekly_performance(day int ,user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+select * from weekly_performance;
++-----+--------------+
+| day | user_signups |
++-----+--------------+
+| 1   | 60           |
+| 2   | 65           |
+| 3   | 70           |
+| 4   | 75           |
+| 5   | 80           |
++-----+--------------+
+
+SELECT regr_r2(user_signups, day) AS r_squared FROM weekly_performance;
++---------+
+|r_squared|
++---------+
+| 1.0     |
++---------+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -192,6 +271,29 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
                     "Computes the average of the independent variable (input) expression_x for the non-null paired data points.",
 
                 "regr_avgx(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+create table daily_sales(day int, total_sales int) as values (1,100), (2,150), (3,200), (4,NULL), (5,250);
+select * from daily_sales;
++-----+-------------+
+| day | total_sales |
+| --- | ----------- |
+| 1   | 100         |
+| 2   | 150         |
+| 3   | 200         |
+| 4   | NULL        |
+| 5   | 250         |
++-----+-------------+
+
+SELECT regr_avgx(total_sales, day) AS avg_day FROM daily_sales;
++----------+
+| avg_day  |
++----------+
+|   2.75   |
++----------+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -204,6 +306,30 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
                     "Computes the average of the dependent variable (output) expression_y for the non-null paired data points.",
 
                 "regr_avgy(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+create table daily_temperature(day int, temperature int) as values (1,30), (2,32), (3, NULL), (4,35), (5,36);
+select * from daily_temperature;
++-----+-------------+
+| day | temperature |
+| --- | ----------- |
+| 1   | 30          |
+| 2   | 32          |
+| 3   | NULL        |
+| 4   | 35          |
+| 5   | 36          |
++-----+-------------+
+
+-- temperature as Dependent Variable(Y), day as Independent Variable(X)
+SELECT regr_avgy(temperature, day) AS avg_temperature FROM daily_temperature;
++-----------------+
+| avg_temperature |
++-----------------+
+| 33.25           |
++-----------------+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -215,6 +341,29 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
             DOC_SECTION_STATISTICAL,
             "Computes the sum of squares of the independent variable.",
             "regr_sxx(expression_y, expression_x)",
+        )
+        .with_sql_example(
+            r#"```sql
+create table study_hours(student_id int, hours int, test_score int) as values (1,2,55), (2,4,65), (3,6,75), (4,8,85), (5,10,95);
+select * from study_hours;
++------------+-------+------------+
+| student_id | hours | test_score |
++------------+-------+------------+
+| 1          | 2     | 55         |
+| 2          | 4     | 65         |
+| 3          | 6     | 75         |
+| 4          | 8     | 85         |
+| 5          | 10    | 95         |
++------------+-------+------------+
+
+SELECT regr_sxx(test_score, hours) AS sxx FROM study_hours;
++------+
+| sxx  |
++------+
+| 40.0 |
++------+
+```
+"#
         )
         .with_standard_argument("expression_y", Some("Dependent variable"))
         .with_standard_argument("expression_x", Some("Independent variable"))
@@ -228,6 +377,27 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
             "Computes the sum of squares of the dependent variable.",
             "regr_syy(expression_y, expression_x)",
         )
+        .with_sql_example(
+            r#"```sql
+create table employee_productivity(week int, productivity_score int) as values (1,60), (2,65), (3,70);
+select * from employee_productivity;
++------+--------------------+
+| week | productivity_score |
++------+--------------------+
+| 1    | 60                 |
+| 2    | 65                 |
+| 3    | 70                 |
++------+--------------------+
+
+SELECT regr_syy(productivity_score, week) AS sum_squares_y FROM employee_productivity;
++---------------+
+| sum_squares_y |
++---------------+
+|    50.0       |
++---------------+
+```
+"#
+        )
         .with_standard_argument("expression_y", Some("Dependent variable"))
         .with_standard_argument("expression_x", Some("Independent variable"))
         .build(),
@@ -239,6 +409,27 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
             DOC_SECTION_STATISTICAL,
             "Computes the sum of products of paired data points.",
             "regr_sxy(expression_y, expression_x)",
+        )
+        .with_sql_example(
+            r#"```sql
+create table employee_productivity(week int, productivity_score int) as values(1,60), (2,65), (3,70);
+select * from employee_productivity;
++------+--------------------+
+| week | productivity_score |
++------+--------------------+
+| 1    | 60                 |
+| 2    | 65                 |
+| 3    | 70                 |
++------+--------------------+
+
+SELECT regr_sxy(productivity_score, week) AS sum_product_deviations FROM employee_productivity;
++------------------------+
+| sum_product_deviations |
++------------------------+
+|       10.0             |
++------------------------+
+```
+"#
         )
         .with_standard_argument("expression_y", Some("Dependent variable"))
         .with_standard_argument("expression_x", Some("Independent variable"))
@@ -263,12 +454,8 @@ impl AggregateUDFImpl for Regr {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Covariance requires numeric input types");
-        }
-
-        if matches!(self.regr_type, RegrType::Count) {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        if self.regr_type == RegrType::Count {
             Ok(DataType::UInt64)
         } else {
             Ok(DataType::Float64)
@@ -401,32 +588,18 @@ impl Accumulator for RegrAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // regr_slope(Y, X) calculates k in y = k*x + b
-        let values_y = &cast(&values[0], &DataType::Float64)?;
-        let values_x = &cast(&values[1], &DataType::Float64)?;
+        let values_y = as_float64_array(&values[0])?;
+        let values_x = as_float64_array(&values[1])?;
 
-        let mut arr_y = downcast_value!(values_y, Float64Array).iter().flatten();
-        let mut arr_x = downcast_value!(values_x, Float64Array).iter().flatten();
-
-        for i in 0..values_y.len() {
+        for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let value_y = if values_y.is_valid(i) {
-                arr_y.next()
-            } else {
-                None
+            let (value_y, value_x) = match (value_y, value_x) {
+                (Some(y), Some(x)) => (y, x),
+                // skip either x or y is NULL
+                _ => continue,
             };
-            let value_x = if values_x.is_valid(i) {
-                arr_x.next()
-            } else {
-                None
-            };
-            if value_y.is_none() || value_x.is_none() {
-                continue;
-            }
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]
-            let value_y = unwrap_or_internal_err!(value_y);
-            let value_x = unwrap_or_internal_err!(value_x);
-
             self.count += 1;
             let delta_x = value_x - self.mean_x;
             let delta_y = value_y - self.mean_y;
@@ -447,32 +620,18 @@ impl Accumulator for RegrAccumulator {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values_y = &cast(&values[0], &DataType::Float64)?;
-        let values_x = &cast(&values[1], &DataType::Float64)?;
+        let values_y = as_float64_array(&values[0])?;
+        let values_x = as_float64_array(&values[1])?;
 
-        let mut arr_y = downcast_value!(values_y, Float64Array).iter().flatten();
-        let mut arr_x = downcast_value!(values_x, Float64Array).iter().flatten();
-
-        for i in 0..values_y.len() {
+        for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let value_y = if values_y.is_valid(i) {
-                arr_y.next()
-            } else {
-                None
+            let (value_y, value_x) = match (value_y, value_x) {
+                (Some(y), Some(x)) => (y, x),
+                // skip either x or y is NULL
+                _ => continue,
             };
-            let value_x = if values_x.is_valid(i) {
-                arr_x.next()
-            } else {
-                None
-            };
-            if value_y.is_none() || value_x.is_none() {
-                continue;
-            }
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]
-            let value_y = unwrap_or_internal_err!(value_y);
-            let value_x = unwrap_or_internal_err!(value_x);
-
             if self.count > 1 {
                 self.count -= 1;
                 let delta_x = value_x - self.mean_x;
@@ -498,12 +657,12 @@ impl Accumulator for RegrAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let count_arr = downcast_value!(states[0], UInt64Array);
-        let mean_x_arr = downcast_value!(states[1], Float64Array);
-        let mean_y_arr = downcast_value!(states[2], Float64Array);
-        let m2_x_arr = downcast_value!(states[3], Float64Array);
-        let m2_y_arr = downcast_value!(states[4], Float64Array);
-        let algo_const_arr = downcast_value!(states[5], Float64Array);
+        let count_arr = as_uint64_array(&states[0])?;
+        let mean_x_arr = as_float64_array(&states[1])?;
+        let mean_y_arr = as_float64_array(&states[2])?;
+        let m2_x_arr = as_float64_array(&states[3])?;
+        let m2_y_arr = as_float64_array(&states[4])?;
+        let algo_const_arr = as_float64_array(&states[5])?;
 
         for i in 0..count_arr.len() {
             let count_b = count_arr.value(i);

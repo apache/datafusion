@@ -15,9 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::IntervalUnit::*;
+use arrow::datatypes::TimeUnit::*;
+
 use crate::types::{LogicalTypeRef, NativeType};
 use std::sync::{Arc, LazyLock};
 
+/// Create a singleton and accompanying static variable for a [`LogicalTypeRef`]
+/// of a [`NativeType`].
+/// * `name`: name of the static variable, must be unique.
+/// * `getter`: name of the public function that will return the singleton instance
+///   of the static variable.
+/// * `ty`: the [`NativeType`].
 macro_rules! singleton {
     ($name:ident, $getter:ident, $ty:ident) => {
         static $name: LazyLock<LogicalTypeRef> =
@@ -25,6 +34,26 @@ macro_rules! singleton {
 
         #[doc = "Getter for singleton instance of a logical type representing"]
         #[doc = concat!("[`NativeType::", stringify!($ty), "`].")]
+        pub fn $getter() -> LogicalTypeRef {
+            Arc::clone(&$name)
+        }
+    };
+}
+
+/// Similar to [`singleton`], but for native types that have variants, such as
+/// `NativeType::Interval(MonthDayNano)`.
+/// * `name`: name of the static variable, must be unique.
+/// * `getter`: name of the public function that will return the singleton instance
+///   of the static variable.
+/// * `ty`: the [`NativeType`].
+/// * `variant`: specific variant of the `ty`.
+macro_rules! singleton_variant {
+    ($name:ident, $getter:ident, $ty:ident, $variant:ident) => {
+        static $name: LazyLock<LogicalTypeRef> =
+            LazyLock::new(|| Arc::new(NativeType::$ty($variant)));
+
+        #[doc = "Getter for singleton instance of a logical type representing"]
+        #[doc = concat!("[`NativeType::", stringify!($ty), "`] of unit [`", stringify!($variant),"`].`")]
         pub fn $getter() -> LogicalTypeRef {
             Arc::clone(&$name)
         }
@@ -47,3 +76,24 @@ singleton!(LOGICAL_FLOAT64, logical_float64, Float64);
 singleton!(LOGICAL_DATE, logical_date, Date);
 singleton!(LOGICAL_BINARY, logical_binary, Binary);
 singleton!(LOGICAL_STRING, logical_string, String);
+
+singleton_variant!(
+    LOGICAL_INTERVAL_MDN,
+    logical_interval_mdn,
+    Interval,
+    MonthDayNano
+);
+
+singleton_variant!(
+    LOGICAL_INTERVAL_YEAR_MONTH,
+    logical_interval_year_month,
+    Interval,
+    YearMonth
+);
+
+singleton_variant!(
+    LOGICAL_DURATION_MICROSECOND,
+    logical_duration_microsecond,
+    Duration,
+    Microsecond
+);

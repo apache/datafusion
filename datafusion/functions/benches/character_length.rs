@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::datatypes::{DataType, Field};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
+use std::hint::black_box;
 use std::sync::Arc;
 
 mod helper;
@@ -30,6 +30,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let character_length = datafusion_functions::unicode::character_length();
 
     let return_field = Arc::new(Field::new("f", DataType::Utf8, true));
+    let config_options = Arc::new(ConfigOptions::default());
 
     let n_rows = 8192;
     for str_len in [8, 32, 128, 4096] {
@@ -51,6 +52,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
                         return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -74,6 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
                         return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -97,6 +100,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
                         return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -120,6 +124,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
                         return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },

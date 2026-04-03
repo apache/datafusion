@@ -23,7 +23,7 @@ use std::{any::Any, borrow::Cow};
 use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, Constraints};
+use datafusion_common::{Constraints, internal_err};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
 
 /// Implements [`TableSource`] for a [`TableProvider`]
@@ -33,8 +33,6 @@ use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType}
 ///
 /// It is used so logical plans in the `datafusion_expr` crate do not have a
 /// direct dependency on physical plans, such as [`TableProvider`]s.
-///
-/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
 pub struct DefaultTableSource {
     /// table provider
     pub table_provider: Arc<dyn TableProvider>,
@@ -78,7 +76,7 @@ impl TableSource for DefaultTableSource {
         self.table_provider.supports_filters_pushdown(filter)
     }
 
-    fn get_logical_plan(&self) -> Option<Cow<datafusion_expr::LogicalPlan>> {
+    fn get_logical_plan(&'_ self) -> Option<Cow<'_, datafusion_expr::LogicalPlan>> {
         self.table_provider.get_logical_plan()
     }
 

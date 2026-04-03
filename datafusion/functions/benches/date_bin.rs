@@ -15,19 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
 use arrow::datatypes::Field;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
-use rand::rngs::ThreadRng;
-use rand::Rng;
-
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_bin;
+use rand::Rng;
+use rand::rngs::ThreadRng;
 
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
     let mut seconds = vec![];
@@ -55,6 +54,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             Field::new("a", interval.data_type(), true).into(),
             Field::new("b", timestamps.data_type(), true).into(),
         ];
+        let config_options = Arc::new(ConfigOptions::default());
+
         b.iter(|| {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
@@ -62,6 +63,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: batch_len,
                     return_field: Arc::clone(&return_field),
+                    config_options: Arc::clone(&config_options),
                 })
                 .expect("date_bin should work on valid values"),
             )

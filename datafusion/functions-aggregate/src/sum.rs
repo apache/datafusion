@@ -17,35 +17,36 @@
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
-use ahash::RandomState;
-use datafusion_expr::utils::AggregateOrderSensitivity;
-use std::any::Any;
-use std::collections::HashSet;
-use std::mem::{size_of, size_of_val};
-
-use arrow::array::Array;
-use arrow::array::ArrowNativeTypeOp;
-use arrow::array::{ArrowNumericType, AsArray};
-use arrow::datatypes::ArrowPrimitiveType;
-use arrow::datatypes::{ArrowNativeType, FieldRef};
+use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
+use arrow::datatypes::Field;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
+    Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
+    DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
+    Float64Type, Int64Type, TimeUnit, UInt64Type,
 };
-use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{
-    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+use datafusion_common::hash_utils::RandomState;
+use datafusion_common::internal_err;
+use datafusion_common::types::{
+    NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
+    logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
 };
-use datafusion_expr::function::AccumulatorArgs;
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::utils::format_state_name;
+use datafusion_common::{HashMap, Result, ScalarValue, exec_err, not_impl_err};
+use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr_fn::cast;
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
-    SetMonotonicity, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
+    Operator, ReversedUDAF, SetMonotonicity, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use datafusion_functions_aggregate_common::utils::Hashable;
+use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
+use std::any::Any;
+use std::mem::size_of_val;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -54,6 +55,17 @@ make_udaf_expr_and_func!(
     "Returns the sum of a group of values.",
     sum_udaf
 );
+
+pub fn sum_distinct(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        sum_udaf(),
+        vec![expr],
+        true,
+        None,
+        vec![],
+        None,
+    ))
+}
 
 /// Sum only supports a subset of numeric types, instead relying on type coercion
 ///
@@ -73,11 +85,38 @@ macro_rules! downcast_sum {
             DataType::Float64 => {
                 $helper!(Float64Type, $args.return_field.data_type().clone())
             }
+            DataType::Decimal32(_, _) => {
+                $helper!(Decimal32Type, $args.return_field.data_type().clone())
+            }
+            DataType::Decimal64(_, _) => {
+                $helper!(Decimal64Type, $args.return_field.data_type().clone())
+            }
             DataType::Decimal128(_, _) => {
                 $helper!(Decimal128Type, $args.return_field.data_type().clone())
             }
             DataType::Decimal256(_, _) => {
                 $helper!(Decimal256Type, $args.return_field.data_type().clone())
+            }
+            DataType::Duration(TimeUnit::Second) => {
+                $helper!(DurationSecondType, $args.return_field.data_type().clone())
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                $helper!(
+                    DurationMillisecondType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                $helper!(
+                    DurationMicrosecondType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                $helper!(
+                    DurationNanosecondType,
+                    $args.return_field.data_type().clone()
+                )
             }
             _ => {
                 not_impl_err!(
@@ -104,7 +143,7 @@ macro_rules! downcast_sum {
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Sum {
     signature: Signature,
 }
@@ -112,7 +151,45 @@ pub struct Sum {
 impl Sum {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
+            // smallint, int, bigint, real, double precision, decimal, or interval.
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Decimal,
+                    )]),
+                    // Unsigned to u64
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_uint64()),
+                        vec![
+                            TypeSignatureClass::Native(logical_uint8()),
+                            TypeSignatureClass::Native(logical_uint16()),
+                            TypeSignatureClass::Native(logical_uint32()),
+                        ],
+                        NativeType::UInt64,
+                    )]),
+                    // Signed to i64
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![
+                            TypeSignatureClass::Native(logical_int8()),
+                            TypeSignatureClass::Native(logical_int16()),
+                            TypeSignatureClass::Native(logical_int32()),
+                        ],
+                        NativeType::Int64,
+                    )]),
+                    // Floats to f64
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Float],
+                        NativeType::Float64,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Duration,
+                    )]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -136,47 +213,30 @@ impl AggregateUDFImpl for Sum {
         &self.signature
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [args] = take_function_args(self.name(), arg_types)?;
-
-        // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
-        // smallint, int, bigint, real, double precision, decimal, or interval.
-
-        fn coerced_type(data_type: &DataType) -> Result<DataType> {
-            match data_type {
-                DataType::Dictionary(_, v) => coerced_type(v),
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-                DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
-                    Ok(data_type.clone())
-                }
-                dt if dt.is_signed_integer() => Ok(DataType::Int64),
-                dt if dt.is_unsigned_integer() => Ok(DataType::UInt64),
-                dt if dt.is_floating() => Ok(DataType::Float64),
-                _ => exec_err!("Sum not supported for {}", data_type),
-            }
-        }
-
-        Ok(vec![coerced_type(args)?])
-    }
-
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
             DataType::Int64 => Ok(DataType::Int64),
             DataType::UInt64 => Ok(DataType::UInt64),
             DataType::Float64 => Ok(DataType::Float64),
+            // In the spark, the result type is DECIMAL(min(38,precision+10), s)
+            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+            DataType::Decimal32(precision, scale) => {
+                let new_precision = DECIMAL32_MAX_PRECISION.min(*precision + 10);
+                Ok(DataType::Decimal32(new_precision, *scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                let new_precision = DECIMAL64_MAX_PRECISION.min(*precision + 10);
+                Ok(DataType::Decimal64(new_precision, *scale))
+            }
             DataType::Decimal128(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
                 let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
                 Ok(DataType::Decimal128(new_precision, *scale))
             }
             DataType::Decimal256(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
                 let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
                 Ok(DataType::Decimal256(new_precision, *scale))
             }
+            DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
             other => {
                 exec_err!("[return_type] SUM not supported for {}", other)
             }
@@ -187,7 +247,7 @@ impl AggregateUDFImpl for Sum {
         if args.is_distinct {
             macro_rules! helper {
                 ($t:ty, $dt:expr) => {
-                    Ok(Box::new(DistinctSumAccumulator::<$t>::try_new(&$dt)?))
+                    Ok(Box::new(DistinctSumAccumulator::<$t>::new(&$dt)))
                 };
             }
             downcast_sum!(args, helper)
@@ -203,25 +263,25 @@ impl AggregateUDFImpl for Sum {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
-            Ok(vec![Field::new_list(
-                format_state_name(args.name, "sum distinct"),
-                // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.return_type().clone(), true),
-                false,
-            )
-            .into()])
+            Ok(vec![
+                Field::new_list(
+                    format_state_name(args.name, "sum distinct"),
+                    // See COMMENTS.md to understand why nullable is set to true
+                    Field::new_list_field(args.return_type().clone(), true),
+                    false,
+                )
+                .into(),
+            ])
         } else {
-            Ok(vec![Field::new(
-                format_state_name(args.name, "sum"),
-                args.return_type().clone(),
-                true,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "sum"),
+                    args.return_type().clone(),
+                    true,
+                )
+                .into(),
+            ])
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -247,12 +307,23 @@ impl AggregateUDFImpl for Sum {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        macro_rules! helper {
-            ($t:ty, $dt:expr) => {
-                Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
-            };
+        if args.is_distinct {
+            // distinct path: use our sliding‐window distinct‐sum
+            macro_rules! helper_distinct {
+                ($t:ty, $dt:expr) => {
+                    Ok(Box::new(SlidingDistinctSumAccumulator::try_new(&$dt)?))
+                };
+            }
+            downcast_sum!(args, helper_distinct)
+        } else {
+            // non‐distinct path: existing sliding sum
+            macro_rules! helper {
+                ($t:ty, $dt:expr) => {
+                    Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
+                };
+            }
+            downcast_sum!(args, helper)
         }
-        downcast_sum!(args, helper)
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
@@ -277,6 +348,47 @@ impl AggregateUDFImpl for Sum {
             DataType::UInt64 => SetMonotonicity::Increasing,
             _ => SetMonotonicity::NotMonotonic,
         }
+    }
+
+    /// Implement ClickBench Q29 specific optimization:
+    /// `SUM(arg + constant)` --> `SUM(arg) + constant * COUNT(arg)`
+    ///
+    /// See background on [`AggregateUDFImpl::simplify_expr_op_literal`]
+    fn simplify_expr_op_literal(
+        &self,
+        agg_function: &AggregateFunction,
+        arg: &Expr,
+        op: Operator,
+        lit: &Expr,
+        // Only support '+' so the order of the args doesn't matter
+        _arg_is_left: bool,
+    ) -> Result<Option<Expr>> {
+        if op != Operator::Plus {
+            return Ok(None);
+        }
+
+        let lit_type = match &lit {
+            Expr::Literal(value, _) => value.data_type(),
+            _ => {
+                return internal_err!(
+                    "Sum::simplify_expr_op_literal got a non literal argument"
+                );
+            }
+        };
+        if lit_type == DataType::Null {
+            return Ok(None);
+        }
+
+        // Build up SUM(arg)
+        let mut sum_agg = agg_function.clone();
+        sum_agg.params.args = vec![arg.clone()];
+        let sum_agg = Expr::AggregateFunction(sum_agg);
+
+        // COUNT(arg) - cast to the correct type
+        let count_agg = cast(crate::count::count(arg.clone()), lit_type);
+
+        // SUM(arg) + lit * COUNT(arg)
+        Ok(Some(sum_agg + (lit.clone() * count_agg)))
     }
 }
 
@@ -309,7 +421,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
         if let Some(x) = arrow::compute::sum(values) {
-            let v = self.sum.get_or_insert(T::Native::usize_as(0));
+            let v = self.sum.get_or_insert_with(|| T::Native::usize_as(0));
             *v = v.add_wrapping(x);
         }
         Ok(())
@@ -401,83 +513,106 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     }
 }
 
-struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
-    values: HashSet<Hashable<T::Native>, RandomState>,
+/// A sliding‐window accumulator for `SUM(DISTINCT)` over Int64 columns.
+/// Maintains a running sum so that `evaluate()` is O(1).
+#[derive(Debug)]
+pub struct SlidingDistinctSumAccumulator {
+    /// Map each distinct value → its current count in the window
+    counts: HashMap<i64, usize, RandomState>,
+    /// Running sum of all distinct keys currently in the window
+    sum: i64,
+    /// Data type (must be Int64)
     data_type: DataType,
 }
 
-impl<T: ArrowPrimitiveType> std::fmt::Debug for DistinctSumAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DistinctSumAccumulator({})", self.data_type)
-    }
-}
-
-impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
+impl SlidingDistinctSumAccumulator {
+    /// Create a new accumulator; only `DataType::Int64` is supported.
     pub fn try_new(data_type: &DataType) -> Result<Self> {
+        // TODO support other numeric types
+        if *data_type != DataType::Int64 {
+            return exec_err!("SlidingDistinctSumAccumulator only supports Int64");
+        }
         Ok(Self {
-            values: HashSet::default(),
+            counts: HashMap::default(),
+            sum: 0,
             data_type: data_type.clone(),
         })
     }
 }
 
-impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // 1. Stores aggregate state in `ScalarValue::List`
-        // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
-        let state_out = {
-            let distinct_values = self
-                .values
-                .iter()
-                .map(|value| {
-                    ScalarValue::new_primitive::<T>(Some(value.0), &self.data_type)
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            vec![ScalarValue::List(ScalarValue::new_list_nullable(
-                &distinct_values,
-                &self.data_type,
-            ))]
-        };
-        Ok(state_out)
-    }
-
+impl Accumulator for SlidingDistinctSumAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let array = values[0].as_primitive::<T>();
-        match array.nulls().filter(|x| x.null_count() > 0) {
-            Some(n) => {
-                for idx in n.valid_indices() {
-                    self.values.insert(Hashable(array.value(idx)));
-                }
+        let arr = values[0].as_primitive::<Int64Type>();
+        for &v in arr.values() {
+            let cnt = self.counts.entry(v).or_insert(0);
+            if *cnt == 0 {
+                // first occurrence in window
+                self.sum = self.sum.wrapping_add(v);
             }
-            None => array.values().iter().for_each(|x| {
-                self.values.insert(Hashable(*x));
-            }),
-        }
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        for x in states[0].as_list::<i32>().iter().flatten() {
-            self.update_batch(&[x])?
+            *cnt += 1;
         }
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut acc = T::Native::usize_as(0);
-        for distinct_value in self.values.iter() {
-            acc = acc.add_wrapping(distinct_value.0)
-        }
-        let v = (!self.values.is_empty()).then_some(acc);
-        ScalarValue::new_primitive::<T>(v, &self.data_type)
+        // O(1) wrap of running sum
+        Ok(ScalarValue::Int64(Some(self.sum)))
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // Serialize distinct keys for cross-partition merge if needed
+        let keys = self
+            .counts
+            .keys()
+            .cloned()
+            .map(Some)
+            .map(ScalarValue::Int64)
+            .collect::<Vec<_>>();
+        Ok(vec![ScalarValue::List(ScalarValue::new_list_nullable(
+            &keys,
+            &self.data_type,
+        ))])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // Merge distinct keys from other partitions
+        let list_arr = states[0].as_list::<i32>();
+        for maybe_inner in list_arr.iter().flatten() {
+            for idx in 0..maybe_inner.len() {
+                if let ScalarValue::Int64(Some(v)) =
+                    ScalarValue::try_from_array(&*maybe_inner, idx)?
+                {
+                    let cnt = self.counts.entry(v).or_insert(0);
+                    if *cnt == 0 {
+                        self.sum = self.sum.wrapping_add(v);
+                    }
+                    *cnt += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = values[0].as_primitive::<Int64Type>();
+        for &v in arr.values() {
+            if let Some(cnt) = self.counts.get_mut(&v) {
+                *cnt -= 1;
+                if *cnt == 0 {
+                    // last copy leaving window
+                    self.sum = self.sum.wrapping_sub(v);
+                    self.counts.remove(&v);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }

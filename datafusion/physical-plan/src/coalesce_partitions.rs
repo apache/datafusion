@@ -27,12 +27,18 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::CardinalityEffect;
-use crate::projection::{make_with_child, ProjectionExec};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
+use crate::projection::{ProjectionExec, make_with_child};
+use crate::sort_pushdown::SortOrderPushdownResult;
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -42,7 +48,7 @@ pub struct CoalescePartitionsExec {
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     pub(crate) fetch: Option<usize>,
 }
@@ -54,7 +60,7 @@ impl CoalescePartitionsExec {
         CoalescePartitionsExec {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
             fetch: None,
         }
     }
@@ -72,6 +78,16 @@ impl CoalescePartitionsExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        let input_partitions = input.output_partitioning().partition_count();
+        let (drive, scheduling) = if input_partitions > 1 {
+            (EvaluationType::Eager, SchedulingType::Cooperative)
+        } else {
+            (
+                input.properties().evaluation_type,
+                input.properties().scheduling_type,
+            )
+        };
+
         // Coalescing partitions loses existing orderings:
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_orderings();
@@ -82,6 +98,19 @@ impl CoalescePartitionsExec {
             input.pipeline_behavior(),
             input.boundedness(),
         )
+        .with_evaluation_type(drive)
+        .with_scheduling_type(scheduling)
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -118,7 +147,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -130,11 +159,19 @@ impl ExecutionPlan for CoalescePartitionsExec {
         vec![false]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut plan = CoalescePartitionsExec::new(Arc::clone(&children[0]));
+        check_if_same_properties!(self, children);
+        let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
         plan.fetch = self.fetch;
         Ok(Arc::new(plan))
     }
@@ -145,9 +182,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // CoalescePartitionsExec produces a single partition
-        if 0 != partition {
-            return internal_err!("CoalescePartitionsExec invalid partition {partition}");
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "CoalescePartitionsExec invalid partition {partition}"
+        );
 
         let input_partitions = self.input.output_partitioning().partition_count();
         match input_partitions {
@@ -155,8 +194,18 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 "CoalescePartitionsExec requires at least one input partition"
             ),
             1 => {
-                // bypass any threading / metrics if there is a single partition
-                self.input.execute(0, context)
+                // single-partition path: execute child directly, but ensure fetch is respected
+                // (wrap with ObservedStream only if fetch is present so we don't add overhead otherwise)
+                let child_stream = self.input.execute(0, context)?;
+                if self.fetch.is_some() {
+                    let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+                    return Ok(Box::pin(ObservedStream::new(
+                        child_stream,
+                        baseline_metrics,
+                        self.fetch,
+                    )));
+                }
+                Ok(child_stream)
             }
             _ => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -195,14 +244,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(None)?
-            .with_fetch(self.schema(), self.fetch, 0, 1)
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -245,8 +289,66 @@ impl ExecutionPlan for CoalescePartitionsExec {
             input: Arc::clone(&self.input),
             fetch: limit,
             metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
         }))
+    }
+
+    fn with_preserve_order(
+        &self,
+        preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.input
+            .with_preserve_order(preserve_order)
+            .and_then(|new_input| {
+                Arc::new(self.clone())
+                    .with_new_children(vec![new_input])
+                    .ok()
+            })
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // CoalescePartitionsExec merges multiple partitions into one, which loses
+        // global ordering. However, we can still push the sort requirement down
+        // to optimize individual partitions - the Sort operator above will handle
+        // the global ordering.
+        //
+        // Note: The result will always be at most Inexact (never Exact) when there
+        // are multiple partitions, because merging destroys global ordering.
+        let result = self.input.try_pushdown_sort(order)?;
+
+        // If we have multiple partitions, we can't return Exact even if the
+        // underlying source claims Exact - merging destroys global ordering
+        let has_multiple_partitions =
+            self.input.output_partitioning().partition_count() > 1;
+
+        result
+            .try_map(|new_input| {
+                Ok(
+                    Arc::new(
+                        CoalescePartitionsExec::new(new_input).with_fetch(self.fetch),
+                    ) as Arc<dyn ExecutionPlan>,
+                )
+            })
+            .map(|r| {
+                if has_multiple_partitions {
+                    // Downgrade Exact to Inexact when merging multiple partitions
+                    r.into_inexact()
+                } else {
+                    r
+                }
+            })
     }
 }
 
@@ -254,7 +356,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
 mod tests {
     use super::*;
     use crate::test::exec::{
-        assert_strong_count_converges_to_zero, BlockingExec, PanicExec,
+        BlockingExec, PanicExec, assert_strong_count_converges_to_zero,
     };
     use crate::test::{self, assert_is_pending};
     use crate::{collect, common};
@@ -326,5 +428,111 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(panicking_exec));
 
         collect(coalesce_partitions_exec, task_ctx).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_single_partition_with_fetch() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Use existing scan_partitioned with 1 partition (returns 100 rows per partition)
+        let input = test::scan_partitioned(1);
+
+        // Test with fetch=3
+        let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(3));
+
+        let stream = coalesce.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(row_count, 3, "Should only return 3 rows due to fetch=3");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multi_partition_with_fetch_one() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Create 4 partitions, each with 100 rows
+        // This simulates the real-world scenario where each partition has data
+        let input = test::scan_partitioned(4);
+
+        // Test with fetch=1 (the original bug: was returning multiple rows instead of 1)
+        let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(1));
+
+        let stream = coalesce.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(
+            row_count, 1,
+            "Should only return 1 row due to fetch=1, not one per partition"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_single_partition_without_fetch() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Use scan_partitioned with 1 partition
+        let input = test::scan_partitioned(1);
+
+        // Test without fetch (should return all rows)
+        let coalesce = CoalescePartitionsExec::new(input);
+
+        let stream = coalesce.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(
+            row_count, 100,
+            "Should return all 100 rows when fetch is None"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_single_partition_fetch_larger_than_batch() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Use scan_partitioned with 1 partition (returns 100 rows)
+        let input = test::scan_partitioned(1);
+
+        // Test with fetch larger than available rows
+        let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(200));
+
+        let stream = coalesce.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(
+            row_count, 100,
+            "Should return all available rows (100) when fetch (200) is larger"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multi_partition_fetch_exact_match() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Create 4 partitions, each with 100 rows
+        let num_partitions = 4;
+        let csv = test::scan_partitioned(num_partitions);
+
+        // Test with fetch=400 (exactly all rows)
+        let coalesce = CoalescePartitionsExec::new(csv).with_fetch(Some(400));
+
+        let stream = coalesce.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(row_count, 400, "Should return exactly 400 rows");
+
+        Ok(())
     }
 }

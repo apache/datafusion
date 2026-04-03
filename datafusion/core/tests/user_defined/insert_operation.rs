@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, str::FromStr, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
@@ -24,11 +24,14 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_catalog::{Session, TableProvider};
-use datafusion_expr::{dml::InsertOp, Expr, TableType};
+use datafusion_common::config::Dialect;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_expr::{Expr, TableType, dml::InsertOp};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
-    execution_plan::{Boundedness, EmissionType},
     DisplayAs, ExecutionPlan, PlanProperties,
+    execution_plan::{Boundedness, EmissionType},
 };
 
 #[tokio::test]
@@ -62,7 +65,7 @@ async fn assert_insert_op(ctx: &SessionContext, sql: &str, insert_op: InsertOp) 
 fn session_ctx_with_dialect(dialect: impl Into<String>) -> SessionContext {
     let mut config = SessionConfig::new();
     let options = config.options_mut();
-    options.sql_parser.dialect = dialect.into();
+    options.sql_parser.dialect = Dialect::from_str(&dialect.into()).unwrap();
     SessionContext::new_with_config(config)
 }
 
@@ -120,18 +123,21 @@ impl TableProvider for TestInsertTableProvider {
 #[derive(Debug)]
 struct TestInsertExec {
     op: InsertOp,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
 }
 
 impl TestInsertExec {
     fn new(op: InsertOp) -> Self {
         Self {
             op,
-            plan_properties: PlanProperties::new(
-                EquivalenceProperties::new(make_count_schema()),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Incremental,
-                Boundedness::Bounded,
+            plan_properties: Arc::new(
+                PlanProperties::new(
+                    EquivalenceProperties::new(make_count_schema()),
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )
+                .with_scheduling_type(SchedulingType::Cooperative),
             ),
         }
     }
@@ -156,7 +162,7 @@ impl ExecutionPlan for TestInsertExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 
@@ -178,6 +184,22 @@ impl ExecutionPlan for TestInsertExec {
         _context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         unimplemented!("TestInsertExec is a stub for testing.")
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.plan_properties.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 

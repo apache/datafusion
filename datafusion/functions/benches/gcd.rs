@@ -15,18 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::datatypes::Field;
 use arrow::{
     array::{ArrayRef, Int64Array},
     datatypes::DataType,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::gcd;
 use rand::Rng;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn generate_i64_array(n_rows: usize) -> ArrayRef {
@@ -42,6 +42,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_a = ColumnarValue::Array(generate_i64_array(n_rows));
     let array_b = ColumnarValue::Array(generate_i64_array(n_rows));
     let udf = gcd();
+    let config_options = Arc::new(ConfigOptions::default());
 
     c.bench_function("gcd both array", |b| {
         b.iter(|| {
@@ -54,6 +55,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     ],
                     number_rows: 0,
                     return_field: Field::new("f", DataType::Int64, true).into(),
+                    config_options: Arc::clone(&config_options),
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -74,6 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     ],
                     number_rows: 0,
                     return_field: Field::new("f", DataType::Int64, true).into(),
+                    config_options: Arc::clone(&config_options),
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -94,6 +97,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     ],
                     number_rows: 0,
                     return_field: Field::new("f", DataType::Int64, true).into(),
+                    config_options: Arc::clone(&config_options),
                 })
                 .expect("date_bin should work on valid values"),
             )

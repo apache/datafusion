@@ -19,10 +19,11 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Nested type Functions for [DataFusion].
 //!
@@ -32,12 +33,12 @@
 //! [DataFusion]: https://crates.io/crates/datafusion
 //!
 //! You can register the functions in this crate using the [`register_all`] function.
-//!
 
 #[macro_use]
 pub mod macros;
 
 pub mod array_has;
+pub mod arrays_zip;
 pub mod cardinality;
 pub mod concat;
 pub mod dimension;
@@ -50,10 +51,11 @@ pub mod flatten;
 pub mod length;
 pub mod make_array;
 pub mod map;
+pub mod map_entries;
 pub mod map_extract;
 pub mod map_keys;
 pub mod map_values;
-pub mod max;
+pub mod min_max;
 pub mod planner;
 pub mod position;
 pub mod range;
@@ -78,6 +80,7 @@ pub mod expr_fn {
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::arrays_zip::arrays_zip;
     pub use super::cardinality::cardinality;
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
@@ -95,9 +98,12 @@ pub mod expr_fn {
     pub use super::flatten::flatten;
     pub use super::length::array_length;
     pub use super::make_array::make_array;
+    pub use super::map_entries::map_entries;
     pub use super::map_extract::map_extract;
     pub use super::map_keys::map_keys;
     pub use super::map_values::map_values;
+    pub use super::min_max::array_max;
+    pub use super::min_max::array_min;
     pub use super::position::array_position;
     pub use super::position::array_positions;
     pub use super::range::gen_series;
@@ -146,7 +152,8 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         length::array_length_udf(),
         distance::array_distance_udf(),
         flatten::flatten_udf(),
-        max::array_max_udf(),
+        min_max::array_max_udf(),
+        min_max::array_min_udf(),
         sort::array_sort_udf(),
         repeat::array_repeat_udf(),
         resize::array_resize_udf(),
@@ -154,6 +161,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         set_ops::array_distinct_udf(),
         set_ops::array_intersect_udf(),
         set_ops::array_union_udf(),
+        arrays_zip::arrays_zip_udf(),
         position::array_position_udf(),
         position::array_positions_udf(),
         remove::array_remove_udf(),
@@ -163,6 +171,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         replace::array_replace_all_udf(),
         replace::array_replace_udf(),
         map::map_udf(),
+        map_entries::map_entries_udf(),
         map_extract::map_extract_udf(),
         map_keys::map_keys_udf(),
         map_values::map_values_udf(),

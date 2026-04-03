@@ -22,10 +22,12 @@ use std::sync::Arc;
 use datafusion_expr::ScalarUDF;
 
 pub mod character_length;
+pub mod common;
 pub mod find_in_set;
 pub mod initcap;
 pub mod left;
 pub mod lpad;
+pub mod planner;
 pub mod reverse;
 pub mod right;
 pub mod rpad;

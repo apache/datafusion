@@ -17,7 +17,6 @@
 
 #[cfg(test)]
 mod tests {
-    use datafusion::common::assert_contains;
     use datafusion::datasource::provider_as_source;
     use datafusion::logical_expr::LogicalPlanBuilder;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
@@ -31,7 +30,7 @@ mod tests {
     use std::fs;
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
-    use substrait::proto::{rel, RelCommon};
+    use substrait::proto::{RelCommon, rel};
 
     #[tokio::test]
     async fn serialize_to_file() -> Result<()> {
@@ -44,8 +43,18 @@ mod tests {
         serializer::deserialize(path).await?;
 
         // Test case 2: serializing to an existing file should fail.
-        let got = serializer::serialize(sql, &ctx, path).await.unwrap_err();
-        assert_contains!(got.to_string(), "File exists");
+        let got = serializer::serialize(sql, &ctx, path)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            [
+                "File exists", // unix
+                "os error 80"  // windows
+            ]
+            .iter()
+            .any(|s| got.contains(s))
+        );
 
         fs::remove_file(path)?;
 
@@ -95,10 +104,10 @@ mod tests {
 
         assert_snapshot!(
                     format!("{}", datafusion_plan),
-                    @r#"
-Projection: data.b, data.a + data.a, data.a
-  TableScan: data projection=[a, b]
-"#
+                    @r"
+        Projection: data.b, data.a + data.a, data.a
+          TableScan: data projection=[a, b]
+        "
         ,
                 );
 
@@ -142,11 +151,11 @@ Projection: data.b, data.a + data.a, data.a
         let datafusion_plan = df.into_optimized_plan()?;
         assert_snapshot!(
                     datafusion_plan,
-                    @r#"
-Projection: data.b, rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, data.c
-  WindowAggr: windowExpr=[[rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-    TableScan: data projection=[a, b, c]
-"#
+                    @r"
+        Projection: data.b, rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, data.c
+          WindowAggr: windowExpr=[[rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+            TableScan: data projection=[a, b, c]
+        "
         ,
                 );
 

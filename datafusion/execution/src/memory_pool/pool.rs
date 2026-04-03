@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::memory_pool::{
-    human_readable_size, MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation, human_readable_size,
 };
 use datafusion_common::HashMap;
-use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, resources_datafusion_err};
 use log::debug;
 use parking_lot::Mutex;
 use std::{
@@ -212,7 +212,7 @@ impl MemoryPool for FairSpillPool {
                     .checked_div(state.num_spill)
                     .unwrap_or(spill_available);
 
-                if reservation.size + additional > available {
+                if reservation.size() + additional > available {
                     return Err(insufficient_capacity_err(
                         reservation,
                         additional,
@@ -260,8 +260,13 @@ fn insufficient_capacity_err(
     additional: usize,
     available: usize,
 ) -> DataFusionError {
-    resources_datafusion_err!("Failed to allocate additional {} for {} with {} already allocated for this reservation - {} remain available for the total pool", 
-    human_readable_size(additional), reservation.registration.consumer.name, human_readable_size(reservation.size), human_readable_size(available))
+    resources_datafusion_err!(
+        "Failed to allocate additional {} for {} with {} already allocated for this reservation - {} remain available for the total pool",
+        human_readable_size(additional),
+        reservation.registration.consumer.name,
+        human_readable_size(reservation.size()),
+        human_readable_size(available)
+    )
 }
 
 #[derive(Debug)]
@@ -269,6 +274,7 @@ struct TrackedConsumer {
     name: String,
     can_spill: bool,
     reserved: AtomicUsize,
+    peak: AtomicUsize,
 }
 
 impl TrackedConsumer {
@@ -277,10 +283,16 @@ impl TrackedConsumer {
         self.reserved.load(Ordering::Relaxed)
     }
 
+    /// Return the peak value
+    fn peak(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
+    }
+
     /// Grows the tracked consumer's reserved size,
     /// should be called after the pool has successfully performed the grow().
     fn grow(&self, additional: usize) {
         self.reserved.fetch_add(additional, Ordering::Relaxed);
+        self.peak.fetch_max(self.reserved(), Ordering::Relaxed);
     }
 
     /// Reduce the tracked consumer's reserved size,
@@ -295,9 +307,25 @@ impl TrackedConsumer {
 ///
 /// By tracking memory reservations more carefully this pool
 /// can provide better error messages on the largest memory users
+/// when memory allocation fails.
 ///
 /// Tracking is per hashed [`MemoryConsumer`], not per [`MemoryReservation`].
 /// The same consumer can have multiple reservations.
+///
+/// # Automatic Usage via [`RuntimeEnvBuilder`]
+///
+/// The easiest way to use `TrackConsumersPool` is via
+/// [`RuntimeEnvBuilder::with_memory_limit()`].
+///
+/// [`RuntimeEnvBuilder`]: crate::runtime_env::RuntimeEnvBuilder
+/// [`RuntimeEnvBuilder::with_memory_limit()`]: crate::runtime_env::RuntimeEnvBuilder::with_memory_limit
+///
+/// # Usage Examples
+///
+/// For more examples of using `TrackConsumersPool`, see the [memory_pool_tracking.rs] example
+///
+/// [memory_pool_tracking.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_tracking.rs
+/// [memory_pool_execution_plan.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
 #[derive(Debug)]
 pub struct TrackConsumersPool<I> {
     /// The wrapped memory pool that actually handles reservation logic
@@ -311,6 +339,38 @@ pub struct TrackConsumersPool<I> {
 impl<I: MemoryPool> TrackConsumersPool<I> {
     /// Creates a new [`TrackConsumersPool`].
     ///
+    /// # Arguments
+    /// * `inner` - The underlying memory pool that handles actual memory allocation
+    /// * `top` - The number of top memory consumers to include in error messages
+    ///
+    /// # Note
+    /// In most cases, you should use [`RuntimeEnvBuilder::with_memory_limit()`](crate::runtime_env::RuntimeEnvBuilder::with_memory_limit)
+    /// instead of creating this pool manually, as it automatically sets up tracking with
+    /// sensible defaults (top 5 consumers).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use datafusion_execution::memory_pool::{
+    ///     FairSpillPool, GreedyMemoryPool, TrackConsumersPool,
+    /// };
+    /// use std::num::NonZeroUsize;
+    ///
+    /// // Create with a greedy pool backend, reporting top 3 consumers in error messages
+    /// let tracked_greedy = TrackConsumersPool::new(
+    ///     GreedyMemoryPool::new(1024 * 1024), // 1MB limit
+    ///     NonZeroUsize::new(3).unwrap(),
+    /// );
+    ///
+    /// // Create with a fair spill pool backend, reporting top 5 consumers in error messages
+    /// let tracked_fair = TrackConsumersPool::new(
+    ///     FairSpillPool::new(2 * 1024 * 1024), // 2MB limit
+    ///     NonZeroUsize::new(5).unwrap(),
+    /// );
+    /// ```
+    ///
+    /// # Impact on Error Messages
+    ///
     /// The `top` determines how many Top K [`MemoryConsumer`]s to include
     /// in the reported [`DataFusionError::ResourcesExhausted`].
     pub fn new(inner: I, top: NonZeroUsize) -> Self {
@@ -321,7 +381,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
         }
     }
 
-    /// The top consumers in a report string.
+    /// Returns a formatted string with the top memory consumers.
     pub fn report_top(&self, top: usize) -> String {
         let mut consumers = self
             .tracked_consumers
@@ -333,6 +393,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
                         *consumer_id,
                         tracked_consumer.name.to_owned(),
                         tracked_consumer.can_spill,
+                        tracked_consumer.peak(),
                     ),
                     tracked_consumer.reserved(),
                 )
@@ -342,10 +403,11 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
 
         consumers[0..std::cmp::min(top, consumers.len())]
             .iter()
-            .map(|((id, name, can_spill), size)| {
+            .map(|((id, name, can_spill, peak), size)| {
                 format!(
-                    "  {name}#{id}(can spill: {can_spill}) consumed {}",
-                    human_readable_size(*size)
+                    "  {name}#{id}(can spill: {can_spill}) consumed {}, peak {}",
+                    human_readable_size(*size),
+                    human_readable_size(*peak),
                 )
             })
             .collect::<Vec<_>>()
@@ -365,6 +427,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 name: consumer.name().to_string(),
                 can_spill: consumer.can_spill(),
                 reserved: Default::default(),
+                peak: Default::default(),
             },
         );
 
@@ -407,8 +470,9 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                     // wrap OOM message in top consumers
                     DataFusionError::ResourcesExhausted(
                         provide_top_memory_consumers_to_error_msg(
-                            e,
-                            self.report_top(self.top.into()),
+                            &reservation.consumer().name,
+                            &e,
+                            &self.report_top(self.top.into()),
                         ),
                     )
                 }
@@ -434,16 +498,19 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 }
 
 fn provide_top_memory_consumers_to_error_msg(
-    error_msg: String,
-    top_consumers: String,
+    consumer_name: &str,
+    error_msg: &str,
+    top_consumers: &str,
 ) -> String {
-    format!("Additional allocation failed with top memory consumers (across reservations) as:\n{top_consumers}\nError: {error_msg}")
+    format!(
+        "Additional allocation failed for {consumer_name} with top memory consumers (across reservations) as:\n{top_consumers}\nError: {error_msg}"
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::{allow_duplicates, assert_snapshot, Settings};
+    use insta::{Settings, allow_duplicates, assert_snapshot};
     use std::sync::Arc;
 
     fn make_settings() -> Settings {
@@ -459,12 +526,12 @@ mod tests {
     fn test_fair() {
         let pool = Arc::new(FairSpillPool::new(100)) as _;
 
-        let mut r1 = MemoryConsumer::new("unspillable").register(&pool);
+        let r1 = MemoryConsumer::new("unspillable").register(&pool);
         // Can grow beyond capacity of pool
         r1.grow(2000);
         assert_eq!(pool.reserved(), 2000);
 
-        let mut r2 = MemoryConsumer::new("r2")
+        let r2 = MemoryConsumer::new("r2")
             .with_can_spill(true)
             .register(&pool);
         // Can grow beyond capacity of pool
@@ -496,7 +563,7 @@ mod tests {
         assert_eq!(r2.size(), 10);
         assert_eq!(pool.reserved(), 30);
 
-        let mut r3 = MemoryConsumer::new("r3")
+        let r3 = MemoryConsumer::new("r3")
             .with_can_spill(true)
             .register(&pool);
 
@@ -517,7 +584,7 @@ mod tests {
         r1.free();
         assert_eq!(pool.reserved(), 80);
 
-        let mut r4 = MemoryConsumer::new("s4").register(&pool);
+        let r4 = MemoryConsumer::new("s4").register(&pool);
         let err = r4.try_grow(30).unwrap_err().strip_backtrace();
         assert_snapshot!(err, @"Resources exhausted: Failed to allocate additional 30.0 B for s4 with 0.0 B already allocated for this reservation - 20.0 B remain available for the total pool");
     }
@@ -534,17 +601,18 @@ mod tests {
         // Test: use all the different interfaces to change reservation size
 
         // set r1=50, using grow and shrink
-        let mut r1 = MemoryConsumer::new("r1").register(&pool);
-        r1.grow(70);
+        let r1 = MemoryConsumer::new("r1").register(&pool);
+        r1.grow(50);
+        r1.grow(20);
         r1.shrink(20);
 
         // set r2=15 using try_grow
-        let mut r2 = MemoryConsumer::new("r2").register(&pool);
+        let r2 = MemoryConsumer::new("r2").register(&pool);
         r2.try_grow(15)
             .expect("should succeed in memory allotment for r2");
 
         // set r3=20 using try_resize
-        let mut r3 = MemoryConsumer::new("r3").register(&pool);
+        let r3 = MemoryConsumer::new("r3").register(&pool);
         r3.try_resize(25)
             .expect("should succeed in memory allotment for r3");
         r3.try_resize(20)
@@ -552,20 +620,20 @@ mod tests {
 
         // set r4=10
         // this should not be reported in top 3
-        let mut r4 = MemoryConsumer::new("r4").register(&pool);
+        let r4 = MemoryConsumer::new("r4").register(&pool);
         r4.grow(10);
 
         // Test: reports if new reservation causes error
         // using the previously set sizes for other consumers
-        let mut r5 = MemoryConsumer::new("r5").register(&pool);
+        let r5 = MemoryConsumer::new("r5").register(&pool);
         let res = r5.try_grow(150);
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          r1#[ID](can spill: false) consumed 50.0 B,
-          r3#[ID](can spill: false) consumed 20.0 B,
-          r2#[ID](can spill: false) consumed 15.0 B.
+        Resources exhausted: Additional allocation failed for r5 with top memory consumers (across reservations) as:
+          r1#[ID](can spill: false) consumed 50.0 B, peak 70.0 B,
+          r3#[ID](can spill: false) consumed 20.0 B, peak 25.0 B,
+          r2#[ID](can spill: false) consumed 15.0 B, peak 15.0 B.
         Error: Failed to allocate additional 150.0 B for r5 with 0.0 B already allocated for this reservation - 5.0 B remain available for the total pool
         ");
     }
@@ -582,13 +650,13 @@ mod tests {
         let same_name = "foo";
 
         // Test: see error message when no consumers recorded yet
-        let mut r0 = MemoryConsumer::new(same_name).register(&pool);
+        let r0 = MemoryConsumer::new(same_name).register(&pool);
         let res = r0.try_grow(150);
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 0.0 B.
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
+          foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 100.0 B remain available for the total pool
         ");
 
@@ -597,16 +665,16 @@ mod tests {
 
         r0.grow(10); // make r0=10, pool available=90
         let new_consumer_same_name = MemoryConsumer::new(same_name);
-        let mut r1 = new_consumer_same_name.register(&pool);
+        let r1 = new_consumer_same_name.register(&pool);
         // TODO: the insufficient_capacity_err() message is per reservation, not per consumer.
         // a followup PR will clarify this message "0 bytes already allocated for this reservation"
         let res = r1.try_grow(150);
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 10.0 B,
-          foo#[ID](can spill: false) consumed 0.0 B.
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
+          foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
+          foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 90.0 B remain available for the total pool
         ");
 
@@ -617,9 +685,9 @@ mod tests {
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 20.0 B,
-          foo#[ID](can spill: false) consumed 10.0 B.
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
+          foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
+          foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 20.0 B already allocated for this reservation - 70.0 B remain available for the total pool
         ");
 
@@ -627,15 +695,15 @@ mod tests {
         // will be recognized as different in the TrackConsumersPool
         let consumer_with_same_name_but_different_hash =
             MemoryConsumer::new(same_name).with_can_spill(true);
-        let mut r2 = consumer_with_same_name_but_different_hash.register(&pool);
+        let r2 = consumer_with_same_name_but_different_hash.register(&pool);
         let res = r2.try_grow(150);
         assert!(res.is_err());
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
-        Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 20.0 B,
-          foo#[ID](can spill: false) consumed 10.0 B,
-          foo#[ID](can spill: true) consumed 0.0 B.
+        Resources exhausted: Additional allocation failed for foo with top memory consumers (across reservations) as:
+          foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
+          foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
+          foo#[ID](can spill: true) consumed 0.0 B, peak 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 70.0 B remain available for the total pool
         ");
     }
@@ -646,21 +714,21 @@ mod tests {
             // Baseline: see the 2 memory consumers
             let setting = make_settings();
             let _bound = setting.bind_to_scope();
-            let mut r0 = MemoryConsumer::new("r0").register(&pool);
+            let r0 = MemoryConsumer::new("r0").register(&pool);
             r0.grow(10);
             let r1_consumer = MemoryConsumer::new("r1");
-            let mut r1 = r1_consumer.register(&pool);
+            let r1 = r1_consumer.register(&pool);
             r1.grow(20);
 
             let res = r0.try_grow(150);
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-                Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r1#[ID](can spill: false) consumed 20.0 B,
-                  r0#[ID](can spill: false) consumed 10.0 B.
-                Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 70.0 B remain available for the total pool
-                "));
+            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
+              r1#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
+              r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
+            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 70.0 B remain available for the total pool
+            "));
 
             // Test: unregister one
             // only the remaining one should be listed
@@ -669,10 +737,10 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-                Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r0#[ID](can spill: false) consumed 10.0 B.
-                Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
-                "));
+            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
+              r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
+            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
+            "));
 
             // Test: actual message we see is the `available is 70`. When it should be `available is 90`.
             // This is because the pool.shrink() does not automatically occur within the inner_pool.deregister().
@@ -680,10 +748,10 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-                Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r0#[ID](can spill: false) consumed 10.0 B.
-                Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
-                "));
+            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
+              r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
+            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
+            "));
 
             // Test: the registration needs to free itself (or be dropped),
             // for the proper error message
@@ -691,10 +759,10 @@ mod tests {
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
-                Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r0#[ID](can spill: false) consumed 10.0 B.
-                Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
-                "));
+            Resources exhausted: Additional allocation failed for r0 with top memory consumers (across reservations) as:
+              r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
+            Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
+            "));
         }
 
         let tracked_spill_pool: Arc<dyn MemoryPool> = Arc::new(TrackConsumersPool::new(
@@ -723,13 +791,13 @@ mod tests {
             .downcast::<TrackConsumersPool<GreedyMemoryPool>>()
             .unwrap();
         // set r1=20
-        let mut r1 = MemoryConsumer::new("r1").register(&pool);
+        let r1 = MemoryConsumer::new("r1").register(&pool);
         r1.grow(20);
         // set r2=15
-        let mut r2 = MemoryConsumer::new("r2").register(&pool);
+        let r2 = MemoryConsumer::new("r2").register(&pool);
         r2.grow(15);
         // set r3=45
-        let mut r3 = MemoryConsumer::new("r3").register(&pool);
+        let r3 = MemoryConsumer::new("r3").register(&pool);
         r3.grow(45);
 
         let downcasted = upcasted
@@ -739,8 +807,8 @@ mod tests {
         // Test: can get runtime metrics, even without an error thrown
         let res = downcasted.report_top(2);
         assert_snapshot!(res, @r"
-        r3#[ID](can spill: false) consumed 45.0 B,
-        r1#[ID](can spill: false) consumed 20.0 B.
+        r3#[ID](can spill: false) consumed 45.0 B, peak 45.0 B,
+        r1#[ID](can spill: false) consumed 20.0 B, peak 20.0 B.
         ");
     }
 }

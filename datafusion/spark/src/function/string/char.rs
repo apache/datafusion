@@ -15,35 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::ArrayRef;
+use arrow::array::GenericStringBuilder;
+use arrow::datatypes::DataType::Int64;
+use arrow::datatypes::DataType::Utf8;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use std::{any::Any, sync::Arc};
 
-use arrow::{
-    array::{ArrayRef, StringArray},
-    datatypes::{
-        DataType,
-        DataType::{Int64, Utf8},
-    },
-};
-
-use datafusion_common::{cast::as_int64_array, exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, cast::as_int64_array, exec_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 /// Spark-compatible `char` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#char>
-#[derive(Debug)]
-pub struct SparkChar {
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct CharFunc {
     signature: Signature,
 }
 
-impl Default for SparkChar {
+impl Default for CharFunc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkChar {
+impl CharFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::uniform(1, vec![Int64], Volatility::Immutable),
@@ -51,7 +49,7 @@ impl SparkChar {
     }
 }
 
-impl ScalarUDFImpl for SparkChar {
+impl ScalarUDFImpl for CharFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -65,11 +63,18 @@ impl ScalarUDFImpl for SparkChar {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Utf8)
+        datafusion_common::internal_err!(
+            "return_type should not be called, use return_field_from_args instead"
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_chr(&args.args)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), Utf8, nullable)))
     }
 }
 
@@ -106,25 +111,75 @@ fn spark_chr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = as_int64_array(&args[0])?;
 
-    // first map is the iterator, second is for the `Option<_>`
-    let result = integer_array
-        .iter()
-        .map(|integer: Option<i64>| {
-            integer
-                .map(|integer| {
-                    if integer < 0 {
-                        return Ok("".to_string()); // Return empty string for negative integers
-                    }
+    let mut builder = GenericStringBuilder::<i32>::with_capacity(
+        integer_array.len(),
+        integer_array.len(),
+    );
+
+    for integer_opt in integer_array {
+        match integer_opt {
+            Some(integer) => {
+                if integer < 0 {
+                    builder.append_value(""); // empty string for negative numbers.
+                } else {
                     match core::char::from_u32((integer % 256) as u32) {
-                        Some(ch) => Ok(ch.to_string()),
+                        Some(ch) => builder.append_value(ch.to_string()),
                         None => {
-                            exec_err!("requested character not compatible for encoding.")
+                            return exec_err!(
+                                "requested character not compatible for encoding."
+                            );
                         }
                     }
-                })
-                .transpose()
-        })
-        .collect::<Result<StringArray>>()?;
+                }
+            }
+            None => builder.append_null(),
+        }
+    }
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
+#[test]
+fn test_char_nullability() -> Result<()> {
+    use arrow::datatypes::{DataType::Utf8, Field, FieldRef};
+    use datafusion_expr::ReturnFieldArgs;
+    use std::sync::Arc;
+
+    let func = CharFunc::new();
+
+    let nullable_field: FieldRef = Arc::new(Field::new("col", Int64, true));
+
+    let out_nullable = func.return_field_from_args(ReturnFieldArgs {
+        arg_fields: &[nullable_field],
+        scalar_arguments: &[None],
+    })?;
+
+    assert!(
+        out_nullable.is_nullable(),
+        "char(col) should be nullable when input column is nullable"
+    );
+    assert_eq!(
+        out_nullable.data_type(),
+        &Utf8,
+        "char always returns Utf8 regardless of input type"
+    );
+
+    let non_nullable_field: FieldRef = Arc::new(Field::new("col", Int64, false));
+
+    let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
+        arg_fields: &[non_nullable_field],
+        scalar_arguments: &[None],
+    })?;
+
+    assert!(
+        !out_non_nullable.is_nullable(),
+        "char(col) should NOT be nullable when input column is NOT nullable"
+    );
+    assert_eq!(
+        out_non_nullable.data_type(),
+        &Utf8,
+        "char always returns Utf8 regardless of input type"
+    );
+
+    Ok(())
 }

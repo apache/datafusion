@@ -26,7 +26,7 @@ use crate::{SchemaProvider, TableProvider, TableProviderFactory};
 
 use crate::Session;
 use datafusion_common::{
-    Constraints, DFSchema, DataFusionError, HashMap, TableReference,
+    DFSchema, DataFusionError, HashMap, TableReference, internal_datafusion_err,
 };
 use datafusion_expr::CreateExternalTable;
 
@@ -111,17 +111,13 @@ impl ListingSchemaProvider {
             let file_name = table
                 .path
                 .file_name()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("Cannot parse file name!".to_string())
-                })?
+                .ok_or_else(|| internal_datafusion_err!("Cannot parse file name!"))?
                 .to_str()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("Cannot parse file name!".to_string())
-                })?;
+                .ok_or_else(|| internal_datafusion_err!("Cannot parse file name!"))?;
             let table_name = file_name.split('.').collect_vec()[0];
-            let table_path = table.to_string().ok_or_else(|| {
-                DataFusionError::Internal("Cannot parse file name!".to_string())
-            })?;
+            let table_path = table
+                .to_string()
+                .ok_or_else(|| internal_datafusion_err!("Cannot parse file name!"))?;
 
             if !self.table_exist(table_name) {
                 let table_url = format!("{}/{}", self.authority, table_path);
@@ -131,21 +127,13 @@ impl ListingSchemaProvider {
                     .factory
                     .create(
                         state,
-                        &CreateExternalTable {
-                            schema: Arc::new(DFSchema::empty()),
+                        &CreateExternalTable::builder(
                             name,
-                            location: table_url,
-                            file_type: self.format.clone(),
-                            table_partition_cols: vec![],
-                            if_not_exists: false,
-                            temporary: false,
-                            definition: None,
-                            order_exprs: vec![],
-                            unbounded: false,
-                            options: Default::default(),
-                            constraints: Constraints::empty(),
-                            column_defaults: Default::default(),
-                        },
+                            table_url,
+                            self.format.clone(),
+                            Arc::new(DFSchema::empty()),
+                        )
+                        .build(),
                     )
                     .await?;
                 let _ =

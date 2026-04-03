@@ -20,8 +20,8 @@ use std::{collections::HashSet, sync::Arc};
 use arrow::datatypes::Schema;
 use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
     Column, HashMap, Result, TableReference,
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
@@ -100,6 +100,71 @@ fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
     Ok(sort_exprs)
 }
 
+/// Rewrite Filter plans that have a Window as their input by inserting a SubqueryAlias.
+///
+/// When a Filter directly operates on a Window plan, it can cause issues during SQL unparsing
+/// because window functions in a WHERE clause are not valid SQL. The solution is to wrap
+/// the Window plan in a SubqueryAlias, effectively creating a derived table.
+///
+/// Example transformation:
+///
+/// Filter: condition
+///   Window: window_function
+///     TableScan: table
+///
+/// becomes:
+///
+/// Filter: condition
+///   SubqueryAlias: __qualify_subquery
+///     Projection: table.column1, table.column2
+///       Window: window_function
+///         TableScan: table
+pub(super) fn rewrite_qualify(plan: LogicalPlan) -> Result<LogicalPlan> {
+    let transformed_plan = plan.transform_up(|plan| match plan {
+        // Check if the filter's input is a Window plan
+        LogicalPlan::Filter(mut filter) => {
+            if matches!(&*filter.input, LogicalPlan::Window(_)) {
+                // Create a SubqueryAlias around the Window plan
+                let qualifier = filter
+                    .input
+                    .schema()
+                    .iter()
+                    .find_map(|(q, _)| q)
+                    .map(|q| q.to_string())
+                    .unwrap_or_else(|| "__qualify_subquery".to_string());
+
+                // for Postgres, name of column for 'rank() over (...)' is 'rank'
+                // but in Datafusion, it is 'rank() over (...)'
+                // without projection, it's still an invalid sql in Postgres
+
+                let project_exprs = filter
+                    .input
+                    .schema()
+                    .iter()
+                    .map(|(_, f)| datafusion_expr::col(f.name()).alias(f.name()))
+                    .collect::<Vec<_>>();
+
+                let input =
+                    datafusion_expr::LogicalPlanBuilder::from(Arc::clone(&filter.input))
+                        .project(project_exprs)?
+                        .build()?;
+
+                let subquery_alias =
+                    datafusion_expr::SubqueryAlias::try_new(Arc::new(input), qualifier)?;
+
+                filter.input = Arc::new(LogicalPlan::SubqueryAlias(subquery_alias));
+                Ok(Transformed::yes(LogicalPlan::Filter(filter)))
+            } else {
+                Ok(Transformed::no(LogicalPlan::Filter(filter)))
+            }
+        }
+
+        _ => Ok(Transformed::no(plan)),
+    });
+
+    transformed_plan.data()
+}
+
 /// Rewrite logic plan for query that order by columns are not in projections
 /// Plan before rewrite:
 ///
@@ -158,7 +223,15 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
 
     let mut collects = p.expr.clone();
     for sort in &sort.expr {
-        collects.push(sort.expr.clone());
+        // Strip aliases from sort expressions so the comparison matches
+        // the inner Projection's raw expressions. The optimizer may add
+        // sort expressions to the inner Projection without aliases, while
+        // the Sort node's expressions carry aliases from the original plan.
+        let mut expr = sort.expr.clone();
+        while let Expr::Alias(alias) = expr {
+            expr = *alias.expr;
+        }
+        collects.push(expr);
     }
 
     // Compare outer collects Expr::to_string with inner collected transformed values
@@ -245,8 +318,12 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     // Check if the inner projection and outer projection have a matching pattern like
     //     Projection: j1.j1_id AS id
     //       Projection: j1.j1_id
+    if outer_projections.expr.len() != inner_projection.expr.len() {
+        return (plan, vec![]);
+    }
+
     for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
-        let Expr::Alias(ref outer_alias) = &outer_projections.expr[i] else {
+        let Expr::Alias(outer_alias) = &outer_projections.expr[i] else {
             return (plan, vec![]);
         };
 
@@ -295,15 +372,14 @@ pub(super) fn find_unnest_column_alias(
         if projection.expr.len() != 1 {
             return (plan, None);
         }
-        if let Some(Expr::Alias(alias)) = projection.expr.first() {
-            if alias
+        if let Some(Expr::Alias(alias)) = projection.expr.first()
+            && alias
                 .expr
                 .schema_name()
                 .to_string()
                 .starts_with(&format!("{UNNEST_COLUMN_PREFIX}("))
-            {
-                return (projection.input.as_ref(), Some(alias.name.clone()));
-            }
+        {
+            return (projection.input.as_ref(), Some(alias.name.clone()));
         }
     }
     (plan, None)
@@ -416,5 +492,55 @@ impl TreeNodeRewriter for TableAliasRewriter<'_> {
             }
             _ => Ok(Transformed::no(expr)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_expr::{LogicalPlanBuilder, col, table_scan};
+
+    // this is a regression test: when the outer projection has fewer expressions than
+    // the inner projection, `subquery_alias_inner_query_and_columns` must not panic
+    // with an index oob error
+    // note: this happens when optimizer passes (e.g. CommonSubexprEliminate)
+    // insert an inner projection with extra columns that a subsequent projection narrows
+    // back down
+    #[test]
+    fn test_stacked_projections_mismatched_lengths_no_panic() {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+
+        // Inner projection has 2 expressions, outer has 0 (empty).
+        let inner_plan = LogicalPlanBuilder::from(
+            table_scan(Some("t"), &schema, Some(vec![0, 1]))
+                .unwrap()
+                .build()
+                .unwrap(),
+        )
+        .project(vec![col("t.id"), col("t.name")])
+        .unwrap()
+        .build()
+        .unwrap();
+
+        // Build an empty outer projection over the inner.
+        let outer_plan = LogicalPlanBuilder::from(inner_plan)
+            .project(Vec::<Expr>::new())
+            .unwrap()
+            .alias("sub")
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let LogicalPlan::SubqueryAlias(subquery_alias) = &outer_plan else {
+            panic!("expected SubqueryAlias");
+        };
+
+        // should return early without panicking
+        let (_plan, columns) = subquery_alias_inner_query_and_columns(subquery_alias);
+        assert!(columns.is_empty());
     }
 }

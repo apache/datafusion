@@ -44,7 +44,7 @@ impl<R: 'static> SpawnedTask<R> {
         R: Send,
     {
         // Ok to use spawn here as SpawnedTask handles aborting/cancelling the task on Drop
-        #[allow(clippy::disallowed_methods)]
+        #[expect(clippy::disallowed_methods)]
         let inner = tokio::task::spawn(trace_future(task));
         Self { inner }
     }
@@ -56,7 +56,7 @@ impl<R: 'static> SpawnedTask<R> {
         R: Send,
     {
         // Ok to use spawn_blocking here as SpawnedTask handles aborting/cancelling the task on Drop
-        #[allow(clippy::disallowed_methods)]
+        #[expect(clippy::disallowed_methods)]
         let inner = tokio::task::spawn_blocking(trace_block(task));
         Self { inner }
     }
@@ -68,15 +68,28 @@ impl<R: 'static> SpawnedTask<R> {
     }
 
     /// Joins the task and unwinds the panic if it happens.
-    pub async fn join_unwind(self) -> Result<R, JoinError> {
+    pub async fn join_unwind(mut self) -> Result<R, JoinError> {
+        self.join_unwind_mut().await
+    }
+
+    /// Joins the task using a mutable reference and unwinds the panic if it happens.
+    ///
+    /// This method is similar to [`join_unwind`](Self::join_unwind), but takes a mutable
+    /// reference instead of consuming `self`. This allows the `SpawnedTask` to remain
+    /// usable after the call.
+    ///
+    /// If called multiple times on the same task:
+    /// - If the task is still running, it will continue waiting for completion
+    /// - If the task has already completed successfully, subsequent calls will
+    ///   continue to return the same `JoinError` indicating the task is finished
+    /// - If the task panicked, the first call will resume the panic, and the
+    ///   program will not reach subsequent calls
+    pub async fn join_unwind_mut(&mut self) -> Result<R, JoinError> {
         self.await.map_err(|e| {
             // `JoinError` can be caused either by panic or cancellation. We have to handle panics:
             if e.is_panic() {
                 std::panic::resume_unwind(e.into_panic());
             } else {
-                // Cancellation may be caused by two reasons:
-                // 1. Abort is called, but since we consumed `self`, it's not our case (`JoinHandle` not accessible outside).
-                // 2. The runtime is shutting down.
                 log::warn!("SpawnedTask was polled during shutdown");
                 e
             }
@@ -102,14 +115,14 @@ impl<R> Drop for SpawnedTask<R> {
 mod tests {
     use super::*;
 
-    use std::future::{pending, Pending};
+    use std::future::{Pending, pending};
 
     use tokio::{runtime::Runtime, sync::oneshot};
 
     #[tokio::test]
     async fn runtime_shutdown() {
         let rt = Runtime::new().unwrap();
-        #[allow(clippy::async_yields_async)]
+        #[expect(clippy::async_yields_async)]
         let task = rt
             .spawn(async {
                 SpawnedTask::spawn(async {

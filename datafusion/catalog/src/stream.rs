@@ -28,13 +28,13 @@ use std::sync::Arc;
 use crate::{Session, TableProvider, TableProviderFactory};
 use arrow::array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
+use datafusion_common::{Constraints, DataFusionError, Result, config_err, plan_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
-use datafusion_physical_expr::create_ordering;
+use datafusion_physical_expr::create_lex_ordering;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
@@ -53,7 +53,7 @@ impl TableProviderFactory for StreamTableFactory {
         state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
+        let schema: SchemaRef = Arc::clone(cmd.schema.inner());
         let location = cmd.location.clone();
         let encoding = cmd.file_type.parse()?;
         let header = if let Ok(opt) = cmd
@@ -256,7 +256,7 @@ impl StreamConfig {
         Self {
             source,
             order: vec![],
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
         }
     }
 
@@ -321,17 +321,21 @@ impl TableProvider for StreamTable {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let projected_schema = match projection {
             Some(p) => {
-                let projected = self.0.source.schema().project(p)?;
-                create_ordering(&projected, &self.0.order)?
+                let projected = Arc::new(self.0.source.schema().project(p)?);
+                create_lex_ordering(&projected, &self.0.order, state.execution_props())?
             }
-            None => create_ordering(self.0.source.schema(), &self.0.order)?,
+            None => create_lex_ordering(
+                self.0.source.schema(),
+                &self.0.order,
+                state.execution_props(),
+            )?,
         };
 
         Ok(Arc::new(StreamingTableExec::try_new(
@@ -350,15 +354,11 @@ impl TableProvider for StreamTable {
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let ordering = match self.0.order.first() {
-            Some(x) => {
-                let schema = self.0.source.schema();
-                let orders = create_ordering(schema, std::slice::from_ref(x))?;
-                let ordering = orders.into_iter().next().unwrap();
-                Some(ordering.into_iter().map(Into::into).collect())
-            }
-            None => None,
-        };
+        let schema = self.0.source.schema();
+        let orders =
+            create_lex_ordering(schema, &self.0.order, _state.execution_props())?;
+        // It is sufficient to pass only one of the equivalent orderings:
+        let ordering = orders.into_iter().next().map(Into::into);
 
         Ok(Arc::new(DataSinkExec::new(
             input,
@@ -440,6 +440,6 @@ impl DataSink for StreamWrite {
         write_task
             .join_unwind()
             .await
-            .map_err(DataFusionError::ExecutionJoin)?
+            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
     }
 }

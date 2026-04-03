@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use std::vec;
 
 use arrow::array::{
     Array, ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray,
@@ -29,22 +31,28 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
-    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
+    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
-use datafusion::common::DataFusionError;
-use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
+use datafusion::common::{DataFusionError, Result, not_impl_err};
+use datafusion::functions::math::abs;
+use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
+use datafusion::logical_expr::{
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility, create_udf,
+};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
+use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use log::info;
 use tempfile::TempDir;
 
@@ -74,22 +82,26 @@ impl TestContext {
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
         let runtime = Arc::new(RuntimeEnv::default());
-        let mut state = SessionStateBuilder::new()
+
+        let mut state_builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
-            .with_default_features()
-            .build();
+            .with_default_features();
 
         if is_spark_path(relative_path) {
-            info!("Registering Spark functions");
-            datafusion_spark::register_all(&mut state)
-                .expect("Can not register Spark functions");
+            state_builder = state_builder.with_spark_features();
         }
+
+        let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "cte.slt" => {
+                info!("Registering strict schema provider for CTE tests");
+                register_strict_schema_provider(test_ctx.session_ctx());
+            }
             "information_schema_table_types.slt" => {
                 info!("Registering local temporary table");
                 register_temp_table(test_ctx.session_ctx()).await;
@@ -133,6 +145,10 @@ impl TestContext {
                 info!("Registering table with union column");
                 register_union_table(test_ctx.session_ctx())
             }
+            "async_udf.slt" => {
+                info!("Registering dummy async udf");
+                register_async_abs_udf(test_ctx.session_ctx())
+            }
             _ => {
                 info!("Using default SessionContext");
             }
@@ -159,6 +175,85 @@ impl TestContext {
     pub fn session_ctx(&self) -> &SessionContext {
         &self.ctx
     }
+}
+
+// ==============================================================================
+// Strict Schema Provider (sqllogictest-only)
+// ==============================================================================
+//
+// The goal of `StrictOrdersSchema` is to exercise end-to-end query planning
+// while detecting *unexpected* catalog lookups.
+//
+// Specifically, if DataFusion incorrectly treats a CTE reference (e.g. `"barbaz"`)
+// as a real table reference, the planner will attempt to resolve it through the
+// schema provider. The types below deliberately `panic!` on any lookup other than
+// the one table we expect (`orders`).
+//
+// This makes the "extra provider lookup" bug observable in an end-to-end test,
+// rather than being silently ignored by default providers that return `Ok(None)`
+// for unknown tables.
+#[derive(Debug)]
+struct StrictOrdersSchema {
+    orders: Arc<dyn TableProvider>,
+}
+
+#[async_trait]
+impl SchemaProvider for StrictOrdersSchema {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn table_names(&self) -> Vec<String> {
+        vec!["orders".to_string()]
+    }
+
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        match name {
+            "orders" => Ok(Some(Arc::clone(&self.orders))),
+            other => panic!(
+                "unexpected table lookup: {other}. This maybe indicates a CTE reference was \
+                 incorrectly treated as a catalog table reference."
+            ),
+        }
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        name == "orders"
+    }
+}
+
+fn register_strict_schema_provider(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "order_id",
+        DataType::Int32,
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2]))],
+    )
+    .expect("record batch should be valid");
+
+    let orders =
+        MemTable::try_new(schema, vec![vec![batch]]).expect("memtable should be valid");
+
+    let schema_provider: Arc<dyn SchemaProvider> = Arc::new(StrictOrdersSchema {
+        orders: Arc::new(orders),
+    });
+
+    let previous = ctx
+        .catalog("datafusion")
+        .expect("default catalog should exist")
+        .register_schema("strict_schema", schema_provider)
+        .expect("strict schema registration should succeed");
+    assert!(
+        previous.is_none(),
+        "strict_schema unexpectedly already existed in datafusion catalog"
+    );
 }
 
 #[cfg(feature = "avro")]
@@ -235,7 +330,7 @@ pub async fn register_temp_table(ctx: &SessionContext) {
 
     #[async_trait]
     impl TableProvider for TestTable {
-        fn as_any(&self) -> &dyn std::any::Any {
+        fn as_any(&self) -> &dyn Any {
             self
         }
 
@@ -426,14 +521,15 @@ fn create_example_udf() -> ScalarUDF {
 
 fn register_union_table(ctx: &SessionContext) {
     let union = UnionArray::try_new(
-        UnionFields::new(
+        UnionFields::try_new(
             // typeids: 3 for int, 1 for string
             vec![3, 1],
             vec![
                 Field::new("int", DataType::Int32, false),
                 Field::new("string", DataType::Utf8, false),
             ],
-        ),
+        )
+        .unwrap(),
         ScalarBuffer::from(vec![3, 1, 3]),
         None,
         vec![
@@ -457,4 +553,49 @@ fn register_union_table(ctx: &SessionContext) {
         RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(union)]).unwrap();
 
     ctx.register_batch("union_table", batch).unwrap();
+}
+
+fn register_async_abs_udf(ctx: &SessionContext) {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct AsyncAbs {
+        inner_abs: Arc<ScalarUDF>,
+    }
+    impl AsyncAbs {
+        fn new() -> Self {
+            AsyncAbs { inner_abs: abs() }
+        }
+    }
+    impl ScalarUDFImpl for AsyncAbs {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "async_abs"
+        }
+
+        fn signature(&self) -> &Signature {
+            self.inner_abs.signature()
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            self.inner_abs.return_type(arg_types)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            not_impl_err!("{} can only be called from async contexts", self.name())
+        }
+    }
+    #[async_trait]
+    impl AsyncScalarUDFImpl for AsyncAbs {
+        async fn invoke_async_with_args(
+            &self,
+            args: ScalarFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            return self.inner_abs.invoke_with_args(args);
+        }
+    }
+    let async_abs = AsyncAbs::new();
+    let udf = AsyncScalarUDF::new(Arc::new(async_abs));
+    ctx.register_udf(udf.into_scalar_udf());
 }

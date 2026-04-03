@@ -15,20 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
 use crate::SendableRecordBatchStream;
+use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
 use crate::{PhysicalExpr, PhysicalSortExpr};
-use arrow::array::Array;
+use arrow::array::{Array, UInt32Array};
+use arrow::compute::take_record_batch;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use arrow::row::{RowConverter, SortField};
-use datafusion_common::Result;
+use arrow::row::{RowConverter, Rows, SortField};
+use arrow_ord::sort::lexsort_to_indices;
+use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Fuse, StreamExt};
+use std::iter::FusedIterator;
 use std::marker::PhantomData;
+use std::mem;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 /// A [`Stream`](futures::Stream) that has multiple partitions that can
 /// be polled separately but not concurrently
@@ -76,8 +81,40 @@ impl FusedStreams {
     }
 }
 
+/// A pair of `Arc<Rows>` that can be reused
+#[derive(Debug)]
+struct ReusableRows {
+    // inner[stream_idx] holds a two Arcs:
+    // at start of a new poll
+    // .0 is the rows from the previous poll (at start),
+    // .1 is the one that is being written to
+    // at end of a poll, .0 will be swapped with .1,
+    inner: Vec<[Option<Arc<Rows>>; 2]>,
+}
+
+impl ReusableRows {
+    // return a Rows for writing,
+    // does not clone if the existing rows can be reused
+    fn take_next(&mut self, stream_idx: usize) -> Result<Rows> {
+        Arc::try_unwrap(self.inner[stream_idx][1].take().unwrap()).map_err(|_| {
+            internal_datafusion_err!(
+                "Rows from RowCursorStream is still in use by consumer"
+            )
+        })
+    }
+    // save the Rows
+    fn save(&mut self, stream_idx: usize, rows: &Arc<Rows>) {
+        self.inner[stream_idx][1] = Some(Arc::clone(rows));
+        // swap the current with the previous one, so that the next poll can reuse the Rows from the previous poll
+        let [a, b] = &mut self.inner[stream_idx];
+        mem::swap(a, b);
+    }
+}
+
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
 /// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
+/// Note: the stream returns an error if the consumer buffers more than one RowValues (i.e. holds on to two RowValues
+/// from the same partition at the same time).
 #[derive(Debug)]
 pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
@@ -88,6 +125,9 @@ pub struct RowCursorStream {
     streams: FusedStreams,
     /// Tracks the memory used by `converter`
     reservation: MemoryReservation,
+    /// Allocated rows for each partition, we keep two to allow for buffering one
+    /// in the consumer of the stream
+    rows: ReusableRows,
 }
 
 impl RowCursorStream {
@@ -105,28 +145,46 @@ impl RowCursorStream {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let streams = streams.into_iter().map(|s| s.fuse()).collect();
+        let streams: Vec<_> = streams.into_iter().map(|s| s.fuse()).collect();
         let converter = RowConverter::new(sort_fields)?;
+        let mut rows = Vec::with_capacity(streams.len());
+        for _ in &streams {
+            // Initialize each stream with an empty Rows
+            rows.push([
+                Some(Arc::new(converter.empty_rows(0, 0))),
+                Some(Arc::new(converter.empty_rows(0, 0))),
+            ]);
+        }
         Ok(Self {
             converter,
             reservation,
             column_expressions: expressions.iter().map(|x| Arc::clone(&x.expr)).collect(),
             streams: FusedStreams(streams),
+            rows: ReusableRows { inner: rows },
         })
     }
 
-    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<RowValues> {
-        let cols = self
-            .column_expressions
-            .iter()
-            .map(|expr| expr.evaluate(batch)?.into_array(batch.num_rows()))
-            .collect::<Result<Vec<_>>>()?;
+    fn convert_batch(
+        &mut self,
+        batch: &RecordBatch,
+        stream_idx: usize,
+    ) -> Result<RowValues> {
+        let cols = evaluate_expressions_to_arrays(&self.column_expressions, batch)?;
 
-        let rows = self.converter.convert_columns(&cols)?;
+        // At this point, ownership should of this Rows should be unique
+        let mut rows = self.rows.take_next(stream_idx)?;
+
+        rows.clear();
+
+        self.converter.append(&mut rows, &cols)?;
         self.reservation.try_resize(self.converter.size())?;
 
+        let rows = Arc::new(rows);
+
+        self.rows.save(stream_idx, &rows);
+
         // track the memory in the newly created Rows.
-        let mut rows_reservation = self.reservation.new_empty();
+        let rows_reservation = self.reservation.new_empty();
         rows_reservation.try_grow(rows.size())?;
         Ok(RowValues::new(rows, rows_reservation))
     }
@@ -146,7 +204,7 @@ impl PartitionedStream for RowCursorStream {
     ) -> Poll<Option<Self::Output>> {
         Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
             r.and_then(|batch| {
-                let cursor = self.convert_batch(&batch)?;
+                let cursor = self.convert_batch(&batch, stream_idx)?;
                 Ok((cursor, batch))
             })
         }))
@@ -192,7 +250,7 @@ impl<T: CursorArray> FieldCursorStream<T> {
         let array = value.into_array(batch.num_rows())?;
         let size_in_mem = array.get_buffer_memory_size();
         let array = array.as_any().downcast_ref::<T>().expect("field values");
-        let mut array_reservation = self.reservation.new_empty();
+        let array_reservation = self.reservation.new_empty();
         array_reservation.try_grow(size_in_mem)?;
         Ok(ArrayValues::new(
             self.sort.options,
@@ -220,5 +278,161 @@ impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
                 Ok((cursor, batch))
             })
         }))
+    }
+}
+
+/// A lazy, memory-efficient sort iterator used as a fallback during aggregate
+/// spill when there is not enough memory for an eager sort (which requires ~2x
+/// peak memory to hold both the unsorted and sorted copies simultaneously).
+///
+/// On the first call to `next()`, a sorted index array (`UInt32Array`) is
+/// computed via `lexsort_to_indices`. Subsequent calls yield chunks of
+/// `batch_size` rows by `take`-ing from the original batch using slices of
+/// this index array. Each `take` copies data for the chunk (not zero-copy),
+/// but only one chunk is live at a time since the caller consumes it before
+/// requesting the next. Once all rows have been yielded, the original batch
+/// and index array are dropped to free memory.
+///
+/// The caller must reserve `sizeof(batch) + sizeof(one chunk)` for this iterator,
+/// and free the reservation once the iterator is depleted.
+pub(crate) struct IncrementalSortIterator {
+    batch: RecordBatch,
+    expressions: LexOrdering,
+    batch_size: usize,
+    indices: Option<UInt32Array>,
+    cursor: usize,
+}
+
+impl IncrementalSortIterator {
+    pub(crate) fn new(
+        batch: RecordBatch,
+        expressions: LexOrdering,
+        batch_size: usize,
+    ) -> Self {
+        Self {
+            batch,
+            expressions,
+            batch_size,
+            cursor: 0,
+            indices: None,
+        }
+    }
+}
+
+impl Iterator for IncrementalSortIterator {
+    type Item = Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor >= self.batch.num_rows() {
+            return None;
+        }
+
+        match self.indices.as_ref() {
+            None => {
+                let sort_columns = match self
+                    .expressions
+                    .iter()
+                    .map(|expr| expr.evaluate_to_sort_column(&self.batch))
+                    .collect::<Result<Vec<_>>>()
+                {
+                    Ok(cols) => cols,
+                    Err(e) => return Some(Err(e)),
+                };
+
+                let indices = match lexsort_to_indices(&sort_columns, None) {
+                    Ok(indices) => indices,
+                    Err(e) => return Some(Err(e.into())),
+                };
+                self.indices = Some(indices);
+
+                // Call again, this time it will hit the Some(indices) branch and return the first batch
+                self.next()
+            }
+            Some(indices) => {
+                let batch_size = self.batch_size.min(self.batch.num_rows() - self.cursor);
+
+                // Perform the take to produce the next batch
+                let new_batch_indices = indices.slice(self.cursor, batch_size);
+                let new_batch = match take_record_batch(&self.batch, &new_batch_indices) {
+                    Ok(batch) => batch,
+                    Err(e) => return Some(Err(e.into())),
+                };
+
+                self.cursor += batch_size;
+
+                // If this is the last batch, we can release the memory
+                if self.cursor >= self.batch.num_rows() {
+                    let schema = self.batch.schema();
+                    let _ = mem::replace(&mut self.batch, RecordBatch::new_empty(schema));
+                    self.indices = None;
+                }
+
+                // Return the new batch
+                Some(Ok(new_batch))
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let num_rows = self.batch.num_rows();
+        let batch_size = self.batch_size;
+        let num_batches = num_rows.div_ceil(batch_size);
+        (num_batches, Some(num_batches))
+    }
+}
+
+impl FusedIterator for IncrementalSortIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{AsArray, Int32Array};
+    use arrow::datatypes::{DataType, Field, Int32Type};
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr::expressions::col;
+
+    /// Verifies that `take_record_batch` in `IncrementalSortIterator` actually
+    /// copies the data into a new allocation rather than returning a zero-copy
+    /// slice of the original batch. If the output arrays were slices, their
+    /// underlying buffer length would match the original array's length; a true
+    /// copy will have a buffer sized to fit only the chunk.
+    #[test]
+    fn incremental_sort_iterator_copies_data() -> Result<()> {
+        let original_len = 10;
+        let batch_size = 3;
+
+        // Build a batch with a single Int32 column of descending values
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a: Int32Array = Int32Array::from(vec![0; original_len]);
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(col_a)])?;
+
+        // Sort ascending on column "a"
+        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "a",
+            &batch.schema(),
+        )?)])
+        .unwrap();
+
+        let mut total_rows = 0;
+        IncrementalSortIterator::new(batch.clone(), expressions, batch_size).try_for_each(
+            |result| {
+                let chunk = result?;
+                total_rows += chunk.num_rows();
+
+                // Every output column must be a fresh allocation whose length
+                // equals the chunk size, NOT the original array length.
+                chunk.columns().iter().zip(batch.columns()).for_each(|(arr, original_arr)| {
+                    let (_, scalar_buf, _) = arr.as_primitive::<Int32Type>().clone().into_parts();
+                    let (_, original_scalar_buf, _) = original_arr.as_primitive::<Int32Type>().clone().into_parts();
+
+                    assert_ne!(scalar_buf.inner().data_ptr(), original_scalar_buf.inner().data_ptr(), "Expected a copy of the data for each chunk, but got a slice that shares the same buffer as the original array");
+                });
+
+                Result::<_, DataFusionError>::Ok(())
+            },
+        )?;
+
+        assert_eq!(total_rows, original_len);
+        Ok(())
     }
 }

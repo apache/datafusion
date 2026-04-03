@@ -1,0 +1,54 @@
+[default.extend-words]
+# random words from unit tests
+Pn = "Pn"
+fo = "fo"
+nd = "nd"
+Nd = "Nd"
+ba = "ba"
+ECT = "ECT"
+Ue = "Ue"
+Iy = "Iy"
+hte = "hte"
+numer = "numer"
+abd = "abd"
+aroun = "aroun"
+abov = "abov"
+Ois = "Ois"
+alo = "alo"
+
+# abbreviations, common words, etc.
+typ = "typ"
+datas = "datas"
+YOUY = "YOUY"
+lits = "lits"
+
+# exposed to public API
+Serializeable = "Serializeable"
+
+# from test cases like TPC-* or ClickBench
+carefull = "carefull"
+precentage = "precentage"
+flate = "flate"
+hom = "hom"
+alph = "alph"
+wih = "wih"
+Ded = "Ded"
+
+# From SLT README
+nteger = "nteger"
+
+[files]
+extend-exclude = [
+    "*.slt",
+    "*.slt.part",
+    "*.svg",
+    "*.sql",
+    "dev/changelog/**",
+    "benchmarks/**",
+    "*.csv",
+    "docs/source/contributor-guide/governance.md",
+    # submodules
+    "parquet-testing/**",
+    "datafusion-testing/**",
+    "testing/**",
+]

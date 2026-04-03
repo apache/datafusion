@@ -15,18 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr::expressions::col;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::{collect, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, collect};
 
 use criterion::async_executor::FuturesExecutor;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_datasource::memory::MemorySourceConfig;
 
 fn generate_spm_for_round_robin_tie_breaker(
@@ -66,11 +66,10 @@ fn generate_spm_for_round_robin_tie_breaker(
         RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap()
     };
 
-    let rbs = (0..batch_count).map(|_| rb.clone()).collect::<Vec<_>>();
-    let partitiones = vec![rbs.clone(); partition_count];
-
     let schema = rb.schema();
-    let sort = LexOrdering::new(vec![
+    let rbs = std::iter::repeat_n(rb, batch_count).collect::<Vec<_>>();
+    let partitions = vec![rbs.clone(); partition_count];
+    let sort = [
         PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
             options: Default::default(),
@@ -79,9 +78,10 @@ fn generate_spm_for_round_robin_tie_breaker(
             expr: col("c", &schema).unwrap(),
             options: Default::default(),
         },
-    ]);
+    ]
+    .into();
 
-    let exec = MemorySourceConfig::try_new_exec(&partitiones, schema, None).unwrap();
+    let exec = MemorySourceConfig::try_new_exec(&partitions, schema, None).unwrap();
     SortPreservingMergeExec::new(sort, exec)
         .with_round_robin_repartition(enable_round_robin_repartition)
 }
