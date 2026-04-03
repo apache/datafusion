@@ -89,10 +89,6 @@ impl Default for FixedSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for FixedSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.inner.table_names()
     }

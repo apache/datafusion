@@ -178,10 +178,6 @@ impl DirSchema {
 
 #[async_trait]
 impl SchemaProvider for DirSchema {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         let tables = self.tables.read().unwrap();
         tables.keys().cloned().collect::<Vec<_>>()

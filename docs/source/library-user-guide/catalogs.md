@@ -74,10 +74,6 @@ use datafusion::common::{Result, exec_err};
 
 #[async_trait]
 impl SchemaProvider for MemorySchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.tables
             .iter()
@@ -131,10 +127,6 @@ Without getting into a `CatalogProvider` implementation, we can create a `Memory
 #
 # #[async_trait]
 # impl SchemaProvider for MemorySchemaProvider {
-#     fn as_any(&self) -> &dyn Any {
-#         self
-#     }
-#
 #     fn table_names(&self) -> Vec<String> {
 #         self.tables
 #             .iter()
@@ -219,7 +211,6 @@ impl SchemaProvider for Schema {
 #       todo!();
     }
 
-#    fn as_any(&self) -> &(dyn std::any::Any + 'static) { todo!() }
 #    fn table_names(&self) -> Vec<std::string::String> { todo!() }
 #    fn table_exist(&self, _: &str) -> bool { todo!() }
 }

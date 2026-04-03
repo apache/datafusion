@@ -37,10 +37,6 @@ impl SchemaProvider for ResolvedSchemaProvider {
         self.owner_name.as_deref()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.cached_tables.keys().cloned().collect()
     }

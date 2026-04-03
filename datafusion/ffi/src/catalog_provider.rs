@@ -140,7 +140,7 @@ unsafe extern "C" fn register_schema_fn_wrapper(
     unsafe {
         let runtime = provider.runtime();
         let inner_provider = provider.inner();
-        let schema: Arc<dyn SchemaProvider + Send> = schema.into();
+        let schema: Arc<dyn SchemaProvider> = schema.into();
 
         let returned_schema =
             rresult_return!(inner_provider.register_schema(name.as_str(), schema))
@@ -330,7 +330,7 @@ impl CatalogProvider for ForeignCatalogProvider {
         schema: Arc<dyn SchemaProvider>,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         unsafe {
-            let schema = match schema.as_any().downcast_ref::<ForeignSchemaProvider>() {
+            let schema = match schema.downcast_ref::<ForeignSchemaProvider>() {
                 Some(s) => &s.0,
                 None => &FFI_SchemaProvider::new_with_ffi_codec(
                     schema,

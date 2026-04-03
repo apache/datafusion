@@ -198,10 +198,6 @@ struct StrictOrdersSchema {
 
 #[async_trait]
 impl SchemaProvider for StrictOrdersSchema {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         vec!["orders".to_string()]
     }

@@ -134,10 +134,6 @@ impl DynamicObjectStoreSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for DynamicObjectStoreSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.inner.table_names()
     }
