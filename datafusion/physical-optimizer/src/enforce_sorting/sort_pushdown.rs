@@ -280,7 +280,7 @@ fn pushdown_requirement_to_children(
             }
             RequirementsCompatibility::NonCompatible => Ok(None),
         }
-    } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+    } else if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
         let Some(sort_ordering) = sort_exec.properties().output_ordering().cloned()
         else {
             return internal_err!("SortExec should have output ordering");
@@ -319,7 +319,7 @@ fn pushdown_requirement_to_children(
         // `UnionExec` does not have real sort requirements for its input, we
         // just propagate the sort requirements down:
         Ok(Some(vec![Some(parent_required); plan.children().len()]))
-    } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
+    } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
         let left_columns_len = smj.left().schema().fields().len();
         let parent_ordering: Vec<PhysicalSortExpr> = parent_required
             .first()
@@ -354,14 +354,14 @@ fn pushdown_requirement_to_children(
                 Ok(None)
             }
         }
-    } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+    } else if let Some(aggregate_exec) = plan.downcast_ref::<AggregateExec>() {
         handle_aggregate_pushdown(aggregate_exec, parent_required)
     } else if maintains_input_order.is_empty()
         || !maintains_input_order.iter().any(|o| *o)
-        || plan.as_any().is::<RepartitionExec>()
-        || plan.as_any().is::<FilterExec>()
+        || plan.is::<RepartitionExec>()
+        || plan.is::<FilterExec>()
         // TODO: Add support for Projection push down
-        || plan.as_any().is::<ProjectionExec>()
+        || plan.is::<ProjectionExec>()
         || pushdown_would_violate_requirements(&parent_required, plan.as_ref())
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
@@ -383,7 +383,7 @@ fn pushdown_requirement_to_children(
             // ordering requirement invalidates requirement of sort preserving merge exec.
             Ok(None)
         }
-    } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+    } else if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
     } else {
         handle_custom_pushdown(plan, parent_required, &maintains_input_order)

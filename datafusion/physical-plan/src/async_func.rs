@@ -37,7 +37,6 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use futures::Stream;
 use futures::stream::StreamExt;
 use log::trace;
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
@@ -156,10 +155,6 @@ impl DisplayAs for AsyncFuncExec {
 impl ExecutionPlan for AsyncFuncExec {
     fn name(&self) -> &str {
         "async_func"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

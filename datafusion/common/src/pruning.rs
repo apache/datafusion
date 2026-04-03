@@ -121,6 +121,7 @@ pub trait PruningStatistics {
     /// container, return `None` (the default).
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn contained(
         &self,
         column: &Column,
@@ -526,6 +527,7 @@ impl PruningStatistics for CompositePruningStatistics {
 
 #[cfg(test)]
 #[expect(deprecated)]
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
 mod tests {
     use crate::{
         ColumnStatistics,
