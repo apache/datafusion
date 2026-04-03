@@ -4666,7 +4666,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
 
         // Get the HashJoinExec to check the dynamic filter
         let hash_join = plan
-            .as_any()
             .downcast_ref::<HashJoinExec>()
             .expect("Plan should be HashJoinExec");
 

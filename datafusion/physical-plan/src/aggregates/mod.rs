@@ -17,7 +17,6 @@
 
 //! Aggregates functionalities
 
-use std::any::Any;
 use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
@@ -1342,10 +1341,6 @@ impl ExecutionPlan for AggregateExec {
     }
 
     /// Return a reference to Any that can be used for down-casting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -2501,10 +2496,6 @@ mod tests {
     impl ExecutionPlan for TestYieldingExec {
         fn name(&self) -> &'static str {
             "TestYieldingExec"
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {

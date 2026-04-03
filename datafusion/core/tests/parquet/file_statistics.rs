@@ -88,7 +88,7 @@ async fn check_stats_precision_with_filter_pushdown() {
         .unwrap();
 
     assert!(
-        optimized_exec.as_any().is::<DataSourceExec>(),
+        optimized_exec.is::<DataSourceExec>(),
         "Sanity check that the pushdown did what we expected"
     );
     // Scan with filter pushdown, stats are inexact
@@ -196,7 +196,7 @@ async fn list_files_with_session_level_cache() {
     //Session 1 first time list files
     assert_eq!(get_list_file_cache_size(&state1), 0);
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
-    let data_source_exec = exec1.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source_exec = exec1.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
     let parquet1 = data_source
         .as_any()
@@ -212,7 +212,7 @@ async fn list_files_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
-    let data_source_exec = exec2.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source_exec = exec2.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
     let parquet2 = data_source
         .as_any()
@@ -228,7 +228,7 @@ async fn list_files_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
-    let data_source_exec = exec3.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source_exec = exec3.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
     let parquet3 = data_source
         .as_any()

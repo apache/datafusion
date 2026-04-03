@@ -286,56 +286,55 @@ fn statistical_join_selection_subrule(
     plan: Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let transformed =
-        if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-            match hash_join.partition_mode() {
-                PartitionMode::Auto => try_collect_left(hash_join, false, config)?
-                    .map_or_else(
-                        || partitioned_hash_join(hash_join, config).map(Some),
-                        |v| Ok(Some(v)),
-                    )?,
-                PartitionMode::CollectLeft => try_collect_left(hash_join, true, config)?
-                    .map_or_else(
-                        || partitioned_hash_join(hash_join, config).map(Some),
-                        |v| Ok(Some(v)),
-                    )?,
-                PartitionMode::Partitioned => {
-                    let left = hash_join.left();
-                    let right = hash_join.right();
-                    // Don't swap null-aware anti joins as they have specific side requirements
-                    if hash_join.join_type().supports_swap()
-                        && !hash_join.null_aware
-                        && should_swap_join_order(&**left, &**right, config)?
-                    {
-                        hash_join
-                            .swap_inputs(PartitionMode::Partitioned)
-                            .map(Some)?
-                    } else {
-                        None
-                    }
+    let transformed = if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
+        match hash_join.partition_mode() {
+            PartitionMode::Auto => try_collect_left(hash_join, false, config)?
+                .map_or_else(
+                    || partitioned_hash_join(hash_join, config).map(Some),
+                    |v| Ok(Some(v)),
+                )?,
+            PartitionMode::CollectLeft => try_collect_left(hash_join, true, config)?
+                .map_or_else(
+                    || partitioned_hash_join(hash_join, config).map(Some),
+                    |v| Ok(Some(v)),
+                )?,
+            PartitionMode::Partitioned => {
+                let left = hash_join.left();
+                let right = hash_join.right();
+                // Don't swap null-aware anti joins as they have specific side requirements
+                if hash_join.join_type().supports_swap()
+                    && !hash_join.null_aware
+                    && should_swap_join_order(&**left, &**right, config)?
+                {
+                    hash_join
+                        .swap_inputs(PartitionMode::Partitioned)
+                        .map(Some)?
+                } else {
+                    None
                 }
             }
-        } else if let Some(cross_join) = plan.as_any().downcast_ref::<CrossJoinExec>() {
-            let left = cross_join.left();
-            let right = cross_join.right();
-            if should_swap_join_order(&**left, &**right, config)? {
-                cross_join.swap_inputs().map(Some)?
-            } else {
-                None
-            }
-        } else if let Some(nl_join) = plan.as_any().downcast_ref::<NestedLoopJoinExec>() {
-            let left = nl_join.left();
-            let right = nl_join.right();
-            if nl_join.join_type().supports_swap()
-                && should_swap_join_order(&**left, &**right, config)?
-            {
-                nl_join.swap_inputs().map(Some)?
-            } else {
-                None
-            }
+        }
+    } else if let Some(cross_join) = plan.downcast_ref::<CrossJoinExec>() {
+        let left = cross_join.left();
+        let right = cross_join.right();
+        if should_swap_join_order(&**left, &**right, config)? {
+            cross_join.swap_inputs().map(Some)?
         } else {
             None
-        };
+        }
+    } else if let Some(nl_join) = plan.downcast_ref::<NestedLoopJoinExec>() {
+        let left = nl_join.left();
+        let right = nl_join.right();
+        if nl_join.join_type().supports_swap()
+            && should_swap_join_order(&**left, &**right, config)?
+        {
+            nl_join.swap_inputs().map(Some)?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     Ok(if let Some(transformed) = transformed {
         Transformed::yes(transformed)
@@ -369,7 +368,7 @@ fn hash_join_convert_symmetric_subrule(
     config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Check if the current plan node is a HashJoinExec.
-    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
+    if let Some(hash_join) = input.downcast_ref::<HashJoinExec>() {
         let left_unbounded = hash_join.left.boundedness().is_unbounded();
         let left_incremental = matches!(
             hash_join.left.pipeline_behavior(),
@@ -508,7 +507,7 @@ pub fn hash_join_swap_subrule(
     mut input: Arc<dyn ExecutionPlan>,
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>()
+    if let Some(hash_join) = input.downcast_ref::<HashJoinExec>()
         && hash_join.left.boundedness().is_unbounded()
         && !hash_join.right.boundedness().is_unbounded()
         && !hash_join.null_aware // Don't swap null-aware anti joins
