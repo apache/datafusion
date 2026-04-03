@@ -20,6 +20,7 @@ pub mod base64;
 pub mod char;
 pub mod concat;
 pub mod elt;
+pub mod encode;
 pub mod format_string;
 pub mod ilike;
 pub mod length;
@@ -40,6 +41,7 @@ make_udf_function!(concat::SparkConcat, concat);
 make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(length::SparkLengthFunc, length);
 make_udf_function!(elt::SparkElt, elt);
+make_udf_function!(encode::SparkEncode, encode);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
@@ -75,6 +77,11 @@ pub mod expr_fn {
         elt,
         "Returns the n-th input (1-indexed), e.g. returns 2nd input when n is 2. The function returns NULL if the index is 0 or exceeds the length of the array.",
         select_col arg1 arg2 argn
+    ));
+    export_functions!((
+        encode,
+        "Encodes a string or binary value into binary using the specified character encoding.",
+        string_or_binary charset
     ));
     export_functions!((
         ilike,
@@ -122,6 +129,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         char(),
         concat(),
         elt(),
+        encode(),
         ilike(),
         length(),
         like(),
