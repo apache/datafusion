@@ -21,6 +21,8 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
+mod builder;
+
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -29,7 +31,7 @@ use std::task::{Context, Poll};
 use crate::PartitionedFile;
 use crate::file_scan_config::FileScanConfig;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::error::Result;
+use datafusion_common::Result;
 use datafusion_execution::RecordBatchStream;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, Time,
@@ -41,6 +43,8 @@ use datafusion_common::instant::Instant;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{FutureExt as _, Stream, StreamExt as _, ready};
+
+pub use builder::FileStreamBuilder;
 
 /// A stream that iterates record batch by record batch, file over file.
 pub struct FileStream {
@@ -66,26 +70,18 @@ pub struct FileStream {
 
 impl FileStream {
     /// Create a new `FileStream` using the give `FileOpener` to scan underlying files
+    #[deprecated(since = "54.0.0", note = "Use FileStreamBuilder instead")]
     pub fn new(
         config: &FileScanConfig,
         partition: usize,
         file_opener: Arc<dyn FileOpener>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        let projected_schema = config.projected_schema()?;
-
-        let file_group = config.file_groups[partition].clone();
-
-        Ok(Self {
-            file_iter: file_group.into_inner().into_iter().collect(),
-            projected_schema,
-            remain: config.limit,
-            file_opener,
-            state: FileStreamState::Idle,
-            file_stream_metrics: FileStreamMetrics::new(metrics, partition),
-            baseline_metrics: BaselineMetrics::new(metrics, partition),
-            on_error: OnError::Fail,
-        })
+        FileStreamBuilder::new(config)
+            .with_partition(partition)
+            .with_file_opener(file_opener)
+            .with_metrics(metrics)
+            .build()
     }
 
     /// Specify the behavior when an error occurs opening or scanning a file
@@ -400,9 +396,9 @@ impl FileStreamMetrics {
 
 #[cfg(test)]
 mod tests {
-    use crate::PartitionedFile;
-    use crate::file_scan_config::FileScanConfigBuilder;
+    use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
     use crate::tests::make_partition;
+    use crate::{PartitionedFile, TableSchema};
     use datafusion_common::error::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -410,7 +406,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
+    use crate::file_stream::{FileOpenFuture, FileOpener, FileStreamBuilder, OnError};
     use crate::test_util::MockSource;
     use arrow::array::RecordBatch;
     use arrow::datatypes::Schema;
@@ -530,7 +526,7 @@ mod tests {
 
             let on_error = self.on_error;
 
-            let table_schema = crate::table_schema::TableSchema::new(file_schema, vec![]);
+            let table_schema = TableSchema::new(file_schema, vec![]);
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
@@ -539,10 +535,12 @@ mod tests {
             .with_limit(self.limit)
             .build();
             let metrics_set = ExecutionPlanMetricsSet::new();
-            let file_stream =
-                FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)
-                    .unwrap()
-                    .with_on_error(on_error);
+            let file_stream = FileStreamBuilder::new(&config)
+                .with_partition(0)
+                .with_file_opener(Arc::new(self.opener))
+                .with_metrics(&metrics_set)
+                .with_on_error(on_error)
+                .build()?;
 
             file_stream
                 .collect::<Vec<_>>()
@@ -561,6 +559,23 @@ mod tests {
             .result()
             .await
             .expect("error executing stream")
+    }
+
+    /// Create the smallest valid file scan config for builder validation tests.
+    fn builder_test_config() -> FileScanConfig {
+        let table_schema = TableSchema::new(Arc::new(Schema::empty()), vec![]);
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_file(PartitionedFile::new("mock_file", 10))
+        .build()
+    }
+
+    /// Convenience helper to keep builder error assertions focused on the
+    /// specific missing or invalid input under test.
+    fn builder_error(builder: FileStreamBuilder<'_>) -> String {
+        builder.build().err().unwrap().to_string()
     }
 
     #[tokio::test]
@@ -856,5 +871,37 @@ mod tests {
         ], &batches);
 
         Ok(())
+    }
+
+    #[test]
+    fn builder_requires_partition_file_opener_and_metrics() {
+        let config = builder_test_config();
+
+        let err = builder_error(FileStreamBuilder::new(&config));
+        assert!(err.contains("FileStreamBuilder missing required partition"));
+
+        let err = builder_error(FileStreamBuilder::new(&config).with_partition(0));
+        assert!(err.contains("FileStreamBuilder missing required file_opener"));
+
+        let err = builder_error(
+            FileStreamBuilder::new(&config)
+                .with_partition(0)
+                .with_file_opener(Arc::new(TestOpener::default())),
+        );
+        assert!(err.contains("FileStreamBuilder missing required metrics"));
+    }
+
+    #[test]
+    fn builder_errors_on_invalid_partition() {
+        let config = builder_test_config();
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let err = builder_error(
+            FileStreamBuilder::new(&config)
+                .with_partition(1)
+                .with_file_opener(Arc::new(TestOpener::default()))
+                .with_metrics(&metrics),
+        );
+        assert!(err.contains("FileStreamBuilder invalid partition index: 1"));
     }
 }

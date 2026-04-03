@@ -17,7 +17,6 @@
 
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
-use std::any::Any;
 use std::fmt::Formatter;
 use std::ops::{BitOr, ControlFlow};
 use std::sync::Arc;
@@ -533,10 +532,6 @@ impl DisplayAs for NestedLoopJoinExec {
 impl ExecutionPlan for NestedLoopJoinExec {
     fn name(&self) -> &'static str {
         "NestedLoopJoinExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

@@ -1,0 +1,212 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test EliminateOuterJoin rule: outer joins with null-rejecting
+# predicates (IN list, BETWEEN) should be converted to inner joins.
+
+statement ok
+create table t1(a int, b int, c varchar);
+
+statement ok
+create table t2(x int, y int, z varchar);
+
+statement ok
+insert into t1 values (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c'), (null, 40, 'd');
+
+statement ok
+insert into t2 values (1, 100, 'p'), (2, 200, 'q'), (null, 300, 'r');
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+###
+### IN list tests
+###
+
+# LEFT JOIN + WHERE t2.x IN (...) -> INNER JOIN
+# IN is null-rejecting: if t2.x is NULL, IN returns NULL (filtered out).
+# After conversion to INNER, PushDownFilter infers the predicate to both sides.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2, 3);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2) OR t1.a = Int32(3)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2) OR t2.x = Int32(3)
+05)----TableScan: t2 projection=[x, y, z]
+
+# Verify result correctness
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2, 3);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# RIGHT JOIN + WHERE t1.a IN (...) -> INNER JOIN
+query TT
+explain select * from t1 right join t2 on t1.a = t2.x where t1.a in (1, 2);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 right join t2 on t1.a = t2.x where t1.a in (1, 2);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# FULL JOIN + WHERE on both sides -> INNER JOIN
+query TT
+explain select * from t1 full join t2 on t1.a = t2.x where t1.a in (1, 2) and t2.x in (1, 2);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 full join t2 on t1.a = t2.x where t1.a in (1, 2) and t2.x in (1, 2);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# IN list with NULL in the list — still null-rejecting on input column
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2, null);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2) OR Boolean(NULL)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2) OR Boolean(NULL)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2, null);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# NOT IN — also null-rejecting
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x not in (99);
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a != Int32(99)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x != Int32(99)
+05)----TableScan: t2 projection=[x, y, z]
+
+###
+### BETWEEN tests
+###
+
+# LEFT JOIN + WHERE t2.x BETWEEN ... -> INNER JOIN
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x between 1 and 3;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a >= Int32(1) AND t1.a <= Int32(3)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x >= Int32(1) AND t2.x <= Int32(3)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.x between 1 and 3;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+# RIGHT JOIN + WHERE t1.a BETWEEN ... -> INNER JOIN
+query TT
+explain select * from t1 right join t2 on t1.a = t2.x where t1.a between 1 and 2;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.a >= Int32(1) AND t1.a <= Int32(2)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x >= Int32(1) AND t2.x <= Int32(2)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 right join t2 on t1.a = t2.x where t1.a between 1 and 2;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+###
+### Negative tests: join should NOT be converted
+###
+
+# IN on preserved side of LEFT JOIN — doesn't help eliminate.
+# Filter is still pushed down to the right side via join key inference.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t1.a in (1, 2, 3);
+----
+logical_plan
+01)Left Join: t1.a = t2.x
+02)--Filter: t1.a = Int32(1) OR t1.a = Int32(2) OR t1.a = Int32(3)
+03)----TableScan: t1 projection=[a, b, c]
+04)--Filter: t2.x = Int32(1) OR t2.x = Int32(2) OR t2.x = Int32(3)
+05)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t1.a in (1, 2, 3);
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+3 30 c NULL NULL NULL
+
+# IN(...) OR IS NULL — not null-rejecting, join preserved
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2) or t2.x is null;
+----
+logical_plan
+01)Filter: t2.x = Int32(1) OR t2.x = Int32(2) OR t2.x IS NULL
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b, c]
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2) or t2.x is null;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+3 30 c NULL NULL NULL
+NULL 40 d NULL NULL NULL
+
+###
+### Cleanup
+###
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;
