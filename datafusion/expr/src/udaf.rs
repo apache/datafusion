@@ -84,7 +84,7 @@ pub struct AggregateUDF {
 
 impl PartialEq for AggregateUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(other.inner.as_any())
+        self.inner.dyn_eq(other.inner.as_ref() as &dyn Any)
     }
 }
 
@@ -415,7 +415,6 @@ where
 ///
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
 /// impl AggregateUDFImpl for GeoMeanUdf {
-///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "geo_mean" }
 ///    fn signature(&self) -> &Signature { &self.signature }
 ///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -443,10 +442,7 @@ where
 /// // Call the function `geo_mean(col)`
 /// let expr = geometric_mean.call(vec![col("a")]);
 /// ```
-pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
-    /// Returns this object as an [`Any`] trait object
-    fn as_any(&self) -> &dyn Any;
-
+pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns this function's name
     fn name(&self) -> &str;
 
@@ -913,7 +909,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
 
 impl PartialEq for dyn AggregateUDFImpl {
     fn eq(&self, other: &Self) -> bool {
-        self.dyn_eq(other.as_any())
+        self.dyn_eq(other)
     }
 }
 
@@ -1231,10 +1227,6 @@ impl AliasedAggregateUDFImpl {
 
 #[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl AggregateUDFImpl for AliasedAggregateUDFImpl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -1415,7 +1407,6 @@ mod test {
     use datafusion_functions_aggregate_common::accumulator::{
         AccumulatorArgs, StateFieldsArgs,
     };
-    use std::any::Any;
     use std::cmp::Ordering;
     use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -1437,9 +1428,6 @@ mod test {
     }
 
     impl AggregateUDFImpl for AMeanUdf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "a"
         }
@@ -1477,9 +1465,6 @@ mod test {
     }
 
     impl AggregateUDFImpl for BMeanUdf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "b"
         }

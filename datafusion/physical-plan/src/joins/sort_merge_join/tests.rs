@@ -24,15 +24,22 @@
 //!
 //! Add relevant tests under the specified sections.
 
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use super::bitwise_stream::BitwiseSortMergeJoinStream;
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
+use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
+use crate::spill::spill_manager::SpillManager;
 use crate::test::TestMemoryExec;
 use crate::test::exec::BarrierExec;
 use crate::test::{build_table_i32, build_table_i32_two_cols};
-use crate::{ExecutionPlan, common};
+use crate::{ExecutionPlan, RecordBatchStream, common};
 use crate::{
     expressions::Column, joins::sort_merge_join::filter::get_corrected_filter_mask,
-    joins::sort_merge_join::stream::JoinedRecordBatches,
+    joins::sort_merge_join::materializing_stream::JoinedRecordBatches,
 };
 use arrow::array::{
     BinaryArray, BooleanArray, Date32Array, Date64Array, FixedSizeBinaryArray,
@@ -53,15 +60,15 @@ use datafusion_common::{
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use futures::StreamExt;
-use insta::{allow_duplicates, assert_snapshot};
+use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
+use futures::{Stream, StreamExt};
+use insta::assert_snapshot;
 use itertools::Itertools;
-use std::sync::Arc;
-use std::task::Poll;
 
 fn build_table(
     a: (&str, &Vec<i32>),
@@ -1278,7 +1285,7 @@ async fn join_right_anti_output_two_batches() -> Result<()> {
 
     let (_, batches) =
         join_collect_batch_size_equals_two(left, right, on, LeftAnti).await?;
-    // SemiAntiSortMergeJoinStream uses a coalescer, so batch boundaries differ
+    // BitwiseSortMergeJoinStream uses a coalescer, so batch boundaries differ
     // from the old stream. Only assert data correctness.
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 3);
@@ -1567,7 +1574,7 @@ async fn join_right_semi_output_two_batches() -> Result<()> {
         "| 2  | 5  | 8  |",
         "+----+----+----+",
     ];
-    // SemiAntiSortMergeJoinStream uses a coalescer, so batch boundaries differ
+    // BitwiseSortMergeJoinStream uses a coalescer, so batch boundaries differ
     // from the old stream. Only assert data correctness.
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 3);
@@ -2061,9 +2068,9 @@ async fn overallocation_single_batch_no_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = vec![
-        // Semi/anti joins use SemiAntiSortMergeJoinStream which only tracks
-        // inner key buffer memory; tested in semi_anti_sort_merge_join/tests.rs.
-        Inner, Left, Right, Full, LeftMark, RightMark,
+        // Semi/anti/mark joins use BitwiseSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested in bitwise_sort_merge_join/tests.rs.
+        Inner, Left, Right, Full,
     ];
 
     // Disable DiskManager to prevent spilling
@@ -2144,9 +2151,9 @@ async fn overallocation_multi_batch_no_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = vec![
-        // Semi/anti joins use SemiAntiSortMergeJoinStream which only tracks
-        // inner key buffer memory; tested in semi_anti_sort_merge_join/tests.rs.
-        Inner, Left, Right, Full, LeftMark, RightMark,
+        // Semi/anti/mark joins use BitwiseSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested in bitwise_sort_merge_join/tests.rs.
+        Inner, Left, Right, Full,
     ];
 
     // Disable DiskManager to prevent spilling
@@ -2206,9 +2213,9 @@ async fn overallocation_single_batch_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = [
-        // Semi/anti joins use SemiAntiSortMergeJoinStream which only tracks
-        // inner key buffer memory; tested in semi_anti_sort_merge_join/tests.rs.
-        Inner, Left, Right, Full, LeftMark, RightMark,
+        // Semi/anti/mark joins use BitwiseSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested in bitwise_sort_merge_join/tests.rs.
+        Inner, Left, Right, Full,
     ];
 
     // Enable DiskManager to allow spilling
@@ -2312,9 +2319,9 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
 
     let join_types = [
-        // Semi/anti joins use SemiAntiSortMergeJoinStream which only tracks
-        // inner key buffer memory; tested in semi_anti_sort_merge_join/tests.rs.
-        Inner, Left, Right, Full, LeftMark, RightMark,
+        // Semi/anti/mark joins use BitwiseSortMergeJoinStream which only tracks
+        // inner key buffer memory; tested in bitwise_sort_merge_join/tests.rs.
+        Inner, Left, Right, Full,
     ];
 
     // Enable DiskManager to allow spilling
@@ -2372,6 +2379,321 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
             // Compare spilled and non spilled data to check spill logic doesn't corrupt the data
             assert_eq!(spilled_join_result, no_spilled_join_result);
         }
+    }
+
+    Ok(())
+}
+
+/// Build a c1 < c2 filter on the third column of each side.
+fn build_c1_lt_c2_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFilter {
+    JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            left_schema
+                .field_with_name("c1")
+                .unwrap()
+                .clone()
+                .with_nullable(true),
+            right_schema
+                .field_with_name("c2")
+                .unwrap()
+                .clone()
+                .with_nullable(true),
+        ])),
+    )
+}
+
+#[tokio::test]
+async fn spill_with_filter_deferred() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![0, 1, 2, 3, 4, 5]),
+        ("b1", &vec![1, 2, 3, 4, 5, 6]),
+        ("c1", &vec![4, 5, 6, 7, 8, 9]),
+    );
+    let right = build_table(
+        ("a2", &vec![0, 10, 20, 30, 40]),
+        ("b2", &vec![1, 3, 4, 6, 8]),
+        ("c2", &vec![50, 60, 70, 80, 90]),
+    );
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let filter = build_c1_lt_c2_filter(&left.schema(), &right.schema());
+
+    // Deferred filtering join types handled by the main MaterializingSortMergeJoinStream
+    let join_types = [Left, Right, Full];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        for join_type in &join_types {
+            // Run with spilling
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(session_config.clone())
+                    .with_runtime(Arc::clone(&runtime)),
+            );
+            let join = join_with_filter(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                filter.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx)?;
+            let spilled_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert!(
+                join.metrics().unwrap().spill_count().unwrap() > 0,
+                "Expected spilling for {join_type:?} batch_size={batch_size}"
+            );
+
+            // Run without spilling
+            let task_ctx_no_spill = Arc::new(
+                TaskContext::default().with_session_config(session_config.clone()),
+            );
+            let join_no_spill = join_with_filter(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                filter.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
+            let no_spill_result = common::collect(stream).await.unwrap();
+
+            let spilled_str = batches_to_sort_string(&spilled_result);
+            let no_spill_str = batches_to_sort_string(&no_spill_result);
+            assert_eq!(
+                spilled_str, no_spill_str,
+                "Spill vs no-spill mismatch for {join_type:?} batch_size={batch_size}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn spill_with_filter_multi_batch() -> Result<()> {
+    let left_batch_1 = build_table_i32(
+        ("a1", &vec![0, 1]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![4, 5]),
+    );
+    let left_batch_2 = build_table_i32(
+        ("a1", &vec![2, 3]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![6, 7]),
+    );
+    let left_batch_3 = build_table_i32(
+        ("a1", &vec![4, 5]),
+        ("b1", &vec![1, 1]),
+        ("c1", &vec![8, 9]),
+    );
+    let right_batch_1 = build_table_i32(
+        ("a2", &vec![0, 10]),
+        ("b2", &vec![1, 1]),
+        ("c2", &vec![50, 60]),
+    );
+    let right_batch_2 = build_table_i32(
+        ("a2", &vec![20, 30]),
+        ("b2", &vec![1, 1]),
+        ("c2", &vec![70, 80]),
+    );
+    let right_batch_3 =
+        build_table_i32(("a2", &vec![40]), ("b2", &vec![1]), ("c2", &vec![90]));
+    let left = build_table_from_batches(vec![left_batch_1, left_batch_2, left_batch_3]);
+    let right =
+        build_table_from_batches(vec![right_batch_1, right_batch_2, right_batch_3]);
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let filter = build_c1_lt_c2_filter(&left.schema(), &right.schema());
+
+    let join_types = [Left, Right, Full];
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(500, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        for join_type in &join_types {
+            // Run with spilling
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(session_config.clone())
+                    .with_runtime(Arc::clone(&runtime)),
+            );
+            let join = join_with_filter(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                filter.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx)?;
+            let spilled_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert!(
+                join.metrics().unwrap().spill_count().unwrap() > 0,
+                "Expected spilling for {join_type:?} batch_size={batch_size}"
+            );
+
+            // Run without spilling
+            let task_ctx_no_spill = Arc::new(
+                TaskContext::default().with_session_config(session_config.clone()),
+            );
+            let join_no_spill = join_with_filter(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                filter.clone(),
+                *join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
+            let no_spill_result = common::collect(stream).await.unwrap();
+
+            let spilled_str = batches_to_sort_string(&spilled_result);
+            let no_spill_str = batches_to_sort_string(&no_spill_result);
+            assert_eq!(
+                spilled_str, no_spill_str,
+                "Spill vs no-spill mismatch for {join_type:?} batch_size={batch_size}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// FULL join where all buffered rows match on key but fail the filter.
+/// Verifies produce_buffered_not_matched emits null-joined rows under spill.
+#[tokio::test]
+async fn spill_full_join_filter_not_matched() -> Result<()> {
+    // c1 values (100..105) are always > c2 values (1..5), so c1 < c2 always fails
+    let left = build_table(
+        ("a1", &vec![0, 1, 2, 3, 4]),
+        ("b1", &vec![1, 1, 1, 1, 1]),
+        ("c1", &vec![100, 101, 102, 103, 104]),
+    );
+    let right = build_table(
+        ("a2", &vec![10, 20, 30, 40, 50]),
+        ("b2", &vec![1, 1, 1, 1, 1]),
+        ("c2", &vec![1, 2, 3, 4, 5]),
+    );
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let filter = build_c1_lt_c2_filter(&left.schema(), &right.schema());
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        // Run with spilling
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config.clone())
+                .with_runtime(Arc::clone(&runtime)),
+        );
+        let join = join_with_filter(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            filter.clone(),
+            Full,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join.execute(0, task_ctx)?;
+        let spilled_result = common::collect(stream).await.unwrap();
+
+        assert!(
+            join.metrics().unwrap().spill_count().unwrap() > 0,
+            "Expected spilling for FULL batch_size={batch_size}"
+        );
+
+        // Run without spilling
+        let task_ctx_no_spill =
+            Arc::new(TaskContext::default().with_session_config(session_config.clone()));
+        let join_no_spill = join_with_filter(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            filter.clone(),
+            Full,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
+        let no_spill_result = common::collect(stream).await.unwrap();
+
+        // All filter evaluations fail, so FULL join should produce:
+        // - 5 rows with left columns + null right columns (unmatched left)
+        // - 5 rows with null left columns + right columns (unmatched right)
+        let total_rows: usize = no_spill_result.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows, 10,
+            "FULL join with all-failing filter should produce 10 rows, got {total_rows}"
+        );
+
+        let spilled_str = batches_to_sort_string(&spilled_result);
+        let no_spill_str = batches_to_sort_string(&no_spill_result);
+        assert_eq!(
+            spilled_str, no_spill_str,
+            "Spill vs no-spill mismatch for FULL join batch_size={batch_size}"
+        );
     }
 
     Ok(())
@@ -2718,354 +3040,6 @@ async fn test_left_outer_join_filtered_mask() -> Result<()> {
     | 1 | 14 | 1 | 11 |
     +---+----+---+----+
     ");
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_semi_join_filtered_mask() -> Result<()> {
-    for join_type in [LeftSemi, RightSemi] {
-        let mut joined_batches = build_joined_record_batches()?;
-        let schema = joined_batches.joined_batches.schema();
-
-        let output = joined_batches.concat_batches(&schema)?;
-        let out_mask = joined_batches.filter_metadata.filter_mask.finish();
-        let out_indices = joined_batches.filter_metadata.row_indices.finish();
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0]),
-                &[0usize],
-                &BooleanArray::from(vec![true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![true])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0]),
-                &[0usize],
-                &BooleanArray::from(vec![false]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0]),
-                &[0usize; 2],
-                &BooleanArray::from(vec![true, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![Some(true), None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![true, true, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![Some(true), None, None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![true, false, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![Some(true), None, None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, false, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, Some(true),])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, true, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, Some(true), None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, false, false]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
-
-        let corrected_mask = get_corrected_filter_mask(
-            join_type,
-            &out_indices,
-            &joined_batches.filter_metadata.batch_ids,
-            &out_mask,
-            output.num_rows(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            corrected_mask,
-            BooleanArray::from(vec![
-                Some(true),
-                None,
-                Some(true),
-                None,
-                Some(true),
-                None,
-                None,
-                None
-            ])
-        );
-
-        let filtered_rb = filter_record_batch(&output, &corrected_mask)?;
-
-        assert_batches_eq!(
-            &[
-                "+---+----+---+----+",
-                "| a | b  | x | y  |",
-                "+---+----+---+----+",
-                "| 1 | 10 | 1 | 11 |",
-                "| 1 | 11 | 1 | 12 |",
-                "| 1 | 12 | 1 | 13 |",
-                "+---+----+---+----+",
-            ],
-            &[filtered_rb]
-        );
-
-        // output null rows
-        let null_mask = arrow::compute::not(&corrected_mask)?;
-        assert_eq!(
-            null_mask,
-            BooleanArray::from(vec![
-                Some(false),
-                None,
-                Some(false),
-                None,
-                Some(false),
-                None,
-                None,
-                None
-            ])
-        );
-
-        let null_joined_batch = filter_record_batch(&output, &null_mask)?;
-
-        assert_batches_eq!(
-            &[
-                "+---+---+---+---+",
-                "| a | b | x | y |",
-                "+---+---+---+---+",
-                "+---+---+---+---+",
-            ],
-            &[null_joined_batch]
-        );
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_anti_join_filtered_mask() -> Result<()> {
-    for join_type in [LeftAnti, RightAnti] {
-        let mut joined_batches = build_joined_record_batches()?;
-        let schema = joined_batches.joined_batches.schema();
-
-        let output = joined_batches.concat_batches(&schema)?;
-        let out_mask = joined_batches.filter_metadata.filter_mask.finish();
-        let out_indices = joined_batches.filter_metadata.row_indices.finish();
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0]),
-                &[0usize],
-                &BooleanArray::from(vec![true]),
-                1
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0]),
-                &[0usize],
-                &BooleanArray::from(vec![false]),
-                1
-            )
-            .unwrap(),
-            BooleanArray::from(vec![Some(true)])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0]),
-                &[0usize; 2],
-                &BooleanArray::from(vec![true, true]),
-                2
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![true, true, true]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![true, false, true]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, false, true]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, true, true]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                join_type,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, false, false]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, Some(true)])
-        );
-
-        let corrected_mask = get_corrected_filter_mask(
-            join_type,
-            &out_indices,
-            &joined_batches.filter_metadata.batch_ids,
-            &out_mask,
-            output.num_rows(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            corrected_mask,
-            BooleanArray::from(vec![
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(true),
-                None,
-                Some(true)
-            ])
-        );
-
-        let filtered_rb = filter_record_batch(&output, &corrected_mask)?;
-
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&[filtered_rb]), @r"
-            +---+----+---+----+
-            | a | b  | x | y  |
-            +---+----+---+----+
-            | 1 | 13 | 1 | 12 |
-            | 1 | 14 | 1 | 11 |
-            +---+----+---+----+
-            ");
-        }
-
-        // output null rows
-        let null_mask = arrow::compute::not(&corrected_mask)?;
-        assert_eq!(
-            null_mask,
-            BooleanArray::from(vec![
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(false),
-                None,
-                Some(false),
-            ])
-        );
-
-        let null_joined_batch = filter_record_batch(&output, &null_mask)?;
-
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&[null_joined_batch]), @r"
-            +---+---+---+---+
-            | a | b | x | y |
-            +---+---+---+---+
-            +---+---+---+---+
-            ");
-        }
-    }
-
     Ok(())
 }
 
@@ -3557,7 +3531,878 @@ async fn consume_stream_until_finish_barrier_reached(
     Ok((output_batched, after_finish_barrier_reached))
 }
 
+/// Exercises the multi-source interleave path in `materialize_right_columns`.
+///
+/// When the right (buffered) side is split into many small batches with unique
+/// keys, a single `freeze_streamed()` call references multiple `BufferedBatch`es.
+/// This forces the `interleave` kernel instead of the single-source `take` path.
+/// Without this test, the interleave path has zero coverage from unit tests
+/// (fuzz tests use ~100 unique keys across 1000 rows, so all keys fit in one
+/// buffered batch).
+#[tokio::test]
+async fn join_filtered_with_multiple_buffered_batches() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_l", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_r", DataType::Int32, false),
+    ]));
+
+    // Left: single batch, keys 1..=6
+    let left_batch = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
+        ],
+    )?;
+    let left = build_table_from_batches(vec![left_batch]);
+
+    // Right: one row per batch so each key lives in a separate BufferedBatch
+    let right_batches: Vec<RecordBatch> = (1..=6)
+        .map(|k| {
+            RecordBatch::try_new(
+                Arc::clone(&right_schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![k])),
+                    Arc::new(Int32Array::from(vec![k * 100])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("key", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("key", &right.schema())?) as _,
+    )];
+
+    // Filter: val_l + val_r < 350 — passes for keys 1-3, fails for 4-6
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("val_l", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("val_r", 1)),
+            )),
+            Operator::Lt,
+            Arc::new(datafusion_physical_expr::expressions::Literal::new(
+                datafusion_common::ScalarValue::Int32(Some(350)),
+            )),
+        )),
+        vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("val_l", DataType::Int32, true),
+            Field::new("val_r", DataType::Int32, true),
+        ])),
+    );
+
+    // Inner: only rows passing the filter
+    let (_, batches) = join_collect_with_filter(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        filter.clone(),
+        Inner,
+    )
+    .await?;
+    let result = batches_to_sort_string(&batches);
+    assert_snapshot!(result, @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    | 1   | 10    | 1   | 100   |
+    | 2   | 20    | 2   | 200   |
+    | 3   | 30    | 3   | 300   |
+    +-----+-------+-----+-------+
+    ");
+
+    // Left: unmatched left rows get null right columns
+    let (_, batches) = join_collect_with_filter(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        filter.clone(),
+        Left,
+    )
+    .await?;
+    let result = batches_to_sort_string(&batches);
+    assert_snapshot!(result, @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    | 1   | 10    | 1   | 100   |
+    | 2   | 20    | 2   | 200   |
+    | 3   | 30    | 3   | 300   |
+    | 4   | 40    |     |       |
+    | 5   | 50    |     |       |
+    | 6   | 60    |     |       |
+    +-----+-------+-----+-------+
+    ");
+
+    // Full: unmatched rows on both sides get null columns
+    let (_, batches) = join_collect_with_filter(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        filter.clone(),
+        Full,
+    )
+    .await?;
+    let result = batches_to_sort_string(&batches);
+    assert_snapshot!(result, @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    |     |       | 4   | 400   |
+    |     |       | 5   | 500   |
+    |     |       | 6   | 600   |
+    | 1   | 10    | 1   | 100   |
+    | 2   | 20    | 2   | 200   |
+    | 3   | 30    | 3   | 300   |
+    | 4   | 40    |     |       |
+    | 5   | 50    |     |       |
+    | 6   | 60    |     |       |
+    +-----+-------+-----+-------+
+    ");
+
+    Ok(())
+}
+
 /// Returns the column names on the schema
 fn columns(schema: &Schema) -> Vec<String> {
     schema.fields().iter().map(|f| f.name().clone()).collect()
+}
+
+// ==================== BitwiseSortMergeJoinStream direct tests ====================
+//
+// These tests construct a BitwiseSortMergeJoinStream directly (bypassing exec)
+// to exercise async re-entry and spill edge cases using PendingStream.
+
+/// Create test memory/spill resources for stream-level tests.
+fn test_stream_resources(
+    inner_schema: SchemaRef,
+    metrics: &ExecutionPlanMetricsSet,
+) -> (
+    datafusion_execution::memory_pool::MemoryReservation,
+    SpillManager,
+    Arc<datafusion_execution::runtime_env::RuntimeEnv>,
+) {
+    let ctx = TaskContext::default();
+    let runtime_env = ctx.runtime_env();
+    let reservation = MemoryConsumer::new("test").register(ctx.memory_pool());
+    let spill_manager = SpillManager::new(
+        Arc::clone(&runtime_env),
+        SpillMetrics::new(metrics, 0),
+        inner_schema,
+    );
+    (reservation, spill_manager, runtime_env)
+}
+
+/// A RecordBatch stream that yields Poll::Pending once before delivering
+/// each batch at a specified index. This simulates the behavior of
+/// repartitioned tokio::sync::mpsc channels where data isn't immediately
+/// available.
+struct PendingStream {
+    batches: Vec<RecordBatch>,
+    index: usize,
+    /// If pending_before[i] is true, yield Pending once before delivering
+    /// the batch at index i.
+    pending_before: Vec<bool>,
+    /// True if we've already yielded Pending for the current index.
+    yielded_pending: bool,
+    schema: SchemaRef,
+}
+
+impl PendingStream {
+    fn new(batches: Vec<RecordBatch>, pending_before: Vec<bool>) -> Self {
+        assert_eq!(batches.len(), pending_before.len());
+        let schema = batches[0].schema();
+        Self {
+            batches,
+            index: 0,
+            pending_before,
+            yielded_pending: false,
+            schema,
+        }
+    }
+}
+
+impl Stream for PendingStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if self.index >= self.batches.len() {
+            return Poll::Ready(None);
+        }
+        if self.pending_before[self.index] && !self.yielded_pending {
+            self.yielded_pending = true;
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+        self.yielded_pending = false;
+        let batch = self.batches[self.index].clone();
+        self.index += 1;
+        Poll::Ready(Some(Ok(batch)))
+    }
+}
+
+impl RecordBatchStream for PendingStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+/// Helper: collect all output from a BitwiseSortMergeJoinStream.
+async fn collect_stream(stream: BitwiseSortMergeJoinStream) -> Result<Vec<RecordBatch>> {
+    common::collect(Box::pin(stream)).await
+}
+
+/// Reproduces the buffer_inner_key_group re-entry bug:
+///
+/// When buffer_inner_key_group buffers inner rows across batch boundaries
+/// and poll_next_inner_batch returns Pending mid-way, the ready! macro
+/// exits poll_join. On re-entry, the merge-scan reaches Equal again and
+/// calls buffer_inner_key_group a second time -- which starts with
+/// clear(), destroying the partially collected inner rows. Previously
+/// consumed batches are gone, so re-buffering misses them.
+///
+/// Setup:
+/// - Inner: 3 single-row batches, all with key=1, filter values c2=[10, 20, 30]
+/// - Outer: 1 row, key=1, filter value c1=10
+/// - Filter: c1 == c2 (only first inner row c2=10 matches)
+/// - Pending injected before 3rd inner batch
+///
+/// Without the bug: outer row emitted (match via c2=10)
+/// With the bug: outer row missing (c2=10 batch lost on re-entry)
+#[tokio::test]
+async fn filter_buffer_pending_loses_inner_rows() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c1", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("a2", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c2", DataType::Int32, false),
+    ]));
+
+    // Outer: 1 row, key=1, c1=10
+    let outer_batch = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![1])), // join key
+            Arc::new(Int32Array::from(vec![10])), // filter value
+        ],
+    )?;
+
+    // Inner: 3 single-row batches, key=1, c2=[10, 20, 30]
+    let inner_batch1 = RecordBatch::try_new(
+        Arc::clone(&right_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![100])),
+            Arc::new(Int32Array::from(vec![1])), // join key
+            Arc::new(Int32Array::from(vec![10])), // matches filter
+        ],
+    )?;
+    let inner_batch2 = RecordBatch::try_new(
+        Arc::clone(&right_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![200])),
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![20])), // doesn't match
+        ],
+    )?;
+    let inner_batch3 = RecordBatch::try_new(
+        Arc::clone(&right_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![300])),
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![30])), // doesn't match
+        ],
+    )?;
+
+    let outer: SendableRecordBatchStream = Box::pin(PendingStream::new(
+        vec![outer_batch],
+        vec![false], // outer delivers immediately
+    ));
+    let inner: SendableRecordBatchStream = Box::pin(PendingStream::new(
+        vec![inner_batch1, inner_batch2, inner_batch3],
+        vec![false, false, true], // Pending before 3rd batch
+    ));
+
+    // Filter: c1 == c2
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    );
+
+    let on_outer: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+    let on_inner: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+
+    let metrics = ExecutionPlanMetricsSet::new();
+    let inner_schema = inner.schema();
+    let (reservation, spill_manager, runtime_env) =
+        test_stream_resources(inner_schema, &metrics);
+    let stream = BitwiseSortMergeJoinStream::try_new(
+        left_schema, // output schema = outer schema for semi
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+        outer,
+        inner,
+        on_outer,
+        on_inner,
+        Some(filter),
+        LeftSemi,
+        8192,
+        0,
+        &metrics,
+        reservation,
+        spill_manager,
+        runtime_env,
+    )?;
+
+    let batches = collect_stream(stream).await?;
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total, 1,
+        "LeftSemi with filter: outer row should be emitted because \
+         inner row c2=10 matches filter c1==c2. Got {total} rows."
+    );
+    Ok(())
+}
+
+/// Reproduces the no-filter boundary Pending re-entry bug:
+///
+/// When an outer key group spans a batch boundary, the no-filter path
+/// emits the current batch, then polls for the next outer batch. If
+/// poll returns Pending, poll_join exits. On re-entry, without the
+/// PendingBoundary fix, the new batch is processed fresh by the
+/// merge-scan. Since inner already advanced past this key, the outer
+/// rows with the matching key are skipped via Ordering::Less.
+///
+/// Setup:
+/// - Outer: 2 single-row batches, both with key=1 (key group spans boundary)
+/// - Inner: 1 row with key=1
+/// - Pending injected on outer before 2nd batch
+///
+/// Without fix: only first outer row emitted (second lost on re-entry)
+/// With fix: both outer rows emitted
+#[tokio::test]
+async fn no_filter_boundary_pending_loses_outer_rows() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c1", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("a2", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c2", DataType::Int32, false),
+    ]));
+
+    // Outer: 2 single-row batches, both key=1
+    let outer_batch1 = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![10])),
+        ],
+    )?;
+    let outer_batch2 = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![2])),
+            Arc::new(Int32Array::from(vec![1])), // same key
+            Arc::new(Int32Array::from(vec![20])),
+        ],
+    )?;
+
+    // Inner: 1 row, key=1
+    let inner_batch = RecordBatch::try_new(
+        Arc::clone(&right_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![100])),
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![50])),
+        ],
+    )?;
+
+    let outer: SendableRecordBatchStream = Box::pin(PendingStream::new(
+        vec![outer_batch1, outer_batch2],
+        vec![false, true], // Pending before 2nd outer batch
+    ));
+    let inner: SendableRecordBatchStream =
+        Box::pin(PendingStream::new(vec![inner_batch], vec![false]));
+
+    let on_outer: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+    let on_inner: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+
+    let metrics = ExecutionPlanMetricsSet::new();
+    let inner_schema = inner.schema();
+    let (reservation, spill_manager, runtime_env) =
+        test_stream_resources(inner_schema, &metrics);
+    let stream = BitwiseSortMergeJoinStream::try_new(
+        left_schema,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+        outer,
+        inner,
+        on_outer,
+        on_inner,
+        None, // no filter
+        LeftSemi,
+        8192,
+        0,
+        &metrics,
+        reservation,
+        spill_manager,
+        runtime_env,
+    )?;
+
+    let batches = collect_stream(stream).await?;
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total, 2,
+        "LeftSemi no filter: both outer rows (key=1) should be emitted \
+         because inner has key=1. Got {total} rows."
+    );
+    Ok(())
+}
+
+/// Tests the filtered boundary Pending re-entry: outer key group spans
+/// batches with a filter, and poll_next_outer_batch returns Pending.
+///
+/// Setup:
+/// - Outer: 2 single-row batches, both key=1, c1=[10, 20]
+/// - Inner: 1 row, key=1, c2=10
+/// - Filter: c1 == c2 (first outer row matches, second doesn't)
+/// - Pending before 2nd outer batch
+///
+/// Expected: 1 row (only the first outer row c1=10 passes the filter)
+#[tokio::test]
+async fn filtered_boundary_pending_outer_rows() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c1", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("a2", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c2", DataType::Int32, false),
+    ]));
+
+    let outer_batch1 = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![10])), // matches filter
+        ],
+    )?;
+    let outer_batch2 = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![2])),
+            Arc::new(Int32Array::from(vec![1])), // same key
+            Arc::new(Int32Array::from(vec![20])), // doesn't match
+        ],
+    )?;
+
+    let inner_batch = RecordBatch::try_new(
+        Arc::clone(&right_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![100])),
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![10])),
+        ],
+    )?;
+
+    let outer: SendableRecordBatchStream = Box::pin(PendingStream::new(
+        vec![outer_batch1, outer_batch2],
+        vec![false, true], // Pending before 2nd outer batch
+    ));
+    let inner: SendableRecordBatchStream =
+        Box::pin(PendingStream::new(vec![inner_batch], vec![false]));
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    );
+
+    let on_outer: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+    let on_inner: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+
+    let metrics = ExecutionPlanMetricsSet::new();
+    let inner_schema = inner.schema();
+    let (reservation, spill_manager, runtime_env) =
+        test_stream_resources(inner_schema, &metrics);
+    let stream = BitwiseSortMergeJoinStream::try_new(
+        left_schema,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+        outer,
+        inner,
+        on_outer,
+        on_inner,
+        Some(filter),
+        LeftSemi,
+        8192,
+        0,
+        &metrics,
+        reservation,
+        spill_manager,
+        runtime_env,
+    )?;
+
+    let batches = collect_stream(stream).await?;
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total, 1,
+        "LeftSemi filtered boundary: only first outer row (c1=10) matches \
+         filter c1==c2. Got {total} rows."
+    );
+    Ok(())
+}
+
+// ── Bitwise stream spill tests ─────────────────────────────────────────────
+
+/// Exercises inner key group spilling under memory pressure.
+///
+/// Uses a tiny memory limit (100 bytes) with disk spilling enabled. Since our
+/// operator only buffers inner rows when a filter is present, this test includes
+/// a filter (c1 < c2, always true). Verifies:
+/// 1. Spill metrics are recorded (spill_count, spilled_bytes, spilled_rows > 0)
+/// 2. Results match a non-spilled run
+#[tokio::test]
+async fn bitwise_spill_with_filter() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 3, 4, 5, 6]),
+        ("b1", &vec![1, 2, 3, 4, 5, 6]),
+        ("c1", &vec![4, 5, 6, 7, 8, 9]),
+    );
+    let right = build_table(
+        ("a2", &vec![10, 20, 30, 40, 50]),
+        ("b1", &vec![1, 3, 4, 6, 8]),
+        ("c2", &vec![50, 60, 70, 80, 90]),
+    );
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    // c1 < c2 is always true for matching keys
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    );
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for batch_size in [1, 50] {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        for join_type in [LeftSemi, LeftAnti, RightSemi, RightAnti] {
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(session_config.clone())
+                    .with_runtime(Arc::clone(&runtime)),
+            );
+
+            let join = SortMergeJoinExec::try_new(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                Some(filter.clone()),
+                join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join.execute(0, task_ctx)?;
+            let spilled_result = common::collect(stream).await.unwrap();
+
+            assert!(
+                join.metrics().is_some(),
+                "metrics missing for {join_type:?}"
+            );
+            let metrics = join.metrics().unwrap();
+            assert!(
+                metrics.spill_count().unwrap() > 0,
+                "expected spill_count > 0 for {join_type:?}, batch_size={batch_size}"
+            );
+            assert!(
+                metrics.spilled_bytes().unwrap() > 0,
+                "expected spilled_bytes > 0 for {join_type:?}, batch_size={batch_size}"
+            );
+            assert!(
+                metrics.spilled_rows().unwrap() > 0,
+                "expected spilled_rows > 0 for {join_type:?}, batch_size={batch_size}"
+            );
+
+            // Run without spilling and compare results
+            let task_ctx_no_spill = Arc::new(
+                TaskContext::default().with_session_config(session_config.clone()),
+            );
+            let join_no_spill = SortMergeJoinExec::try_new(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                Some(filter.clone()),
+                join_type,
+                sort_options.clone(),
+                NullEquality::NullEqualsNothing,
+            )?;
+            let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
+            let no_spill_result = common::collect(stream).await.unwrap();
+
+            let no_spill_metrics = join_no_spill.metrics().unwrap();
+            assert_eq!(
+                no_spill_metrics.spill_count(),
+                Some(0),
+                "unexpected spill for {join_type:?} without memory limit"
+            );
+
+            assert_eq!(
+                spilled_result, no_spill_result,
+                "spilled vs non-spilled results differ for {join_type:?}, batch_size={batch_size}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Reproduces a bug where `resume_boundary` for the Filtered pending case
+/// only checks `inner_key_buffer.is_empty()` but ignores `inner_key_spill`.
+/// After spilling, the in-memory buffer is cleared while the spill file
+/// holds the data. If the outer key group spans a batch boundary, the
+/// second outer batch's rows are never evaluated against the inner group.
+///
+/// Setup:
+/// - Outer: 2 single-row batches, both key=1, c1=[10, 10]
+/// - Inner: 1 batch with many rows all key=1 (enough to trigger spill)
+/// - Filter: c1 == c2 (matches when c2=10)
+/// - Memory limit: tiny (100 bytes) to force spilling
+/// - Pending before 2nd outer batch to trigger boundary re-entry
+///
+/// Expected: both outer rows match (semi=2 rows, anti=0 rows)
+/// Bug: second outer row is skipped because resume_boundary sees empty
+///      inner_key_buffer and skips re-evaluation.
+#[tokio::test]
+async fn spill_filtered_boundary_loses_outer_rows() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c1", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("a2", DataType::Int32, false),
+        Field::new("b1", DataType::Int32, false),
+        Field::new("c2", DataType::Int32, false),
+    ]));
+
+    // Two single-row outer batches with the same key -- key group spans boundary
+    let outer_batch1 = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![1])), // key=1
+            Arc::new(Int32Array::from(vec![10])), // matches filter
+        ],
+    )?;
+    let outer_batch2 = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![2])),
+            Arc::new(Int32Array::from(vec![1])), // same key=1
+            Arc::new(Int32Array::from(vec![10])), // also matches filter
+        ],
+    )?;
+
+    // Inner: many rows with key=1 to force spilling, followed by key=2.
+    // c2=10 so the filter c1==c2 passes for both outer rows.
+    // The key=2 row ensures the inner cursor advances past the key group
+    // (buffer_inner_key_group returns Ok(false) instead of Ok(true)).
+    let n_inner = 200;
+    let mut inner_a = vec![100; n_inner];
+    inner_a.push(101);
+    let mut inner_b = vec![1; n_inner];
+    inner_b.push(2); // different key -- forces inner cursor past key=1
+    let mut inner_c = vec![10; n_inner];
+    inner_c.push(10);
+    let inner_batch = RecordBatch::try_new(
+        Arc::clone(&right_schema),
+        vec![
+            Arc::new(Int32Array::from(inner_a)),
+            Arc::new(Int32Array::from(inner_b)),
+            Arc::new(Int32Array::from(inner_c)),
+        ],
+    )?;
+
+    // Filter: c1 == c2
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    );
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let on_outer: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+    let on_inner: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b1", 1))];
+
+    for join_type in [LeftSemi, LeftAnti] {
+        let outer: SendableRecordBatchStream = Box::pin(PendingStream::new(
+            vec![outer_batch1.clone(), outer_batch2.clone()],
+            vec![false, true], // Pending before 2nd outer batch
+        ));
+        let inner: SendableRecordBatchStream =
+            Box::pin(PendingStream::new(vec![inner_batch.clone()], vec![false]));
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
+        let spill_manager = SpillManager::new(
+            Arc::clone(&runtime),
+            SpillMetrics::new(&metrics, 0),
+            Arc::clone(&right_schema),
+        );
+
+        let stream = BitwiseSortMergeJoinStream::try_new(
+            Arc::clone(&left_schema),
+            vec![SortOptions::default()],
+            NullEquality::NullEqualsNothing,
+            outer,
+            inner,
+            on_outer.clone(),
+            on_inner.clone(),
+            Some(filter.clone()),
+            join_type,
+            8192,
+            0,
+            &metrics,
+            reservation,
+            spill_manager,
+            Arc::clone(&runtime),
+        )?;
+
+        let batches = collect_stream(stream).await?;
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+        match join_type {
+            LeftSemi => {
+                assert_eq!(
+                    total, 2,
+                    "LeftSemi spill+boundary: both outer rows match filter, \
+                     expected 2 rows, got {total}"
+                );
+            }
+            LeftAnti => {
+                assert_eq!(
+                    total, 0,
+                    "LeftAnti spill+boundary: both outer rows match filter, \
+                     expected 0 rows, got {total}"
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    Ok(())
 }

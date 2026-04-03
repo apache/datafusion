@@ -64,7 +64,7 @@ use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::Column;
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::format::ExplainAnalyzeLevel;
+use datafusion_common::format::ExplainAnalyzeCategories;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
@@ -99,7 +99,6 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
-use datafusion_physical_plan::metrics::MetricType;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
@@ -1199,7 +1198,14 @@ impl DefaultPhysicalPlanner {
                 let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
             }
-            LogicalPlan::Subquery(_) => todo!(),
+            // The optimizer's decorrelation passes remove Subquery nodes
+            // for supported patterns. This error is hit for correlated
+            // patterns that the optimizer cannot (yet) decorrelate.
+            LogicalPlan::Subquery(_) => {
+                return not_impl_err!(
+                    "Physical plan does not support undecorrelated Subquery"
+                );
+            }
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
@@ -2716,14 +2722,21 @@ impl DefaultPhysicalPlanner {
         let schema = Arc::clone(a.schema.inner());
         let show_statistics = session_state.config_options().explain.show_statistics;
         let analyze_level = session_state.config_options().explain.analyze_level;
-        let metric_types = match analyze_level {
-            ExplainAnalyzeLevel::Summary => vec![MetricType::SUMMARY],
-            ExplainAnalyzeLevel::Dev => vec![MetricType::SUMMARY, MetricType::DEV],
+        let metric_types = analyze_level.included_types();
+        let analyze_categories = session_state
+            .config_options()
+            .explain
+            .analyze_categories
+            .clone();
+        let metric_categories = match analyze_categories {
+            ExplainAnalyzeCategories::All => None,
+            ExplainAnalyzeCategories::Only(cats) => Some(cats),
         };
         Ok(Arc::new(AnalyzeExec::new(
             a.verbose,
             show_statistics,
             metric_types,
+            metric_categories,
             input,
             schema,
         )))
