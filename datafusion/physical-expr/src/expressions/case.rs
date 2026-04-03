@@ -793,17 +793,14 @@ impl CaseBody {
                 }
             }?;
 
-            // `true_count` ignores `true` values where the validity bit is not set, so there's
-            // no need to call `prep_null_mask_filter`.
-            let when_true_count = when_value.true_count();
-
-            // If the 'when' predicate did not match any rows, continue to the next branch immediately
-            if when_true_count == 0 {
+            // If the 'when' predicate did not match any rows, continue to the next branch immediately.
+            // `has_true` short-circuits on the first true value, avoiding a full popcount.
+            if !when_value.has_true() {
                 continue;
             }
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
-            if when_true_count == remainder_batch.num_rows() {
+            if when_value.true_count() == remainder_batch.num_rows() {
                 let then_expression = &self.when_then_expr[i].1;
                 let then_value = then_expression.evaluate(&remainder_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
@@ -882,17 +879,14 @@ impl CaseBody {
                 internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
 
-            // `true_count` ignores `true` values where the validity bit is not set, so there's
-            // no need to call `prep_null_mask_filter`.
-            let when_true_count = when_value.true_count();
-
-            // If the 'when' predicate did not match any rows, continue to the next branch immediately
-            if when_true_count == 0 {
+            // If the 'when' predicate did not match any rows, continue to the next branch immediately.
+            // `has_true` short-circuits on the first true value, avoiding a full popcount.
+            if !when_value.has_true() {
                 continue;
             }
 
             // If the 'when' predicate matched all remaining rows, there is no need to filter
-            if when_true_count == remainder_batch.num_rows() {
+            if when_value.true_count() == remainder_batch.num_rows() {
                 let then_expression = &self.when_then_expr[i].1;
                 let then_value = then_expression.evaluate(&remainder_batch)?;
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
