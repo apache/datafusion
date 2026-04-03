@@ -84,7 +84,7 @@ fn apply_spark_null_semantics(
     haystack_arg: &ColumnarValue,
 ) -> Result<BooleanArray> {
     // happy path
-    if result.false_count() == 0 || haystack_arg.data_type() == DataType::Null {
+    if !result.has_false() || haystack_arg.data_type() == DataType::Null {
         return Ok(result.clone());
     }
 

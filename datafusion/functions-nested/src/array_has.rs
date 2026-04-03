@@ -337,7 +337,7 @@ fn array_has_dispatch_for_array<'a>(
         let is_nested = arr.data_type().is_nested();
         let needle_row = Scalar::new(needle.slice(i, 1));
         let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
-        boolean_builder.append_value(eq_array.true_count() > 0);
+        boolean_builder.append_value(eq_array.has_true());
     }
 
     Ok(Arc::new(boolean_builder.finish()))
