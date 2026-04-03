@@ -5220,6 +5220,7 @@ async fn test_buffer_exec_waits_for_hash_join_dynamic_filter() {
 
     let mut config = ConfigOptions::default();
     config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
     config.execution.hash_join_buffering_capacity = 1024 * 1024;
     config.execution.hash_join_buffering_dynamic_filter_wait_ms = usize::MAX;
 
@@ -5288,6 +5289,7 @@ async fn test_buffer_exec_hash_join_with_topk_above_no_deadlock() {
 
     let mut config = ConfigOptions::default();
     config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
     config.execution.hash_join_buffering_capacity = 1024 * 1024;
     config.execution.hash_join_buffering_dynamic_filter_wait_ms = usize::MAX;
 
