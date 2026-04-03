@@ -207,6 +207,45 @@ reset datafusion.optimizer.enable_dynamic_filter_pushdown;
 statement ok
 reset datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown;
 
+# Regression test for https://github.com/apache/datafusion/issues/21065
+# Ensure filter pushdown through AggregateExec still works when a ProjectionExec
+# reorders aggregate input columns.
+
+statement ok
+create external table agg_reordered_pushdown stored as parquet location '../../parquet-testing/data/alltypes_plain.parquet';
+
+query TBI rowsort
+select a, b, cnt
+from (
+    select a, b, count(c) as cnt
+    from (
+        select id as c, cast(string_col as varchar) as a, bool_col as b
+        from agg_reordered_pushdown
+    ) t
+    group by a, b
+) q
+where b = true;
+----
+0 true 4
+
+query TBI rowsort
+select a, b, cnt
+from (
+    select a, b, count(c) as cnt
+    from (
+        select id as c, cast(string_col as varchar) as a, bool_col as b
+        from agg_reordered_pushdown
+    ) t
+    group by a, b
+) q
+where cnt > 1;
+----
+0 true 4
+1 false 4
+
+statement ok
+drop table agg_reordered_pushdown;
+
 statement ok
 drop table agg_dyn_test;
 
