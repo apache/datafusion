@@ -545,12 +545,21 @@ impl BatchPartitioner {
         })
     }
 
-    /// Actual implementation of [`partition`](Self::partition).
+    /// Returns an iterator of `(partition_index, RecordBatch)` pairs for the given batch.
     ///
-    /// The reason this was pulled out is that we need to have a variant of `partition` that works w/ sync functions,
-    /// and one that works w/ async. Using an iterator as an intermediate representation was the best way to achieve
-    /// this (so we don't need to clone the entire implementation).
-    fn partition_iter(
+    /// This is useful for async consumers that want to separate CPU-bound partitioning
+    /// from I/O. For example, you can iterate results on the async side and send them
+    /// through a channel, while performing file I/O on a blocking task:
+    ///
+    /// ```ignore
+    /// for result in partitioner.partition_iter(batch)? {
+    ///     let (partition, batch) = result?;
+    ///     tx.send((partition, batch)).await?;
+    /// }
+    /// ```
+    ///
+    /// The sync [`partition`](Self::partition) method is implemented on top of this.
+    pub fn partition_iter(
         &mut self,
         batch: RecordBatch,
     ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
