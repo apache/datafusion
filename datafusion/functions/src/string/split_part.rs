@@ -237,6 +237,14 @@ fn split_part_scalar(
     delim_scalar: &ScalarValue,
     pos_scalar: &ScalarValue,
 ) -> Result<ColumnarValue> {
+    // Empty input array → empty result.
+    if string_array.is_empty() {
+        return Ok(ColumnarValue::Array(new_null_array(
+            string_array.data_type(),
+            0,
+        )));
+    }
+
     let delimiter = delim_scalar.try_as_str().ok_or_else(|| {
         exec_datafusion_err!(
             "Unsupported delimiter type {:?} for split_part",
@@ -254,10 +262,6 @@ fn split_part_scalar(
         }
     };
 
-    if position == Some(0) {
-        return exec_err!("field position must not be zero");
-    }
-
     // Null delimiter or position → every row is null.
     let (Some(delimiter), Some(position)) = (delimiter, position) else {
         return Ok(ColumnarValue::Array(new_null_array(
@@ -265,6 +269,10 @@ fn split_part_scalar(
             string_array.len(),
         )));
     };
+
+    if position == 0 {
+        return exec_err!("field position must not be zero");
+    }
 
     let result = match string_array.data_type() {
         DataType::Utf8View => split_part_scalar_impl(

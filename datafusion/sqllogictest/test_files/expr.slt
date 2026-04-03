@@ -728,6 +728,13 @@ SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
 statement error DataFusion error: Execution error: field position must not be zero
 SELECT split_part(column1, '.', 0) FROM (VALUES (NULL::text)) AS t(column1)
 
+# NULL delimiter with position 0 returns null (not an error), matching the
+# slow path where null args short-circuit before the position check.
+query T
+SELECT split_part(column1, NULL, 0) FROM (VALUES ('a.b.c')) AS t(column1)
+----
+NULL
+
 # split_part with column input (exercises the scalar-delimiter fast path)
 query TTT
 SELECT
@@ -789,6 +796,14 @@ FROM (SELECT arrow_cast(column1, 'Utf8View') AS column1
 ----
 a b
 x y
+
+# LargeUtf8 column with scalar delimiter
+query T
+SELECT split_part(arrow_cast(column1, 'LargeUtf8'), '.', 2)
+FROM (VALUES ('a.b.c'), (NULL)) AS t(column1)
+----
+b
+NULL
 
 query B
 SELECT starts_with('alphabet', 'alph')
