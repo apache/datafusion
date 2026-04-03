@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 use datafusion_common::{Result, ScalarValue, assert_or_internal_err};
@@ -52,10 +50,6 @@ impl PiFunc {
 }
 
 impl ScalarUDFImpl for PiFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "pi"
     }

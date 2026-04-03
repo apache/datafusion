@@ -293,14 +293,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        // The window expressions from SELECT and QUALIFY only, used to validate that
-        // QUALIFY is used with window functions (ORDER BY window functions don't count).
-        let qualify_window_func_exprs = find_window_exprs(
-            select_exprs_post_aggr
-                .iter()
-                .chain(qualify_expr_post_aggr.iter()),
-        );
-
         // All of the window expressions (deduplicated and rewritten to reference aggregates as
         // columns from input). Window functions may be sourced from the SELECT list, QUALIFY
         // expression, or ORDER BY.
@@ -342,6 +334,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // QUALIFY filters the results of window functions, similar to how HAVING filters aggregates
         let plan = if let Some(qualify_expr) = qualify_expr_post_aggr {
             // Validate that QUALIFY is used with window functions in SELECT or QUALIFY
+            let qualify_window_func_exprs = find_window_exprs(
+                select_exprs_post_aggr
+                    .iter()
+                    .chain(std::iter::once(&qualify_expr)),
+            );
             if qualify_window_func_exprs.is_empty() {
                 return plan_err!(
                     "QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"

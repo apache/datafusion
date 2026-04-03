@@ -658,7 +658,7 @@ mod tests {
 
         let returned_udf = foreign_codec.try_decode_udf(udf.name(), &bytes)?;
 
-        assert!(returned_udf.inner().as_any().is::<AbsFunc>());
+        assert!(returned_udf.inner().is::<AbsFunc>());
 
         Ok(())
     }
@@ -679,7 +679,7 @@ mod tests {
 
         let returned_udf = foreign_codec.try_decode_udaf(udf.name(), &bytes)?;
 
-        assert!(returned_udf.inner().as_any().is::<Sum>());
+        assert!(returned_udf.inner().is::<Sum>());
 
         Ok(())
     }
@@ -703,7 +703,7 @@ mod tests {
 
         let returned_udf = foreign_codec.try_decode_udwf(udf.name(), &bytes)?;
 
-        assert!(returned_udf.inner().as_any().is::<Rank>());
+        assert!(returned_udf.inner().is::<Rank>());
 
         Ok(())
     }

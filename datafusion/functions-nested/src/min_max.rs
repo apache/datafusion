@@ -34,7 +34,6 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -84,10 +83,6 @@ impl ArrayMax {
 }
 
 impl ScalarUDFImpl for ArrayMax {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_max"
     }
@@ -170,10 +165,6 @@ impl ArrayMin {
 }
 
 impl ScalarUDFImpl for ArrayMin {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_min"
     }

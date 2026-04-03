@@ -20,7 +20,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::{any::Any, vec};
+use std::vec;
 
 use crate::ExecutionPlanProperties;
 use crate::execution_plan::{
@@ -46,7 +46,7 @@ use crate::joins::utils::{
     swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
-use crate::metrics::{Count, MetricBuilder};
+use crate::metrics::{Count, MetricBuilder, MetricCategory};
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
@@ -1179,10 +1179,6 @@ impl ExecutionPlan for HashJoinExec {
         "HashJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -1317,6 +1313,7 @@ impl ExecutionPlan for HashJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         let array_map_created_count = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
         let left_fut = match self.mode {

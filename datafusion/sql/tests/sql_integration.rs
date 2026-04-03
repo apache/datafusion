@@ -19,7 +19,6 @@
 // Issue: <https://github.com/apache/datafusion/issues/18503>
 #![expect(clippy::needless_pass_by_value)]
 
-use std::any::Any;
 use std::hash::Hash;
 #[cfg(test)]
 use std::sync::Arc;
@@ -3447,10 +3446,6 @@ impl DummyUDF {
 }
 
 impl ScalarUDFImpl for DummyUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.name
     }
@@ -4728,6 +4723,26 @@ fn plan_create_index() {
         }
         _ => panic!("wrong plan type"),
     }
+}
+
+#[test]
+fn test_table_function_with_unsupported_arg_propagates_error() {
+    let sql = "SELECT * FROM my_func(('a', 'b', 'c'))";
+    let dialect = &GenericDialect {};
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new(&context);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect);
+    let mut ast = result.unwrap();
+    let err = planner
+        .statement_to_plan(ast.pop_front().unwrap())
+        .expect_err("query should have failed");
+    let msg = err.strip_backtrace();
+    assert!(
+        !msg.contains("Table Functions are not supported"),
+        "tuple argument error should be propagated before reaching get_table_function_source, got: {msg}"
+    );
+    assert_contains!(msg, "Struct not supported");
 }
 
 fn assert_field_not_found(mut err: DataFusionError, name: &str) {

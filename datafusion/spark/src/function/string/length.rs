@@ -66,10 +66,6 @@ impl SparkLengthFunc {
 }
 
 impl ScalarUDFImpl for SparkLengthFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "length"
     }

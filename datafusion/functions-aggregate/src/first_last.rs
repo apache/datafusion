@@ -17,7 +17,6 @@
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of_val;
@@ -112,10 +111,6 @@ impl FirstValue {
 }
 
 impl AggregateUDFImpl for FirstValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "first_value"
     }
@@ -1052,10 +1047,6 @@ impl LastValue {
 }
 
 impl AggregateUDFImpl for LastValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "last_value"
     }

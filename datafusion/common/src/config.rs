@@ -22,7 +22,7 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
+use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
@@ -1211,7 +1211,13 @@ config_namespace! {
         /// Verbosity level for "EXPLAIN ANALYZE". Default is "dev"
         /// "summary" shows common metrics for high-level insights.
         /// "dev" provides deep operator-level introspection for developers.
-        pub analyze_level: ExplainAnalyzeLevel, default = ExplainAnalyzeLevel::Dev
+        pub analyze_level: MetricType, default = MetricType::Dev
+
+        /// Which metric categories to include in "EXPLAIN ANALYZE" output.
+        /// Comma-separated list of: "rows", "bytes", "timing", "uncategorized".
+        /// Use "none" to show plan structure only, or "all" (default) to show everything.
+        /// Metrics without a declared category are treated as "uncategorized".
+        pub analyze_categories: ExplainAnalyzeCategories, default = ExplainAnalyzeCategories::All
     }
 }
 
@@ -1254,30 +1260,30 @@ config_namespace! {
     }
 }
 
-impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
+impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
-    fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
-        let duration_format = match self.duration_format.as_str() {
+    fn try_from(options: &'a FormatOptions) -> Result<Self> {
+        let duration_format = match options.duration_format.as_str() {
             "pretty" => arrow::util::display::DurationFormat::Pretty,
             "iso8601" => arrow::util::display::DurationFormat::ISO8601,
             _ => {
                 return _config_err!(
                     "Invalid duration format: {}. Valid values are pretty or iso8601",
-                    self.duration_format
+                    options.duration_format
                 );
             }
         };
 
-        Ok(arrow::util::display::FormatOptions::new()
-            .with_display_error(self.safe)
-            .with_null(&self.null)
-            .with_date_format(self.date_format.as_deref())
-            .with_datetime_format(self.datetime_format.as_deref())
-            .with_timestamp_format(self.timestamp_format.as_deref())
-            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
-            .with_time_format(self.time_format.as_deref())
+        Ok(Self::new()
+            .with_display_error(options.safe)
+            .with_null(&options.null)
+            .with_date_format(options.date_format.as_deref())
+            .with_datetime_format(options.datetime_format.as_deref())
+            .with_timestamp_format(options.timestamp_format.as_deref())
+            .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
+            .with_time_format(options.time_format.as_deref())
             .with_duration_format(duration_format)
-            .with_types_info(self.types_info))
+            .with_types_info(options.types_info))
     }
 }
 

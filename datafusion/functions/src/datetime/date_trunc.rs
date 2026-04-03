@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
@@ -167,7 +166,21 @@ impl DateTruncGranularity {
     argument(
         name = "expression",
         description = "Timestamp or time expression to operate on. Can be a constant, column, or function."
-    )
+    ),
+    sql_example = r#"```sql
+> SELECT date_trunc('month', '2024-05-15T10:30:00');
++-----------------------------------------------+
+| date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
++-----------------------------------------------+
+| 2024-05-01T00:00:00                           |
++-----------------------------------------------+
+> SELECT date_trunc('hour', '2024-05-15T10:30:00');
++----------------------------------------------+
+| date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
++----------------------------------------------+
+| 2024-05-15T10:00:00                          |
++----------------------------------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DateTruncFunc {
@@ -211,10 +224,6 @@ impl DateTruncFunc {
 }
 
 impl ScalarUDFImpl for DateTruncFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "date_trunc"
     }

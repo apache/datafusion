@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -79,10 +78,6 @@ impl DummyUDF {
 }
 
 impl ScalarUDFImpl for DummyUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "dummy_udf"
     }
@@ -520,7 +515,6 @@ fn test_memory_after_projection() -> Result<()> {
     assert_eq!(
         after_optimize
             .clone()
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .unwrap()
             .data_source()
@@ -603,10 +597,7 @@ fn test_streaming_table_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let result = after_optimize
-        .as_any()
-        .downcast_ref::<StreamingTableExec>()
-        .unwrap();
+    let result = after_optimize.downcast_ref::<StreamingTableExec>().unwrap();
     assert_eq!(
         result.partition_schema(),
         &Arc::new(Schema::new(vec![
@@ -797,7 +788,6 @@ fn test_output_req_after_projection() -> Result<()> {
     );
     assert_eq!(
         after_optimize
-            .as_any()
             .downcast_ref::<OutputRequirementExec>()
             .unwrap()
             .required_input_ordering()[0]
@@ -810,7 +800,6 @@ fn test_output_req_after_projection() -> Result<()> {
         Arc::new(Column::new("b", 2)),
     ];
     if let Distribution::HashPartitioned(vec) = after_optimize
-        .as_any()
         .downcast_ref::<OutputRequirementExec>()
         .unwrap()
         .required_input_distribution()[0]
@@ -1041,7 +1030,6 @@ fn test_join_after_projection() -> Result<()> {
     assert_eq!(
         expected_filter_col_ind,
         after_optimize
-            .as_any()
             .downcast_ref::<SymmetricHashJoinExec>()
             .unwrap()
             .filter()
@@ -1405,7 +1393,6 @@ fn test_repartition_after_projection() -> Result<()> {
 
     assert_eq!(
         after_optimize
-            .as_any()
             .downcast_ref::<RepartitionExec>()
             .unwrap()
             .partitioning()

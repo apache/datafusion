@@ -28,7 +28,6 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 use sha2::{self, Digest};
-use std::any::Any;
 use std::sync::Arc;
 
 /// Differs from DataFusion version in allowing array input for bit lengths, and
@@ -69,10 +68,6 @@ impl SparkSha2 {
 }
 
 impl ScalarUDFImpl for SparkSha2 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "sha2"
     }

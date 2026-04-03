@@ -46,7 +46,6 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -133,9 +132,6 @@ impl ArrayElement {
 }
 
 impl ScalarUDFImpl for ArrayElement {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_element"
     }
@@ -356,10 +352,6 @@ impl ArraySlice {
 }
 
 impl ScalarUDFImpl for ArraySlice {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn display_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
         if let Some((arr, indexes)) = args_name.split_first() {
@@ -822,9 +814,6 @@ impl ArrayPopFront {
 }
 
 impl ScalarUDFImpl for ArrayPopFront {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_pop_front"
     }
@@ -915,9 +904,6 @@ impl ArrayPopBack {
 }
 
 impl ScalarUDFImpl for ArrayPopBack {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_pop_back"
     }
@@ -1012,9 +998,6 @@ impl ArrayAnyValue {
 }
 
 impl ScalarUDFImpl for ArrayAnyValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_any_value"
     }

@@ -106,6 +106,10 @@ clickbench_partitioned: ClickBench queries against partitioned (100 files) parqu
 clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 
+# Sort Pushdown Benchmarks
+sort_pushdown:          Sort pushdown baseline (no WITH ORDER) on TPC-H data (SF=1)
+sort_pushdown_sorted:   Sort pushdown with WITH ORDER — tests sort elimination on non-overlapping files
+
 # Sorted Data Benchmarks (ORDER BY Optimization)
 clickbench_sorted:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
 
@@ -309,6 +313,9 @@ main() {
                     # same data as for tpch
                     data_tpch "1" "parquet"
                     ;;
+                sort_pushdown|sort_pushdown_sorted)
+                    data_sort_pushdown
+                    ;;
                 sort_tpch)
                     # same data as for tpch
                     data_tpch "1" "parquet"
@@ -508,6 +515,12 @@ main() {
                     ;;
                 external_aggr)
                     run_external_aggr
+                    ;;
+                sort_pushdown)
+                    run_sort_pushdown
+                    ;;
+                sort_pushdown_sorted)
+                    run_sort_pushdown_sorted
                     ;;
                 sort_tpch)
                     run_sort_tpch "1"
@@ -1068,6 +1081,60 @@ run_external_aggr() {
     # CPU cores, we set a constant number of partitions to prevent this
     # benchmark to fail on some machines.
     debug_run $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the sort pushdown benchmark (without WITH ORDER)
+# Generates sort pushdown benchmark data: TPC-H lineitem with 3 parts,
+# renamed so alphabetical order does NOT match sort key order.
+# This forces the sort pushdown optimizer to reorder files by statistics.
+#
+# tpchgen produces 3 sorted, non-overlapping parquet files:
+#   lineitem.1.parquet: l_orderkey 1 ~ 2M        (lowest keys)
+#   lineitem.2.parquet: l_orderkey 2M ~ 4M
+#   lineitem.3.parquet: l_orderkey 4M ~ 6M       (highest keys)
+#
+# We rename them so alphabetical order is reversed:
+#   a_part3.parquet (highest keys, sorts first alphabetically)
+#   b_part2.parquet
+#   c_part1.parquet (lowest keys, sorts last alphabetically)
+data_sort_pushdown() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown/lineitem"
+    if [ -d "${SORT_PUSHDOWN_DIR}" ] && [ "$(ls -A ${SORT_PUSHDOWN_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown data already exists at ${SORT_PUSHDOWN_DIR}"
+        return
+    fi
+
+    echo "Generating sort pushdown benchmark data (3 parts with reversed naming)..."
+
+    TEMP_DIR="${DATA_DIR}/sort_pushdown_temp"
+    mkdir -p "${TEMP_DIR}" "${SORT_PUSHDOWN_DIR}"
+
+    tpchgen-cli --scale-factor 1 --format parquet --parquet-compression='ZSTD(1)' --parts=3 --output-dir "${TEMP_DIR}"
+
+    # Rename: reverse alphabetical order vs key order
+    mv "${TEMP_DIR}/lineitem/lineitem.3.parquet" "${SORT_PUSHDOWN_DIR}/a_part3.parquet"
+    mv "${TEMP_DIR}/lineitem/lineitem.2.parquet" "${SORT_PUSHDOWN_DIR}/b_part2.parquet"
+    mv "${TEMP_DIR}/lineitem/lineitem.1.parquet" "${SORT_PUSHDOWN_DIR}/c_part1.parquet"
+
+    rm -rf "${TEMP_DIR}"
+
+    echo "Sort pushdown data generated at ${SORT_PUSHDOWN_DIR}"
+    ls -la "${SORT_PUSHDOWN_DIR}"
+}
+
+run_sort_pushdown() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown.json"
+    echo "Running sort pushdown benchmark (no WITH ORDER)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown benchmark with WITH ORDER (enables sort elimination)
+run_sort_pushdown_sorted() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_sorted.json"
+    echo "Running sort pushdown benchmark (with WITH ORDER)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the sort integration benchmark
