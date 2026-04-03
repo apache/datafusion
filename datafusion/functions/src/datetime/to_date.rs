@@ -28,7 +28,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -118,10 +117,6 @@ impl ToDateFunc {
 }
 
 impl ScalarUDFImpl for ToDateFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_date"
     }

@@ -35,7 +35,6 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use regex::Regex;
-use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
@@ -103,10 +102,6 @@ impl RegexpLikeFunc {
 }
 
 impl ScalarUDFImpl for RegexpLikeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regexp_like"
     }

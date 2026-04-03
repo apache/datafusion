@@ -28,15 +28,10 @@ use datafusion_physical_expr::PhysicalExprSimplifier;
 use datafusion_physical_expr::expressions::NotExpr;
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::data_type::Decimal;
 use parquet::schema::types::SchemaDescriptor;
-use parquet::{
-    arrow::{ParquetRecordBatchStreamBuilder, async_reader::AsyncFileReader},
-    bloom_filter::Sbbf,
-    file::metadata::RowGroupMetaData,
-};
+use parquet::{bloom_filter::Sbbf, file::metadata::RowGroupMetaData};
 
 /// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
 ///
@@ -72,6 +67,11 @@ impl RowGroupAccessPlanFilter {
     /// Return the number of row groups that are currently expected to be scanned
     pub fn remaining_row_group_count(&self) -> usize {
         self.access_plan.row_group_index_iter().count()
+    }
+
+    /// Return indexes of row groups that still need to be scanned.
+    pub fn row_group_indexes(&self) -> impl Iterator<Item = usize> + '_ {
+        self.access_plan.row_group_index_iter()
     }
 
     /// Returns the inner access plan
@@ -368,62 +368,32 @@ impl RowGroupAccessPlanFilter {
         }
     }
 
-    /// Prune remaining row groups using available bloom filters and the
+    /// Prune remaining row groups using loaded bloom filters and the
     /// [`PruningPredicate`].
     ///
-    /// Updates this set with row groups that should not be scanned
+    /// Updates this set with row groups that should not be scanned.
+    /// `row_group_bloom_filters[idx]` contains the bloom filters for the
+    /// parquet row group at index `idx`.
     ///
     /// # Panics
-    /// if the builder does not have the same number of row groups as this set
-    pub async fn prune_by_bloom_filters<T: AsyncFileReader + Send + 'static>(
+    /// if `row_group_bloom_filters` does not have the same number of row groups as this set
+    pub(crate) fn prune_by_bloom_filters(
         &mut self,
-        arrow_schema: &Schema,
-        builder: &mut ParquetRecordBatchStreamBuilder<T>,
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
+        row_group_bloom_filters: &[BloomFilterStatistics],
     ) {
         // scoped timer updates on drop
         let _timer_guard = metrics.bloom_filter_eval_time.timer();
 
-        assert_eq!(builder.metadata().num_row_groups(), self.access_plan.len());
-        for idx in 0..self.access_plan.len() {
+        assert_eq!(row_group_bloom_filters.len(), self.access_plan.len());
+        for (idx, stats) in row_group_bloom_filters.iter().enumerate() {
             if !self.access_plan.should_scan(idx) {
                 continue;
             }
 
-            // Attempt to find bloom filters for filtering this row group
-            let literal_columns = predicate.literal_columns();
-            let mut column_sbbf = HashMap::with_capacity(literal_columns.len());
-
-            for column_name in literal_columns {
-                let Some((column_idx, _field)) =
-                    parquet_column(builder.parquet_schema(), arrow_schema, &column_name)
-                else {
-                    continue;
-                };
-
-                let bf = match builder
-                    .get_row_group_column_bloom_filter(idx, column_idx)
-                    .await
-                {
-                    Ok(Some(bf)) => bf,
-                    Ok(None) => continue, // no bloom filter for this column
-                    Err(e) => {
-                        log::debug!("Ignoring error reading bloom filter: {e}");
-                        metrics.predicate_evaluation_errors.add(1);
-                        continue;
-                    }
-                };
-                let physical_type =
-                    builder.parquet_schema().column(column_idx).physical_type();
-
-                column_sbbf.insert(column_name.to_string(), (bf, physical_type));
-            }
-
-            let stats = BloomFilterStatistics { column_sbbf };
-
             // Can this group be pruned?
-            let prune_group = match predicate.prune(&stats) {
+            let prune_group = match predicate.prune(stats) {
                 Ok(values) => !values[0],
                 Err(e) => {
                     log::debug!(
@@ -443,13 +413,39 @@ impl RowGroupAccessPlanFilter {
         }
     }
 }
-/// Implements [`PruningStatistics`] for Parquet Split Block Bloom Filters (SBBF)
-struct BloomFilterStatistics {
-    /// Maps column name to the parquet bloom filter and parquet physical type
+
+/// In memory Parquet Split Block Bloom Filters (SBBF).
+///
+/// This structure implements [`PruningStatistics`] and is used to prune
+/// Parquet row groups and data pages based on the query predicate.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BloomFilterStatistics {
+    /// Per-column Bloom filters
+    /// Key: predicate column name
+    /// Value:
+    /// * [`Sbbf`] (Bloom filter),
+    /// * Parquet physical [`Type`] needed to evaluate  literals against the filter
     column_sbbf: HashMap<String, (Sbbf, Type)>,
 }
 
 impl BloomFilterStatistics {
+    /// Create an empty [`BloomFilterStatistics`]
+    pub(crate) fn new() -> Self {
+        Default::default()
+    }
+
+    /// Create an empty [`BloomFilterStatistics`] with the specified capacity
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            column_sbbf: HashMap::with_capacity(capacity),
+        }
+    }
+
+    /// Add a Bloom filter and type for the specified column
+    pub(crate) fn insert(&mut self, column: impl Into<String>, sbbf: Sbbf, ty: Type) {
+        self.column_sbbf.insert(column.into(), (sbbf, ty));
+    }
+
     /// Helper function for checking if [`Sbbf`] filter contains [`ScalarValue`].
     ///
     /// In case the type of scalar is not supported, returns `true`, assuming that the
@@ -662,6 +658,7 @@ mod tests {
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use object_store::ObjectStoreExt;
     use parquet::arrow::ArrowSchemaConverter;
+    use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
@@ -1784,14 +1781,52 @@ mod tests {
 
         let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());
         let mut pruned_row_groups = RowGroupAccessPlanFilter::new(access_plan);
-        pruned_row_groups
-            .prune_by_bloom_filters(
-                pruning_predicate.schema(),
-                &mut builder,
-                pruning_predicate,
-                &file_metrics,
-            )
-            .await;
+        let literal_columns = pruning_predicate.literal_columns();
+        let parquet_columns: Vec<_> = literal_columns
+            .into_iter()
+            .filter_map(|column_name| {
+                let (column_idx, _) = parquet::arrow::parquet_column(
+                    builder.parquet_schema(),
+                    pruning_predicate.schema(),
+                    &column_name,
+                )?;
+                Some((
+                    column_name.to_string(),
+                    column_idx,
+                    builder.parquet_schema().column(column_idx).physical_type(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let mut row_group_bloom_filters =
+            Vec::with_capacity(builder.metadata().num_row_groups());
+        row_group_bloom_filters.resize_with(
+            builder.metadata().num_row_groups(),
+            BloomFilterStatistics::new,
+        );
+        for idx in pruned_row_groups.row_group_indexes() {
+            let mut column_sbbf = HashMap::with_capacity(parquet_columns.len());
+            for (column_name, column_idx, physical_type) in &parquet_columns {
+                let bf = match builder
+                    .get_row_group_column_bloom_filter(idx, *column_idx)
+                    .await
+                {
+                    Ok(Some(bf)) => bf,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        log::debug!("Ignoring error reading bloom filter: {e}");
+                        file_metrics.predicate_evaluation_errors.add(1);
+                        continue;
+                    }
+                };
+                column_sbbf.insert(column_name.clone(), (bf, *physical_type));
+            }
+            row_group_bloom_filters[idx] = BloomFilterStatistics { column_sbbf };
+        }
+        pruned_row_groups.prune_by_bloom_filters(
+            pruning_predicate,
+            &file_metrics,
+            &row_group_bloom_filters,
+        );
 
         Ok(pruned_row_groups)
     }

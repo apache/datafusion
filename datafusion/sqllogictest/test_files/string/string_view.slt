@@ -908,6 +908,52 @@ logical_plan
 01)Projection: split_part(test.column1_utf8view, Utf8("f"), Int64(1)) AS c1, split_part(Utf8("testtesttest"), test.column1_utf8view, Int64(1)) AS c2
 02)--TableScan: test projection=[column1_utf8view]
 
+# SPLIT_PART with Utf8View
+query T
+SELECT split_part(arrow_cast('abc~@~def~@~ghi', 'Utf8View'), '~@~', 2);
+----
+def
+
+query T
+SELECT split_part(arrow_cast('abc~@~def~@~ghi', 'Utf8View'), '~@~', 20);
+----
+(empty)
+
+query T
+SELECT split_part(arrow_cast('abc~@~def~@~ghi', 'Utf8View'), '~@~', -1);
+----
+ghi
+
+statement error DataFusion error: Execution error: field position must not be zero
+SELECT split_part(arrow_cast('abc~@~def~@~ghi', 'Utf8View'), '~@~', 0);
+
+query T
+SELECT split_part(arrow_cast('a,b', 'Utf8View'), '', 1);
+----
+a,b
+
+query T
+SELECT split_part(arrow_cast('a,b', 'Utf8View'), '', 2);
+----
+(empty)
+
+query T
+SELECT split_part(arrow_cast('a,b', 'Utf8View'), '', -1);
+----
+a,b
+
+# Single-char delimiter
+query T
+SELECT split_part(arrow_cast('a.b.c', 'Utf8View'), '.', 2);
+----
+b
+
+# Verify Utf8View input produces Utf8View output
+query T
+SELECT arrow_typeof(split_part(arrow_cast('a.b.c', 'Utf8View'), '.', 2));
+----
+Utf8View
+
 ## Ensure no casts for STRPOS
 query TT
 EXPLAIN SELECT

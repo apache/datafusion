@@ -30,7 +30,6 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
-use std::any::Any;
 use std::fmt::Debug;
 use std::iter;
 use std::ops::Range;
@@ -85,11 +84,6 @@ impl Default for CumeDist {
 }
 
 impl WindowUDFImpl for CumeDist {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "cume_dist"
     }

@@ -31,7 +31,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -81,10 +80,6 @@ impl Flatten {
 }
 
 impl ScalarUDFImpl for Flatten {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "flatten"
     }

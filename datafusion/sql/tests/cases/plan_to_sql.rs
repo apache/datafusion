@@ -362,6 +362,17 @@ fn roundtrip_statement_with_dialect_3() -> Result<(), DataFusionError> {
 }
 
 #[test]
+fn roundtrip_statement_postgres_any_array_expr() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select left from array where 1 = any(left);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @r#"SELECT "array"."left" FROM "array" WHERE 1 = ANY("array"."left")"#,
+    );
+    Ok(())
+}
+
+#[test]
 fn roundtrip_statement_with_dialect_4() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
         sql: "select j1_id from (select 1 as j1_id);",

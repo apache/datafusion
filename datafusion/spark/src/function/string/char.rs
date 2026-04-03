@@ -20,7 +20,7 @@ use arrow::array::GenericStringBuilder;
 use arrow::datatypes::DataType::Int64;
 use arrow::datatypes::DataType::Utf8;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use datafusion_common::{Result, ScalarValue, cast::as_int64_array, exec_err};
 use datafusion_expr::{
@@ -50,10 +50,6 @@ impl CharFunc {
 }
 
 impl ScalarUDFImpl for CharFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "char"
     }
