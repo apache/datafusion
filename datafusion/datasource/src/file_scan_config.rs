@@ -902,19 +902,15 @@ impl DataSource for FileScanConfig {
 
     /// Push sort requirements into file-based data sources.
     ///
-    /// # When does this matter?
+    /// # Sort Pushdown Architecture
     ///
-    /// `EnforceSorting` (which runs before `PushdownSort`) already eliminates
-    /// `SortExec` when `validated_output_ordering()` confirms the file order is
-    /// correct. However, if files are listed in wrong order (e.g., alphabetical
-    /// order doesn't match sort key order), `validated_output_ordering()` strips
-    /// the ordering and `EnforceSorting` cannot help.
+    /// When a partition (file group) contains multiple files in wrong order,
+    /// `validated_output_ordering()` strips the ordering and `EnforceSorting`
+    /// inserts a `SortExec`. This optimizer fixes the file order by sorting
+    /// files within each group by min/max statistics, enabling sort elimination.
     ///
-    /// This is where `PushdownSort` adds value: it **sorts files by statistics**
-    /// to fix the ordering, then re-checks — enabling sort elimination even when
-    /// files were originally in wrong order.
-    ///
-    /// # Architecture
+    /// This applies to both single-partition and multi-partition plans — any
+    /// file group with multiple files in wrong order benefits.
     ///
     /// ```text
     /// PushdownSort optimizer finds SortExec
@@ -923,7 +919,7 @@ impl DataSource for FileScanConfig {
     /// FileScanConfig::try_pushdown_sort()
     ///   │
     ///   ├─► FileSource returns Exact
-    ///   │     (natural ordering already satisfies request)
+    ///   │     (natural ordering satisfies request)
     ///   │     → rebuild_with_source: sort files by stats, verify non-overlapping
     ///   │     → SortExec removed, fetch (LIMIT) pushed to DataSourceExec
     ///   │
@@ -932,21 +928,13 @@ impl DataSource for FileScanConfig {
     ///   │     → SortExec kept, scan optimized
     ///   │
     ///   └─► FileSource returns Unsupported
-    ///         (ordering was stripped because files in wrong order)
+    ///         (ordering stripped because files in wrong order)
     ///         → try_sort_file_groups_by_statistics():
-    ///           1. Sort files within groups by min/max statistics
-    ///           2. Re-check: are files now non-overlapping + ordering valid?
-    ///              YES → upgrade to Exact → SortExec removed
-    ///              NO  → Inexact (files reordered but Sort stays)
+    ///           1. Sort files within each group by min/max statistics
+    ///           2. Re-check: non-overlapping + ordering valid?
+    ///              YES → Exact → SortExec removed
+    ///              NO  → Inexact (files reordered, Sort stays)
     /// ```
-    ///
-    /// # Note on multi-partition plans
-    ///
-    /// In the default configuration, `EnforceDistribution` byte-range splits
-    /// files into single-file groups before `PushdownSort` runs. Single-file
-    /// groups pass `validated_output_ordering()` trivially, so `EnforceSorting`
-    /// already eliminates `SortExec`. In this case, `PushdownSort` finds no
-    /// `SortExec` and does nothing.
     fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],

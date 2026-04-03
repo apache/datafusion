@@ -37,11 +37,14 @@
 //!
 //! ## Capabilities
 //!
-//! - **Statistics-based file sorting + sort elimination**: when files within a
-//!   partition are non-overlapping and internally sorted but listed in wrong order,
-//!   sort them by min/max statistics to fix the ordering. After sorting, the
-//!   ordering becomes valid and `SortExec` can be removed entirely. Also preserves
+//! - **Sort elimination**: when a data source's natural ordering satisfies the
+//!   request, return `Exact` and remove the `SortExec` entirely. Preserves
 //!   `fetch` (LIMIT) from the eliminated `SortExec` for early termination.
+//! - **Statistics-based file sorting**: sort files within each partition by
+//!   min/max statistics. When files are non-overlapping but listed in wrong
+//!   order (e.g., alphabetical order ≠ sort key order), this fixes the ordering
+//!   and enables sort elimination. Works for both single-partition and
+//!   multi-partition plans with multi-file groups.
 //! - **Reverse scan optimization**: when required sort is the reverse of the data source's
 //!   natural ordering, enable reverse scanning (reading row groups in reverse order)
 //! - **Prefix matching**: if data has ordering [A DESC, B ASC] and query needs
