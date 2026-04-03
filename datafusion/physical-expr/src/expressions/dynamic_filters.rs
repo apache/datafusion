@@ -30,14 +30,14 @@ use datafusion_physical_expr_common::physical_expr::DynHash;
 
 /// Identifies which kind of operator produced a [`DynamicFilterPhysicalExpr`].
 ///
-/// This is used by operators like [`BufferExec`] to decide whether it is safe
+/// This is used by operators like `BufferExec` to decide whether it is safe
 /// to wait for a dynamic filter to complete before starting execution.
 /// Only [`ProducerKind::HashJoin`] filters are guaranteed to be fully populated
 /// before the probe side starts, making them safe to wait on.
 /// [`ProducerKind::TopK`] and [`ProducerKind::Aggregate`] filters are populated
 /// incrementally during execution and waiting on them would cause a deadlock.
 ///
-/// [`BufferExec`]: datafusion_physical_plan::buffer::BufferExec
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProducerKind {
     /// Produced by a hash join build side. Safe to wait on — fully populated before probe starts.
