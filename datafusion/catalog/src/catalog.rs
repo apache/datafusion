@@ -105,11 +105,7 @@ use datafusion_common::not_impl_err;
 /// [`UnityCatalogProvider`]: https://github.com/delta-io/delta-rs/blob/951436ecec476ce65b5ed3b58b50fb0846ca7b91/crates/deltalake-core/src/data_catalog/unity/datafusion.rs#L111-L123
 ///
 /// [`TableProvider`]: crate::TableProvider
-pub trait CatalogProvider: Debug + Sync + Send {
-    /// Returns the catalog provider as [`Any`]
-    /// so that it can be downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait CatalogProvider: Any + Debug + Sync + Send {
     /// Retrieves the list of available schema names in this catalog.
     fn schema_names(&self) -> Vec<String>;
 
@@ -149,6 +145,26 @@ pub trait CatalogProvider: Debug + Sync + Send {
         _cascade: bool,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         not_impl_err!("Deregistering new schemas is not supported")
+    }
+}
+
+impl dyn CatalogProvider {
+    /// Returns `true` if the catalog provider is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn CatalogProvider>` via auto-deref.
+    pub fn is<T: CatalogProvider>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this catalog provider to a concrete type `T`,
+    /// returning `None` if the provider is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn CatalogProvider>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: CatalogProvider>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
     }
 }
 

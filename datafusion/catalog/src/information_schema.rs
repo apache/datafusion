@@ -1482,10 +1482,6 @@ mod tests {
     }
 
     impl CatalogProvider for Fixture {
-        fn as_any(&self) -> &dyn std::any::Any {
-            unimplemented!("not required for these tests")
-        }
-
         fn schema_names(&self) -> Vec<String> {
             vec!["aschema".to_string()]
         }

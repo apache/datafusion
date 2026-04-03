@@ -91,10 +91,6 @@ impl DynamicObjectStoreCatalogProvider {
 }
 
 impl CatalogProvider for DynamicObjectStoreCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.inner.schema_names()
     }

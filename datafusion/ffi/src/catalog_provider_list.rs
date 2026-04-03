@@ -112,7 +112,7 @@ unsafe extern "C" fn register_catalog_fn_wrapper(
     unsafe {
         let runtime = provider.runtime();
         let inner_provider = provider.inner();
-        let catalog: Arc<dyn CatalogProvider + Send> = catalog.into();
+        let catalog: Arc<dyn CatalogProvider> = catalog.into();
 
         inner_provider
             .register_catalog(name.into(), catalog)
@@ -273,8 +273,7 @@ impl CatalogProviderList for ForeignCatalogProviderList {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         unsafe {
-            let catalog = match catalog.as_any().downcast_ref::<ForeignCatalogProvider>()
-            {
+            let catalog = match catalog.downcast_ref::<ForeignCatalogProvider>() {
                 Some(s) => &s.0,
                 None => &FFI_CatalogProvider::new_with_ffi_codec(
                     catalog,

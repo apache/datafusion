@@ -233,10 +233,6 @@ pub struct MemoryCatalogProvider {
 }
 
 impl CatalogProvider for MemoryCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.schemas.iter().map(|s| s.key().clone()).collect()
     }

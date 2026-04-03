@@ -111,10 +111,6 @@ struct ResolvedCatalogProvider {
     cached_schemas: HashMap<String, Arc<dyn SchemaProvider>>,
 }
 impl CatalogProvider for ResolvedCatalogProvider {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.cached_schemas.keys().cloned().collect()
     }

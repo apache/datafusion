@@ -87,10 +87,6 @@ impl DynamicFileCatalogProvider {
 }
 
 impl CatalogProvider for DynamicFileCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.inner.schema_names()
     }
