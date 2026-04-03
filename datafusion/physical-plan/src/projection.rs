@@ -51,7 +51,6 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
-use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
@@ -1082,14 +1081,11 @@ fn try_unifying_projections(
 /// Collect all column indices from the given projection expressions.
 fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
     // Collect column indices in a deterministic order that preserves the
-    // projection's column ordering when possible. For simple Column
-    // expressions, we use the column index directly (preserving the
-    // projection's desired output order). For complex expressions with
-    // multiple column references, we sort indices for determinism since
-    // collect_columns returns a HashSet with non-deterministic iteration.
+    // projection's column ordering. For simple Column expressions, we use
+    // the column index directly. For complex expressions, we walk the
+    // expression tree to collect column references in traversal order.
     // This allows the embedded projection to match the desired output
-    // column order for simple column reorderings, avoiding a residual
-    // ProjectionExec.
+    // column order, avoiding a residual ProjectionExec.
     let mut seen = std::collections::HashSet::new();
     let mut indices = Vec::new();
     for proj_expr in exprs {
@@ -1099,18 +1095,20 @@ fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
                 indices.push(col.index());
             }
         } else {
-            // Complex expression: collect all referenced columns in sorted
-            // order for determinism.
-            let mut expr_indices: Vec<usize> = collect_columns(&proj_expr.expr)
-                .into_iter()
-                .map(|c| c.index())
-                .collect();
-            expr_indices.sort();
-            for idx in expr_indices {
-                if seen.insert(idx) {
-                    indices.push(idx);
-                }
-            }
+            // Complex expression: collect all referenced columns in
+            // expression tree traversal order (deterministic) to preserve
+            // the natural ordering of column references.
+            proj_expr
+                .expr
+                .apply(|expr| {
+                    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                        if seen.insert(col.index()) {
+                            indices.push(col.index());
+                        }
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+                .expect("closure always returns OK");
         }
     }
     indices
@@ -1226,7 +1224,8 @@ mod tests {
             expr,
             alias: "b-(1+a)".to_string(),
         }]);
-        assert_eq!(column_indices, vec![1, 7]);
+        // Tree traversal order: b@7 is visited before a@1
+        assert_eq!(column_indices, vec![7, 1]);
         Ok(())
     }
 
