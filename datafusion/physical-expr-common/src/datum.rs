@@ -89,14 +89,21 @@ pub fn apply_arithmetic(
     let f = arithmetic_op_to_fn(op);
     match (lhs, rhs) {
         (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
-            // Try in-place on left array with right array values
+            // Try in-place on left array, then right array
             match try_apply_inplace_array(left, &right, op) {
                 Ok(result) => Ok(ColumnarValue::Array(result)),
-                Err(left) => Ok(ColumnarValue::Array(f(&left, &right)?)),
+                Err(left) => match try_apply_inplace_array_rhs(&left, right, op) {
+                    Ok(result) => Ok(ColumnarValue::Array(result)),
+                    Err(right) => Ok(ColumnarValue::Array(f(&left, &right)?)),
+                },
             }
         }
         (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
-            Ok(ColumnarValue::Array(f(&left.to_scalar()?, &right)?))
+            // Try in-place on right array with scalar left (flipped)
+            match try_apply_inplace_scalar_rhs(right, &left, op) {
+                Ok(result) => Ok(ColumnarValue::Array(result)),
+                Err(right) => Ok(ColumnarValue::Array(f(&left.to_scalar()?, &right)?)),
+            }
         }
         (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
             // Try in-place on left array with scalar right
@@ -129,6 +136,110 @@ fn arithmetic_op_to_fn(
     }
 }
 
+/// Dispatches an in-place unary (array op scalar) operation across all supported primitive types.
+/// `$arr` is the ArrayRef, `$scalar_value` is the &ScalarValue, `$op` is ArithmeticOp,
+/// `$fn_name` is the function to call (try_inplace_unary or try_inplace_unary_rhs).
+macro_rules! dispatch_inplace_unary {
+    ($arr:expr, $scalar_value:expr, $op:expr, $fn_name:ident) => {{
+        macro_rules! do_dispatch {
+            ($arrow_type:ty, $arr_inner:expr) => {{
+                let scalar_val = $scalar_value
+                    .to_scalar()
+                    .map_err(|_| Arc::clone(&$arr_inner))?;
+                let scalar_arr = scalar_val.get().0;
+                let rhs_val = scalar_arr
+                    .as_any()
+                    .downcast_ref::<PrimitiveArray<$arrow_type>>()
+                    .ok_or_else(|| Arc::clone(&$arr_inner))?
+                    .value(0);
+                $fn_name::<$arrow_type>($arr_inner, rhs_val, $op)
+            }};
+        }
+        match $arr.data_type() {
+            dt if dt == &<Int8Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(Int8Type, $arr)
+            }
+            dt if dt == &<Int16Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(Int16Type, $arr)
+            }
+            dt if dt == &<Int32Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(Int32Type, $arr)
+            }
+            dt if dt == &<Int64Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(Int64Type, $arr)
+            }
+            dt if dt == &<UInt8Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(UInt8Type, $arr)
+            }
+            dt if dt == &<UInt16Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(UInt16Type, $arr)
+            }
+            dt if dt == &<UInt32Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(UInt32Type, $arr)
+            }
+            dt if dt == &<UInt64Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(UInt64Type, $arr)
+            }
+            dt if dt == &<Float16Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(Float16Type, $arr)
+            }
+            dt if dt == &<Float32Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(Float32Type, $arr)
+            }
+            dt if dt == &<Float64Type as ArrowPrimitiveType>::DATA_TYPE => {
+                do_dispatch!(Float64Type, $arr)
+            }
+            // Decimal types excluded: result precision/scale differs from input
+            _ => Err($arr),
+        }
+    }};
+}
+
+/// Dispatches an in-place binary (array op array) operation across all supported primitive types.
+/// `$arr` is the ArrayRef to mutate, `$other` is the other ArrayRef, `$op` is ArithmeticOp,
+/// `$fn_name` is the function to call (try_inplace_binary or try_inplace_binary_rhs).
+macro_rules! dispatch_inplace_binary {
+    ($arr:expr, $other:expr, $op:expr, $fn_name:ident) => {{
+        match $arr.data_type() {
+            dt if dt == &<Int8Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<Int8Type>($arr, $other, $op)
+            }
+            dt if dt == &<Int16Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<Int16Type>($arr, $other, $op)
+            }
+            dt if dt == &<Int32Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<Int32Type>($arr, $other, $op)
+            }
+            dt if dt == &<Int64Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<Int64Type>($arr, $other, $op)
+            }
+            dt if dt == &<UInt8Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<UInt8Type>($arr, $other, $op)
+            }
+            dt if dt == &<UInt16Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<UInt16Type>($arr, $other, $op)
+            }
+            dt if dt == &<UInt32Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<UInt32Type>($arr, $other, $op)
+            }
+            dt if dt == &<UInt64Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<UInt64Type>($arr, $other, $op)
+            }
+            dt if dt == &<Float16Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<Float16Type>($arr, $other, $op)
+            }
+            dt if dt == &<Float32Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<Float32Type>($arr, $other, $op)
+            }
+            dt if dt == &<Float64Type as ArrowPrimitiveType>::DATA_TYPE => {
+                $fn_name::<Float64Type>($arr, $other, $op)
+            }
+            // Decimal types excluded: result precision/scale differs from input
+            _ => Err($arr),
+        }
+    }};
+}
+
 /// Try to apply arithmetic in-place on `left` array with a scalar `right`.
 /// Returns `Ok(result)` on success, or `Err(left)` if in-place not possible.
 fn try_apply_inplace_scalar(
@@ -139,40 +250,7 @@ fn try_apply_inplace_scalar(
     if right.is_null() {
         return Err(left);
     }
-    macro_rules! dispatch_inplace_scalar {
-        ($($arrow_type:ident),*) => {
-            match left.data_type() {
-                $(
-                    dt if dt == &<$arrow_type as ArrowPrimitiveType>::DATA_TYPE => {
-                        let scalar_val = right
-                            .to_scalar()
-                            .map_err(|_| Arc::clone(&left))?;
-                        let scalar_arr = scalar_val.get().0;
-                        let rhs_val = scalar_arr
-                            .as_any()
-                            .downcast_ref::<PrimitiveArray<$arrow_type>>()
-                            .ok_or_else(|| Arc::clone(&left))?
-                            .value(0);
-                        try_inplace_unary::<$arrow_type>(left, rhs_val, op)
-                    }
-                )*
-                _ => Err(left),
-            }
-        };
-    }
-    dispatch_inplace_scalar!(
-        Int8Type,
-        Int16Type,
-        Int32Type,
-        Int64Type,
-        UInt8Type,
-        UInt16Type,
-        UInt32Type,
-        UInt64Type,
-        Float16Type,
-        Float32Type,
-        Float64Type
-    )
+    dispatch_inplace_unary!(left, right, op, try_inplace_unary)
 }
 
 /// Try to apply arithmetic in-place on `left` array using values from `right` array.
@@ -185,31 +263,7 @@ fn try_apply_inplace_array(
     if left.data_type() != right.data_type() {
         return Err(left);
     }
-    macro_rules! dispatch_inplace_array {
-        ($($arrow_type:ident),*) => {
-            match left.data_type() {
-                $(
-                    dt if dt == &<$arrow_type as ArrowPrimitiveType>::DATA_TYPE => {
-                        try_inplace_binary::<$arrow_type>(left, right, op)
-                    }
-                )*
-                _ => Err(left),
-            }
-        };
-    }
-    dispatch_inplace_array!(
-        Int8Type,
-        Int16Type,
-        Int32Type,
-        Int64Type,
-        UInt8Type,
-        UInt16Type,
-        UInt32Type,
-        UInt64Type,
-        Float16Type,
-        Float32Type,
-        Float64Type
-    )
+    dispatch_inplace_binary!(left, right, op, try_inplace_binary)
 }
 
 /// Attempt in-place unary (array op scalar) mutation on a PrimitiveArray.
@@ -303,6 +357,132 @@ where
     let result = builder.finish();
     if right_primitive.nulls().is_some() {
         let merged = NullBuffer::union(result.nulls(), right_primitive.nulls());
+        let result = PrimitiveArray::<T>::new(result.values().clone(), merged);
+        Ok(Arc::new(result))
+    } else {
+        Ok(Arc::new(result))
+    }
+}
+
+/// Try to apply arithmetic in-place on `right` array with a scalar `left`.
+/// The operation is `result[i] = op(scalar_left, right[i])`, stored in `right`'s buffer.
+/// Returns `Ok(result)` on success, or `Err(right)` if in-place not possible.
+fn try_apply_inplace_scalar_rhs(
+    right: ArrayRef,
+    left: &ScalarValue,
+    op: ArithmeticOp,
+) -> Result<ArrayRef, ArrayRef> {
+    if left.is_null() {
+        return Err(right);
+    }
+    dispatch_inplace_unary!(right, left, op, try_inplace_unary_rhs)
+}
+
+/// Try to apply arithmetic in-place on `right` array using values from `left` array.
+/// The operation is `result[i] = op(left[i], right[i])`, stored in `right`'s buffer.
+/// Returns `Ok(result)` on success, or `Err(right)` if in-place not possible.
+fn try_apply_inplace_array_rhs(
+    left: &ArrayRef,
+    right: ArrayRef,
+    op: ArithmeticOp,
+) -> Result<ArrayRef, ArrayRef> {
+    if left.data_type() != right.data_type() {
+        return Err(right);
+    }
+    dispatch_inplace_binary!(right, left, op, try_inplace_binary_rhs)
+}
+
+/// Attempt in-place mutation on the right PrimitiveArray: result[i] = op(scalar, right[i]).
+fn try_inplace_unary_rhs<T: ArrowPrimitiveType>(
+    array: ArrayRef,
+    scalar: T::Native,
+    op: ArithmeticOp,
+) -> Result<ArrayRef, ArrayRef>
+where
+    T::Native: ArrowNativeTypeOp,
+{
+    let primitive = array
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .ok_or_else(|| Arc::clone(&array))?
+        .clone();
+    drop(array);
+
+    // For right-side mutation: result = op(scalar, element)
+    // Commutative ops: same as op(element, scalar)
+    // Non-commutative: need reversed argument order
+    type BinFn<N> = fn(N, N) -> N;
+    let op_fn: Option<BinFn<T::Native>> = match op {
+        ArithmeticOp::AddWrapping => Some(ArrowNativeTypeOp::add_wrapping),
+        ArithmeticOp::MulWrapping => Some(ArrowNativeTypeOp::mul_wrapping),
+        ArithmeticOp::SubWrapping => Some(ArrowNativeTypeOp::sub_wrapping),
+        ArithmeticOp::Rem if !scalar.is_zero() => Some(ArrowNativeTypeOp::mod_wrapping),
+        _ => None,
+    };
+
+    let Some(op_fn) = op_fn else {
+        return Err(Arc::new(primitive));
+    };
+
+    // Note: op(scalar, v) — scalar is the left operand
+    match primitive.unary_mut(|v| op_fn(scalar, v)) {
+        Ok(result) => Ok(Arc::new(result)),
+        Err(arr) => Err(Arc::new(arr)),
+    }
+}
+
+/// Attempt in-place mutation on the right PrimitiveArray: result[i] = op(left[i], right[i]).
+/// Note: parameter order is (right_owned, left_ref) to match the dispatch_inplace_binary macro.
+fn try_inplace_binary_rhs<T: ArrowPrimitiveType>(
+    right: ArrayRef,
+    left: &ArrayRef,
+    op: ArithmeticOp,
+) -> Result<ArrayRef, ArrayRef>
+where
+    T::Native: ArrowNativeTypeOp,
+{
+    let left_primitive = left
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .ok_or_else(|| Arc::clone(&right))?;
+
+    let right_primitive = right
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .ok_or_else(|| Arc::clone(&right))?
+        .clone();
+    drop(right);
+
+    let mut builder = match right_primitive.into_builder() {
+        Ok(b) => b,
+        Err(arr) => return Err(Arc::new(arr)),
+    };
+
+    type BinFn<N> = fn(N, N) -> N;
+    let op_fn: Option<BinFn<T::Native>> = match op {
+        ArithmeticOp::AddWrapping => Some(ArrowNativeTypeOp::add_wrapping),
+        ArithmeticOp::SubWrapping => Some(ArrowNativeTypeOp::sub_wrapping),
+        ArithmeticOp::MulWrapping => Some(ArrowNativeTypeOp::mul_wrapping),
+        _ => None,
+    };
+
+    let Some(op_fn) = op_fn else {
+        return Err(Arc::new(builder.finish()));
+    };
+
+    let right_slice = builder.values_slice_mut();
+    let left_values = left_primitive.values();
+
+    // Note: op(left[i], right[i]) — left is the first operand
+    right_slice
+        .iter_mut()
+        .zip(left_values.iter())
+        .for_each(|(r, l)| *r = op_fn(*l, *r));
+
+    // Merge null buffers from both sides
+    let result = builder.finish();
+    if left_primitive.nulls().is_some() {
+        let merged = NullBuffer::union(result.nulls(), left_primitive.nulls());
         let result = PrimitiveArray::<T>::new(result.values().clone(), merged);
         Ok(Arc::new(result))
     } else {
