@@ -1101,10 +1101,10 @@ fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
             proj_expr
                 .expr
                 .apply(|expr| {
-                    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                        if seen.insert(col.index()) {
-                            indices.push(col.index());
-                        }
+                    if let Some(col) = expr.as_any().downcast_ref::<Column>()
+                        && seen.insert(col.index())
+                    {
+                        indices.push(col.index());
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
