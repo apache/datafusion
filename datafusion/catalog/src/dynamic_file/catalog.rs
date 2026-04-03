@@ -19,7 +19,6 @@
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -42,10 +41,6 @@ impl DynamicFileCatalog {
 }
 
 impl CatalogProviderList for DynamicFileCatalog {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,

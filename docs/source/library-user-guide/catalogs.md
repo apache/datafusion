@@ -285,10 +285,6 @@ pub struct MemoryCatalogProviderList {
 }
 
 impl CatalogProviderList for MemoryCatalogProviderList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,

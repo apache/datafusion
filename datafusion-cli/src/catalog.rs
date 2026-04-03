@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::{Arc, Weak};
 
 use crate::object_storage::{AwsOptions, GcpOptions, get_object_store};
@@ -50,10 +49,6 @@ impl DynamicObjectStoreCatalog {
 }
 
 impl CatalogProviderList for DynamicObjectStoreCatalog {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,

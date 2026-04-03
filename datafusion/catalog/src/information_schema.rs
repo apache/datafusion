@@ -1460,10 +1460,6 @@ mod tests {
     }
 
     impl CatalogProviderList for Fixture {
-        fn as_any(&self) -> &dyn std::any::Any {
-            unimplemented!("not required for these tests")
-        }
-
         fn register_catalog(
             &self,
             _: String,

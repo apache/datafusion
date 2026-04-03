@@ -25,7 +25,6 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -197,10 +196,6 @@ impl Default for FixedCatalogProviderList {
 }
 
 impl CatalogProviderList for FixedCatalogProviderList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn catalog_names(&self) -> Vec<String> {
         self.inner.catalog_names()
     }

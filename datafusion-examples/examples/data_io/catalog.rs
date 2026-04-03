@@ -32,7 +32,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use std::sync::RwLock;
-use std::{any::Any, collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 use std::{fs::File, io::Write};
 use tempfile::TempDir;
 
@@ -269,10 +269,6 @@ impl CustomCatalogProviderList {
 }
 
 impl CatalogProviderList for CustomCatalogProviderList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,

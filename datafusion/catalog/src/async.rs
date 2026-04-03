@@ -152,10 +152,6 @@ struct ResolvedCatalogProviderList {
     cached_catalogs: HashMap<String, Arc<dyn CatalogProvider>>,
 }
 impl CatalogProviderList for ResolvedCatalogProviderList {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         _name: String,
