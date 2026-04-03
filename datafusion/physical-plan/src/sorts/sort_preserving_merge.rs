@@ -29,8 +29,8 @@ use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
-    check_if_same_properties,
+    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics, check_if_same_properties,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -452,27 +452,23 @@ impl LazySortPreservingMergeStream {
 
         let receivers = (0..input_partitions)
             .map(|partition| {
-                let stream =
-                    self.input.execute(partition, Arc::clone(&self.context))?;
+                let stream = self.input.execute(partition, Arc::clone(&self.context))?;
                 Ok(spawn_buffered(stream, 1))
             })
             .collect::<Result<_>>()?;
 
-        debug!(
-            "Done setting up sender-receiver for SortPreservingMergeExec::execute"
-        );
+        debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
         // Take reservation out of self via mem::replace to pass ownership
         let reservation = std::mem::replace(
             &mut self.reservation,
-            MemoryConsumer::new("empty").register(
-                &self.context.runtime_env().memory_pool,
-            ),
+            MemoryConsumer::new("empty")
+                .register(&self.context.runtime_env().memory_pool),
         );
 
         let result = StreamingMergeBuilder::new()
             .with_streams(receivers)
-            .with_schema(self.schema.clone())
+            .with_schema(Arc::clone(&self.schema))
             .with_expressions(&self.expr)
             .with_metrics(self.metrics.clone())
             .with_batch_size(self.batch_size)
@@ -481,9 +477,7 @@ impl LazySortPreservingMergeStream {
             .with_round_robin_tie_breaker(self.enable_round_robin_repartition)
             .build()?;
 
-        debug!(
-            "Got stream result from SortPreservingMergeStream::new_from_receivers"
-        );
+        debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
 
         self.state = LazySPMState::Running(result);
         match &mut self.state {
@@ -495,7 +489,7 @@ impl LazySortPreservingMergeStream {
 
 impl RecordBatchStream for LazySortPreservingMergeStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
