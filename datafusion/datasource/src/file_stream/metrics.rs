@@ -52,20 +52,27 @@ pub struct FileStreamMetrics {
     ///
     /// Time between when [`FileOpener::open`] is called and when the
     /// [`FileStream`] receives a stream for reading.
-    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
+    ///
+    /// [`FileStream`]: crate::file_stream::FileStream
+    /// [`FileOpener::open`]: crate::file_stream::FileOpener::open
     pub time_opening: StartableTime,
     /// Wall clock time elapsed for file scanning + first record batch of decompression + decoding
     ///
     /// Time between when the [`FileStream`] requests data from the
-    /// stream and when the first [`arrow::record_batch::RecordBatch`] is produced.
-    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
+    /// stream and when the first [`RecordBatch`] is produced.
+    ///
+    /// [`FileStream`]: crate::file_stream::FileStream
+    /// [`RecordBatch`]: arrow::record_batch::RecordBatch
     pub time_scanning_until_data: StartableTime,
     /// Total elapsed wall clock time for scanning + record batch decompression / decoding
     ///
     /// Sum of time between when the [`FileStream`] requests data from
-    /// the stream and when a [`arrow::record_batch::RecordBatch`] is produced for all
+    /// the stream and when a [`RecordBatch`] is produced for all
     /// record batches in the stream. Note that this metric also
     /// includes the time of the parent operator's execution.
+    ///
+    /// [`FileStream`]: crate::file_stream::FileStream
+    /// [`RecordBatch`]: arrow::record_batch::RecordBatch
     pub time_scanning_total: StartableTime,
     /// Wall clock time elapsed for data decompression + decoding
     ///
