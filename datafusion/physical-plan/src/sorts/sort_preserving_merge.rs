@@ -361,7 +361,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .map(|partition| {
                         let stream =
                             self.input.execute(partition, Arc::clone(&context))?;
-                        Ok(spawn_buffered(stream, 1))
+                        Ok(spawn_buffered(stream, 16))
                     })
                     .collect::<Result<_>>()?;
 
