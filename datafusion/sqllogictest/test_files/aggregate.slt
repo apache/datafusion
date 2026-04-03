@@ -125,6 +125,36 @@ CREATE TABLE group_median_table_nullable (
 ( 'group1', 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100,  101,   4294967294, arrow_cast(100,'UInt64'), 3.2,  5.5,   arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
 ( 'group1', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255,  65535, 4294967295, 18446744073709551615,     2.2,  2.2,   arrow_cast('NAN','Float64'), 0.0005, 0.0005 )
 
+query R
+select quantile_cont(col0, 0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+2.5
+
+query R
+select quantile_cont(col0, 0.75 order by col0 desc)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+1.5
+
+query R
+select quantile_cont(0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+2.5
+
+query R
+select quantile_cont(0.75 order by col0 desc)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+1.5
+
+query R
+select quantile_cont(0.75) within group (order by col0)
+from values (1), (2), (3) t(col0);
+----
+2.5
+
 #######
 # Error tests
 #######

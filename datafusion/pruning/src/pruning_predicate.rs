@@ -2158,6 +2158,7 @@ mod tests {
         }
 
         /// Add contained information.
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
         pub fn with_contained(
             mut self,
             values: impl IntoIterator<Item = ScalarValue>,
@@ -2172,6 +2173,7 @@ mod tests {
         }
 
         /// get any contained information for the specified values
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
         fn contained(&self, find_values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
             // find the one with the matching values
             self.contained

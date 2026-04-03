@@ -100,8 +100,7 @@ impl AsyncFuncExpr {
     /// Return the ideal batch size for this function
     pub fn ideal_batch_size(&self) -> Result<Option<usize>> {
         if let Some(expr) = self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
-            && let Some(udf) =
-                (expr.fun().inner().as_ref() as &dyn Any).downcast_ref::<AsyncScalarUDF>()
+            && let Some(udf) = expr.fun().inner().downcast_ref::<AsyncScalarUDF>()
         {
             return Ok(udf.ideal_batch_size());
         }
@@ -125,7 +124,9 @@ impl AsyncFuncExpr {
             );
         };
 
-        let Some(async_udf) = (scalar_function_expr.fun().inner().as_ref() as &dyn Any)
+        let Some(async_udf) = scalar_function_expr
+            .fun()
+            .inner()
             .downcast_ref::<AsyncScalarUDF>()
         else {
             return not_impl_err!(

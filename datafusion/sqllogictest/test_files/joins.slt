@@ -4020,13 +4020,12 @@ logical_plan
 02)--SubqueryAlias: t1
 03)----TableScan: join_t1 projection=[t1_id, t1_name]
 04)--SubqueryAlias: series
-05)----Subquery:
-06)------Projection: UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int))) AS i
-07)--------Subquery:
-08)----------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int)))
-09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))|depth=1] structs[]
-10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))
-11)----------------EmptyRelation: rows=1
+05)----Projection: UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int))) AS i
+06)------Subquery:
+07)--------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int)))
+08)----------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))|depth=1] structs[]
+09)------------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))
+10)--------------EmptyRelation: rows=1
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true }, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
 
 
@@ -4045,13 +4044,12 @@ logical_plan
 02)--SubqueryAlias: t2
 03)----TableScan: join_t1 projection=[t1_id, t1_name]
 04)--SubqueryAlias: series
-05)----Subquery:
-06)------Projection: UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int))) AS i
-07)--------Subquery:
-08)----------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int)))
-09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))|depth=1] structs[]
-10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))
-11)----------------EmptyRelation: rows=1
+05)----Projection: UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int))) AS i
+06)------Subquery:
+07)--------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int)))
+08)----------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))|depth=1] structs[]
+09)------------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))
+10)--------------EmptyRelation: rows=1
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true }, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
 
 
@@ -4635,31 +4633,40 @@ query TT
 explain SELECT j1_string, j2_string FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2;
 ----
 logical_plan
-01)Cross Join:
-02)--TableScan: j1 projection=[j1_string]
-03)--SubqueryAlias: j2
-04)----Projection: j2.j2_string
-05)------Subquery:
-06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
-07)----------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+01)Projection: j1.j1_string, j2.j2_string
+02)--Inner Join:  Filter: j1.j1_id < j2.j2_id
+03)----TableScan: j1 projection=[j1_string, j1_id]
+04)----SubqueryAlias: j2
+05)------TableScan: j2 projection=[j2_string, j2_id]
+physical_plan
+01)NestedLoopJoinExec: join_type=Inner, filter=j1_id@0 < j2_id@1, projection=[j1_string@0, j2_string@2]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
 explain SELECT * FROM j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id), LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4
 ----
 logical_plan
-01)Cross Join:
+01)Inner Join: j2.j2_string = j4.j3_string
 02)--Inner Join: CAST(j2.j2_id AS Int64) = CAST(j3.j3_id AS Int64) - Int64(2)
 03)----Inner Join: j1.j1_id = j2.j2_id
 04)------TableScan: j1 projection=[j1_string, j1_id]
 05)------TableScan: j2 projection=[j2_string, j2_id]
 06)----TableScan: j3 projection=[j3_string, j3_id]
 07)--SubqueryAlias: j4
-08)----Subquery:
-09)------Filter: j3.j3_string = outer_ref(j2.j2_string)
-10)--------TableScan: j3 projection=[j3_string, j3_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j2_string", data_type: Utf8View, nullable: true }, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
+08)----TableScan: j3 projection=[j3_string, j3_id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(j2_string@2, j3_string@0)]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(j2.j2_id AS Int64)@4, j3.j3_id - Int64(2)@2)], projection=[j1_string@0, j1_id@1, j2_string@2, j2_id@3, j3_string@5, j3_id@6]
+03)----ProjectionExec: expr=[j1_string@0 as j1_string, j1_id@1 as j1_id, j2_string@2 as j2_string, j2_id@3 as j2_id, CAST(j2_id@3 AS Int64) as CAST(j2.j2_id AS Int64)]
+04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(j1_id@1, j2_id@1)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[0]
+06)--------DataSourceExec: partitions=1, partition_sizes=[0]
+07)----ProjectionExec: expr=[j3_string@0 as j3_string, j3_id@1 as j3_id, CAST(j3_id@1 AS Int64) - 2 as j3.j3_id - Int64(2)]
+08)------DataSourceExec: partitions=1, partition_sizes=[0]
+09)--DataSourceExec: partitions=1, partition_sizes=[0]
 
+# Nested LATERAL: each level only references siblings, no skip-level correlation.
 query TT
 explain SELECT * FROM j1, LATERAL (SELECT * FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id = j2_id) as j2) as j2;
 ----
@@ -4667,14 +4674,16 @@ logical_plan
 01)Cross Join:
 02)--TableScan: j1 projection=[j1_string, j1_id]
 03)--SubqueryAlias: j2
-04)----Subquery:
-05)------Cross Join:
-06)--------TableScan: j1 projection=[j1_string, j1_id]
-07)--------SubqueryAlias: j2
-08)----------Subquery:
-09)------------Filter: outer_ref(j1.j1_id) = j2.j2_id
-10)--------------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+04)----Inner Join: j1.j1_id = j2.j2_id
+05)------TableScan: j1 projection=[j1_string, j1_id]
+06)------SubqueryAlias: j2
+07)--------TableScan: j2 projection=[j2_string, j2_id]
+physical_plan
+01)CrossJoinExec
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(j1_id@1, j2_id@1)]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+05)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
 explain SELECT j1_string, j2_string FROM j1 LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);
@@ -5425,7 +5434,7 @@ statement count 0
 DROP TABLE issue_20437_large;
 
 # Test count(*) with right semi/anti joins returns correct row counts
-# issue: https://github.com/apache/datafusion/issues/20669 
+# issue: https://github.com/apache/datafusion/issues/20669
 
 statement ok
 CREATE TABLE t1 (k INT, v INT);
@@ -5465,7 +5474,7 @@ FROM t;
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

@@ -100,10 +100,6 @@ impl ExecutionPlan for CustomExec {
         "CustomExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.projected_schema.clone()
     }
@@ -229,10 +225,6 @@ The `scan` method of the `TableProvider` returns a `Result<Arc<dyn ExecutionPlan
 # impl ExecutionPlan for CustomExec {
 #     fn name(&self) -> &str {
 #         "CustomExec"
-#     }
-#
-#     fn as_any(&self) -> &dyn Any {
-#         self
 #     }
 #
 #     fn schema(&self) -> SchemaRef {
@@ -429,10 +421,6 @@ This will allow you to use the custom table provider in DataFusion. For example,
 # impl ExecutionPlan for CustomExec {
 #     fn name(&self) -> &str {
 #         "CustomExec"
-#     }
-#
-#     fn as_any(&self) -> &dyn Any {
-#         self
 #     }
 #
 #     fn schema(&self) -> SchemaRef {
