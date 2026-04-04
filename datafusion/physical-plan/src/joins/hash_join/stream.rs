@@ -406,6 +406,21 @@ impl HashJoinStream {
         }
     }
 
+    /// Returns the next state after the build side has been fully collected
+    /// and any required build-side coordination has completed.
+    fn state_after_build_ready(
+        join_type: JoinType,
+        left_data: &JoinLeftData,
+    ) -> HashJoinStreamState {
+        if left_data.map().is_empty()
+            && join_type.empty_build_side_produces_empty_result()
+        {
+            HashJoinStreamState::Completed
+        } else {
+            HashJoinStreamState::FetchProbeBatch
+        }
+    }
+
     /// Separate implementation function that unpins the [`HashJoinStream`] so
     /// that partial borrows work correctly
     fn poll_next_impl(
@@ -469,7 +484,9 @@ impl HashJoinStream {
         if let Some(ref mut fut) = self.build_waiter {
             ready!(fut.get_shared(cx))?;
         }
-        self.state = HashJoinStreamState::FetchProbeBatch;
+        let build_side = self.build_side.try_as_ready()?;
+        self.state =
+            Self::state_after_build_ready(self.join_type, build_side.left_data.as_ref());
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
@@ -540,7 +557,8 @@ impl HashJoinStream {
             }));
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;
         } else {
-            self.state = HashJoinStreamState::FetchProbeBatch;
+            self.state =
+                Self::state_after_build_ready(self.join_type, left_data.as_ref());
         }
 
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
@@ -643,10 +661,14 @@ impl HashJoinStream {
             }
         }
 
-        // if the left side is empty, we can skip the (potentially expensive) join operation
+        // If the build side is empty, this stream only reaches ProcessProbeBatch for
+        // join types whose output still depends on probe rows.
         let is_empty = build_side.left_data.map().is_empty();
 
-        if is_empty && self.filter.is_none() {
+        if is_empty {
+            // Invariant: state_after_build_ready should have already completed
+            // join types whose result is fixed to empty when the build side is empty.
+            debug_assert!(!self.join_type.empty_build_side_produces_empty_result());
             let result = build_batch_empty_build_side(
                 &self.schema,
                 build_side.left_data.batch(),
