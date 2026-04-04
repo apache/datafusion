@@ -123,6 +123,34 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     }
 }
 
+impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T>
+where
+    T::Native: HashValue,
+{
+    #[inline(always)]
+    fn find_or_insert(&mut self, key: T::Native, hash: u64, hot_full: bool) -> usize {
+        if let Some(&(g, _)) = self.hot_map.find(hash, |&(_, v)| v.is_eq(key)) {
+            return g;
+        }
+        if !self.cold_map.is_empty() {
+            if let Some(&(g, _)) = self.cold_map.find(hash, |&(_, v)| v.is_eq(key)) {
+                return g;
+            }
+        }
+        let g = self.num_groups;
+        self.num_groups += 1;
+        let state = &self.random_state;
+        if !hot_full {
+            self.hot_map
+                .insert_unique(hash, (g, key), |&(_, v)| v.hash(state));
+        } else {
+            self.cold_map
+                .insert_unique(hash, (g, key), |&(_, v)| v.hash(state));
+        }
+        g
+    }
+}
+
 impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
@@ -150,34 +178,7 @@ where
             for i in 0..len {
                 let key = values[i];
                 let hash = hashes_buffer[i];
-
-                let group_id =
-                    if let Some(&(g, _)) = self.hot_map.find(hash, |&(_, v)| v.is_eq(key)) {
-                        g
-                    } else if let Some(&(g, _)) =
-                        self.cold_map.find(hash, |&(_, v)| v.is_eq(key))
-                    {
-                        g
-                    } else {
-                        let g = self.num_groups;
-                        self.num_groups += 1;
-                        let state = &self.random_state;
-                        if !hot_full {
-                            self.hot_map.insert_unique(
-                                hash,
-                                (g, key),
-                                |&(_, v)| v.hash(state),
-                            );
-                        } else {
-                            self.cold_map.insert_unique(
-                                hash,
-                                (g, key),
-                                |&(_, v)| v.hash(state),
-                            );
-                        }
-                        g
-                    };
-                groups.push(group_id);
+                groups.push(self.find_or_insert(key, hash, hot_full));
             }
         } else {
             for i in 0..len {
@@ -190,33 +191,7 @@ where
                 } else {
                     let key = unsafe { array.value_unchecked(i) };
                     let hash = hashes_buffer[i];
-
-                    if let Some(&(g, _)) = self.hot_map.find(hash, |&(_, v)| v.is_eq(key))
-                    {
-                        g
-                    } else if let Some(&(g, _)) =
-                        self.cold_map.find(hash, |&(_, v)| v.is_eq(key))
-                    {
-                        g
-                    } else {
-                        let g = self.num_groups;
-                        self.num_groups += 1;
-                        let state = &self.random_state;
-                        if !hot_full {
-                            self.hot_map.insert_unique(
-                                hash,
-                                (g, key),
-                                |&(_, v)| v.hash(state),
-                            );
-                        } else {
-                            self.cold_map.insert_unique(
-                                hash,
-                                (g, key),
-                                |&(_, v)| v.hash(state),
-                            );
-                        }
-                        g
-                    }
+                    self.find_or_insert(key, hash, hot_full)
                 };
                 groups.push(group_id);
             }
