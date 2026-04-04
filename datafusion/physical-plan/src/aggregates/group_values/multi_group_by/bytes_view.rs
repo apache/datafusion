@@ -149,6 +149,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         let arr = array.as_byte_view::<B>();
         let null_count = array.null_count();
         let num_rows = array.len();
+        self.views.reserve(rows.len());
         let all_null_or_non_null = if null_count == 0 {
             Nulls::None
         } else if null_count == num_rows {

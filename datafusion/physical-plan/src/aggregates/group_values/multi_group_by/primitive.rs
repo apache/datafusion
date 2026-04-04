@@ -195,6 +195,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
         let null_count = array.null_count();
         let num_rows = array.len();
+        self.group_values.reserve(rows.len());
         let all_null_or_non_null = if null_count == 0 {
             Nulls::None
         } else if null_count == num_rows {
