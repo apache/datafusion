@@ -274,7 +274,6 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         let exist_view_len = exist_view as u32;
 
         let input_view = unsafe { *array.views().get_unchecked(rhs_row) };
-        let input_view_len = input_view as u32;
 
         // fast path, if we know there are no buffers, then the view must be inlined
         // so we can simply compare the u128 views
@@ -283,26 +282,20 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
 
         // The check logic
-        //   - Check len equality
-        //   - If inlined, check inlined value
-        //   - If non-inlined, check prefix and then check value in buffer
-        //     when needed
-        if exist_view_len != input_view_len {
+        // Compare length + prefix in one 64-bit comparison.
+        // View layout: len(4B) | prefix(4B) | buffer_index(4B) | offset(4B)
+        // The low 64 bits contain both length and prefix (for non-inlined)
+        // or length and first 4 value bytes (for inlined).
+        let exist_len_prefix = exist_view as u64;
+        let input_len_prefix = input_view as u64;
+        if exist_len_prefix != input_len_prefix {
             return false;
         }
 
         if exist_view_len <= 12 {
-            // both inlined, so compare inlined value
+            // both inlined, so compare full inlined value
             exist_view == input_view
         } else {
-            let exist_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
-            let input_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&input_view, 4) };
-
-            if exist_prefix != input_prefix {
-                return false;
-            }
 
             // get the full values and compare
             let exist_full = {
