@@ -20,7 +20,7 @@
 use crate::binary_map::OutputType;
 use arrow::array::NullBufferBuilder;
 use arrow::array::cast::AsArray;
-use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
+use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
@@ -114,9 +114,6 @@ impl ArrowBytesViewSet {
 /// This map is used by the special `COUNT DISTINCT` aggregate function to
 /// store the distinct values, and by the `GROUP BY` operator to store
 /// group values when they are a single string array.
-/// Max size of the in-progress buffer before flushing to completed buffers
-const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
-
 pub struct ArrowBytesViewMap<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
@@ -128,12 +125,14 @@ where
     /// Total size of the map in bytes
     map_size: usize,
 
-    /// Views for all stored values (in insertion order)
+    /// Views for all stored values (in insertion order).
+    /// For non-inline values (>12 bytes), the `buffer_index` field in each view
+    /// points into `buffers`.
     views: Vec<u128>,
-    /// In-progress buffer for out-of-line string data
-    in_progress: Vec<u8>,
-    /// Completed buffers containing string data
-    completed: Vec<Buffer>,
+    /// All buffers referenced by views. This includes both buffers adopted
+    /// from input arrays (zero-copy) and any buffers from the legacy
+    /// `in_progress` path.
+    buffers: Vec<Buffer>,
     /// Tracks null values (true = null)
     nulls: NullBufferBuilder,
 
@@ -160,8 +159,7 @@ where
             map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
             views: Vec::new(),
-            in_progress: Vec::new(),
-            completed: Vec::new(),
+            buffers: Vec::new(),
             nulls: NullBufferBuilder::new(0),
             random_state: RandomState::default(),
             hashes_buffer: vec![],
@@ -266,6 +264,12 @@ where
 
         // Get raw views buffer for direct comparison
         let input_views = values.views();
+        let input_buffers = values.data_buffers();
+
+        // Lazily register the input array's data buffers into our buffer list
+        // only when we encounter a new non-inline value. This avoids keeping
+        // references to buffers when all values already exist in the map.
+        let mut buffer_offset: Option<u32> = None;
 
         // Ensure lengths are equivalent
         assert_eq!(values.len(), self.hashes_buffer.len());
@@ -298,9 +302,7 @@ where
 
             // Check if value already exists
             let maybe_payload = {
-                // Borrow completed and in_progress for comparison
-                let completed = &self.completed;
-                let in_progress = &self.in_progress;
+                let buffers = &self.buffers;
 
                 self.map
                     .find(hash, |header| {
@@ -326,14 +328,10 @@ where
                         let offset = byte_view.offset as usize;
 
                         let stored_value = unsafe {
-                            if buffer_index < completed.len() {
-                                completed
-                                    .get_unchecked(buffer_index)
-                                    .as_slice()
-                                    .get_unchecked(offset..offset + stored_len)
-                            } else {
-                                in_progress.get_unchecked(offset..offset + stored_len)
-                            }
+                            buffers
+                                .get_unchecked(buffer_index)
+                                .as_slice()
+                                .get_unchecked(offset..offset + stored_len)
                         };
                         // Safety: i is in range and not null
                         let input_value: &[u8] =
@@ -351,8 +349,29 @@ where
                 let value: &[u8] = unsafe { values.value_unchecked(i).as_ref() };
                 let payload = make_payload_fn(Some(value));
 
-                // Create view pointing to our buffers
-                let new_view = self.append_value(value);
+                // Adopt the view from the input array, remapping buffer_index
+                let new_view = if len <= 12 {
+                    // Inline value - view is self-contained, use as-is
+                    view_u128
+                } else {
+                    // Lazily register input buffers on first non-inline insert
+                    let offset = *buffer_offset.get_or_insert_with(|| {
+                        let off = self.buffers.len() as u32;
+                        self.buffers.extend_from_slice(input_buffers);
+                        off
+                    });
+                    // Remap buffer_index to point into our buffers list
+                    let byte_view = ByteView::from(view_u128);
+                    let remapped = ByteView {
+                        buffer_index: byte_view.buffer_index + offset,
+                        ..byte_view
+                    };
+                    remapped.into()
+                };
+
+                self.views.push(new_view);
+                self.nulls.append_non_null();
+
                 let new_header = Entry {
                     view: new_view,
                     hash,
@@ -374,18 +393,12 @@ where
     /// The values are guaranteed to be returned in the same order in which
     /// they were first seen.
     pub fn into_state(mut self) -> ArrayRef {
-        // Flush any remaining in-progress buffer
-        if !self.in_progress.is_empty() {
-            let flushed = std::mem::take(&mut self.in_progress);
-            self.completed.push(Buffer::from_vec(flushed));
-        }
-
         // Build null buffer if we have any nulls
         let null_buffer = self.nulls.finish();
 
         let views = ScalarBuffer::from(self.views);
         let array =
-            unsafe { BinaryViewArray::new_unchecked(views, self.completed, null_buffer) };
+            unsafe { BinaryViewArray::new_unchecked(views, self.buffers, null_buffer) };
 
         match self.output_type {
             OutputType::BinaryView => Arc::new(array),
@@ -398,32 +411,6 @@ where
         }
     }
 
-    /// Append a value to our buffers and return the view pointing to it
-    fn append_value(&mut self, value: &[u8]) -> u128 {
-        let len = value.len();
-        let view = if len <= 12 {
-            make_view(value, 0, 0)
-        } else {
-            // Ensure buffer is big enough
-            if self.in_progress.len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
-                let flushed = std::mem::replace(
-                    &mut self.in_progress,
-                    Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
-                );
-                self.completed.push(Buffer::from_vec(flushed));
-            }
-
-            let buffer_index = self.completed.len() as u32;
-            let offset = self.in_progress.len() as u32;
-            self.in_progress.extend_from_slice(value);
-
-            make_view(value, buffer_index, offset)
-        };
-
-        self.views.push(view);
-        self.nulls.append_non_null();
-        view
-    }
 
     /// Total number of entries (including null, if present)
     pub fn len(&self) -> usize {
@@ -444,14 +431,12 @@ where
     /// this set, not including `self`
     pub fn size(&self) -> usize {
         let views_size = self.views.len() * size_of::<u128>();
-        let in_progress_size = self.in_progress.capacity();
-        let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
+        let buffers_size: usize = self.buffers.iter().map(|b| b.len()).sum();
         let nulls_size = self.nulls.allocated_size();
 
         self.map_size
             + views_size
-            + in_progress_size
-            + completed_size
+            + buffers_size
             + nulls_size
             + self.hashes_buffer.allocated_size()
     }
@@ -466,7 +451,7 @@ where
             .field("map", &"<map>")
             .field("map_size", &self.map_size)
             .field("views_len", &self.views.len())
-            .field("completed_buffers", &self.completed.len())
+            .field("buffers", &self.buffers.len())
             .field("random_state", &self.random_state)
             .field("hashes_buffer", &self.hashes_buffer)
             .finish()
@@ -486,7 +471,7 @@ where
 {
     /// The u128 view pointing to our internal buffers. For inline strings,
     /// this contains the complete value. For larger strings, this contains
-    /// the buffer_index/offset into our completed/in_progress buffers.
+    /// the buffer_index/offset into our buffers.
     view: u128,
 
     hash: u64,
