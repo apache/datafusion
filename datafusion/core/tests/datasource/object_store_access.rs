@@ -457,7 +457,7 @@ async fn create_single_parquet_file_no_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (opts) path=parquet_table.parquet range=0-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=0-2994
     "
     );
 }
