@@ -2088,6 +2088,78 @@ DROP TABLE te_src_c;
 statement ok
 DROP TABLE te_inferred_multi;
 
+# ===========================================================
+# Test F: NULL handling — sort pushdown must not eliminate Sort
+# when files contain NULLs in sort columns, because NULL ordering
+# (NULLS FIRST/LAST) across files requires a full sort.
+# ===========================================================
+
+# Test F.1: NULLS LAST — file with NULL must not cause wrong ordering
+statement ok
+CREATE TABLE null_src_a(id INT) AS VALUES (1), (NULL);
+
+statement ok
+CREATE TABLE null_src_b(id INT) AS VALUES (2), (3);
+
+query I
+COPY (SELECT * FROM null_src_a ORDER BY id ASC NULLS LAST)
+TO 'test_files/scratch/sort_pushdown/tf_nulls/b_null_tail.parquet';
+----
+2
+
+query I
+COPY (SELECT * FROM null_src_b ORDER BY id ASC NULLS LAST)
+TO 'test_files/scratch/sort_pushdown/tf_nulls/a_nonnull.parquet';
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE tf_nulls_last(id INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tf_nulls/'
+WITH ORDER (id ASC NULLS LAST);
+
+# With target_partitions=1, files end up in separate groups via
+# split_groups_by_statistics. EnforceSorting eliminates SortExec,
+# SPM merges the two sorted streams.
+query TT
+EXPLAIN SELECT * FROM tf_nulls_last ORDER BY id ASC NULLS LAST;
+----
+logical_plan
+01)Sort: tf_nulls_last.id ASC NULLS LAST
+02)--TableScan: tf_nulls_last projection=[id]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tf_nulls/a_nonnull.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tf_nulls/b_null_tail.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+# Results must be correct: NULLs at the end
+query I
+SELECT * FROM tf_nulls_last ORDER BY id ASC NULLS LAST;
+----
+1
+2
+3
+NULL
+
+# Test F.2: NULLS FIRST — NULLs should come first
+query I
+SELECT * FROM tf_nulls_last ORDER BY id ASC NULLS FIRST;
+----
+NULL
+1
+2
+3
+
+# Cleanup Test F
+statement ok
+DROP TABLE null_src_a;
+
+statement ok
+DROP TABLE null_src_b;
+
+statement ok
+DROP TABLE tf_nulls_last;
+
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok
 SET datafusion.execution.target_partitions = 4;

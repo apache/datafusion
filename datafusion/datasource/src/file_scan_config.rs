@@ -27,6 +27,7 @@ use crate::{
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
@@ -1556,8 +1557,25 @@ impl FileScanConfig {
         // Re-check: now that files are sorted, does output_ordering become valid?
         // This handles the case where validated_output_ordering() previously
         // stripped the ordering because files were in the wrong order.
-        if result.all_non_overlapping && !self.output_ordering.is_empty() {
-            // Files are now non-overlapping and we have declared output_ordering.
+        //
+        // IMPORTANT: We cannot claim Exact if any file in a non-last position
+        // contains NULLs in the sort columns. With NULLS LAST, NULLs within
+        // a file are placed after all non-null values. If the next file has
+        // non-null values smaller than the previous file's max, those values
+        // would incorrectly appear after the NULLs. Similarly for NULLS FIRST.
+        //
+        // Conservative approach: if any file has nulls in the sort columns,
+        // do not claim Exact. The SortExec will handle NULL ordering correctly.
+        if result.all_non_overlapping
+            && !self.output_ordering.is_empty()
+            && !Self::any_file_has_nulls_in_sort_columns(
+                &new_config.file_groups,
+                order,
+                &projected_schema,
+                projection_indices.as_deref(),
+            )
+        {
+            // Files are now non-overlapping, no NULLs in sort columns.
             // Re-ask the FileSource if this ordering satisfies the request,
             // using eq_properties computed from the NEW (sorted) file groups.
             let new_eq_props = new_config.eq_properties();
@@ -1573,6 +1591,43 @@ impl FileScanConfig {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_config),
         })
+    }
+
+    /// Check if any file in any group has nulls in the sort columns.
+    fn any_file_has_nulls_in_sort_columns(
+        file_groups: &[FileGroup],
+        order: &[PhysicalSortExpr],
+        projected_schema: &SchemaRef,
+        projection_indices: Option<&[usize]>,
+    ) -> bool {
+        let Some(sort_columns) =
+            sort_columns_from_physical_sort_exprs_nullable(order, projected_schema)
+        else {
+            return true; // Can't determine, assume nulls exist
+        };
+
+        for group in file_groups {
+            for file in group.iter() {
+                let Some(stats) = file.statistics.as_ref() else {
+                    return true; // No stats, assume nulls exist
+                };
+                for col in &sort_columns {
+                    let stat_idx = projection_indices
+                        .map(|p| p[col.index()])
+                        .unwrap_or_else(|| col.index());
+                    if stat_idx >= stats.column_statistics.len() {
+                        return true;
+                    }
+                    let col_stats = &stats.column_statistics[stat_idx];
+                    match &col_stats.null_count {
+                        Precision::Exact(0) => {}           // No nulls, safe
+                        Precision::Exact(_) => return true, // Has nulls
+                        _ => return true, // Unknown null count, assume nulls
+                    }
+                }
+            }
+        }
+        false
     }
 }
 
@@ -1627,6 +1682,17 @@ fn ordered_column_indices_from_projection(
             Some(index)
         })
         .collect::<Option<Vec<usize>>>()
+}
+
+/// Extract Column references from sort expressions for null checking.
+fn sort_columns_from_physical_sort_exprs_nullable(
+    order: &[PhysicalSortExpr],
+    _schema: &SchemaRef,
+) -> Option<Vec<Column>> {
+    order
+        .iter()
+        .map(|expr| expr.expr.as_any().downcast_ref::<Column>().cloned())
+        .collect()
 }
 
 /// Check whether a given ordering is valid for all file groups by verifying
@@ -3434,6 +3500,92 @@ mod tests {
 
         // output_ordering cleared (Inexact)
         assert!(pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    /// Helper: create a PartitionedFile with stats including null count
+    fn make_file_with_null_stats(
+        name: &str,
+        min: f64,
+        max: f64,
+        null_count: usize,
+    ) -> PartitionedFile {
+        PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
+            Statistics {
+                num_rows: Precision::Exact(100),
+                total_byte_size: Precision::Exact(1024),
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(null_count),
+                    min_value: Precision::Exact(ScalarValue::Float64(Some(min))),
+                    max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
+                    ..Default::default()
+                }],
+            },
+        ))
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_with_nulls_does_not_upgrade_to_exact() -> Result<()> {
+        // Files are non-overlapping but one has NULLs.
+        // Should NOT upgrade to Exact — NULLs would appear in wrong position.
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        // Files in wrong order (high min first) to trigger reordering
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_null_stats("b_no_nulls", 10.0, 19.0, 0),
+            make_file_with_null_stats("a_with_nulls", 0.0, 9.0, 5), // has NULLs
+        ])];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        // Should be Inexact (not Exact) because of NULLs
+        assert!(
+            matches!(result, SortOrderPushdownResult::Inexact { .. }),
+            "Expected Inexact due to NULLs, got {result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_no_nulls_upgrades_to_exact() -> Result<()> {
+        // Files are non-overlapping, no NULLs → should upgrade to Exact
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_null_stats("b_high", 10.0, 19.0, 0),
+            make_file_with_null_stats("a_low", 0.0, 9.0, 0),
+        ])];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        assert!(
+            matches!(result, SortOrderPushdownResult::Exact { .. }),
+            "Expected Exact (no NULLs), got {result:?}"
+        );
         Ok(())
     }
 }
