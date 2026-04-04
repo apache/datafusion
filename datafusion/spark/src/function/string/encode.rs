@@ -173,7 +173,7 @@ fn encode_dispatch(arr: &ArrayRef, charset: &str) -> Result<ArrayRef> {
 }
 
 /// Extracts a charset string from a ColumnarValue, normalizing to uppercase.
-pub(crate) fn extract_charset(charset_arg: &ColumnarValue) -> Result<String> {
+fn extract_charset(charset_arg: &ColumnarValue) -> Result<String> {
     match charset_arg {
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(Some(s))
