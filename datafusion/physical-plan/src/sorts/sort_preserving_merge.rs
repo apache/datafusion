@@ -100,6 +100,12 @@ pub struct SortPreservingMergeExec {
     ///
     /// See [`Self::with_round_robin_repartition`] for more information.
     enable_round_robin_repartition: bool,
+    /// Number of batches to prefetch from each input partition.
+    ///
+    /// When SPM reads directly from I/O-bound sources (e.g., after sort
+    /// elimination removes a buffering SortExec), a larger prefetch allows
+    /// pipelining I/O with merge computation. Defaults to 1.
+    prefetch: usize,
 }
 
 impl SortPreservingMergeExec {
@@ -113,6 +119,7 @@ impl SortPreservingMergeExec {
             fetch: None,
             cache: Arc::new(cache),
             enable_round_robin_repartition: true,
+            prefetch: 1,
         }
     }
 
@@ -139,6 +146,21 @@ impl SortPreservingMergeExec {
         self
     }
 
+    /// Sets the number of batches to prefetch from each input partition.
+    ///
+    /// A larger value allows pipelining I/O with merge computation, which
+    /// helps when inputs are I/O-bound (e.g., reading directly from
+    /// DataSourceExec without a buffering SortExec in between).
+    pub fn with_prefetch(mut self, prefetch: usize) -> Self {
+        self.prefetch = prefetch;
+        self
+    }
+
+    /// Returns the prefetch buffer size
+    pub fn prefetch(&self) -> usize {
+        self.prefetch
+    }
+
     /// Input schema
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -152,6 +174,11 @@ impl SortPreservingMergeExec {
     /// Fetch
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    /// Whether round-robin repartition is enabled
+    pub fn enable_round_robin_repartition(&self) -> bool {
+        self.enable_round_robin_repartition
     }
 
     /// Creates the cache object that stores the plan properties
@@ -250,7 +277,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
             metrics: self.metrics.clone(),
             fetch: limit,
             cache: Arc::clone(&self.cache),
-            enable_round_robin_repartition: true,
+            enable_round_robin_repartition: self.enable_round_robin_repartition,
+            prefetch: self.prefetch,
         }))
     }
 
@@ -361,7 +389,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .map(|partition| {
                         let stream =
                             self.input.execute(partition, Arc::clone(&context))?;
-                        Ok(spawn_buffered(stream, 16))
+                        Ok(spawn_buffered(stream, self.prefetch))
                     })
                     .collect::<Result<_>>()?;
 

@@ -61,7 +61,12 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::sync::Arc;
+
+/// Prefetch buffer size for SortPreservingMergeExec when sort elimination
+/// removes the buffering SortExec between SPM and DataSourceExec.
+const SPM_PREFETCH_AFTER_SORT_ELIMINATION: usize = 16;
 
 /// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources.
 ///
@@ -87,8 +92,59 @@ impl PhysicalOptimizerRule for PushdownSort {
         }
 
         // Use transform_down to find and optimize all SortExec nodes (including nested ones)
+        // Also handles SPM → SortExec pattern to set prefetch when sort is eliminated
         plan.transform_down(|plan: Arc<dyn ExecutionPlan>| {
-            // Check if this is a SortExec
+            // Pattern 1: SPM → SortExec(preserve_partitioning)
+            // When we eliminate the SortExec, SPM loses its memory buffer and reads
+            // directly from I/O-bound sources. Set a larger prefetch to pipeline I/O.
+            if let Some(spm) = plan.downcast_ref::<SortPreservingMergeExec>()
+                && let Some(sort_child) = spm.input().downcast_ref::<SortExec>()
+                && sort_child.preserve_partitioning()
+            {
+                let sort_input = Arc::clone(sort_child.input());
+                let required_ordering = sort_child.expr();
+                match sort_input.try_pushdown_sort(required_ordering)? {
+                    SortOrderPushdownResult::Exact { inner } => {
+                        let inner = if let Some(fetch) = sort_child.fetch() {
+                            inner.with_fetch(Some(fetch)).unwrap_or(inner)
+                        } else {
+                            inner
+                        };
+                        let new_spm = SortPreservingMergeExec::new(
+                            spm.expr().clone(),
+                            inner,
+                        )
+                        .with_fetch(spm.fetch())
+                        .with_round_robin_repartition(
+                            spm.enable_round_robin_repartition(),
+                        )
+                        .with_prefetch(SPM_PREFETCH_AFTER_SORT_ELIMINATION);
+                        return Ok(Transformed::yes(Arc::new(new_spm)));
+                    }
+                    SortOrderPushdownResult::Inexact { inner } => {
+                        let new_sort = SortExec::new(
+                            required_ordering.clone(),
+                            inner,
+                        )
+                        .with_fetch(sort_child.fetch())
+                        .with_preserve_partitioning(true);
+                        let new_spm = SortPreservingMergeExec::new(
+                            spm.expr().clone(),
+                            Arc::new(new_sort),
+                        )
+                        .with_fetch(spm.fetch())
+                        .with_round_robin_repartition(
+                            spm.enable_round_robin_repartition(),
+                        );
+                        return Ok(Transformed::yes(Arc::new(new_spm)));
+                    }
+                    SortOrderPushdownResult::Unsupported => {
+                        return Ok(Transformed::no(plan));
+                    }
+                }
+            }
+
+            // Pattern 2: Standalone SortExec (no SPM parent)
             let Some(sort_exec) = plan.downcast_ref::<SortExec>() else {
                 return Ok(Transformed::no(plan));
             };
