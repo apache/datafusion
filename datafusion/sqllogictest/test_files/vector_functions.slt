@@ -1,0 +1,302 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## Vector Distance and Array Math Functions Tests
+#############
+
+# ============================================================================
+# cosine_distance
+# ============================================================================
+
+# orthogonal vectors -> distance 1.0
+query R
+select cosine_distance([1.0, 0.0], [0.0, 1.0]);
+----
+1
+
+# identical vectors -> distance 0.0
+query R
+select cosine_distance([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]);
+----
+0
+
+# opposite vectors -> distance 2.0
+query R
+select cosine_distance([1.0, 0.0], [-1.0, 0.0]);
+----
+2
+
+# alias: list_cosine_distance
+query R
+select list_cosine_distance([1.0, 0.0], [0.0, 1.0]);
+----
+1
+
+# null elements inside array
+query R
+select cosine_distance([1.0, NULL], [1.0, 2.0]);
+----
+NULL
+
+# mismatched lengths
+query error
+select cosine_distance([1.0, 2.0], [1.0]);
+
+# ============================================================================
+# inner_product / dot_product
+# ============================================================================
+
+# basic dot product: 1*4 + 2*5 + 3*6 = 32
+query R
+select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
+----
+32
+
+# orthogonal vectors -> 0
+query R
+select inner_product([1.0, 0.0], [0.0, 1.0]);
+----
+0
+
+# alias: list_inner_product
+query R
+select list_inner_product([1.0, 2.0], [3.0, 4.0]);
+----
+11
+
+# alias: dot_product
+query R
+select dot_product([1.0, 2.0], [3.0, 4.0]);
+----
+11
+
+# null elements inside array
+query R
+select inner_product([1.0, NULL], [1.0, 2.0]);
+----
+NULL
+
+# mismatched lengths
+query error
+select inner_product([1.0, 2.0], [1.0]);
+
+# empty arrays
+query R
+select inner_product(ARRAY[]::DOUBLE[], ARRAY[]::DOUBLE[]);
+----
+0
+
+# ============================================================================
+# array_normalize
+# ============================================================================
+
+# 3-4-5 triangle: [3/5, 4/5] = [0.6, 0.8]
+query ?
+select array_normalize([3.0, 4.0]);
+----
+[0.6, 0.8]
+
+# unit vector stays unit
+query ?
+select array_normalize([1.0, 0.0]);
+----
+[1.0, 0.0]
+
+# alias: list_normalize
+query ?
+select list_normalize([3.0, 4.0]);
+----
+[0.6, 0.8]
+
+# null elements
+query ?
+select array_normalize([1.0, NULL, 2.0]);
+----
+NULL
+
+# zero vector -> null (undefined direction)
+query ?
+select array_normalize([0.0, 0.0]);
+----
+NULL
+
+# ============================================================================
+# array_add
+# ============================================================================
+
+query ?
+select array_add([1.0, 2.0], [3.0, 4.0]);
+----
+[4.0, 6.0]
+
+# alias: list_add
+query ?
+select list_add([1.0, 2.0], [3.0, 4.0]);
+----
+[4.0, 6.0]
+
+# mismatched lengths
+query error
+select array_add([1.0, 2.0], [1.0]);
+
+# empty arrays
+query ?
+select array_add(ARRAY[]::DOUBLE[], ARRAY[]::DOUBLE[]);
+----
+[]
+
+# ============================================================================
+# array_subtract
+# ============================================================================
+
+query ?
+select array_subtract([5.0, 3.0], [1.0, 2.0]);
+----
+[4.0, 1.0]
+
+# alias: list_subtract
+query ?
+select list_subtract([5.0, 3.0], [1.0, 2.0]);
+----
+[4.0, 1.0]
+
+# mismatched lengths
+query error
+select array_subtract([1.0], [1.0, 2.0]);
+
+# ============================================================================
+# array_scale
+# ============================================================================
+
+query ?
+select array_scale([1.0, 2.0, 3.0], 2.0);
+----
+[2.0, 4.0, 6.0]
+
+# alias: list_scale
+query ?
+select list_scale([1.0, 2.0], 3.0);
+----
+[3.0, 6.0]
+
+# scale by zero
+query ?
+select array_scale([1.0, 2.0], 0.0);
+----
+[0.0, 0.0]
+
+# negative scale
+query ?
+select array_scale([1.0, 2.0], -1.0);
+----
+[-1.0, -2.0]
+
+# ============================================================================
+# Column-based null tests (NULL via column data, not bare SQL NULL literal)
+# ============================================================================
+
+statement ok
+CREATE TABLE null_test (a DOUBLE[], b DOUBLE[]) AS VALUES
+  ([1.0, 2.0], [3.0, 4.0]),
+  (NULL, [1.0, 2.0]),
+  ([1.0, 2.0], NULL);
+
+query R
+select cosine_distance(a, b) from null_test;
+----
+0.0161300899
+NULL
+NULL
+
+query R
+select inner_product(a, b) from null_test;
+----
+11
+NULL
+NULL
+
+query ?
+select array_normalize(a) from null_test;
+----
+[0.4472135954999579, 0.8944271909999159]
+NULL
+[0.4472135954999579, 0.8944271909999159]
+
+query ?
+select array_add(a, b) from null_test;
+----
+[4.0, 6.0]
+NULL
+NULL
+
+query ?
+select array_subtract(a, b) from null_test;
+----
+[-2.0, -2.0]
+NULL
+NULL
+
+statement ok
+DROP TABLE null_test;
+
+# ============================================================================
+# Vector search pattern: cosine distance ranking
+# ============================================================================
+
+statement ok
+CREATE TABLE embeddings (id INT, emb DOUBLE[]) AS VALUES
+  (1, [1.0, 0.0, 0.0]),
+  (2, [0.0, 1.0, 0.0]),
+  (3, [0.707, 0.707, 0.0]),
+  (4, [0.0, 0.0, 1.0]),
+  (5, [0.577, 0.577, 0.577]);
+
+# Find nearest neighbors by cosine distance
+query IR
+select id, round(cosine_distance(emb, [1.0, 0.0, 0.0]), 6) as dist from embeddings order by dist limit 3;
+----
+1 0
+3 0.292893
+5 0.42265
+
+# Rank by inner product (higher = more similar)
+query IR
+select id, round(inner_product(emb, [1.0, 0.0, 0.0]), 6) as score from embeddings order by score desc limit 3;
+----
+1 1
+3 0.707
+5 0.577
+
+# Normalize then compute cosine distance (should give same results)
+query IR
+select id, round(cosine_distance(array_normalize(emb), [1.0, 0.0, 0.0]), 6) as dist from embeddings order by dist limit 3;
+----
+1 0
+3 0.292893
+5 0.42265
+
+# Combine array math: subtract query vector, get L2 distance of difference
+query IR
+select id, round(array_distance(array_subtract(emb, [1.0, 0.0, 0.0]), [0.0, 0.0, 0.0]), 6) as l2_diff from embeddings order by l2_diff limit 3;
+----
+1 0
+3 0.765309
+5 0.919123
+
+statement ok
+DROP TABLE embeddings;

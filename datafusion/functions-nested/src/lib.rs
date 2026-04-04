@@ -38,9 +38,12 @@
 pub mod macros;
 
 pub mod array_has;
+pub mod array_math;
+pub mod array_normalize;
 pub mod arrays_zip;
 pub mod cardinality;
 pub mod concat;
+pub mod cosine_distance;
 pub mod dimension;
 pub mod distance;
 pub mod empty;
@@ -48,6 +51,7 @@ pub mod except;
 pub mod expr_ext;
 pub mod extract;
 pub mod flatten;
+pub mod inner_product;
 pub mod length;
 pub mod make_array;
 pub mod map;
@@ -68,6 +72,7 @@ pub mod set_ops;
 pub mod sort;
 pub mod string;
 pub mod utils;
+pub mod vector_math;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
@@ -80,11 +85,16 @@ pub mod expr_fn {
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::array_math::array_add;
+    pub use super::array_math::array_scale;
+    pub use super::array_math::array_subtract;
+    pub use super::array_normalize::array_normalize;
     pub use super::arrays_zip::arrays_zip;
     pub use super::cardinality::cardinality;
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
+    pub use super::cosine_distance::cosine_distance;
     pub use super::dimension::array_dims;
     pub use super::dimension::array_ndims;
     pub use super::distance::array_distance;
@@ -96,6 +106,7 @@ pub mod expr_fn {
     pub use super::extract::array_pop_front;
     pub use super::extract::array_slice;
     pub use super::flatten::flatten;
+    pub use super::inner_product::inner_product;
     pub use super::length::array_length;
     pub use super::make_array::make_array;
     pub use super::map_entries::map_entries;
@@ -148,10 +159,16 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
         array_has::array_has_any_udf(),
+        array_math::array_add_udf(),
+        array_math::array_subtract_udf(),
+        array_math::array_scale_udf(),
+        array_normalize::array_normalize_udf(),
         empty::array_empty_udf(),
         length::array_length_udf(),
+        cosine_distance::cosine_distance_udf(),
         distance::array_distance_udf(),
         flatten::flatten_udf(),
+        inner_product::inner_product_udf(),
         min_max::array_max_udf(),
         min_max::array_min_udf(),
         sort::array_sort_udf(),
