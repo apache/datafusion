@@ -33,6 +33,7 @@ use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::HashMap;
 use std::future::Future;
 use std::mem;
+use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -1193,8 +1194,9 @@ impl PushDecoderStreamState {
     async fn transition(&mut self) -> Option<Result<RecordBatch>> {
         loop {
             match self.decoder.try_decode() {
-                Ok(DecodeResult::NeedsData(ranges)) => {
+                Ok(DecodeResult::NeedsData(mut ranges)) => {
                     let fetch = async {
+                        coalesce_ranges(&mut ranges);
                         let data = self.reader.get_byte_ranges(ranges.clone()).await?;
                         self.decoder.push_ranges(ranges, data)?;
                         Ok::<_, ParquetError>(())
@@ -1570,6 +1572,24 @@ fn should_enable_page_index(
             .as_ref()
             .map(|p| p.filter_number() > 0)
             .unwrap_or(false)
+}
+
+/// Coalesce adjacent or overlapping ranges in-place into fewer, larger ranges.
+fn coalesce_ranges(ranges: &mut Vec<Range<u64>>) {
+    if ranges.len() <= 1 {
+        return;
+    }
+    ranges.sort_by_key(|r| r.start);
+    let mut write = 0;
+    for read in 1..ranges.len() {
+        if ranges[read].start <= ranges[write].end {
+            ranges[write].end = ranges[write].end.max(ranges[read].end);
+        } else {
+            write += 1;
+            ranges[write] = ranges[read].clone();
+        }
+    }
+    ranges.truncate(write + 1);
 }
 
 #[cfg(test)]
