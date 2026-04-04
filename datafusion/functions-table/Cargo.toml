@@ -53,13 +53,14 @@ datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true }
 datafusion-datasource-avro = { workspace = true, optional = true }
+# CSV and JSON are always available — no heavy optional dependencies
 datafusion-datasource-csv = { workspace = true }
 datafusion-datasource-json = { workspace = true }
 datafusion-datasource-parquet = { workspace = true, optional = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 parking_lot = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }

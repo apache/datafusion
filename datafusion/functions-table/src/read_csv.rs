@@ -26,14 +26,11 @@ use std::sync::Arc;
 
 use datafusion_catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion_common::Result;
+use datafusion_common::{plan_err, Result};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_csv::file_format::CsvFormat;
 
-use tokio::runtime::Handle;
-use tokio::task::block_in_place;
-
-use crate::extract_path;
+use crate::{extract_path, infer_schema_blocking};
 
 /// Table function that reads CSV files.
 #[derive(Debug, Default)]
@@ -43,7 +40,7 @@ impl TableFunctionImpl for ReadCsvFunc {
     fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
         let exprs = args.exprs();
         if exprs.len() != 1 {
-            return datafusion_common::plan_err!(
+            return plan_err!(
                 "read_csv requires exactly 1 argument (path), got {}",
                 exprs.len()
             );
@@ -61,10 +58,7 @@ impl TableFunctionImpl for ReadCsvFunc {
             .with_file_extension(".csv")
             .with_session_config_options(session.config());
 
-        let schema = block_in_place(|| {
-            Handle::current()
-                .block_on(listing_options.infer_schema(session, &table_path))
-        })?;
+        let schema = infer_schema_blocking(&listing_options, session, &table_path)?;
 
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)

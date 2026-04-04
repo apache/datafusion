@@ -31,10 +31,7 @@ use datafusion_common::{plan_err, Result};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_parquet::file_format::ParquetFormat;
 
-use crate::extract_path;
-
-use tokio::runtime::Handle;
-use tokio::task::block_in_place;
+use crate::{extract_path, infer_schema_blocking};
 
 /// Table function that reads Parquet files.
 #[derive(Debug, Default)]
@@ -59,10 +56,7 @@ impl TableFunctionImpl for ReadParquetFunc {
             .with_file_extension(".parquet")
             .with_session_config_options(session.config());
 
-        let schema = block_in_place(|| {
-            Handle::current()
-                .block_on(listing_options.infer_schema(session, &table_path))
-        })?;
+        let schema = infer_schema_blocking(&listing_options, session, &table_path)?;
 
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)

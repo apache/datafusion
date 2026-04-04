@@ -28,13 +28,17 @@
 pub mod generate_series;
 #[cfg(feature = "avro")]
 pub mod read_avro;
+// CSV and JSON are always available — no heavy optional dependencies
 pub mod read_csv;
 pub mod read_json;
 #[cfg(feature = "parquet")]
 pub mod read_parquet;
 
-use datafusion_catalog::TableFunction;
+use arrow::datatypes::SchemaRef;
+use datafusion_catalog::{Session, TableFunction};
+use datafusion_catalog_listing::ListingOptions;
 use datafusion_common::{plan_err, Result};
+use datafusion_datasource::ListingTableUrl;
 use datafusion_expr::Expr;
 use std::sync::Arc;
 
@@ -51,6 +55,30 @@ pub(crate) fn extract_path(expr: &Expr, func_name: &str) -> Result<String> {
             "{func_name} requires a string literal path argument, got {expr:?}"
         ),
     }
+}
+
+/// Bridge async `infer_schema` into the sync `call_with_args` context.
+///
+/// Spawns a scoped OS thread so the Tokio executor thread is never blocked.
+/// Inside the spawned thread, [`tokio::runtime::Handle::block_on`] drives
+/// the future to completion.  This works on **both** multi-thread and
+/// current-thread Tokio runtimes (unlike `block_in_place`, which panics on
+/// single-threaded runtimes).
+pub(crate) fn infer_schema_blocking(
+    listing_options: &ListingOptions,
+    session: &dyn Session,
+    table_path: &ListingTableUrl,
+) -> Result<SchemaRef> {
+    let handle = tokio::runtime::Handle::current();
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                handle
+                    .block_on(listing_options.infer_schema(session, table_path))
+            })
+            .join()
+            .expect("infer_schema thread panicked")
+    })
 }
 
 /// Returns all default table functions

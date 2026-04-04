@@ -418,3 +418,65 @@ async fn read_json_with_filter() -> Result<()> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Error-path tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_csv_no_args_error() -> Result<()> {
+    let ctx = SessionContext::new();
+    let result = ctx.sql("SELECT * FROM read_csv()").await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert_contains!(err, "read_csv requires exactly 1 argument");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_json_no_args_error() -> Result<()> {
+    let ctx = SessionContext::new();
+    let result = ctx.sql("SELECT * FROM read_json()").await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert_contains!(err, "read_json requires exactly 1 argument");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_parquet_wrong_arg_type() -> Result<()> {
+    let ctx = SessionContext::new();
+    let result = ctx.sql("SELECT * FROM read_parquet(42)").await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert_contains!(err, "read_parquet requires a string literal path argument");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Single-threaded runtime tests — verify no panic on current_thread runtime
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn read_parquet_single_threaded_runtime() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let path = write_test_parquet(&tmp).await?;
+
+    let ctx = SessionContext::new();
+    let results = ctx
+        .sql(&format!("SELECT count(*) AS cnt FROM read_parquet('{path}')"))
+        .await?
+        .collect()
+        .await?;
+
+    #[cfg_attr(any(), rustfmt::skip)]
+    assert_batches_eq!(&[
+        "+-----+",
+        "| cnt |",
+        "+-----+",
+        "| 5   |",
+        "+-----+",
+    ], &results);
+
+    Ok(())
+}
