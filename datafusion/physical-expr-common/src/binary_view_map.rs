@@ -127,12 +127,13 @@ where
 
     /// Views for all stored values (in insertion order).
     /// For non-inline values (>12 bytes), the `buffer_index` field in each view
-    /// points into `buffers`.
+    /// points into `completed`.
     views: Vec<u128>,
-    /// All buffers referenced by views. This includes both buffers adopted
-    /// from input arrays (zero-copy) and any buffers from the legacy
-    /// `in_progress` path.
-    buffers: Vec<Buffer>,
+    /// Completed buffers containing string data
+    completed: Vec<Buffer>,
+    /// In-progress buffer for accumulating non-inline string data.
+    /// Flushed to `completed` when full.
+    in_progress: Vec<u8>,
     /// Tracks null values (true = null)
     nulls: NullBufferBuilder,
 
@@ -145,6 +146,9 @@ where
     /// in the buffer
     null: Option<(V, usize)>,
 }
+
+/// Max size of the in-progress buffer before flushing to completed buffers.
+const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
 
 /// The size, in number of entries, of the initial hash table
 const INITIAL_MAP_CAPACITY: usize = 512;
@@ -159,7 +163,8 @@ where
             map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
             views: Vec::new(),
-            buffers: Vec::new(),
+            completed: Vec::new(),
+            in_progress: Vec::new(),
             nulls: NullBufferBuilder::new(0),
             random_state: RandomState::default(),
             hashes_buffer: vec![],
@@ -266,13 +271,17 @@ where
         let input_views = values.views();
         let input_buffers = values.data_buffers();
 
-        // Lazily register the input array's data buffers into our buffer list
-        // only when we encounter a new non-inline value. This avoids keeping
-        // references to buffers when all values already exist in the map.
-        let mut buffer_offset: Option<u32> = None;
-
         // Ensure lengths are equivalent
         assert_eq!(values.len(), self.hashes_buffer.len());
+
+        // Lazily register input buffers so that new values added during the
+        // loop can be read by subsequent rows in the same batch for comparison.
+        // After the loop we decide whether to keep the adopted buffers (high
+        // utilization) or copy just the referenced bytes into in_progress.
+        let mut buffer_offset: Option<u32> = None;
+        let mut batch_referenced_bytes: usize = 0;
+        // (view_index, hash) of new non-inline entries pointing to adopted buffers
+        let mut pending_entries: Vec<(usize, u64)> = Vec::new();
 
         for i in 0..values.len() {
             // Safety: i is in range 0..values.len()
@@ -302,7 +311,8 @@ where
 
             // Check if value already exists
             let maybe_payload = {
-                let buffers = &self.buffers;
+                let completed = &self.completed;
+                let in_progress = &self.in_progress;
 
                 self.map
                     .find(hash, |header| {
@@ -328,10 +338,14 @@ where
                         let offset = byte_view.offset as usize;
 
                         let stored_value = unsafe {
-                            buffers
-                                .get_unchecked(buffer_index)
-                                .as_slice()
-                                .get_unchecked(offset..offset + stored_len)
+                            if buffer_index < completed.len() {
+                                completed
+                                    .get_unchecked(buffer_index)
+                                    .as_slice()
+                                    .get_unchecked(offset..offset + stored_len)
+                            } else {
+                                in_progress.get_unchecked(offset..offset + stored_len)
+                            }
                         };
                         // Safety: i is in range and not null
                         let input_value: &[u8] =
@@ -349,24 +363,26 @@ where
                 let value: &[u8] = unsafe { values.value_unchecked(i).as_ref() };
                 let payload = make_payload_fn(Some(value));
 
-                // Adopt the view from the input array, remapping buffer_index
                 let new_view = if len <= 12 {
-                    // Inline value - view is self-contained, use as-is
                     view_u128
                 } else {
-                    // Lazily register input buffers on first non-inline insert
+                    // Register input buffers into completed on first use so
+                    // subsequent rows in the same batch can compare against them.
                     let offset = *buffer_offset.get_or_insert_with(|| {
-                        let off = self.buffers.len() as u32;
-                        self.buffers.extend_from_slice(input_buffers);
+                        let off = self.completed.len() as u32;
+                        self.completed
+                            .extend(input_buffers.iter().cloned());
                         off
                     });
-                    // Remap buffer_index to point into our buffers list
+                    batch_referenced_bytes += len as usize;
+                    pending_entries.push((self.views.len(), hash));
+
                     let byte_view = ByteView::from(view_u128);
-                    let remapped = ByteView {
+                    ByteView {
                         buffer_index: byte_view.buffer_index + offset,
                         ..byte_view
-                    };
-                    remapped.into()
+                    }
+                    .into()
                 };
 
                 self.views.push(new_view);
@@ -384,6 +400,66 @@ where
             };
             observe_payload_fn(payload);
         }
+
+        // Batch finalization: decide whether to keep adopted buffers or copy.
+        let Some(adopted_offset) = buffer_offset else {
+            return; // no new non-inline values
+        };
+
+        let input_buffers_size: usize =
+            input_buffers.iter().map(|b| b.len()).sum();
+
+        if batch_referenced_bytes * 2 >= input_buffers_size {
+            // High utilization (>= 50%): keep the adopted buffers as-is.
+            return;
+        }
+
+        // Low utilization: copy referenced bytes into in_progress, rewrite
+        // the pending views and their hash table entries, then drop the
+        // adopted buffers.
+        //
+        // We write directly to in_progress without flushing to completed
+        // during this loop to keep adopted_offset stable. The batch's
+        // referenced bytes are bounded so in_progress may temporarily
+        // exceed BYTE_VIEW_MAX_BLOCK_SIZE; the next batch will flush normally.
+        for &(view_idx, hash) in &pending_entries {
+            let view = unsafe { self.views.get_unchecked_mut(view_idx) };
+            let old_view = *view;
+            let byte_view = ByteView::from(old_view);
+            let buf_idx = byte_view.buffer_index as usize;
+            let offset = byte_view.offset as usize;
+            let length = byte_view.length as usize;
+
+            let value = unsafe {
+                self.completed
+                    .get_unchecked(buf_idx)
+                    .as_slice()
+                    .get_unchecked(offset..offset + length)
+            };
+
+            let new_offset = self.in_progress.len() as u32;
+            self.in_progress.extend_from_slice(value);
+
+            // After truncation, in_progress will be at index adopted_offset
+            let new_view: u128 = ByteView {
+                length: byte_view.length,
+                prefix: byte_view.prefix,
+                buffer_index: adopted_offset,
+                offset: new_offset,
+            }
+            .into();
+
+            *view = new_view;
+
+            if let Some(entry) =
+                self.map.find_mut(hash, |e| e.view == old_view)
+            {
+                entry.view = new_view;
+            }
+        }
+
+        // Drop the adopted buffers — all pending views now point to in_progress.
+        self.completed.truncate(adopted_offset as usize);
     }
 
     /// Converts this set into a `StringViewArray`, or `BinaryViewArray`,
@@ -393,12 +469,18 @@ where
     /// The values are guaranteed to be returned in the same order in which
     /// they were first seen.
     pub fn into_state(mut self) -> ArrayRef {
+        // Flush in_progress
+        if !self.in_progress.is_empty() {
+            let flushed = std::mem::take(&mut self.in_progress);
+            self.completed.push(Buffer::from_vec(flushed));
+        }
+
         // Build null buffer if we have any nulls
         let null_buffer = self.nulls.finish();
 
         let views = ScalarBuffer::from(self.views);
         let array =
-            unsafe { BinaryViewArray::new_unchecked(views, self.buffers, null_buffer) };
+            unsafe { BinaryViewArray::new_unchecked(views, self.completed, null_buffer) };
 
         match self.output_type {
             OutputType::BinaryView => Arc::new(array),
@@ -431,12 +513,14 @@ where
     /// this set, not including `self`
     pub fn size(&self) -> usize {
         let views_size = self.views.len() * size_of::<u128>();
-        let buffers_size: usize = self.buffers.iter().map(|b| b.len()).sum();
+        let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
+        let in_progress_size = self.in_progress.capacity();
         let nulls_size = self.nulls.allocated_size();
 
         self.map_size
             + views_size
-            + buffers_size
+            + completed_size
+            + in_progress_size
             + nulls_size
             + self.hashes_buffer.allocated_size()
     }
@@ -451,7 +535,7 @@ where
             .field("map", &"<map>")
             .field("map_size", &self.map_size)
             .field("views_len", &self.views.len())
-            .field("buffers", &self.buffers.len())
+            .field("completed_buffers", &self.completed.len())
             .field("random_state", &self.random_state)
             .field("hashes_buffer", &self.hashes_buffer)
             .finish()
