@@ -110,24 +110,19 @@ impl PhysicalOptimizerRule for PushdownSort {
                         } else {
                             inner
                         };
-                        let new_spm = SortPreservingMergeExec::new(
-                            spm.expr().clone(),
-                            inner,
-                        )
-                        .with_fetch(spm.fetch())
-                        .with_round_robin_repartition(
-                            spm.enable_round_robin_repartition(),
-                        )
-                        .with_prefetch(SPM_PREFETCH_AFTER_SORT_ELIMINATION);
+                        let new_spm =
+                            SortPreservingMergeExec::new(spm.expr().clone(), inner)
+                                .with_fetch(spm.fetch())
+                                .with_round_robin_repartition(
+                                    spm.enable_round_robin_repartition(),
+                                )
+                                .with_prefetch(SPM_PREFETCH_AFTER_SORT_ELIMINATION);
                         return Ok(Transformed::yes(Arc::new(new_spm)));
                     }
                     SortOrderPushdownResult::Inexact { inner } => {
-                        let new_sort = SortExec::new(
-                            required_ordering.clone(),
-                            inner,
-                        )
-                        .with_fetch(sort_child.fetch())
-                        .with_preserve_partitioning(true);
+                        let new_sort = SortExec::new(required_ordering.clone(), inner)
+                            .with_fetch(sort_child.fetch())
+                            .with_preserve_partitioning(true);
                         let new_spm = SortPreservingMergeExec::new(
                             spm.expr().clone(),
                             Arc::new(new_sort),
