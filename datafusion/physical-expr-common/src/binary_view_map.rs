@@ -271,8 +271,9 @@ where
         assert_eq!(values.len(), self.hashes_buffer.len());
 
         for i in 0..values.len() {
-            let view_u128 = input_views[i];
-            let hash = self.hashes_buffer[i];
+            // Safety: i is in range 0..values.len()
+            let view_u128 = unsafe { *input_views.get_unchecked(i) };
+            let hash = unsafe { *self.hashes_buffer.get_unchecked(i) };
 
             // handle null value via validity bitmap check
             if values.is_null(i) {
@@ -290,7 +291,9 @@ where
                 continue;
             }
 
-            // Extract length from the view (first 4 bytes of u128 in little-endian)
+            // Compare length + prefix in a single u64 comparison.
+            // View layout (little-endian): len(4B) | prefix(4B) | buffer_index(4B) | offset(4B)
+            let input_len_prefix = view_u128 as u64;
             let len = view_u128 as u32;
 
             // Check if value already exists
@@ -305,15 +308,14 @@ where
                             return false;
                         }
 
-                        // Fast path: inline strings can be compared directly
+                        // Fast path: inline strings can be compared directly via view
                         if len <= 12 {
                             return header.view == view_u128;
                         }
 
-                        // For larger strings: first compare the 4-byte prefix
-                        let stored_prefix = (header.view >> 32) as u32;
-                        let input_prefix = (view_u128 >> 32) as u32;
-                        if stored_prefix != input_prefix {
+                        // Compare length + 4-byte prefix in one u64 comparison
+                        let stored_len_prefix = header.view as u64;
+                        if stored_len_prefix != input_len_prefix {
                             return false;
                         }
 
@@ -323,13 +325,19 @@ where
                         let buffer_index = byte_view.buffer_index as usize;
                         let offset = byte_view.offset as usize;
 
-                        let stored_value = if buffer_index < completed.len() {
-                            &completed[buffer_index].as_slice()
-                                [offset..offset + stored_len]
-                        } else {
-                            &in_progress[offset..offset + stored_len]
+                        let stored_value = unsafe {
+                            if buffer_index < completed.len() {
+                                completed
+                                    .get_unchecked(buffer_index)
+                                    .as_slice()
+                                    .get_unchecked(offset..offset + stored_len)
+                            } else {
+                                in_progress.get_unchecked(offset..offset + stored_len)
+                            }
                         };
-                        let input_value: &[u8] = values.value(i).as_ref();
+                        // Safety: i is in range and not null
+                        let input_value: &[u8] =
+                            unsafe { values.value_unchecked(i).as_ref() };
                         stored_value == input_value
                     })
                     .map(|entry| entry.payload)
@@ -339,7 +347,8 @@ where
                 payload
             } else {
                 // no existing value, make a new one
-                let value: &[u8] = values.value(i).as_ref();
+                // Safety: i is in range and not null
+                let value: &[u8] = unsafe { values.value_unchecked(i).as_ref() };
                 let payload = make_payload_fn(Some(value));
 
                 // Create view pointing to our buffers
