@@ -1,0 +1,148 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+###############################################
+## Tests for IN/EXISTS subqueries in projection
+## expressions (CASE, COALESCE, bare boolean)
+###############################################
+
+# Setup
+statement ok
+CREATE TABLE t1(id INT, name TEXT) AS VALUES
+(1, 'alice'),
+(2, 'bob'),
+(3, 'carol'),
+(4, 'dave');
+
+statement ok
+CREATE TABLE ref_table(id INT, label TEXT) AS VALUES
+(1, 'x'),
+(2, 'y'),
+(5, 'z');
+
+# 1. IN subquery inside CASE WHEN
+query TT rowsort
+SELECT
+  name,
+  CASE WHEN id IN (SELECT id FROM ref_table) THEN 'matched' ELSE 'unmatched' END AS status
+FROM t1
+----
+alice matched
+bob matched
+carol unmatched
+dave unmatched
+
+# 2. NOT IN subquery inside CASE WHEN
+query TT rowsort
+SELECT
+  name,
+  CASE WHEN id NOT IN (SELECT id FROM ref_table) THEN 'excluded' ELSE 'included' END AS status
+FROM t1
+----
+alice included
+bob included
+carol excluded
+dave excluded
+
+# 3. EXISTS inside CASE WHEN (correlated)
+query TT rowsort
+SELECT
+  name,
+  CASE WHEN EXISTS (SELECT 1 FROM ref_table WHERE ref_table.id = t1.id)
+       THEN 'has_ref' ELSE 'no_ref' END AS ref_status
+FROM t1
+----
+alice has_ref
+bob has_ref
+carol no_ref
+dave no_ref
+
+# 4. NOT EXISTS inside CASE WHEN (correlated)
+query TT rowsort
+SELECT
+  name,
+  CASE WHEN NOT EXISTS (SELECT 1 FROM ref_table WHERE ref_table.id = t1.id)
+       THEN 'missing' ELSE 'present' END AS ref_status
+FROM t1
+----
+alice present
+bob present
+carol missing
+dave missing
+
+# 5. IN subquery as bare boolean in SELECT
+query TB rowsort
+SELECT
+  name,
+  id IN (SELECT id FROM ref_table) AS is_in_ref
+FROM t1
+----
+alice true
+bob true
+carol false
+dave false
+
+# 6. Correlated IN subquery inside CASE WHEN
+query TT rowsort
+SELECT
+  name,
+  CASE WHEN id IN (SELECT ref_table.id FROM ref_table WHERE ref_table.label = 'x')
+       THEN 'label_x' ELSE 'other' END AS label_status
+FROM t1
+----
+alice label_x
+bob other
+carol other
+dave other
+
+# 7. Multiple subqueries in one CASE expression
+query TT rowsort
+SELECT
+  name,
+  CASE
+    WHEN id IN (SELECT id FROM ref_table WHERE label = 'x') THEN 'x_match'
+    WHEN id IN (SELECT id FROM ref_table WHERE label = 'y') THEN 'y_match'
+    ELSE 'none'
+  END AS multi_status
+FROM t1
+----
+alice x_match
+bob y_match
+carol none
+dave none
+
+# 8. COALESCE with IN subquery
+query TT rowsort
+SELECT
+  name,
+  COALESCE(
+    CASE WHEN id IN (SELECT id FROM ref_table) THEN 'found' ELSE NULL END,
+    'default'
+  ) AS coalesce_status
+FROM t1
+----
+alice found
+bob found
+carol default
+dave default
+
+# Cleanup
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE ref_table;
