@@ -25,6 +25,7 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
+use bytes::Bytes;
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
@@ -33,6 +34,7 @@ use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::HashMap;
 use std::future::Future;
 use std::mem;
+use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -71,6 +73,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
@@ -1132,7 +1135,10 @@ impl RowGroupsPrunedParquetOpen {
         let stream = futures::stream::unfold(
             PushDecoderStreamState {
                 decoder,
-                reader: prepared.async_file_reader,
+                reader: Some(prepared.async_file_reader),
+                current_batch_reader: None,
+                next_batch_reader: None,
+                pending_prefetch: None,
                 projector,
                 output_schema,
                 replace_schema,
@@ -1163,15 +1169,37 @@ impl RowGroupsPrunedParquetOpen {
     }
 }
 
+/// Result of a prefetch operation: the file reader (returned for reuse) and
+/// the fetched byte ranges + data.
+type PrefetchResult = (
+    Box<dyn AsyncFileReader + Send>,
+    Result<(Vec<Range<u64>>, Vec<Bytes>), ParquetError>,
+);
+
+/// Handle to a spawned prefetch task.
+type PrefetchHandle = tokio::task::JoinHandle<PrefetchResult>;
+
 /// State for a stream that decodes a single Parquet file using a push-based decoder.
 ///
-/// The [`transition`](Self::transition) method drives the decoder in a loop: it requests
-/// byte ranges from the [`AsyncFileReader`], pushes the fetched data into the
-/// [`ParquetPushDecoder`], and yields projected [`RecordBatch`]es until the file is
-/// fully consumed.
+/// Uses [`ParquetPushDecoder::try_next_reader`] to obtain a synchronous
+/// [`ParquetRecordBatchReader`] for the current row group, then prefetches
+/// the data needed for the next row group while iterating batches from the
+/// current one. This overlaps IO with compute, avoiding idle time between
+/// row groups.
 struct PushDecoderStreamState {
     decoder: ParquetPushDecoder,
-    reader: Box<dyn AsyncFileReader>,
+    /// The async file reader, wrapped in `Option` so it can be moved into
+    /// a prefetch future and returned when the future completes.
+    reader: Option<Box<dyn AsyncFileReader + Send>>,
+    /// Synchronous batch reader for the current row group.
+    current_batch_reader: Option<ParquetRecordBatchReader>,
+    /// A ready-to-use batch reader for the next row group, obtained when
+    /// the prefetch found data already available.
+    next_batch_reader: Option<ParquetRecordBatchReader>,
+    /// A spawned background task that fetches byte ranges for the next row group.
+    /// Using `tokio::spawn` ensures the IO runs concurrently on the runtime,
+    /// rather than being lazy and only polled when awaited.
+    pending_prefetch: Option<PrefetchHandle>,
     projector: Projector,
     output_schema: Arc<Schema>,
     replace_schema: bool,
@@ -1185,37 +1213,139 @@ impl PushDecoderStreamState {
     /// Advances the decoder state machine until the next [`RecordBatch`] is
     /// produced, the file is fully consumed, or an error occurs.
     ///
-    /// On each iteration the decoder is polled via [`ParquetPushDecoder::try_decode`]:
-    /// - [`NeedsData`](DecodeResult::NeedsData) – the requested byte ranges are
-    ///   fetched from the [`AsyncFileReader`] and fed back into the decoder.
-    /// - [`Data`](DecodeResult::Data) – a decoded batch is projected and returned.
-    /// - [`Finished`](DecodeResult::Finished) – signals end-of-stream (`None`).
+    /// This method uses [`ParquetPushDecoder::try_next_reader`] to pipeline
+    /// IO and compute: while batches are yielded from the current row group's
+    /// synchronous reader, a background future prefetches data for the next
+    /// row group.
     async fn transition(&mut self) -> Option<Result<RecordBatch>> {
         loop {
-            match self.decoder.try_decode() {
-                Ok(DecodeResult::NeedsData(ranges)) => {
-                    let fetch = async {
-                        let data = self.reader.get_byte_ranges(ranges.clone()).await?;
-                        self.decoder.push_ranges(ranges, data)?;
-                        Ok::<_, ParquetError>(())
-                    };
-                    if let Err(e) = fetch.await {
+            // 1. If we have a current batch reader, yield the next batch from it
+            if let Some(ref mut batch_reader) = self.current_batch_reader {
+                match batch_reader.next() {
+                    Some(Ok(batch)) => {
+                        let mut timer =
+                            self.baseline_metrics.elapsed_compute().timer();
+                        self.copy_arrow_reader_metrics();
+                        let result = self.project_batch(&batch);
+                        timer.stop();
+                        return Some(result);
+                    }
+                    Some(Err(e)) => {
+                        return Some(Err(DataFusionError::from(
+                            ParquetError::ArrowError(e.to_string()),
+                        )));
+                    }
+                    None => {
+                        // Current row group exhausted
+                        self.current_batch_reader = None;
+                    }
+                }
+            }
+
+            // 2. If there's a pending prefetch, await it and push data to the decoder
+            if let Some(prefetch) = self.pending_prefetch.take() {
+                match prefetch.await {
+                    Ok((reader, result)) => {
+                        self.reader = Some(reader);
+                        match result {
+                            Ok((ranges, data)) => {
+                                if let Err(e) =
+                                    self.decoder.push_ranges(ranges, data)
+                                {
+                                    return Some(Err(DataFusionError::from(e)));
+                                }
+                            }
+                            Err(e) => {
+                                return Some(Err(DataFusionError::from(e)))
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Some(Err(DataFusionError::External(Box::new(e))))
+                    }
+                }
+            }
+
+            // 3. Check if start_prefetch already obtained the next reader
+            if let Some(batch_reader) = self.next_batch_reader.take() {
+                self.current_batch_reader = Some(batch_reader);
+                self.start_prefetch();
+                continue;
+            }
+
+            // 4. Drive the decoder until we get a batch reader for the next row group
+            loop {
+                match self.decoder.try_next_reader() {
+                    Ok(DecodeResult::NeedsData(ranges)) => {
+                        let mut reader = self
+                            .reader
+                            .take()
+                            .expect("reader must be available");
+                        let fetch_result = async {
+                            let result =
+                                reader.get_byte_ranges(ranges.clone()).await;
+                            (reader, result.map(|data| (ranges, data)))
+                        }
+                        .await;
+                        self.reader = Some(fetch_result.0);
+                        match fetch_result.1 {
+                            Ok((ranges, data)) => {
+                                if let Err(e) =
+                                    self.decoder.push_ranges(ranges, data)
+                                {
+                                    return Some(Err(DataFusionError::from(e)));
+                                }
+                            }
+                            Err(e) => {
+                                return Some(Err(DataFusionError::from(e)))
+                            }
+                        }
+                    }
+                    Ok(DecodeResult::Data(batch_reader)) => {
+                        self.current_batch_reader = Some(batch_reader);
+                        // Start prefetching the next row group's data
+                        self.start_prefetch();
+                        break;
+                    }
+                    Ok(DecodeResult::Finished) => {
+                        return None;
+                    }
+                    Err(e) => {
                         return Some(Err(DataFusionError::from(e)));
                     }
                 }
-                Ok(DecodeResult::Data(batch)) => {
-                    let mut timer = self.baseline_metrics.elapsed_compute().timer();
-                    self.copy_arrow_reader_metrics();
-                    let result = self.project_batch(&batch);
-                    timer.stop();
-                    return Some(result);
-                }
-                Ok(DecodeResult::Finished) => {
-                    return None;
-                }
-                Err(e) => {
-                    return Some(Err(DataFusionError::from(e)));
-                }
+            }
+        }
+    }
+
+    /// Speculatively starts fetching data for the next row group.
+    ///
+    /// Calls [`ParquetPushDecoder::try_next_reader`] to determine what byte
+    /// ranges the decoder needs for the next row group, then spawns an async
+    /// fetch. The prefetched data will be pushed to the decoder when the
+    /// current row group's batch reader is exhausted.
+    fn start_prefetch(&mut self) {
+        if self.pending_prefetch.is_some() {
+            return;
+        }
+        match self.decoder.try_next_reader() {
+            Ok(DecodeResult::NeedsData(ranges)) => {
+                let mut reader =
+                    self.reader.take().expect("reader must be available");
+                self.pending_prefetch =
+                    Some(tokio::spawn(async move {
+                        let result =
+                            reader.get_byte_ranges(ranges.clone()).await;
+                        (reader, result.map(|data| (ranges, data)))
+                    }));
+            }
+            Ok(DecodeResult::Data(batch_reader)) => {
+                // Next row group already has all data (unlikely but possible).
+                // Store it so transition() can use it directly.
+                self.next_batch_reader = Some(batch_reader);
+            }
+            Ok(DecodeResult::Finished) | Err(_) => {
+                // No more row groups or error; nothing to prefetch.
             }
         }
     }
