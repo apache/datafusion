@@ -830,6 +830,8 @@ pub struct FirstValueAccumulator {
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // derived from `ordering_req`.
+    sort_options: Vec<SortOptions>,
     // Stores whether incoming data already satisfies the ordering requirement.
     is_input_pre_ordered: bool,
     // Ignore null values.
@@ -849,11 +851,13 @@ impl FirstValueAccumulator {
             .iter()
             .map(ScalarValue::try_from)
             .collect::<Result<_>>()?;
+        let sort_options = get_sort_options(&ordering_req);
         ScalarValue::try_from(data_type).map(|first| Self {
             first,
             is_set: false,
             orderings,
             ordering_req,
+            sort_options,
             is_input_pre_ordered,
             ignore_nulls,
         })
@@ -926,12 +930,8 @@ impl Accumulator for FirstValueAccumulator {
             let row = get_row_at_idx(values, first_idx)?;
             if !self.is_set
                 || (!self.is_input_pre_ordered
-                    && compare_rows(
-                        &self.orderings,
-                        &row[1..],
-                        &get_sort_options(&self.ordering_req),
-                    )?
-                    .is_gt())
+                    && compare_rows(&self.orderings, &row[1..], &self.sort_options)?
+                        .is_gt())
             {
                 self.update_with_new_row(row);
             }
@@ -959,10 +959,10 @@ impl Accumulator for FirstValueAccumulator {
             let mut first_row = get_row_at_idx(&filtered_states, first_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let first_ordering = &first_row[1..is_set_idx];
-            let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
-                || compare_rows(&self.orderings, first_ordering, &sort_options)?.is_gt()
+                || compare_rows(&self.orderings, first_ordering, &self.sort_options)?
+                    .is_gt()
             {
                 // Update with first value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
@@ -1219,6 +1219,8 @@ struct LastValueAccumulator {
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // derived from `ordering_req`.
+    sort_options: Vec<SortOptions>,
     // Stores whether incoming data already satisfies the ordering requirement.
     is_input_pre_ordered: bool,
     // Ignore null values.
@@ -1238,11 +1240,13 @@ impl LastValueAccumulator {
             .iter()
             .map(ScalarValue::try_from)
             .collect::<Result<_>>()?;
+        let sort_options = get_sort_options(&ordering_req);
         ScalarValue::try_from(data_type).map(|last| Self {
             last,
             is_set: false,
             orderings,
             ordering_req,
+            sort_options,
             is_input_pre_ordered,
             ignore_nulls,
         })
@@ -1315,12 +1319,7 @@ impl Accumulator for LastValueAccumulator {
             // Update when there is a more recent entry
             if !self.is_set
                 || self.is_input_pre_ordered
-                || compare_rows(
-                    &self.orderings,
-                    orderings,
-                    &get_sort_options(&self.ordering_req),
-                )?
-                .is_lt()
+                || compare_rows(&self.orderings, orderings, &self.sort_options)?.is_lt()
             {
                 self.update_with_new_row(row);
             }
@@ -1348,12 +1347,12 @@ impl Accumulator for LastValueAccumulator {
             let mut last_row = get_row_at_idx(&filtered_states, last_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let last_ordering = &last_row[1..is_set_idx];
-            let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
                 || self.is_input_pre_ordered
-                || compare_rows(&self.orderings, last_ordering, &sort_options)?.is_lt()
+                || compare_rows(&self.orderings, last_ordering, &self.sort_options)?
+                    .is_lt()
             {
                 // Update with last value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
