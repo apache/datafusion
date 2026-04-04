@@ -157,7 +157,18 @@ where
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
                 for &row in rows {
-                    self.do_append_val_inner(arr, row)?;
+                    // Safety: null_count == 0, so all rows are valid
+                    let value: &[u8] = unsafe { arr.value_unchecked(row) }.as_ref();
+                    self.buffer.append_slice(value);
+
+                    if self.buffer.len() > self.max_buffer_size {
+                        return Err(exec_datafusion_err!(
+                            "offset overflow, buffer size > {}",
+                            self.max_buffer_size
+                        ));
+                    }
+
+                    self.offsets.push(O::usize_as(self.buffer.len()));
                 }
             }
 

@@ -138,8 +138,11 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
 
             (true, Nulls::None) => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.buffer.append(arr.value(row));
+                // Safety: null_count == 0 so all rows are valid; rows.len() is exact
+                unsafe {
+                    self.buffer.extend_trusted_len(
+                        rows.iter().map(|&row| arr.value_unchecked(row)),
+                    );
                 }
             }
 
@@ -149,8 +152,11 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
             }
 
             (false, _) => {
-                for &row in rows {
-                    self.buffer.append(arr.value(row));
+                // Safety: non-nullable column, all rows are valid; rows.len() is exact
+                unsafe {
+                    self.buffer.extend_trusted_len(
+                        rows.iter().map(|&row| arr.value_unchecked(row)),
+                    );
                 }
             }
         }

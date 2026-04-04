@@ -166,9 +166,36 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
-                }
+                let views = &mut self.views;
+                let in_progress = &mut self.in_progress;
+                let completed = &mut self.completed;
+                let max_block_size = self.max_block_size;
+                views.extend(rows.iter().map(|&row| {
+                    // Safety: null_count == 0, so all rows are valid
+                    let value: &[u8] = unsafe { arr.value_unchecked(row) }.as_ref();
+
+                    let value_len = value.len();
+                    if value_len <= 12 {
+                        make_view(value, 0, 0)
+                    } else {
+                        // Inline ensure_in_progress_big_enough
+                        let require_cap = in_progress.len() + value_len;
+                        if require_cap > max_block_size {
+                            let flushed_block = replace(
+                                in_progress,
+                                Vec::with_capacity(max_block_size),
+                            );
+                            let buffer = Buffer::from_vec(flushed_block);
+                            completed.push(buffer);
+                        }
+
+                        let buffer_index = completed.len();
+                        let offset = in_progress.len();
+                        in_progress.extend_from_slice(value);
+
+                        make_view(value, buffer_index as u32, offset as u32)
+                    }
+                }));
             }
 
             Nulls::All => {

@@ -218,9 +218,9 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
             (true, Nulls::None) => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.group_values.push(arr.value(row));
-                }
+                // Safety: we checked null_count == 0, so all rows are valid
+                self.group_values
+                    .extend(rows.iter().map(|&row| unsafe { arr.value_unchecked(row) }));
             }
 
             (true, Nulls::All) => {
@@ -230,9 +230,9 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             }
 
             (false, _) => {
-                for &row in rows {
-                    self.group_values.push(arr.value(row));
-                }
+                // Safety: non-nullable column, all rows are valid
+                self.group_values
+                    .extend(rows.iter().map(|&row| unsafe { arr.value_unchecked(row) }));
             }
         }
 
