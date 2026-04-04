@@ -837,18 +837,21 @@ mod tests {
 
     #[test]
     fn test_sliced_string_array_array_args() -> Result<()> {
-        let string_array =
-            Arc::new(StringArray::from(vec!["unused", "alphabet", "joséésoj"]))
-                as ArrayRef;
+        // Use strings longer than 12 bytes so the result views are out-of-line.
+        let string_array = Arc::new(StringArray::from(vec![
+            "skipped_prefix_value",
+            "alphabet_long_string",
+            "joséésojanother_long",
+        ])) as ArrayRef;
         let string_array = string_array.slice(1, 2);
         let start_array = Arc::new(Int64Array::from(vec![3, 5])) as ArrayRef;
-        let count_array = Arc::new(Int64Array::from(vec![2, 2])) as ArrayRef;
+        let count_array = Arc::new(Int64Array::from(vec![15, 14])) as ArrayRef;
 
         let result = super::substr(&[string_array, start_array, count_array])?;
         let result = result.as_string_view();
 
-        assert_eq!(result.value(0), "ph");
-        assert_eq!(result.value(1), "és");
+        assert_eq!(result.value(0), "phabet_long_str");
+        assert_eq!(result.value(1), "ésojanother_lo");
 
         Ok(())
     }
