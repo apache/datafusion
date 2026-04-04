@@ -87,7 +87,7 @@ num-traits = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
-unicode-segmentation = { version = "^1.7.1", optional = true }
+unicode-segmentation = { version = "^1.13.2", optional = true }
 uuid = { workspace = true, features = ["v4"], optional = true }
 
 [dev-dependencies]

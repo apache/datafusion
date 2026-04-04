@@ -45,7 +45,6 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::mem::size_of_val;
 
 make_udaf_expr_and_func!(
@@ -201,10 +200,6 @@ impl Default for Sum {
 }
 
 impl AggregateUDFImpl for Sum {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "sum"
     }

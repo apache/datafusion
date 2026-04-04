@@ -414,14 +414,12 @@ fn test_backtrace_output(#[case] query: &str) {
     let output = cmd.output().expect("Failed to execute command");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined_output = format!("{}{}", stdout, stderr);
+    let combined_output = format!("{stdout}{stderr}");
 
     // Assert that the output includes literal 'backtrace'
     assert!(
         combined_output.to_lowercase().contains("backtrace"),
-        "Expected output to contain 'backtrace', but got stdout: '{}' stderr: '{}'",
-        stdout,
-        stderr
+        "Expected output to contain 'backtrace', but got stdout: '{stdout}' stderr: '{stderr}'"
     );
 }
 

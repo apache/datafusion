@@ -544,7 +544,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use bytes::Bytes;
     use datafusion_datasource::FileRange;
-    use futures::TryStreamExt;
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStoreExt, PutPayload};

@@ -139,6 +139,23 @@ ORDER BY id, name, l_name;
 NULL bar NULL
 NULL NULL l_bar
 
+# Regression test: UNION ALL + optimize_projections pruning unused columns causes
+# metadata loss when one branch has NULL literals (empty metadata) and the other
+# has field metadata. The optimizer prunes unused columns, triggering recompute_schema
+# which rebuilds the Union schema via intersect_metadata_for_union. Previously, this
+# intersection would drop metadata when any branch had empty metadata (from NULL literals).
+# See https://github.com/apache/datafusion/issues/19049
+query T
+SELECT name FROM (
+  SELECT id, name FROM "table_with_metadata"
+  UNION ALL
+  SELECT NULL::int as id, NULL::string as name
+) GROUP BY name ORDER BY name;
+----
+bar
+baz
+NULL
+
 # Regression test: missing field metadata from left side of the union when right side is chosen
 query T
 select name from (

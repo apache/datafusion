@@ -58,10 +58,11 @@ where
 /// Fixed seed for the hashing so that values are consistent across runs
 ///
 /// Note that when we later move on to have serialized HLL register binaries
-/// shared across cluster, this SEED will have to be consistent across all
+/// shared across cluster, this HLL_HASH_STATE will have to be consistent across all
 /// parties otherwise we might have corruption. So ideally for later this seed
 /// shall be part of the serialized form (or stay unchanged across versions).
-const SEED: foldhash::quality::FixedState = foldhash::quality::FixedState::with_seed(0);
+pub(crate) const HLL_HASH_STATE: foldhash::quality::FixedState =
+    foldhash::quality::FixedState::with_seed(0);
 
 impl<T> Default for HyperLogLog<T>
 where
@@ -97,12 +98,21 @@ where
     /// reasonable performance.
     #[inline]
     fn hash_value(&self, obj: &T) -> u64 {
-        SEED.hash_one(obj)
+        HLL_HASH_STATE.hash_one(obj)
     }
 
     /// Adds an element to the HyperLogLog.
     pub fn add(&mut self, obj: &T) {
         let hash = self.hash_value(obj);
+        self.add_hashed(hash);
+    }
+
+    /// Adds a pre-computed hash value directly to the HyperLogLog.
+    ///
+    /// The hash should be computed using [`HLL_HASH_STATE`], the same hasher used
+    /// by [`Self::add`].
+    #[inline]
+    pub(crate) fn add_hashed(&mut self, hash: u64) {
         let index = (hash & HLL_P_MASK) as usize;
         let p = ((hash >> HLL_P) | (1_u64 << HLL_Q)).trailing_zeros() + 1;
         self.registers[index] = self.registers[index].max(p as u8);

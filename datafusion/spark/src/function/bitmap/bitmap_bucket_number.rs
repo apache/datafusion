@@ -18,12 +18,13 @@
 use arrow::array::{ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type};
-use datafusion::logical_expr::{ColumnarValue, Signature, TypeSignature, Volatility};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `bitmap_bucket_number` expression
@@ -56,10 +57,6 @@ impl BitmapBucketNumber {
 }
 
 impl ScalarUDFImpl for BitmapBucketNumber {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bitmap_bucket_number"
     }

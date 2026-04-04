@@ -293,7 +293,7 @@ fn sort_columns_from_physical_sort_exprs(
     since = "47.0.0",
     note = "Please use `get_files_with_limit` and  `compute_all_files_statistics` instead"
 )]
-#[expect(unused)]
+#[cfg_attr(not(test), expect(unused))]
 pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Arc<Statistics>)>>,
     file_schema: SchemaRef,
@@ -329,7 +329,7 @@ pub async fn get_statistics_with_limit(
             col_stats_set[index].null_count = file_column.null_count;
             col_stats_set[index].max_value = file_column.max_value;
             col_stats_set[index].min_value = file_column.min_value;
-            col_stats_set[index].sum_value = file_column.sum_value;
+            col_stats_set[index].sum_value = file_column.sum_value.cast_to_sum_type();
         }
 
         // If the number of rows exceeds the limit, we can stop processing
@@ -374,7 +374,7 @@ pub async fn get_statistics_with_limit(
                     col_stats.null_count = col_stats.null_count.add(file_nc);
                     col_stats.max_value = col_stats.max_value.max(file_max);
                     col_stats.min_value = col_stats.min_value.min(file_min);
-                    col_stats.sum_value = col_stats.sum_value.add(file_sum);
+                    col_stats.sum_value = col_stats.sum_value.add_for_sum(file_sum);
                     col_stats.byte_size = col_stats.byte_size.add(file_sbs);
                 }
 
@@ -496,4 +496,79 @@ pub fn add_row_stats(
     num_rows: Precision<usize>,
 ) -> Precision<usize> {
     file_num_rows.add(&num_rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PartitionedFile;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use futures::stream;
+
+    fn file_stats(sum: u32) -> Statistics {
+        Statistics {
+            num_rows: Precision::Exact(1),
+            total_byte_size: Precision::Exact(4),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::UInt32(Some(sum))),
+                min_value: Precision::Exact(ScalarValue::UInt32(Some(sum))),
+                sum_value: Precision::Exact(ScalarValue::UInt32(Some(sum))),
+                distinct_count: Precision::Exact(1),
+                byte_size: Precision::Exact(4),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    #[expect(deprecated)]
+    async fn test_get_statistics_with_limit_casts_first_file_sum_to_sum_type()
+    -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, true)]));
+
+        let files = stream::iter(vec![Ok((
+            PartitionedFile::new("f1.parquet", 1),
+            Arc::new(file_stats(100)),
+        ))]);
+
+        let (_group, stats) =
+            get_statistics_with_limit(files, schema, None, false).await?;
+
+        assert_eq!(
+            stats.column_statistics[0].sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(100)))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(deprecated)]
+    async fn test_get_statistics_with_limit_merges_sum_with_unsigned_widening()
+    -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, true)]));
+
+        let files = stream::iter(vec![
+            Ok((
+                PartitionedFile::new("f1.parquet", 1),
+                Arc::new(file_stats(100)),
+            )),
+            Ok((
+                PartitionedFile::new("f2.parquet", 1),
+                Arc::new(file_stats(200)),
+            )),
+        ]);
+
+        let (_group, stats) =
+            get_statistics_with_limit(files, schema, None, true).await?;
+
+        assert_eq!(
+            stats.column_statistics[0].sum_value,
+            Precision::Exact(ScalarValue::UInt64(Some(300)))
+        );
+
+        Ok(())
+    }
 }

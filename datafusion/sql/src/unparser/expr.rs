@@ -1833,7 +1833,7 @@ impl Unparser<'_> {
 #[cfg(test)]
 mod tests {
     use std::ops::{Add, Sub};
-    use std::{any::Any, sync::Arc, vec};
+    use std::{sync::Arc, vec};
 
     use crate::unparser::dialect::SqliteDialect;
     use arrow::array::{LargeListArray, ListArray};
@@ -1853,15 +1853,16 @@ mod tests {
     use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
-    use datafusion_functions_nested::expr_fn::{array_element, make_array};
+    use datafusion_functions_nested::expr_fn::{array_element, array_has, make_array};
     use datafusion_functions_nested::map::map;
     use datafusion_functions_window::rank::rank_udwf;
     use datafusion_functions_window::row_number::row_number_udwf;
     use sqlparser::ast::ExactNumberInfo;
 
     use crate::unparser::dialect::{
-        CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
-        DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
+        BigQueryDialect, CharacterLengthStyle, CustomDialect, CustomDialectBuilder,
+        DateFieldExtractStyle, DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect,
+        ScalarFnToSqlHandler,
     };
 
     use super::*;
@@ -1881,10 +1882,6 @@ mod tests {
     }
 
     impl ScalarUDFImpl for DummyUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "dummy_udf"
         }
@@ -2050,7 +2047,7 @@ mod tests {
                     ScalarValue::TimestampSecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 10:46:41 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T10:46:41+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMillisecond(Some(10001), None), None),
@@ -2061,7 +2058,7 @@ mod tests {
                     ScalarValue::TimestampMillisecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 08:00:10.001 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:10.001+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMicrosecond(Some(10001), None), None),
@@ -2072,7 +2069,7 @@ mod tests {
                     ScalarValue::TimestampMicrosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 08:00:00.010001 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.010001+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampNanosecond(Some(10001), None), None),
@@ -2083,7 +2080,7 @@ mod tests {
                     ScalarValue::TimestampNanosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01 08:00:00.000010001 +08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.000010001+08:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Time32Second(Some(10001)), None),
@@ -3078,6 +3075,24 @@ mod tests {
     }
 
     #[test]
+    fn test_postgres_array_has_to_any() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> = Arc::new(DefaultDialect {});
+        let postgres_dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+        let expr = array_has(col("items"), lit(1));
+
+        for (dialect, expected) in [
+            (default_dialect, "array_has(\"items\", 1)"),
+            (postgres_dialect, "1 = ANY(\"items\")"),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+            let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_window_func_support_window_frame() -> Result<()> {
         let default_dialect: Arc<dyn Dialect> =
             Arc::new(CustomDialectBuilder::new().build());
@@ -3353,12 +3368,13 @@ mod tests {
             Arc::new(CustomDialectBuilder::new().build());
 
         let duckdb_dialect: Arc<dyn Dialect> = Arc::new(DuckDBDialect::new());
+        let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
 
         for (dialect, scalar, expected) in [
             (
                 Arc::clone(&default_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15 11:00:00 +00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3366,7 +3382,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15 12:00:00.123 +01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3374,7 +3390,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15 10:00:00.123456 -01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3382,12 +3398,12 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15 11:00:00.123456789 +00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15 11:00:00+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3395,7 +3411,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15 12:00:00.123+01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3403,7 +3419,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15 10:00:00.123456-01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3411,7 +3427,36 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15 11:00:00.123456789+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampMillisecond(
+                    Some(1757934000123),
+                    Some("+01:00".into()),
+                ),
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampMicrosecond(
+                    Some(1757934000123456),
+                    Some("-01:00".into()),
+                ),
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&bigquery_dialect),
+                ScalarValue::TimestampNanosecond(
+                    Some(1757934000123456789),
+                    Some("+00:00".into()),
+                ),
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
             ),
         ] {
             let unparser = Unparser::new(dialect.as_ref());

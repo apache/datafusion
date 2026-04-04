@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -27,7 +26,8 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -70,10 +70,6 @@ impl ReverseFunc {
 }
 
 impl ScalarUDFImpl for ReverseFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "reverse"
     }
@@ -86,10 +82,7 @@ impl ScalarUDFImpl for ReverseFunc {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {
             Utf8 | Utf8View | LargeUtf8 => make_scalar_function(reverse, vec![])(args),

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Scalar};
@@ -75,10 +74,6 @@ impl StartsWithFunc {
 }
 
 impl ScalarUDFImpl for StartsWithFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "starts_with"
     }
@@ -228,11 +223,8 @@ mod tests {
     use crate::utils::test::test_function;
     use arrow::array::{Array, BooleanArray, StringArray};
     use arrow::datatypes::DataType::Boolean;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
-    use std::sync::Arc;
 
     use super::*;
 

@@ -24,7 +24,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Other Functions"),
@@ -59,10 +58,6 @@ impl VersionFunc {
 }
 
 impl ScalarUDFImpl for VersionFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "version"
     }
@@ -99,6 +94,7 @@ mod test {
     use super::*;
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::ScalarFunctionArgs;
     use datafusion_expr::ScalarUDF;
     use std::sync::Arc;
 

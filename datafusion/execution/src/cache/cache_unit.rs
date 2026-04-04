@@ -101,7 +101,6 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::CacheAccessor;
     use crate::cache::cache_manager::{
         CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
     };
@@ -114,7 +113,6 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use object_store::ObjectMeta;
-    use object_store::path::Path;
     use std::sync::Arc;
 
     fn create_test_meta(path: &str, size: u64) -> ObjectMeta {
