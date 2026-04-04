@@ -666,6 +666,8 @@ impl HashJoinStream {
         let is_empty = build_side.left_data.map().is_empty();
 
         if is_empty {
+            // Invariant: state_after_build_ready should have already completed
+            // join types whose result is fixed to empty when the build side is empty.
             debug_assert!(!self.join_type.empty_build_side_produces_empty_result());
             let result = build_batch_empty_build_side(
                 &self.schema,
