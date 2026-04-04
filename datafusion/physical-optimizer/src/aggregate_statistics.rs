@@ -51,7 +51,6 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
-                .as_any()
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
             let stats = partial_agg_exec.input().partition_statistics(None)?;
@@ -115,13 +114,13 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// We would have preferred to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
 fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
-    if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>()
+    if let Some(final_agg_exec) = node.downcast_ref::<AggregateExec>()
         && final_agg_exec.mode().input_mode() == AggregateInputMode::Partial
         && final_agg_exec.group_expr().is_empty()
     {
         let mut child = Arc::clone(final_agg_exec.input());
         loop {
-            if let Some(partial_agg_exec) = child.as_any().downcast_ref::<AggregateExec>()
+            if let Some(partial_agg_exec) = child.downcast_ref::<AggregateExec>()
                 && partial_agg_exec.mode().input_mode() == AggregateInputMode::Raw
                 && partial_agg_exec.group_expr().is_empty()
                 && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())

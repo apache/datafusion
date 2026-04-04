@@ -18,8 +18,8 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
+use std::sync::Arc;
 use std::task::{Poll, ready};
-use std::{any::Any, sync::Arc};
 
 use super::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
@@ -228,10 +228,6 @@ impl DisplayAs for UnnestExec {
 impl ExecutionPlan for UnnestExec {
     fn name(&self) -> &'static str {
         "UnnestExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

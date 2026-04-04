@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -231,9 +230,7 @@ impl Clone for FFI_ScalarUDF {
 
 impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
     fn from(udf: Arc<ScalarUDF>) -> Self {
-        if let Some(udf) =
-            (udf.inner().as_ref() as &dyn Any).downcast_ref::<ForeignScalarUDF>()
-        {
+        if let Some(udf) = udf.inner().downcast_ref::<ForeignScalarUDF>() {
             return udf.udf.clone();
         }
 
@@ -433,7 +430,6 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::any::Any;
 
     #[test]
     fn test_round_trip_scalar_udf() -> Result<()> {
@@ -460,20 +456,12 @@ mod tests {
 
         // Verify local libraries can be downcast to their original
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
-        assert!(
-            (foreign_udf.as_ref() as &dyn Any)
-                .downcast_ref::<AbsFunc>()
-                .is_some()
-        );
+        assert!(foreign_udf.is::<AbsFunc>());
 
         // Verify different library markers generate foreign providers
         ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
-        assert!(
-            (foreign_udf.as_ref() as &dyn Any)
-                .downcast_ref::<ForeignScalarUDF>()
-                .is_some()
-        );
+        assert!(foreign_udf.is::<ForeignScalarUDF>());
 
         Ok(())
     }
