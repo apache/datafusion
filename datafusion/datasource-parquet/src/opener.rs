@@ -1048,6 +1048,15 @@ impl RowGroupsPrunedParquetOpen {
             row_groups.prune_by_limit(limit, rg_metadata, &prepared.file_metrics);
         }
 
+        // If all remaining row groups are fully matched by the predicate
+        // (i.e., statistics prove every row satisfies the filter), skip
+        // per-row filter evaluation entirely.
+        let all_fully_matched = row_filter.is_some()
+            && row_groups
+                .row_group_indexes()
+                .all(|idx| row_groups.is_fully_matched()[idx]);
+        let row_filter = if all_fully_matched { None } else { row_filter };
+
         // Page index pruning: if all data on individual pages can
         // be ruled using page metadata, rows from other columns
         // with that range can be skipped as well.
