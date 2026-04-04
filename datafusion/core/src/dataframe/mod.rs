@@ -531,7 +531,12 @@ impl DataFrame {
                     let rewritten = rewrite_expr(expr, &aggr_map)?;
                     let name =
                         make_unique_name(base_alias, &mut projection_used_names, 1);
-                    let final_expr = rewritten.alias(name);
+                    // Avoid adding a redundant alias if the rewritten expression
+                    // already has the desired name.
+                    let final_expr = match rewritten.name_for_alias() {
+                        Ok(existing) if existing == name => rewritten,
+                        _ => rewritten.alias(name),
+                    };
 
                     rewritten_exprs.push(SelectExpr::Expression(final_expr));
                 }
