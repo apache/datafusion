@@ -17,38 +17,58 @@
 
 use arrow::datatypes::DataType;
 
-use super::binary::comparison_coercion;
+use super::binary::{comparison_coercion, type_union_coercion};
+
+/// Fold `coerce_fn` over `types`, starting from `initial_type`.
+fn fold_coerce(
+    initial_type: &DataType,
+    types: &[DataType],
+    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
+) -> Option<DataType> {
+    types
+        .iter()
+        .try_fold(initial_type.clone(), |left_type, right_type| {
+            coerce_fn(&left_type, right_type)
+        })
+}
 
 /// Attempts to coerce the types of `list_types` to be comparable with the
-/// `expr_type`.
-/// Returns the common data type for `expr_type` and `list_types`
+/// `expr_type` for IN list predicates.
+/// Returns the common data type for `expr_type` and `list_types`.
+///
+/// Uses comparison coercion because `x IN (a, b)` is semantically equivalent
+/// to `x = a OR x = b`.
 pub fn get_coerce_type_for_list(
     expr_type: &DataType,
     list_types: &[DataType],
 ) -> Option<DataType> {
-    list_types
-        .iter()
-        .try_fold(expr_type.clone(), |left_type, right_type| {
-            comparison_coercion(&left_type, right_type)
-        })
+    fold_coerce(expr_type, list_types, comparison_coercion)
 }
 
-/// Find a common coerceable type for all `when_or_then_types` as well
-/// and the `case_or_else_type`, if specified.
-/// Returns the common data type for `when_or_then_types` and `case_or_else_type`
-pub fn get_coerce_type_for_case_expression(
-    when_or_then_types: &[DataType],
-    case_or_else_type: Option<&DataType>,
+/// Find a common coerceable type for `CASE expr WHEN val1 WHEN val2 ...`
+/// conditions. Returns the common type for `case_type` and all `when_types`.
+///
+/// Uses comparison coercion because `CASE expr WHEN val` is semantically
+/// equivalent to `expr = val`.
+pub fn get_coerce_type_for_case_when(
+    when_types: &[DataType],
+    case_type: &DataType,
 ) -> Option<DataType> {
-    let case_or_else_type = match case_or_else_type {
-        None => when_or_then_types[0].clone(),
-        Some(data_type) => data_type.clone(),
+    fold_coerce(case_type, when_types, comparison_coercion)
+}
+
+/// Find a common coerceable type for CASE THEN/ELSE result expressions.
+/// Returns the common data type for `then_types` and `else_type`.
+///
+/// Uses type union coercion because the result branches must be brought to a
+/// common type (like UNION), not compared.
+pub fn get_coerce_type_for_case_expression(
+    then_types: &[DataType],
+    else_type: Option<&DataType>,
+) -> Option<DataType> {
+    let (initial_type, remaining) = match else_type {
+        None => then_types.split_first()?,
+        Some(data_type) => (data_type, then_types),
     };
-    when_or_then_types
-        .iter()
-        .try_fold(case_or_else_type, |left_type, right_type| {
-            // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
-            // refactor again.
-            comparison_coercion(&left_type, right_type)
-        })
+    fold_coerce(initial_type, remaining, type_union_coercion)
 }

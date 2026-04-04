@@ -527,8 +527,8 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
 02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[id@0 as id, CASE WHEN __always_true@2 IS NULL THEN 0 ELSE cnt@1 END as cnt]
-04)------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, t1_id@1)], projection=[id@0, cnt@1, __always_true@3]
+03)----ProjectionExec: expr=[id@0 as id, CASE WHEN __always_true@1 IS NULL THEN 0 ELSE cnt@2 END as cnt]
+04)------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, t1_id@1)], projection=[id@0, __always_true@3, cnt@1]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)--------ProjectionExec: expr=[count(Int64(1))@1 as cnt, t1_id@0 as t1_id, true as __always_true]
 07)----------AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]

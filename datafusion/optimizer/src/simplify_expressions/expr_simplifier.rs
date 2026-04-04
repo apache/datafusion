@@ -1784,6 +1784,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
                 let lhs = to_inlist(*left).unwrap();
                 let rhs = to_inlist(*right).unwrap();
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut seen: HashSet<Expr> = HashSet::new();
                 let list = lhs
                     .list
@@ -2174,6 +2176,7 @@ impl<'a> StringScalar<'a> {
     }
 }
 
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
     let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
     iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
@@ -2258,6 +2261,7 @@ fn to_inlist(expr: Expr) -> Option<InList> {
 
 /// Return the union of two inlist expressions
 /// maintaining the order of the elements in the two lists
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
     // extend the list in l1 with the elements in l2 that are not already in l1
     let l1_items: HashSet<_> = l1.list.iter().collect();
@@ -2276,6 +2280,7 @@ fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
 
 /// Return the intersection of two inlist expressions
 /// maintaining the order of the elements in the two lists
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn inlist_intersection(mut l1: InList, l2: &InList, negated: bool) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
@@ -2292,6 +2297,7 @@ fn inlist_intersection(mut l1: InList, l2: &InList, negated: bool) -> Result<Exp
 
 /// Return the all items in l1 that are not in l2
 /// maintaining the order of the elements in the two lists
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
