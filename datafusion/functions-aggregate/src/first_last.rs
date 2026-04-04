@@ -784,8 +784,7 @@ impl Accumulator for TrivialFirstValueAccumulator {
                 first_idx = Some(0);
             }
             if let Some(first_idx) = first_idx {
-                let mut row = get_row_at_idx(values, first_idx)?;
-                self.first = row.swap_remove(0);
+                self.first = ScalarValue::try_from_array(&values[0], first_idx)?;
                 self.first.compact();
                 self.is_set = true;
             }
@@ -1176,8 +1175,7 @@ impl Accumulator for TrivialLastValueAccumulator {
             last_idx = Some(value.len() - 1);
         }
         if let Some(last_idx) = last_idx {
-            let mut row = get_row_at_idx(values, last_idx)?;
-            self.last = row.swap_remove(0);
+            self.last = ScalarValue::try_from_array(&values[0], last_idx)?;
             self.last.compact();
             self.is_set = true;
         }
