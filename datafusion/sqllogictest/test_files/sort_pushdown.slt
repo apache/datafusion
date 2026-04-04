@@ -1100,7 +1100,8 @@ CREATE EXTERNAL TABLE reversed_parquet(id INT, value INT)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/sort_pushdown/reversed/';
 
-# Test 4.1: Files sorted by statistics → non-overlapping → SortExec eliminated
+# Test 4.1: PushdownSort reorders files by min/max statistics so they are
+# already in correct sort order → non-overlapping → no SortExec needed.
 # (files reordered from [a_high, b_mid, c_low] to [c_low, b_mid, a_high])
 query TT
 EXPLAIN SELECT * FROM reversed_parquet ORDER BY id ASC;
