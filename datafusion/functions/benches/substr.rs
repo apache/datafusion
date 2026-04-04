@@ -220,8 +220,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         group.finish();
 
-        // Scalar start=1, no count, long strings (exercises the short-start
-        // heuristic that skips the is_ascii scan)
+        // Scalar start=1, no count, long strings
         let len = 128;
         let mut group =
             c.benchmark_group("substr, scalar start=1, no count, long strings");

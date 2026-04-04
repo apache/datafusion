@@ -369,8 +369,7 @@ fn generic_string_substr<T: OffsetSizeTrait>(
     let start_array = as_int64_array(&args[0])?;
     let count_array_opt = args.get(1).map(|a| as_int64_array(a)).transpose()?;
 
-    let is_ascii =
-        enable_ascii_fast_path(&string_array, start_array, count_array_opt);
+    let is_ascii = enable_ascii_fast_path(&string_array, start_array, count_array_opt);
     let offsets = string_array.value_offsets();
     let mut views_buf = Vec::with_capacity(string_array.len());
     let mut null_builder = NullBufferBuilder::new(string_array.len());
@@ -420,6 +419,8 @@ fn generic_string_substr<T: OffsetSizeTrait>(
     }
 }
 
+// Fallback for `generic_string_substr` if we can't use zerocopy because the
+// input string array is too large.
 fn generic_string_substr_copy<T: OffsetSizeTrait>(
     string_array: &GenericStringArray<T>,
     args: &[ArrayRef],
@@ -427,8 +428,7 @@ fn generic_string_substr_copy<T: OffsetSizeTrait>(
     let start_array = as_int64_array(&args[0])?;
     let count_array_opt = args.get(1).map(|a| as_int64_array(a)).transpose()?;
 
-    let is_ascii =
-        enable_ascii_fast_path(&string_array, start_array, count_array_opt);
+    let is_ascii = enable_ascii_fast_path(&string_array, start_array, count_array_opt);
     let mut result_builder = StringViewBuilder::with_capacity(string_array.len());
 
     for i in 0..string_array.len() {
