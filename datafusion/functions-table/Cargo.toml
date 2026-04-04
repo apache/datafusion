@@ -40,14 +40,26 @@ workspace = true
 [lib]
 name = "datafusion_functions_table"
 
+[features]
+default = ["parquet"]
+parquet = ["datafusion-datasource-parquet"]
+avro = ["datafusion-datasource-avro"]
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
 datafusion-catalog = { workspace = true }
+datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
+datafusion-datasource-avro = { workspace = true, optional = true }
+datafusion-datasource-csv = { workspace = true }
+datafusion-datasource-json = { workspace = true }
+datafusion-datasource-parquet = { workspace = true, optional = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 parking_lot = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }

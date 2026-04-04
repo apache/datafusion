@@ -26,13 +26,47 @@
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
 pub mod generate_series;
+#[cfg(feature = "avro")]
+pub mod read_avro;
+pub mod read_csv;
+pub mod read_json;
+#[cfg(feature = "parquet")]
+pub mod read_parquet;
 
 use datafusion_catalog::TableFunction;
+use datafusion_common::{plan_err, Result};
+use datafusion_expr::Expr;
 use std::sync::Arc;
+
+/// Extract a string path from a literal expression.
+pub(crate) fn extract_path(expr: &Expr, func_name: &str) -> Result<String> {
+    match expr {
+        Expr::Literal(scalar, _) => match scalar.try_as_str() {
+            Some(Some(s)) => Ok(s.to_string()),
+            _ => plan_err!(
+                "{func_name} requires a string literal path argument, got {scalar:?}"
+            ),
+        },
+        _ => plan_err!(
+            "{func_name} requires a string literal path argument, got {expr:?}"
+        ),
+    }
+}
 
 /// Returns all default table functions
 pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
-    vec![generate_series(), range()]
+    #[cfg(any(feature = "parquet", feature = "avro"))]
+    let mut funcs = vec![generate_series(), range(), read_csv(), read_json()];
+    #[cfg(not(any(feature = "parquet", feature = "avro")))]
+    let funcs = vec![generate_series(), range(), read_csv(), read_json()];
+
+    #[cfg(feature = "parquet")]
+    funcs.push(read_parquet());
+
+    #[cfg(feature = "avro")]
+    funcs.push(read_avro());
+
+    funcs
 }
 
 /// Creates a singleton instance of a table function
@@ -62,3 +96,15 @@ create_udtf_function!(
     "generate_series"
 );
 create_udtf_function!(generate_series::RangeFunc {}, range, "range");
+create_udtf_function!(read_csv::ReadCsvFunc {}, read_csv, "read_csv");
+create_udtf_function!(read_json::ReadJsonFunc {}, read_json, "read_json");
+
+#[cfg(feature = "parquet")]
+create_udtf_function!(
+    read_parquet::ReadParquetFunc {},
+    read_parquet,
+    "read_parquet"
+);
+
+#[cfg(feature = "avro")]
+create_udtf_function!(read_avro::ReadAvroFunc {}, read_avro, "read_avro");
