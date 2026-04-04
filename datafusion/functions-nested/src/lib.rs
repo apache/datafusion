@@ -37,9 +37,12 @@
 #[macro_use]
 pub mod macros;
 
+pub mod array_avg;
 pub mod array_has;
 pub mod array_math;
 pub mod array_normalize;
+pub mod array_product;
+pub mod array_sum;
 pub mod arrays_zip;
 pub mod cardinality;
 pub mod concat;
@@ -82,6 +85,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::array_avg::array_avg;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
@@ -89,6 +93,8 @@ pub mod expr_fn {
     pub use super::array_math::array_scale;
     pub use super::array_math::array_subtract;
     pub use super::array_normalize::array_normalize;
+    pub use super::array_product::array_product;
+    pub use super::array_sum::array_sum;
     pub use super::arrays_zip::arrays_zip;
     pub use super::cardinality::cardinality;
     pub use super::concat::array_append;
@@ -169,6 +175,9 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         distance::array_distance_udf(),
         flatten::flatten_udf(),
         inner_product::inner_product_udf(),
+        array_avg::array_avg_udf(),
+        array_product::array_product_udf(),
+        array_sum::array_sum_udf(),
         min_max::array_max_udf(),
         min_max::array_min_udf(),
         sort::array_sort_udf(),

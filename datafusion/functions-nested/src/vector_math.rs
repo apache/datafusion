@@ -20,7 +20,8 @@
 
 use arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::cast::{
-    as_float32_array, as_float64_array, as_int32_array, as_int64_array,
+    as_float32_array, as_float64_array, as_int8_array, as_int16_array, as_int32_array,
+    as_int64_array, as_uint8_array, as_uint16_array, as_uint32_array, as_uint64_array,
 };
 use datafusion_common::{Result, exec_err};
 
@@ -30,21 +31,39 @@ pub fn convert_to_f64_array(array: &ArrayRef) -> Result<Float64Array> {
         arrow::datatypes::DataType::Float64 => Ok(as_float64_array(array)?.clone()),
         arrow::datatypes::DataType::Float32 => {
             let array = as_float32_array(array)?;
-            let converted: Float64Array =
-                array.iter().map(|v| v.map(|v| v as f64)).collect();
-            Ok(converted)
+            Ok(array.iter().map(|v| v.map(|v| v as f64)).collect())
         }
         arrow::datatypes::DataType::Int64 => {
             let array = as_int64_array(array)?;
-            let converted: Float64Array =
-                array.iter().map(|v| v.map(|v| v as f64)).collect();
-            Ok(converted)
+            Ok(array.iter().map(|v| v.map(|v| v as f64)).collect())
         }
         arrow::datatypes::DataType::Int32 => {
             let array = as_int32_array(array)?;
-            let converted: Float64Array =
-                array.iter().map(|v| v.map(|v| v as f64)).collect();
-            Ok(converted)
+            Ok(array.iter().map(|v| v.map(|v| v as f64)).collect())
+        }
+        arrow::datatypes::DataType::Int16 => {
+            let array = as_int16_array(array)?;
+            Ok(array.iter().map(|v| v.map(|v| v as f64)).collect())
+        }
+        arrow::datatypes::DataType::Int8 => {
+            let array = as_int8_array(array)?;
+            Ok(array.iter().map(|v| v.map(|v| v as f64)).collect())
+        }
+        arrow::datatypes::DataType::UInt64 => {
+            let array = as_uint64_array(array)?;
+            Ok(array.iter().map(|v| v.map(|v| v as f64)).collect())
+        }
+        arrow::datatypes::DataType::UInt32 => {
+            let array = as_uint32_array(array)?;
+            Ok(array.iter().map(|v| v.map(|v| v as f64)).collect())
+        }
+        arrow::datatypes::DataType::UInt16 => {
+            let array = as_uint16_array(array)?;
+            Ok(array.iter().map(|v| v.map(|v| v as f64)).collect())
+        }
+        arrow::datatypes::DataType::UInt8 => {
+            let array = as_uint8_array(array)?;
+            Ok(array.iter().map(|v| v.map(|v| v as f64)).collect())
         }
         _ => exec_err!("Unsupported array type for conversion to Float64Array"),
     }

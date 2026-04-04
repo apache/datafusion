@@ -148,6 +148,7 @@ make_udf_expr_and_func!(
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ArrayMin {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Default for ArrayMin {
@@ -160,6 +161,7 @@ impl ArrayMin {
     fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
+            aliases: vec!["list_min".to_string()],
         }
     }
 }
@@ -183,6 +185,10 @@ impl ScalarUDFImpl for ArrayMin {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_min_inner)(&args.args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn documentation(&self) -> Option<&Documentation> {

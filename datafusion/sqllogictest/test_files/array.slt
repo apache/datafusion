@@ -1757,6 +1757,288 @@ from (
 100 300 Decimal128(20, 4) Decimal128(20, 4)
 
 
+# list_min alias
+query I
+select list_min(make_array(3, 1, 4, 2));
+----
+1
+
+## array_sum (aliases: `list_sum`)
+
+# array_sum with integers
+query I
+select array_sum(make_array(1, 2, 3, 4));
+----
+10
+
+# array_sum with NULLs (skipped)
+query I
+select array_sum(make_array(1, NULL, 3, NULL, 5));
+----
+9
+
+# array_sum with all NULLs (Null element type unsupported at planning)
+query error DataFusion error: Execution error: array_sum does not support element type: Null
+select array_sum(make_array(NULL, NULL));
+
+# array_sum with floats
+query R
+select array_sum(make_array(1.5, 2.5, 3.0));
+----
+7
+
+# array_sum with negative values
+query I
+select array_sum(make_array(-1, -2, 3, 4));
+----
+4
+
+# array_sum with empty array (Null element type unsupported at planning)
+query error DataFusion error: Execution error: array_sum does not support element type: Null
+select array_sum(make_array());
+
+# array_sum with single element
+query I
+select array_sum(make_array(42));
+----
+42
+
+# array_sum with NULL input (Null type unsupported)
+query error DataFusion error: Error during planning: array_sum does not support type Null
+select array_sum(NULL);
+
+# array_sum with LargeList
+query I
+select array_sum(arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)'));
+----
+60
+
+# array_sum over multiple rows
+query I
+select array_sum(column1) from (values
+    (make_array(1, 2, 3)),
+    (make_array(10, 20, 30)),
+    (NULL),
+    (make_array(NULL, 5, NULL)),
+    (make_array(100))
+) as t(column1);
+----
+6
+60
+NULL
+5
+100
+
+# list_sum alias
+query I
+select list_sum(make_array(1, 2, 3));
+----
+6
+
+# array_sum preserves element type (no widening)
+query IT
+select array_sum(make_array(1, 2, 3)), arrow_typeof(array_sum(make_array(1, 2, 3)));
+----
+6 Int64
+
+# array_sum with unsigned integers
+query I
+select array_sum(arrow_cast(make_array(10, 20, 30), 'List(UInt8)'));
+----
+60
+
+# array_sum no arguments error
+query error DataFusion error: Error during planning: 'array_sum' does not support zero arguments
+select array_sum();
+
+# array_sum with string (should error)
+query error DataFusion error: Execution error: array_sum does not support element type: Utf8
+select array_sum(make_array('a', 'b', 'c'));
+
+## array_product (aliases: `list_product`)
+
+# array_product with integers
+query I
+select array_product(make_array(2, 3, 4));
+----
+24
+
+# array_product with NULLs (skipped)
+query I
+select array_product(make_array(2, NULL, 5));
+----
+10
+
+# array_product with all NULLs
+query error DataFusion error: Execution error: array_product does not support element type: Null
+select array_product(make_array(NULL, NULL));
+
+# array_product with floats
+query R
+select array_product(make_array(1.5, 2.0, 3.0));
+----
+9
+
+# array_product with single element
+query I
+select array_product(make_array(42));
+----
+42
+
+# array_product with zero
+query I
+select array_product(make_array(5, 0, 3));
+----
+0
+
+# array_product with LargeList
+query I
+select array_product(arrow_cast(make_array(2, 3, 5), 'LargeList(Int64)'));
+----
+30
+
+# array_product over multiple rows
+query I
+select array_product(column1) from (values
+    (make_array(1, 2, 3)),
+    (make_array(10, 20)),
+    (NULL),
+    (make_array(NULL, 5, NULL)),
+    (make_array(7))
+) as t(column1);
+----
+6
+200
+NULL
+5
+7
+
+# array_product preserves element type
+query IT
+select array_product(make_array(2, 3, 4)), arrow_typeof(array_product(make_array(2, 3, 4)));
+----
+24 Int64
+
+# list_product alias
+query I
+select list_product(make_array(2, 3));
+----
+6
+
+# array_product with unsigned integers
+query I
+select array_product(arrow_cast(make_array(2, 3, 5), 'List(UInt8)'));
+----
+30
+
+# array_product with empty array
+query error DataFusion error: Execution error: array_product does not support element type: Null
+select array_product(make_array());
+
+# array_product with NULL input
+query error DataFusion error: Error during planning: array_product does not support type Null
+select array_product(NULL);
+
+# array_product rejects Decimal types (scale is not adjusted during multiplication)
+query error DataFusion error: Execution error: array_product does not support Decimal types
+select array_product(arrow_cast(make_array(arrow_cast(2, 'Decimal128(10,2)'), arrow_cast(3, 'Decimal128(10,2)')), 'List(Decimal128(10, 2))'));
+
+# array_product no arguments error
+query error DataFusion error: Error during planning: 'array_product' does not support zero arguments
+select array_product();
+
+# array_product with string (should error)
+query error DataFusion error: Execution error: array_product does not support element type: Utf8
+select array_product(make_array('a', 'b', 'c'));
+
+## array_avg (aliases: `list_avg`)
+
+# array_avg with integers
+query R
+select array_avg(make_array(1, 2, 3, 4));
+----
+2.5
+
+# array_avg with NULLs (skipped, count excludes NULLs)
+query R
+select array_avg(make_array(10, NULL, 20));
+----
+15
+
+# array_avg with all NULLs
+query error DataFusion error: Execution error: Unsupported array type for conversion to Float64Array
+select array_avg(make_array(NULL, NULL));
+
+# array_avg with floats
+query R
+select array_avg(make_array(1.0, 2.0, 3.0));
+----
+2
+
+# array_avg with single element
+query R
+select array_avg(make_array(42));
+----
+42
+
+# array_avg always returns Float64
+query RT
+select array_avg(make_array(1, 2, 3)), arrow_typeof(array_avg(make_array(1, 2, 3)));
+----
+2 Float64
+
+# array_avg with LargeList
+query R
+select array_avg(arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)'));
+----
+20
+
+# array_avg over multiple rows
+query R
+select array_avg(column1) from (values
+    (make_array(10, 20, 30)),
+    (make_array(5, 15)),
+    (NULL),
+    (make_array(NULL, 100, NULL)),
+    (make_array(7))
+) as t(column1);
+----
+20
+10
+NULL
+100
+7
+
+# list_avg alias
+query R
+select list_avg(make_array(4, 8));
+----
+6
+
+# array_avg with unsigned integers
+query R
+select array_avg(arrow_cast(make_array(10, 20, 30), 'List(UInt8)'));
+----
+20
+
+# array_avg with typed empty array
+query R
+select array_avg(arrow_cast(make_array(), 'List(Int64)'));
+----
+NULL
+
+# array_avg with NULL input
+query error DataFusion error: Error during planning: array_avg does not support type Null
+select array_avg(NULL);
+
+# array_avg no arguments error
+query error DataFusion error: Error during planning: 'array_avg' does not support zero arguments
+select array_avg();
+
+# array_avg with string (should error)
+query error DataFusion error: Execution error: Unsupported array type for conversion to Float64Array
+select array_avg(make_array('a', 'b', 'c'));
+
 ## array_pop_back (aliases: `list_pop_back`)
 
 # array_pop_back scalar function with null
