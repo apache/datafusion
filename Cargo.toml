@@ -34,6 +34,7 @@ members = [
     "datafusion/ffi",
     "datafusion/functions",
     "datafusion/functions-aggregate",
+    "datafusion/functions-json",
     "datafusion/functions-aggregate-common",
     "datafusion/functions-table",
     "datafusion/functions-nested",
@@ -140,6 +141,7 @@ datafusion-ffi = { path = "datafusion/ffi", version = "54.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "54.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "54.0.0" }
 datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "54.0.0" }
+datafusion-functions-json = { path = "datafusion/functions-json", version = "54.0.0" }
 datafusion-functions-nested = { path = "datafusion/functions-nested", version = "54.0.0", default-features = false }
 datafusion-functions-table = { path = "datafusion/functions-table", version = "54.0.0" }
 datafusion-functions-window = { path = "datafusion/functions-window", version = "54.0.0" }

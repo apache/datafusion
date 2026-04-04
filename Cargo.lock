@@ -1710,6 +1710,7 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-aggregate",
+ "datafusion-functions-json",
  "datafusion-functions-nested",
  "datafusion-functions-table",
  "datafusion-functions-window",
@@ -2257,6 +2258,21 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-physical-expr-common",
  "rand 0.9.4",
+]
+
+[[package]]
+name = "datafusion-functions-json"
+version = "53.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-doc",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-macros",
+ "log",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
