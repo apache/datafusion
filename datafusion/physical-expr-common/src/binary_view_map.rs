@@ -127,13 +127,12 @@ where
 
     /// Views for all stored values (in insertion order).
     /// For non-inline values (>12 bytes), the `buffer_index` field in each view
-    /// points into `completed`.
+    /// points into `buffers`.
     views: Vec<u128>,
-    /// Completed buffers containing string data
-    completed: Vec<Buffer>,
-    /// In-progress buffer for accumulating non-inline string data.
-    /// Flushed to `completed` when full.
-    in_progress: Vec<u8>,
+    /// Buffers containing out-of-line string data. May include:
+    /// - Buffers adopted zero-copy from input arrays (high utilization)
+    /// - Compacted buffers with only referenced data (low utilization)
+    buffers: Vec<Buffer>,
     /// Tracks null values (true = null)
     nulls: NullBufferBuilder,
 
@@ -141,14 +140,13 @@ where
     random_state: RandomState,
     /// buffer that stores hash values (reused across batches to save allocations)
     hashes_buffer: Vec<u64>,
+    /// view indices of pending non-inline entries (reused across batches)
+    pending_view_indices: Vec<usize>,
     /// `(payload, null_index)` for the 'null' value, if any
     /// NOTE null_index is the logical index in the final array, not the index
     /// in the buffer
     null: Option<(V, usize)>,
 }
-
-/// Max size of the in-progress buffer before flushing to completed buffers.
-const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
 
 /// The size, in number of entries, of the initial hash table
 const INITIAL_MAP_CAPACITY: usize = 512;
@@ -163,11 +161,11 @@ where
             map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
             views: Vec::new(),
-            completed: Vec::new(),
-            in_progress: Vec::new(),
+            buffers: Vec::new(),
             nulls: NullBufferBuilder::new(0),
             random_state: RandomState::default(),
             hashes_buffer: vec![],
+            pending_view_indices: Vec::new(),
             null: None,
         }
     }
@@ -280,8 +278,7 @@ where
         // utilization) or copy just the referenced bytes into in_progress.
         let mut buffer_offset: Option<u32> = None;
         let mut batch_referenced_bytes: usize = 0;
-        // (view_index, hash) of new non-inline entries pointing to adopted buffers
-        let mut pending_entries: Vec<(usize, u64)> = Vec::new();
+        self.pending_view_indices.clear();
 
         for i in 0..values.len() {
             // Safety: i is in range 0..values.len()
@@ -311,8 +308,8 @@ where
 
             // Check if value already exists
             let maybe_payload = {
-                let completed = &self.completed;
-                let in_progress = &self.in_progress;
+                let buffers = &self.buffers;
+                let views = &self.views;
 
                 self.map
                     .find(hash, |header| {
@@ -320,32 +317,32 @@ where
                             return false;
                         }
 
-                        // Fast path: inline strings can be compared directly via view
+                        // Safety: view_idx was valid when inserted
+                        let stored_view =
+                            unsafe { *views.get_unchecked(header.view_idx as usize) };
+
+                        // Fast path: inline strings can be compared directly
                         if len <= 12 {
-                            return header.view == view_u128;
+                            return stored_view == view_u128;
                         }
 
                         // Compare length + 4-byte prefix in one u64 comparison
-                        let stored_len_prefix = header.view as u64;
+                        let stored_len_prefix = stored_view as u64;
                         if stored_len_prefix != input_len_prefix {
                             return false;
                         }
 
                         // Prefix matched - compare full bytes
-                        let byte_view = ByteView::from(header.view);
+                        let byte_view = ByteView::from(stored_view);
                         let stored_len = byte_view.length as usize;
                         let buffer_index = byte_view.buffer_index as usize;
                         let offset = byte_view.offset as usize;
 
                         let stored_value = unsafe {
-                            if buffer_index < completed.len() {
-                                completed
-                                    .get_unchecked(buffer_index)
-                                    .as_slice()
-                                    .get_unchecked(offset..offset + stored_len)
-                            } else {
-                                in_progress.get_unchecked(offset..offset + stored_len)
-                            }
+                            buffers
+                                .get_unchecked(buffer_index)
+                                .as_slice()
+                                .get_unchecked(offset..offset + stored_len)
                         };
                         // Safety: i is in range and not null
                         let input_value: &[u8] =
@@ -369,13 +366,13 @@ where
                     // Register input buffers into completed on first use so
                     // subsequent rows in the same batch can compare against them.
                     let offset = *buffer_offset.get_or_insert_with(|| {
-                        let off = self.completed.len() as u32;
-                        self.completed
+                        let off = self.buffers.len() as u32;
+                        self.buffers
                             .extend(input_buffers.iter().cloned());
                         off
                     });
                     batch_referenced_bytes += len as usize;
-                    pending_entries.push((self.views.len(), hash));
+                    self.pending_view_indices.push(self.views.len());
 
                     let byte_view = ByteView::from(view_u128);
                     ByteView {
@@ -385,11 +382,12 @@ where
                     .into()
                 };
 
+                let view_idx = self.views.len() as u32;
                 self.views.push(new_view);
                 self.nulls.append_non_null();
 
                 let new_header = Entry {
-                    view: new_view,
+                    view_idx,
                     hash,
                     payload,
                 };
@@ -414,52 +412,39 @@ where
             return;
         }
 
-        // Low utilization: copy referenced bytes into in_progress, rewrite
-        // the pending views and their hash table entries, then drop the
-        // adopted buffers.
-        //
-        // We write directly to in_progress without flushing to completed
-        // during this loop to keep adopted_offset stable. The batch's
-        // referenced bytes are bounded so in_progress may temporarily
-        // exceed BYTE_VIEW_MAX_BLOCK_SIZE; the next batch will flush normally.
-        for &(view_idx, hash) in &pending_entries {
+        // Low utilization: copy only referenced bytes into a new compact buffer,
+        // rewrite the pending views, then drop adopted buffers.
+        // Hash table entries store view_idx so they see the update automatically.
+        let mut compact = Vec::with_capacity(batch_referenced_bytes);
+        for &view_idx in &self.pending_view_indices {
             let view = unsafe { self.views.get_unchecked_mut(view_idx) };
-            let old_view = *view;
-            let byte_view = ByteView::from(old_view);
+            let byte_view = ByteView::from(*view);
             let buf_idx = byte_view.buffer_index as usize;
             let offset = byte_view.offset as usize;
             let length = byte_view.length as usize;
 
             let value = unsafe {
-                self.completed
+                self.buffers
                     .get_unchecked(buf_idx)
                     .as_slice()
                     .get_unchecked(offset..offset + length)
             };
 
-            let new_offset = self.in_progress.len() as u32;
-            self.in_progress.extend_from_slice(value);
+            let new_offset = compact.len() as u32;
+            compact.extend_from_slice(value);
 
-            // After truncation, in_progress will be at index adopted_offset
-            let new_view: u128 = ByteView {
+            *view = ByteView {
                 length: byte_view.length,
                 prefix: byte_view.prefix,
                 buffer_index: adopted_offset,
                 offset: new_offset,
             }
             .into();
-
-            *view = new_view;
-
-            if let Some(entry) =
-                self.map.find_mut(hash, |e| e.view == old_view)
-            {
-                entry.view = new_view;
-            }
         }
 
-        // Drop the adopted buffers — all pending views now point to in_progress.
-        self.completed.truncate(adopted_offset as usize);
+        // Replace adopted buffers with the single compact buffer
+        self.buffers.truncate(adopted_offset as usize);
+        self.buffers.push(Buffer::from_vec(compact));
     }
 
     /// Converts this set into a `StringViewArray`, or `BinaryViewArray`,
@@ -469,18 +454,12 @@ where
     /// The values are guaranteed to be returned in the same order in which
     /// they were first seen.
     pub fn into_state(mut self) -> ArrayRef {
-        // Flush in_progress
-        if !self.in_progress.is_empty() {
-            let flushed = std::mem::take(&mut self.in_progress);
-            self.completed.push(Buffer::from_vec(flushed));
-        }
-
         // Build null buffer if we have any nulls
         let null_buffer = self.nulls.finish();
 
         let views = ScalarBuffer::from(self.views);
         let array =
-            unsafe { BinaryViewArray::new_unchecked(views, self.completed, null_buffer) };
+            unsafe { BinaryViewArray::new_unchecked(views, self.buffers, null_buffer) };
 
         match self.output_type {
             OutputType::BinaryView => Arc::new(array),
@@ -513,14 +492,12 @@ where
     /// this set, not including `self`
     pub fn size(&self) -> usize {
         let views_size = self.views.len() * size_of::<u128>();
-        let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
-        let in_progress_size = self.in_progress.capacity();
+        let buffers_size: usize = self.buffers.iter().map(|b| b.len()).sum();
         let nulls_size = self.nulls.allocated_size();
 
         self.map_size
             + views_size
-            + completed_size
-            + in_progress_size
+            + buffers_size
             + nulls_size
             + self.hashes_buffer.allocated_size()
     }
@@ -535,7 +512,7 @@ where
             .field("map", &"<map>")
             .field("map_size", &self.map_size)
             .field("views_len", &self.views.len())
-            .field("completed_buffers", &self.completed.len())
+            .field("buffers", &self.buffers.len())
             .field("random_state", &self.random_state)
             .field("hashes_buffer", &self.hashes_buffer)
             .finish()
@@ -544,19 +521,16 @@ where
 
 /// Entry in the hash table -- see [`ArrowBytesViewMap`] for more details
 ///
-/// Stores the view pointing to our internal buffers, eliminating the need
-/// for a separate builder index. For inline strings (<=12 bytes), the view
-/// contains the entire value. For out-of-line strings, the view contains
-/// buffer_index and offset pointing directly to our storage.
+/// Stores an index into `ArrowBytesViewMap::views` rather than a copy of
+/// the view itself. This means compaction only needs to rewrite `views`
+/// — hash-table entries follow automatically.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct Entry<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
-    /// The u128 view pointing to our internal buffers. For inline strings,
-    /// this contains the complete value. For larger strings, this contains
-    /// the buffer_index/offset into our buffers.
-    view: u128,
+    /// Index into [`ArrowBytesViewMap::views`].
+    view_idx: u32,
 
     hash: u64,
 
