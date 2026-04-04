@@ -18,13 +18,12 @@
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
     cast::AsArray,
 };
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
-use datafusion_common::hash_utils::RandomState;
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::hash_table::HashTable;
@@ -75,26 +74,38 @@ macro_rules! hash_float {
 
 hash_float!(f16, f32, f64);
 
+/// Size threshold for the hot map in bytes.
+/// Once the hot map reaches this size, new entries spill to the cold map.
+/// This keeps the hot map in CPU cache for fast probing.
+const HOT_MAP_THRESHOLD: usize = 1024 * 1024;
+
 /// A [`GroupValues`] storing a single column of primitive values
 ///
 /// This specialization is significantly faster than using the more general
-/// purpose `Row`s format
+/// purpose `Row`s format.
+///
+/// Uses two hash tables for cache efficiency:
+/// - A hot map (preallocated to ~1MB) that is probed first
+/// - A cold map for overflow once the hot map is full
+///
+/// Values are stored inline in the hash table entries (no separate Vec),
+/// and hashes are not stored (recomputed on rehash) to minimize memory.
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// The data type of the output array
     data_type: DataType,
-    /// Stores the `(group_index, hash)` based on the hash of its value
-    ///
-    /// We also store `hash` is for reducing cost of rehashing. Such cost
-    /// is obvious in high cardinality group by situation.
-    /// More details can see:
-    /// <https://github.com/apache/datafusion/issues/15961>
-    map: HashTable<(usize, u64)>,
+    /// Hot hash table - probed first, preallocated to ~1MB, never rehashes.
+    /// Stores (group_index, value) inline.
+    hot_map: HashTable<(usize, T::Native)>,
+    /// Cold hash table - overflow when hot map is full.
+    cold_map: HashTable<(usize, T::Native)>,
     /// The group index of the null value if any
     null_group: Option<usize>,
-    /// The values for each group index
-    values: Vec<T::Native>,
+    /// Total number of distinct groups
+    num_groups: usize,
     /// The random state used to generate hashes
     random_state: RandomState,
+    /// Reusable buffer for vectorized hash computation
+    hashes_buffer: Vec<u64>,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
@@ -102,10 +113,12 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
         assert!(PrimitiveArray::<T>::is_compatible(&data_type));
         Self {
             data_type,
-            map: HashTable::with_capacity(128),
-            values: Vec::with_capacity(128),
+            hot_map: HashTable::with_capacity(128),
+            cold_map: HashTable::new(),
             null_group: None,
+            num_groups: 0,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            hashes_buffer: Vec::new(),
         }
     }
 }
@@ -118,50 +131,113 @@ where
         assert_eq!(cols.len(), 1);
         groups.clear();
 
-        for v in cols[0].as_primitive::<T>() {
-            let group_id = match v {
-                None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(Default::default());
-                    group_id
-                }),
-                Some(key) => {
-                    let state = &self.random_state;
-                    let hash = key.hash(state);
-                    let insert = self.map.entry(
-                        hash,
-                        |&(g, h)| unsafe {
-                            hash == h && self.values.get_unchecked(g).is_eq(key)
-                        },
-                        |&(_, h)| h,
-                    );
+        let array = cols[0].as_primitive::<T>();
+        let len = array.len();
 
-                    match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
-                        hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.values.len();
-                            v.insert((g, hash));
-                            self.values.push(key);
-                            g
+        // Vectorized hash computation
+        let mut hashes_buffer = std::mem::take(&mut self.hashes_buffer);
+        hashes_buffer.clear();
+        hashes_buffer.resize(len, 0);
+        create_hashes(cols, &self.random_state, &mut hashes_buffer)?;
+
+        groups.reserve(len);
+
+        let hot_full = self.hot_map.capacity() * size_of::<(usize, T::Native)>()
+            >= HOT_MAP_THRESHOLD;
+
+        if array.null_count() == 0 {
+            let values = array.values();
+            for i in 0..len {
+                let key = values[i];
+                let hash = hashes_buffer[i];
+
+                let group_id =
+                    if let Some(&(g, _)) = self.hot_map.find(hash, |&(_, v)| v.is_eq(key)) {
+                        g
+                    } else if let Some(&(g, _)) =
+                        self.cold_map.find(hash, |&(_, v)| v.is_eq(key))
+                    {
+                        g
+                    } else {
+                        let g = self.num_groups;
+                        self.num_groups += 1;
+                        let state = &self.random_state;
+                        if !hot_full {
+                            self.hot_map.insert_unique(
+                                hash,
+                                (g, key),
+                                |&(_, v)| v.hash(state),
+                            );
+                        } else {
+                            self.cold_map.insert_unique(
+                                hash,
+                                (g, key),
+                                |&(_, v)| v.hash(state),
+                            );
                         }
+                        g
+                    };
+                groups.push(group_id);
+            }
+        } else {
+            for i in 0..len {
+                let group_id = if array.is_null(i) {
+                    *self.null_group.get_or_insert_with(|| {
+                        let g = self.num_groups;
+                        self.num_groups += 1;
+                        g
+                    })
+                } else {
+                    let key = unsafe { array.value_unchecked(i) };
+                    let hash = hashes_buffer[i];
+
+                    if let Some(&(g, _)) = self.hot_map.find(hash, |&(_, v)| v.is_eq(key))
+                    {
+                        g
+                    } else if let Some(&(g, _)) =
+                        self.cold_map.find(hash, |&(_, v)| v.is_eq(key))
+                    {
+                        g
+                    } else {
+                        let g = self.num_groups;
+                        self.num_groups += 1;
+                        let state = &self.random_state;
+                        if !hot_full {
+                            self.hot_map.insert_unique(
+                                hash,
+                                (g, key),
+                                |&(_, v)| v.hash(state),
+                            );
+                        } else {
+                            self.cold_map.insert_unique(
+                                hash,
+                                (g, key),
+                                |&(_, v)| v.hash(state),
+                            );
+                        }
+                        g
                     }
-                }
-            };
-            groups.push(group_id)
+                };
+                groups.push(group_id);
+            }
         }
+
+        self.hashes_buffer = hashes_buffer;
         Ok(())
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
+        self.hot_map.capacity() * size_of::<(usize, T::Native)>()
+            + self.cold_map.capacity() * size_of::<(usize, T::Native)>()
+            + self.hashes_buffer.capacity() * size_of::<u64>()
     }
 
     fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.num_groups == 0
     }
 
     fn len(&self) -> usize {
-        self.values.len()
+        self.num_groups
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -182,23 +258,43 @@ where
 
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
-                self.map.clear();
-                build_primitive(std::mem::take(&mut self.values), self.null_group.take())
+                let mut values = vec![T::Native::default(); self.num_groups];
+                for &(g, v) in self.hot_map.iter() {
+                    values[g] = v;
+                }
+                for &(g, v) in self.cold_map.iter() {
+                    values[g] = v;
+                }
+                self.hot_map.clear();
+                self.cold_map.clear();
+                let null_group = self.null_group.take();
+                self.num_groups = 0;
+                build_primitive(values, null_group)
             }
             EmitTo::First(n) => {
-                self.map.retain(|entry| {
-                    // Decrement group index by n
-                    let group_idx = entry.0;
-                    match group_idx.checked_sub(n) {
-                        // Group index was >= n, shift value down
-                        Some(sub) => {
-                            entry.0 = sub;
-                            true
-                        }
-                        // Group index was < n, so remove from table
-                        None => false,
+                let mut values = vec![T::Native::default(); n];
+
+                self.hot_map.retain(|entry| {
+                    if entry.0 < n {
+                        values[entry.0] = entry.1;
+                        false
+                    } else {
+                        entry.0 -= n;
+                        true
                     }
                 });
+                self.cold_map.retain(|entry| {
+                    if entry.0 < n {
+                        values[entry.0] = entry.1;
+                        false
+                    } else {
+                        entry.0 -= n;
+                        true
+                    }
+                });
+
+                self.num_groups -= n;
+
                 let null_group = match &mut self.null_group {
                     Some(v) if *v >= n => {
                         *v -= n;
@@ -207,9 +303,8 @@ where
                     Some(_) => self.null_group.take(),
                     None => None,
                 };
-                let mut split = self.values.split_off(n);
-                std::mem::swap(&mut self.values, &mut split);
-                build_primitive(split, null_group)
+
+                build_primitive(values, null_group)
             }
         };
 
@@ -217,9 +312,10 @@ where
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
-        self.values.clear();
-        self.values.shrink_to(num_rows);
-        self.map.clear();
-        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+        self.hot_map.clear();
+        self.hot_map.shrink_to(num_rows, |_| 0);
+        self.cold_map.clear();
+        self.null_group = None;
+        self.num_groups = 0;
     }
 }
