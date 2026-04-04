@@ -490,6 +490,59 @@ mod tests {
         assert_eq!(udf.name(), "encode");
     }
 
+    #[test]
+    fn test_encode_large_binary_input() {
+        let result = eval_encode_scalar(
+            ScalarValue::LargeBinary(Some(b"Hello".to_vec())),
+            "UTF-8",
+        )
+        .unwrap();
+        assert_eq!(expect_binary_scalar(result), b"Hello");
+    }
+
+    #[test]
+    fn test_encode_binary_view_input() {
+        let result =
+            eval_encode_scalar(ScalarValue::BinaryView(Some(b"Hello".to_vec())), "UTF-8")
+                .unwrap();
+        assert_eq!(expect_binary_scalar(result), b"Hello");
+    }
+
+    #[test]
+    fn test_encode_emoji_utf8() {
+        // U+1F600 (😀) is 4 bytes in UTF-8: F0 9F 98 80
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("😀".into())), "UTF-8").unwrap();
+        assert_eq!(expect_binary_scalar(result), vec![0xF0, 0x9F, 0x98, 0x80]);
+    }
+
+    #[test]
+    fn test_encode_emoji_utf16be() {
+        // U+1F600 (😀) is a surrogate pair in UTF-16: D83D DE00
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("😀".into())), "UTF-16BE").unwrap();
+        assert_eq!(expect_binary_scalar(result), vec![0xD8, 0x3D, 0xDE, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_emoji_utf16le() {
+        // U+1F600 (😀) surrogate pair in little-endian: 3DD8 00DE
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("😀".into())), "UTF-16LE").unwrap();
+        assert_eq!(expect_binary_scalar(result), vec![0x3D, 0xD8, 0x00, 0xDE]);
+    }
+
+    #[test]
+    fn test_encode_emoji_utf16_with_bom() {
+        // UTF-16 = BOM (FEFF) + UTF-16BE surrogate pair
+        let result =
+            eval_encode_scalar(ScalarValue::Utf8(Some("😀".into())), "UTF-16").unwrap();
+        assert_eq!(
+            expect_binary_scalar(result),
+            vec![0xFE, 0xFF, 0xD8, 0x3D, 0xDE, 0x00]
+        );
+    }
+
     /// Simple hex encoding for test assertions.
     fn hex_encode(bytes: &[u8]) -> String {
         bytes
