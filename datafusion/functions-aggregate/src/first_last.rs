@@ -426,7 +426,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             return Ok(true);
         }
 
-        assert!(new_ordering_values.len() == self.ordering_req.len());
+        debug_assert!(new_ordering_values.len() == self.ordering_req.len());
         let current_ordering = &self.orderings[group_idx];
         compare_rows(current_ordering, new_ordering_values, &self.sort_options).map(|x| {
             if self.pick_first_in_group {
@@ -485,7 +485,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         self.state.update(group_idx, array, idx)?;
         self.is_sets.set_bit(group_idx, true);
 
-        assert!(orderings.len() == self.ordering_req.len());
+        debug_assert!(orderings.len() == self.ordering_req.len());
         let old_size = ScalarValue::size_of_vec(&self.orderings[group_idx]);
         self.orderings[group_idx].clear();
         self.orderings[group_idx].extend_from_slice(orderings);
@@ -650,7 +650,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
                 ordering_cols.push(Vec::with_capacity(self.orderings.len()));
             }
             for row in orderings.into_iter() {
-                assert_eq!(row.len(), self.ordering_req.len());
+                debug_assert!(row.len() == self.ordering_req.len());
                 for (col_idx, ordering) in row.into_iter().enumerate() {
                     ordering_cols[col_idx].push(ordering);
                 }
