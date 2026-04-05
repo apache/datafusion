@@ -1851,7 +1851,7 @@ mod tests {
                         let list_matches =
                             any_match.slice(start_and_end[0] as usize, length as usize);
 
-                        list_matches.true_count() == list_matches.len() as usize
+                        list_matches.true_count() == list_matches.len()
                     })
                     .collect::<BooleanBuffer>();
 

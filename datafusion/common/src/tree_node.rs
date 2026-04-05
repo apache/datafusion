@@ -592,7 +592,7 @@ pub trait ScopedTreeNode: TreeNode {
     /// `f` is applied to the node first, and then its children in scope.
     ///
     /// # See Also
-    /// * [`Self::transform_down`] for the same transformation but in all children ignoring scope
+    /// * [`TreeNode::transform_down`] for the same transformation but in all children ignoring scope
     /// * [`Self::transform_up_in_scope`] for a bottom-up (post-order) traversal.
     /// * [Self::transform_down_up_in_scope] for a combined traversal with closures
     /// * [`Self::rewrite_in_scope`] for a combined traversal with a visitor
@@ -645,7 +645,7 @@ pub trait ScopedTreeNode: TreeNode {
     /// (pre-order), and using `f_up` while traversing the tree bottom-up
     /// (post-order), limited to children in the same scope.
     ///
-    /// Same as [`Self::transform_down_up`] but limited to the same scope.
+    /// Same as [`TreeNode::transform_down_up`] but limited to the same scope.
     ///
     /// # See Also
     /// * [`Self::transform_up_in_scope`] for a bottom-up (post-order) traversal.
