@@ -1734,4 +1734,131 @@ mod tests {
         assert_eq!(cast_expr.input_field().data_type(), &DataType::Int32);
         assert_eq!(cast_expr.target_field().data_type(), &DataType::Int64);
     }
+
+    /// A mock expression with an in-scope child and an out-of-scope child.
+    /// Used to verify that scoped traversal does not modify out-of-scope children.
+    #[derive(Debug, Hash, Clone)]
+    struct ScopedExprMock {
+        in_scope_child: Arc<dyn PhysicalExpr>,
+        out_of_scope_child: Arc<dyn PhysicalExpr>,
+    }
+
+    impl PartialEq for ScopedExprMock {
+        fn eq(&self, other: &Self) -> bool {
+            self.in_scope_child.as_ref() == other.in_scope_child.as_ref()
+                && self.out_of_scope_child.as_ref()
+                    == other.out_of_scope_child.as_ref()
+        }
+    }
+
+    impl Eq for ScopedExprMock {}
+
+    impl std::fmt::Display for ScopedExprMock {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(
+                f,
+                "scoped_mock({}, {})",
+                self.in_scope_child, self.out_of_scope_child
+            )
+        }
+    }
+
+    impl PhysicalExpr for ScopedExprMock {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn return_field(
+            &self,
+            input_schema: &Schema,
+        ) -> Result<Arc<Field>> {
+            self.in_scope_child.return_field(input_schema)
+        }
+
+        fn evaluate(
+            &self,
+            _batch: &RecordBatch,
+        ) -> Result<datafusion_expr::ColumnarValue> {
+            unimplemented!("ScopedExprMock does not support evaluation")
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.in_scope_child, &self.out_of_scope_child]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert_eq!(children.len(), 2);
+            let mut iter = children.into_iter();
+            Ok(Arc::new(Self {
+                in_scope_child: iter.next().unwrap(),
+                out_of_scope_child: iter.next().unwrap(),
+            }))
+        }
+
+        fn children_in_scope(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.in_scope_child]
+        }
+
+        fn with_new_children_in_scope(
+            self: Arc<Self>,
+            children_in_scope: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert_eq!(children_in_scope.len(), 1);
+            Ok(Arc::new(Self {
+                in_scope_child: children_in_scope.into_iter().next().unwrap(),
+                out_of_scope_child: Arc::clone(&self.out_of_scope_child),
+            }))
+        }
+
+        fn fmt_sql(
+            &self,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result {
+            std::fmt::Display::fmt(&self, f)
+        }
+    }
+
+    #[test]
+    fn test_replace_columns_with_literals_does_not_modify_out_of_scope_children() {
+        // The in-scope child references column "a" which should be replaced
+        let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // The out-of-scope child also references a column "a" but should NOT be replaced
+        let out_of_scope_child: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new("a", 0));
+
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
+            in_scope_child,
+            out_of_scope_child,
+        });
+
+        let mut replacements = HashMap::new();
+        replacements.insert("a", ScalarValue::Int32(Some(42)));
+
+        let result = replace_columns_with_literals(expr, &replacements).unwrap();
+
+        let mock = result
+            .as_any()
+            .downcast_ref::<ScopedExprMock>()
+            .expect("Should still be ScopedExprMock");
+
+        // The in-scope child "a" should be replaced with literal 42
+        let in_scope_lit = mock
+            .in_scope_child
+            .as_any()
+            .downcast_ref::<Literal>()
+            .expect("in_scope_child should be replaced with Literal");
+        assert_eq!(in_scope_lit.value(), &ScalarValue::Int32(Some(42)));
+
+        // The out-of-scope child "a@0" should be UNCHANGED (still a Column)
+        let out_of_scope_col = mock
+            .out_of_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("out_of_scope_child should still be Column");
+        assert_eq!(out_of_scope_col.name(), "a");
+        assert_eq!(out_of_scope_col.index(), 0);
+    }
 }

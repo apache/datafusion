@@ -1200,7 +1200,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::equivalence::{EquivalenceProperties, convert_to_orderings};
     use crate::expressions::{BinaryExpr, col};
-    use crate::utils::tests::TestScalarUDF;
+    use crate::utils::tests::{ScopedExprMock, TestScalarUDF};
     use crate::{PhysicalExprRef, ScalarFunctionExpr};
 
     use arrow::compute::SortOptions;
@@ -3035,6 +3035,164 @@ pub(crate) mod tests {
             output_stats.column_statistics[1].max_value,
             Precision::Exact(ScalarValue::Int64(Some(21)))
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_does_not_modify_out_of_scope_children() -> Result<()> {
+        // Outer schema: [a, b, c]
+        // Expression: ScopedExprMock(in_scope=a@0, out_of_scope=x@0)
+        // Projection: [c@2 as c_new, a@0 as a_new, b@1 as b_new]
+        // After unproject: in_scope should become c@2, out_of_scope should stay x@0
+        let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a_new", 1));
+        let out_of_scope_child: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new("x", 0));
+
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
+            in_scope_child,
+            out_of_scope_child,
+        });
+
+        let projected_exprs = vec![
+            ProjectionExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                alias: "c_new".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                alias: "a_new".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                alias: "b_new".to_string(),
+            },
+        ];
+
+        let result =
+            update_expr(&expr, &projected_exprs, true)?.expect("Should be valid");
+
+        let mock = result
+            .as_any()
+            .downcast_ref::<ScopedExprMock>()
+            .expect("Should still be ScopedExprMock");
+
+        // The in-scope child "a_new@1" should be unprojected to "a@0"
+        let in_scope_col = mock
+            .in_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("in_scope_child should be Column");
+        assert_eq!(in_scope_col.name(), "a");
+        assert_eq!(in_scope_col.index(), 0);
+
+        // The out-of-scope child "x@0" should be UNCHANGED
+        let out_of_scope_col = mock
+            .out_of_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("out_of_scope_child should be Column");
+        assert_eq!(out_of_scope_col.name(), "x");
+        assert_eq!(out_of_scope_col.index(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_ordering_does_not_modify_out_of_scope_children() {
+        // Schema: [a: Int32, b: Int32]
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let out_of_scope_child: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new("x", 0));
+
+        let scoped_expr: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
+            in_scope_child,
+            out_of_scope_child,
+        });
+
+        let ordering =
+            LexOrdering::new(vec![PhysicalSortExpr::new(scoped_expr, SortOptions::new(false, false))])
+                .unwrap();
+
+        let result = project_ordering(&ordering, &schema).expect("Should project");
+
+        let projected_expr = &result.first().expr;
+        let mock = projected_expr
+            .as_any()
+            .downcast_ref::<ScopedExprMock>()
+            .expect("Should still be ScopedExprMock");
+
+        // The in-scope column "a" should be reindexed (stays at 0 in this case)
+        let in_scope_col = mock
+            .in_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("in_scope_child should be Column");
+        assert_eq!(in_scope_col.name(), "a");
+        assert_eq!(in_scope_col.index(), 0);
+
+        // The out-of-scope child "x@0" should be UNCHANGED
+        let out_of_scope_col = mock
+            .out_of_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("out_of_scope_child should be Column");
+        assert_eq!(out_of_scope_col.name(), "x");
+        assert_eq!(out_of_scope_col.index(), 0);
+    }
+
+    #[test]
+    fn test_projection_mapping_does_not_modify_out_of_scope_children() -> Result<()> {
+        // Input schema: [a: Int32, b: Int32]
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let out_of_scope_child: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new("x", 0));
+
+        let scoped_expr: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
+            in_scope_child,
+            out_of_scope_child,
+        });
+
+        // Project: [ScopedExprMock as "result"]
+        let projection_exprs = vec![(scoped_expr, "result".to_string())];
+
+        let mapping = ProjectionMapping::try_new(projection_exprs, &input_schema)?;
+
+        // The source expression in the mapping should have its in-scope column
+        // validated but the out-of-scope column left untouched
+        let (source_expr, _targets) = mapping.iter().next().unwrap();
+        let mock = source_expr
+            .as_any()
+            .downcast_ref::<ScopedExprMock>()
+            .expect("Should still be ScopedExprMock");
+
+        // In-scope child: "a@0" should still be "a@0" (name matches schema)
+        let in_scope_col = mock
+            .in_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("in_scope_child should be Column");
+        assert_eq!(in_scope_col.name(), "a");
+        assert_eq!(in_scope_col.index(), 0);
+
+        // Out-of-scope child: "x@0" should be UNCHANGED
+        let out_of_scope_col = mock
+            .out_of_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("out_of_scope_child should be Column");
+        assert_eq!(out_of_scope_col.name(), "x");
+        assert_eq!(out_of_scope_col.index(), 0);
 
         Ok(())
     }

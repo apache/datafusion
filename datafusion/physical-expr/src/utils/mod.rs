@@ -343,7 +343,89 @@ pub(crate) mod tests {
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
     };
 
+    use arrow::array::RecordBatch;
     use petgraph::visit::Bfs;
+
+    /// A mock expression that has two children but only one is "in scope".
+    /// This simulates a lambda-like expression where the `in_scope_child`
+    /// references columns in the outer schema and the `out_of_scope_child`
+    /// references columns in a different (lambda) schema.
+    #[derive(Debug, Hash, Clone)]
+    pub(crate) struct ScopedExprMock {
+        pub in_scope_child: Arc<dyn PhysicalExpr>,
+        pub out_of_scope_child: Arc<dyn PhysicalExpr>,
+    }
+
+    impl PartialEq for ScopedExprMock {
+        fn eq(&self, other: &Self) -> bool {
+            self.in_scope_child.as_ref() == other.in_scope_child.as_ref()
+                && self.out_of_scope_child.as_ref() == other.out_of_scope_child.as_ref()
+        }
+    }
+
+    impl Eq for ScopedExprMock {}
+
+    impl Display for ScopedExprMock {
+        fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(
+                f,
+                "scoped_mock({}, {})",
+                self.in_scope_child, self.out_of_scope_child
+            )
+        }
+    }
+
+    impl PhysicalExpr for ScopedExprMock {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn return_field(
+            &self,
+            input_schema: &Schema,
+        ) -> Result<Arc<Field>> {
+            self.in_scope_child.return_field(input_schema)
+        }
+
+        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+            unimplemented!("ScopedExprMock does not support evaluation")
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.in_scope_child, &self.out_of_scope_child]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert_eq!(children.len(), 2);
+            let mut iter = children.into_iter();
+            Ok(Arc::new(Self {
+                in_scope_child: iter.next().unwrap(),
+                out_of_scope_child: iter.next().unwrap(),
+            }))
+        }
+
+        fn children_in_scope(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.in_scope_child]
+        }
+
+        fn with_new_children_in_scope(
+            self: Arc<Self>,
+            children_in_scope: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert_eq!(children_in_scope.len(), 1);
+            Ok(Arc::new(Self {
+                in_scope_child: children_in_scope.into_iter().next().unwrap(),
+                out_of_scope_child: Arc::clone(&self.out_of_scope_child),
+            }))
+        }
+
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            Display::fmt(&self, f)
+        }
+    }
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub struct TestScalarUDF {
@@ -647,5 +729,50 @@ pub(crate) mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_reassign_expr_columns_does_not_modify_out_of_scope_children() {
+        // Outer schema: [a: Int32, b: Int32]
+        // Lambda schema: [x: Int32] (different scope, should not be touched)
+        let outer_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        // The in-scope child references "b" at index 5 (wrong index for outer_schema)
+        let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 5));
+        // The out-of-scope child references "x" at index 0 in the lambda schema
+        let out_of_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 0));
+
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
+            in_scope_child,
+            out_of_scope_child,
+        });
+
+        let result = reassign_expr_columns(expr, &outer_schema).unwrap();
+
+        // The in-scope "b" column should be reassigned to index 1 (its position in outer_schema)
+        let mock = result
+            .as_any()
+            .downcast_ref::<ScopedExprMock>()
+            .expect("Should still be ScopedExprMock");
+
+        let in_scope_col = mock
+            .in_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("in_scope_child should be Column");
+        assert_eq!(in_scope_col.name(), "b");
+        assert_eq!(in_scope_col.index(), 1); // reassigned to correct index
+
+        // The out-of-scope "x" column should be UNCHANGED (still index 0)
+        let out_of_scope_col = mock
+            .out_of_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("out_of_scope_child should be Column");
+        assert_eq!(out_of_scope_col.name(), "x");
+        assert_eq!(out_of_scope_col.index(), 0); // not modified
     }
 }

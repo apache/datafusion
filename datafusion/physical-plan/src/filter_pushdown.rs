@@ -553,3 +553,199 @@ impl FilterDescription {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::RecordBatch;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::ColumnarValue;
+    use datafusion_physical_expr::expressions::Column;
+
+    /// A mock expression with an in-scope child and an out-of-scope child.
+    /// Used to verify that scoped traversal does not modify out-of-scope children.
+    #[derive(Debug, Hash, Clone)]
+    struct ScopedExprMock {
+        in_scope_child: Arc<dyn PhysicalExpr>,
+        out_of_scope_child: Arc<dyn PhysicalExpr>,
+    }
+
+    impl PartialEq for ScopedExprMock {
+        fn eq(&self, other: &Self) -> bool {
+            self.in_scope_child.as_ref() == other.in_scope_child.as_ref()
+                && self.out_of_scope_child.as_ref()
+                    == other.out_of_scope_child.as_ref()
+        }
+    }
+
+    impl Eq for ScopedExprMock {}
+
+    impl std::fmt::Display for ScopedExprMock {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(
+                f,
+                "scoped_mock({}, {})",
+                self.in_scope_child, self.out_of_scope_child
+            )
+        }
+    }
+
+    impl PhysicalExpr for ScopedExprMock {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn return_field(
+            &self,
+            input_schema: &Schema,
+        ) -> Result<Arc<Field>> {
+            self.in_scope_child.return_field(input_schema)
+        }
+
+        fn evaluate(
+            &self,
+            _batch: &RecordBatch,
+        ) -> Result<ColumnarValue> {
+            unimplemented!("ScopedExprMock does not support evaluation")
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.in_scope_child, &self.out_of_scope_child]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert_eq!(children.len(), 2);
+            let mut iter = children.into_iter();
+            Ok(Arc::new(Self {
+                in_scope_child: iter.next().unwrap(),
+                out_of_scope_child: iter.next().unwrap(),
+            }))
+        }
+
+        fn children_in_scope(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.in_scope_child]
+        }
+
+        fn with_new_children_in_scope(
+            self: Arc<Self>,
+            children_in_scope: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert_eq!(children_in_scope.len(), 1);
+            Ok(Arc::new(Self {
+                in_scope_child: children_in_scope.into_iter().next().unwrap(),
+                out_of_scope_child: Arc::clone(&self.out_of_scope_child),
+            }))
+        }
+
+        fn fmt_sql(
+            &self,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result {
+            std::fmt::Display::fmt(&self, f)
+        }
+    }
+
+    #[test]
+    fn test_filter_remapper_does_not_modify_out_of_scope_children() {
+        // Child schema: [a: Int32, b: Int32]
+        let child_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let remapper = FilterRemapper::new(Arc::clone(&child_schema));
+
+        // The in-scope child references column "a@0" which exists in child schema
+        let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // The out-of-scope child also references "a@0" but should NOT be remapped
+        let out_of_scope_child: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new("a", 0));
+
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
+            in_scope_child,
+            out_of_scope_child,
+        });
+
+        let result = remapper
+            .try_remap(&filter)
+            .unwrap()
+            .expect("Should remap successfully");
+
+        let mock = result
+            .as_any()
+            .downcast_ref::<ScopedExprMock>()
+            .expect("Should still be ScopedExprMock");
+
+        // The in-scope child "a@0" should be remapped (stays "a@0" since schema matches)
+        let in_scope_col = mock
+            .in_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("in_scope_child should be Column");
+        assert_eq!(in_scope_col.name(), "a");
+        assert_eq!(in_scope_col.index(), 0);
+
+        // The out-of-scope child "a@0" should be UNCHANGED
+        let out_of_scope_col = mock
+            .out_of_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("out_of_scope_child should still be Column");
+        assert_eq!(out_of_scope_col.name(), "a");
+        assert_eq!(out_of_scope_col.index(), 0);
+    }
+
+    #[test]
+    fn test_filter_remapper_remaps_in_scope_but_not_out_of_scope() {
+        // Parent schema: [a: Int32, b: Int32, c: Int32]
+        // Child schema: [b: Int32, a: Int32]  (different order, so "a" remaps from 0 -> 1)
+        let child_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        let remapper = FilterRemapper::new(Arc::clone(&child_schema));
+
+        // The in-scope child references "a@0" - should be remapped to "a@1" in child schema
+        let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // The out-of-scope child references "x@0" in the lambda schema - should NOT be touched
+        let out_of_scope_child: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new("x", 0));
+
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
+            in_scope_child,
+            out_of_scope_child,
+        });
+
+        let result = remapper
+            .try_remap(&filter)
+            .unwrap()
+            .expect("Should remap successfully");
+
+        let mock = result
+            .as_any()
+            .downcast_ref::<ScopedExprMock>()
+            .expect("Should still be ScopedExprMock");
+
+        // The in-scope child "a@0" should be remapped to "a@1" (position in child schema)
+        let in_scope_col = mock
+            .in_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("in_scope_child should be Column");
+        assert_eq!(in_scope_col.name(), "a");
+        assert_eq!(in_scope_col.index(), 1);
+
+        // The out-of-scope child "x@0" should be UNCHANGED
+        let out_of_scope_col = mock
+            .out_of_scope_child
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("out_of_scope_child should still be Column");
+        assert_eq!(out_of_scope_col.name(), "x");
+        assert_eq!(out_of_scope_col.index(), 0);
+    }
+}
