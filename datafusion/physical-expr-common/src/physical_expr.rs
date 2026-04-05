@@ -165,11 +165,36 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// Get a list of child PhysicalExpr that provide the input for this expr.
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>;
 
+    /// Get a list of child PhysicalExpr that provide the input for this expr that are in the same scope as this expression.
+    /// 
+    /// Due to the majority of expressions being in the same scope the default implementation is to call to [`Self::children`] 
+    /// 
+    /// To know if specific child is considered in the same scope you can answer this simple question:
+    /// If that child is a `Column` would that column can be evaluated with the same input schema
+    /// Expressions like `plus`, `sum`, etc have all children in scope.
+    /// Lambda expressions like `array_filter(list, value -> value + 1)`, have the `list` in the same scope and the lambda function in different scope
+    fn children_in_scope(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        self.children()
+    }
+
     /// Returns a new PhysicalExpr where all children were replaced by new exprs.
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>>;
+
+    /// Returns a new PhysicalExpr where all scoped children were replaced by new exprs.
+    /// 
+    /// See [`Self::children_in_scope`] for definition of what child considered a scope
+    /// 
+    /// Due to the majority of expressions being in the same scope the default implementation is to call to [`Self::with_new_children`] 
+    /// 
+    fn with_new_children_in_scope(
+        self: Arc<Self>,
+        children_in_scope: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.with_new_children(children_in_scope)
+    }
 
     /// Computes the output interval for the expression, given the input
     /// intervals.
@@ -476,12 +501,36 @@ pub fn with_new_children_if_necessary(
     );
 
     if children.is_empty()
-        || children
-            .iter()
-            .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
+      || children
+      .iter()
+      .zip(old_children.iter())
+      .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
         Ok(expr.with_new_children(children)?)
+    } else {
+        Ok(expr)
+    }
+}
+/// Returns a copy of this expr if we change any child according to the pointer comparison.
+/// The size of `children_in_scope` must be equal to the size of [`PhysicalExpr::children_in_scope()`].
+pub fn with_new_children_in_scope_if_necessary(
+    expr: Arc<dyn PhysicalExpr>,
+    children_in_scope: Vec<Arc<dyn PhysicalExpr>>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let old_children_in_scope = expr.children_in_scope();
+    assert_eq_or_internal_err!(
+        children_in_scope.len(),
+        old_children_in_scope.len(),
+        "PhysicalExpr: Wrong number of children in scope"
+    );
+
+    if children_in_scope.is_empty()
+      || children_in_scope
+      .iter()
+      .zip(old_children_in_scope.iter())
+      .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
+    {
+        Ok(expr.with_new_children_in_scope(children_in_scope)?)
     } else {
         Ok(expr)
     }

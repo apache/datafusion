@@ -27,7 +27,7 @@ use crate::utils::collect_columns;
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{ScopedTreeNode, Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     Result, ScalarValue, Statistics, assert_or_internal_err, internal_datafusion_err,
     plan_err,
@@ -920,7 +920,7 @@ pub fn update_expr(
     let mut state = RewriteState::Unchanged;
 
     let new_expr = Arc::clone(expr)
-        .transform_up(|expr| {
+        .transform_up_in_scope(|expr| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
             }
@@ -1043,7 +1043,7 @@ impl ProjectionMapping {
         let mut map = IndexMap::<_, ProjectionTargets>::new();
         for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
             let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
-            let source_expr = expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+            let source_expr = expr.transform_down_in_scope(|e| match e.as_any().downcast_ref::<Column>() {
                 Some(col) => {
                     // Sometimes, an expression and its name in the input_schema
                     // doesn't match. This can cause problems, so we make sure
@@ -1162,7 +1162,7 @@ pub fn project_ordering(
 ) -> Option<LexOrdering> {
     let mut projected_exprs = vec![];
     for PhysicalSortExpr { expr, options } in ordering.iter() {
-        let transformed = Arc::clone(expr).transform_up(|expr| {
+        let transformed = Arc::clone(expr).transform_up_in_scope(|expr| {
             let Some(col) = expr.as_any().downcast_ref::<Column>() else {
                 return Ok(Transformed::no(expr));
             };

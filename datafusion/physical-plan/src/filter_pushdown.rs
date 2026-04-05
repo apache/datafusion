@@ -40,7 +40,7 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use datafusion_common::{
     Result,
-    tree_node::{Transformed, TreeNode},
+    tree_node::{ScopedTreeNode, Transformed, TreeNode},
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -364,7 +364,7 @@ impl FilterRemapper {
         filter: &Arc<dyn PhysicalExpr>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         let mut all_valid = true;
-        let transformed = Arc::clone(filter).transform_down(|expr| {
+        let transformed = Arc::clone(filter).transform_down_in_scope(|expr| {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 if self.allowed_indices.contains(&col.index())
                     && let Ok(new_index) = self.child_schema.index_of(col.name())

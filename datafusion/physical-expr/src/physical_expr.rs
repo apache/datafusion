@@ -22,7 +22,7 @@ use crate::{LexOrdering, PhysicalSortExpr, create_physical_expr};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{ScopedTreeNode, Transformed, TransformedResult, TreeNode};
 use datafusion_common::{DFSchema, HashMap};
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -38,7 +38,7 @@ pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: isize,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+    expr.transform_down_in_scope(|e| match e.as_any().downcast_ref::<Column>() {
         Some(col) => {
             let Some(idx) = col.index().checked_add_signed(offset) else {
                 return plan_err!("Column index overflow");

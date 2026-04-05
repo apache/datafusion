@@ -16,6 +16,7 @@
 // under the License.
 
 mod guarantee;
+use datafusion_common::tree_node::ScopedTreeNode;
 pub use guarantee::{Guarantee, LiteralGuarantee};
 
 use std::borrow::Borrow;
@@ -312,7 +313,7 @@ pub fn reassign_expr_columns(
     expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_down(|expr| {
+    expr.transform_down_in_scope(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             let index = schema.index_of(column.name())?;
 

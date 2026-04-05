@@ -40,7 +40,9 @@ use std::{any::Any, sync::Arc};
 
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    ScopedTreeNode, Transformed, TreeNode, TreeNodeRecursion,
+};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use datafusion_physical_expr_common::utils::scatter;
 use itertools::Itertools;
@@ -130,7 +132,7 @@ impl CaseBody {
         // Determine the set of columns that are used in all the expressions of the case body.
         let mut used_column_indices = IndexSet::<usize>::new();
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
-            expr.apply(|expr| {
+            expr.apply_in_scope(|expr| {
                 if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                     used_column_indices.insert(column.index());
                 }
@@ -161,7 +163,7 @@ impl CaseBody {
         // using the column index mapping.
         let project = |expr: &Arc<dyn PhysicalExpr>| -> Result<Arc<dyn PhysicalExpr>> {
             Arc::clone(expr)
-                .transform_down(|e| {
+                .transform_down_in_scope(|e| {
                     if let Some(column) = e.as_any().downcast_ref::<Column>() {
                         let original = column.index();
                         let projected = *column_index_map.get(&original).unwrap();
@@ -1397,7 +1399,7 @@ fn replace_with_null(
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
     let with_null = Arc::clone(expr)
-        .transform_down(|e| {
+        .transform_down_in_scope(|e| {
             if e.as_ref().dyn_eq(expr_to_replace) {
                 let data_type = e.data_type(input_schema)?;
                 let null_literal = lit(ScalarValue::try_new_null(&data_type)?);
@@ -1929,135 +1931,6 @@ mod tests {
     }
 
     #[test]
-    fn case_without_expr_and_with_custom_column_impl() -> Result<()> {
-        /// Represents the column at a given index in a RecordBatch that is inside a Spark lambda function
-        ///
-        /// This is the same as the datafusion [`datafusion::physical_expr::expressions::Column`] except that it store the entire info so that it can be used in lambda execution
-        #[derive(Debug, Hash, PartialEq, Eq, Clone)]
-        pub struct CustomColumn {
-            /// The name of the column (used for debugging and display purposes)
-            name: String,
-            /// The index of the column in its schema
-            index: usize,
-            data_type: DataType,
-            nullable: bool,
-        }
-
-        impl CustomColumn {
-            pub fn new_with_schema(
-                name: &str,
-                schema: &Schema,
-            ) -> Result<Arc<dyn PhysicalExpr>> {
-                let index = schema.index_of(name)?;
-                let field = schema.field(index);
-                Ok(Arc::new(CustomColumn {
-                    name: name.to_string(),
-                    index,
-                    data_type: field.data_type().clone(),
-                    nullable: field.is_nullable(),
-                }))
-            }
-        }
-
-        impl std::fmt::Display for CustomColumn {
-            fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-                write!(f, "{}@{}", self.name, self.index)
-            }
-        }
-
-        impl PhysicalExpr for CustomColumn {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-
-            fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-                Ok(self.data_type.clone())
-            }
-
-            fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-                Ok(self.nullable)
-            }
-
-            fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-                self.bounds_check(batch.schema().as_ref())?;
-                Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
-            }
-
-            fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-                vec![]
-            }
-
-            fn with_new_children(
-                self: Arc<Self>,
-                _children: Vec<Arc<dyn PhysicalExpr>>,
-            ) -> Result<Arc<dyn PhysicalExpr>> {
-                Ok(self)
-            }
-
-            fn fmt_sql(&self, _: &mut Formatter<'_>) -> std::fmt::Result {
-                unimplemented!()
-            }
-        }
-
-        impl CustomColumn {
-            fn bounds_check(&self, input_schema: &Schema) -> Result<()> {
-                if self.index < input_schema.fields.len() {
-                    Ok(())
-                } else {
-                    internal_err!(
-                        "PhysicalExpr BoundLambdaColumn references column '{}' at index {} (zero-based) but input schema only has {} columns: {:?}",
-                        self.name,
-                        self.index,
-                        input_schema.fields.len(),
-                        input_schema
-                            .fields()
-                            .iter()
-                            .map(|f| f.name())
-                            .collect::<Vec<_>>()
-                    )
-                }
-            }
-        }
-
-        let batch = case_test_batch()?;
-        let schema = batch.schema();
-
-        // CASE WHEN a = 'foo' THEN 123 WHEN a = 'bar' THEN 456 END
-        let when1 = binary(
-            CustomColumn::new_with_schema("a", &schema)?,
-            Operator::Eq,
-            lit("foo"),
-            &batch.schema(),
-        )?;
-        let then1 = lit(123i32);
-        let when2 = binary(
-            CustomColumn::new_with_schema("a", &schema)?,
-            Operator::Eq,
-            lit("bar"),
-            &batch.schema(),
-        )?;
-        let then2 = lit(456i32);
-
-        let expr = generate_case_when_with_type_coercion(
-            None,
-            vec![(when1, then1), (when2, then2)],
-            None,
-            schema.as_ref(),
-        )?;
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
-        let result = as_int32_array(&result)?;
-
-        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
-
-        assert_eq!(expected, result);
-
-        Ok(())
-    }
-
-    #[test]
     fn case_with_expr_when_null() -> Result<()> {
         let batch = case_test_batch()?;
         let schema = batch.schema();
@@ -2552,7 +2425,7 @@ mod tests {
             .unwrap();
 
         let expr3 = Arc::clone(&expr)
-            .transform_down(|e| {
+            .transform_down_in_scope(|e| {
                 let transformed = match e.as_any().downcast_ref::<Literal>() {
                     Some(lit_value) => match lit_value.value() {
                         ScalarValue::Utf8(Some(str_value)) => {

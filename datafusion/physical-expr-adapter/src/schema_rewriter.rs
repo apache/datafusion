@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
+use datafusion_common::tree_node::ScopedTreeNode;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_err,
     metadata::FieldMetadata,
@@ -69,7 +70,7 @@ where
     K: Borrow<str> + Eq + Hash,
     V: Borrow<ScalarValue>,
 {
-    expr.transform_down(|expr| {
+    expr.transform_down_in_scope(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>()
             && let Some(replacement_value) = replacements.get(column.name())
         {
