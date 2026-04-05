@@ -86,6 +86,7 @@ memchr = { workspace = true }
 num-traits = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true, optional = true }
+regex-syntax = "0.8.9"
 sha2 = { workspace = true, optional = true }
 unicode-segmentation = { version = "^1.13.2", optional = true }
 uuid = { workspace = true, features = ["v4"], optional = true }

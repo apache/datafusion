@@ -41,6 +41,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use regex::Regex;
+use regex_syntax::hir::{Hir, HirKind, Look};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -197,6 +198,63 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
     CAPTURE_GROUPS_RE_LOCK
         .replace_all(replacement, "$${$1}")
         .into_owned()
+}
+
+/// Count capture groups in a HIR tree.
+fn count_capture_groups(hir: &Hir) -> usize {
+    match hir.kind() {
+        HirKind::Capture(cap) => 1 + count_capture_groups(&cap.sub),
+        HirKind::Concat(subs) | HirKind::Alternation(subs) => {
+            subs.iter().map(count_capture_groups).sum()
+        }
+        HirKind::Repetition(rep) => count_capture_groups(&rep.sub),
+        _ => 0,
+    }
+}
+
+/// For anchored patterns (`^...$`), try to build a shorter regex by
+/// stripping trailing `.*` via HIR analysis. This reduces backtracker
+/// work since it doesn't need to scan through the rest of the string.
+///
+/// Only strips `.*` (greedy, min=0) which matches any suffix — this
+/// guarantees that if the extract regex matches, the full pattern would too.
+fn try_build_extract_regex(pattern: &str) -> Option<Regex> {
+    let hir = regex_syntax::Parser::new().parse(pattern).ok()?;
+    let HirKind::Concat(parts) = hir.kind() else {
+        return None;
+    };
+
+    if parts.len() < 3
+        || !matches!(parts.first()?.kind(), HirKind::Look(Look::Start))
+        || !matches!(parts.last()?.kind(), HirKind::Look(Look::End))
+    {
+        return None;
+    }
+
+    let before_end = &parts[parts.len() - 2];
+    let is_dot_star = matches!(before_end.kind(), HirKind::Repetition(rep)
+        if rep.min == 0
+            && rep.max.is_none()
+            && rep.greedy
+            && matches!(rep.sub.kind(), HirKind::Class(_))
+    );
+    if !is_dot_star {
+        return None;
+    }
+
+    // Keep ^ and inner parts, drop the .* and $
+    let trimmed_parts: Vec<Hir> = parts[..parts.len() - 2].to_vec();
+    if trimmed_parts
+        .iter()
+        .map(count_capture_groups)
+        .sum::<usize>()
+        == 0
+    {
+        return None;
+    }
+
+    let trimmed_hir = Hir::concat(trimmed_parts);
+    Regex::new(&trimmed_hir.to_string()).ok()
 }
 
 /// Replaces substring(s) matching a PCRE-like regular expression.
@@ -456,6 +514,14 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     // Replaces the posix groups in the replacement string
     // with rust ones.
     let replacement = regex_replace_posix_groups(replacement);
+
+    // For anchored patterns with trailing .*, build a shorter regex that
+    // reduces backtracker work by not scanning the rest of the string.
+    let re = if limit == 1 {
+        try_build_extract_regex(&pattern).unwrap_or(re)
+    } else {
+        re
+    };
 
     let string_array_type = args[0].data_type();
     match string_array_type {
