@@ -141,6 +141,46 @@ statement ok
 DROP TABLE t1;
 
 #######
+## Nullability tests for cast_to_type
+#######
+
+statement ok
+set datafusion.catalog.information_schema = true;
+
+# Non-nullable input -> non-nullable output
+statement ok
+CREATE VIEW v_cast_nonnull AS SELECT cast_to_type(42, NULL::INTEGER) as a;
+
+query TTT
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_cast_nonnull';
+----
+a Int32 NO
+
+statement ok
+DROP VIEW v_cast_nonnull;
+
+# Nullable input -> nullable output
+statement ok
+CREATE TABLE t_nullable (x INTEGER);
+
+statement ok
+INSERT INTO t_nullable VALUES (1), (NULL);
+
+statement ok
+CREATE VIEW v_cast_null AS SELECT cast_to_type(x, NULL::DOUBLE) as a FROM t_nullable;
+
+query TTT
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_cast_null';
+----
+a Float64 YES
+
+statement ok
+DROP VIEW v_cast_null;
+
+statement ok
+DROP TABLE t_nullable;
+
+#######
 ## Tests for try_cast_to_type function (fallible variant returning NULL)
 #######
 
@@ -255,3 +295,22 @@ NULL
 
 statement ok
 DROP TABLE t2;
+
+#######
+## Nullability tests for try_cast_to_type
+#######
+
+# try_cast_to_type is always nullable (cast can fail)
+statement ok
+CREATE VIEW v_trycast AS SELECT try_cast_to_type(42, NULL::INTEGER) as a;
+
+query TTT
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_trycast';
+----
+a Int32 YES
+
+statement ok
+DROP VIEW v_trycast;
+
+statement ok
+set datafusion.catalog.information_schema = false;

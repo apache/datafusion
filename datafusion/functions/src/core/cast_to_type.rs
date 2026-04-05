@@ -105,9 +105,14 @@ impl ScalarUDFImpl for CastToTypeFunc {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-        let [_, reference_field] = take_function_args(self.name(), args.arg_fields)?;
+        let [source_field, reference_field] =
+            take_function_args(self.name(), args.arg_fields)?;
         let target_type = reference_field.data_type().clone();
+        // Nullability is inherited only from the first argument (the value
+        // being cast).  The second argument is used solely for its type, so
+        // its own nullability is irrelevant.  The one exception is when the
+        // target type is Null – that type is inherently nullable.
+        let nullable = source_field.is_nullable() || target_type == DataType::Null;
         Ok(Field::new(self.name(), target_type, nullable).into())
     }
 
