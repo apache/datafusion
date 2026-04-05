@@ -2868,7 +2868,13 @@ pub(crate) mod tests {
     fn test_large_tree() {
         let mut item = TestTreeNode::new_leaf("initial".to_string());
         for i in 0..3000 {
-            item = TestTreeNode::new(vec![item], format!("parent-{i}"));
+            // Avoid TestTreeNode::new() here which clones children into
+            // children_in_same_scope - that would be O(n^2) for a deep chain.
+            item = TestTreeNode {
+                children: vec![item],
+                children_in_same_scope: vec![],
+                data: format!("parent-{i}"),
+            };
         }
 
         let mut visitor =
