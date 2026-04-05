@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`CastToTypeFunc`]: Implementation of the `cast_to_type`
+//! [`CastToTypeFunc`]: Implementation of the `cast_to_type` function
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{
