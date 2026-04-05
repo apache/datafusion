@@ -2862,87 +2862,62 @@ pub(crate) mod tests {
         item.visit(&mut visitor).unwrap();
     }
 
-    // =====================================================================
-    // ScopedTreeNode tests
+    //                                A
+    //                                |
+    //                                B
+    //                               / \
+    //                              C   F (mixed)
+    //                             / \ / \
+    //                            D  E G  H (new scope)
+    //                                    |
+    //                                   / \
+    //                                  I   J (mixed)
+    //                                     / \
+    //                                    K   L (new scope)
+    //                                        |
+    //                                        M
     //
-    // Models nested scope boundaries, like expressions with nested lambdas.
-    // Each scope has multiple nodes (>=3) to test sibling traversal within
-    // a scope, plus some scopes with only 1 in-scope child.
+    // ScopedTreeNode traversal from A: A, B, C, D, E, F, G
+    //   (skips H, I, J, K, L, M -- H is a new scope)
     //
-    // OUTER SCOPE (root traversal visits these):
-    //   root -> and -> [plus, gt]
-    //     plus -> [col_a, col_b]
-    //     gt   -> [col_c, Lambda1]  <- Lambda1 is out of scope
+    // ScopedTreeNode traversal from H: H, I, J, K
+    //   (skips L, M -- L is a new scope)
     //
-    //   Scoped traversal: root, and, plus, col_a, col_b, gt, col_c
-    //   (7 nodes, Lambda1 not entered)
-    //
-    // LAMBDA1 SCOPE (Lambda1's own traversal):
-    //   lambda1 -> [list_col, cmp]
-    //     cmp   -> [idx_col, Lambda2]  <- Lambda2 is out of scope
-    //
-    //   Scoped traversal: lambda1, list_col, cmp, idx_col
-    //   (4 nodes, Lambda2 not entered)
-    //
-    // LAMBDA2 SCOPE (Lambda2's own traversal -- only 1 in-scope child):
-    //   lambda2 -> [inner_col]
-    //
-    //   Scoped traversal: lambda2, inner_col
-    //   (2 nodes)
-    //
-    //                         root
-    //                          |      (scoped)
-    //                         and  (scoped: [plus, gt])
-    //                        /   \
-    //                     plus    gt  (mixed: in_scope=[col_c], out=[Lambda1])
-    //                    /   \    / \
-    //                col_a col_b col_c Lambda1 <- scope boundary
-    //                                  |
-    //                              (in_scope=[list_col, cmp], out=[])
-    //                                /       \
-    //                          list_col      cmp (mixed: in_scope=[idx_col], out=[Lambda2])
-    //                                        / \
-    //                                  idx_col  Lambda2 <- nested scope boundary
-    //                                           |
-    //                                       (in_scope=[inner_col])
-    //                                           |
-    //                                       inner_col
-    // =====================================================================
+    // ScopedTreeNode traversal from L: L, M
 
     fn scoped_test_tree() -> TestTreeNode<String> {
         // Leaves for outer scope
-        let col_a = TestTreeNode::new_leaf("col_a".to_string());
-        let col_b = TestTreeNode::new_leaf("col_b".to_string());
-        let col_c = TestTreeNode::new_leaf("col_c".to_string());
+        let d = TestTreeNode::new_leaf("d".to_string());
+        let e = TestTreeNode::new_leaf("e".to_string());
+        let g = TestTreeNode::new_leaf("g".to_string());
 
-        let plus = TestTreeNode::new(vec![col_a, col_b], "plus".to_string());
+        let c = TestTreeNode::new(vec![d, e], "c".to_string());
 
-        // --- Innermost lambda scope: Lambda2 -> inner_col ---
-        let inner_col = TestTreeNode::new_leaf("inner_col".to_string());
-        let lambda2 = TestTreeNode::new(vec![inner_col], "lambda2".to_string());
+        // --- Innermost scope: l -> m ---
+        let m = TestTreeNode::new_leaf("m".to_string());
+        let l = TestTreeNode::new(vec![m], "l".to_string());
 
-        // --- Middle lambda scope: Lambda1 -> list_col, cmp ---
-        let list_col = TestTreeNode::new_leaf("list_col".to_string());
-        let idx_col = TestTreeNode::new_leaf("idx_col".to_string());
-        // cmp has idx_col in scope, Lambda2 out of scope (new scope)
-        let cmp = TestTreeNode::new_mixed(
-            vec![idx_col.clone(), lambda2.clone()],
-            vec![lambda2],
-            "cmp".to_string(),
+        // --- Middle scope: h -> [i, j] ---
+        let i = TestTreeNode::new_leaf("i".to_string());
+        let k = TestTreeNode::new_leaf("k".to_string());
+        // j has k in scope, l out of scope (new scope)
+        let j = TestTreeNode::new_mixed(
+            vec![k.clone(), l.clone()],
+            vec![l],
+            "j".to_string(),
         );
-        let lambda1 =
-            TestTreeNode::new(vec![list_col, cmp], "lambda1".to_string());
+        let h = TestTreeNode::new(vec![i, j], "h".to_string());
 
         // --- Outer scope ---
-        // gt has col_c in scope, Lambda1 out of scope (new scope)
-        let gt = TestTreeNode::new_mixed(
-            vec![col_c.clone(), lambda1.clone()],
-            vec![lambda1],
-            "gt".to_string(),
+        // f has g in scope, h out of scope (new scope)
+        let f = TestTreeNode::new_mixed(
+            vec![g.clone(), h.clone()],
+            vec![h],
+            "f".to_string(),
         );
-        let and = TestTreeNode::new(vec![plus, gt], "and".to_string());
+        let b = TestTreeNode::new(vec![c, f], "b".to_string());
 
-        TestTreeNode::new(vec![and], "root".to_string())
+        TestTreeNode::new(vec![b], "a".to_string())
     }
 
     /// Collect all data reachable via children_in_new_scope (scoped DFS).
@@ -3015,20 +2990,20 @@ pub(crate) mod tests {
         assert_eq!(
             visitor.visits,
             s(&[
-                "f_down(root)",
-                "f_down(and)",
-                "f_down(plus)",
-                "f_down(col_a)",
-                "f_up(col_a)",
-                "f_down(col_b)",
-                "f_up(col_b)",
-                "f_up(plus)",
-                "f_down(gt)",
-                "f_down(col_c)",
-                "f_up(col_c)",
-                "f_up(gt)",
-                "f_up(and)",
-                "f_up(root)",
+                "f_down(a)",
+                "f_down(b)",
+                "f_down(c)",
+                "f_down(d)",
+                "f_up(d)",
+                "f_down(e)",
+                "f_up(e)",
+                "f_up(c)",
+                "f_down(f)",
+                "f_down(g)",
+                "f_up(g)",
+                "f_up(f)",
+                "f_up(b)",
+                "f_up(a)",
             ])
         );
         Ok(())
@@ -3040,14 +3015,7 @@ pub(crate) mod tests {
         let mut visitor =
             TestVisitor::new(Box::new(visit_continue), Box::new(visit_continue));
         tree.visit_in_scope(&mut visitor)?;
-        let out_of_scope = [
-            "lambda1",
-            "lambda2",
-            "list_col",
-            "cmp",
-            "idx_col",
-            "inner_col",
-        ];
+        let out_of_scope = ["h", "l", "i", "j", "k", "m"];
         for v in &visitor.visits {
             for name in &out_of_scope {
                 assert!(
@@ -3060,134 +3028,134 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_visit_in_scope_f_down_jump_on_plus() -> Result<()> {
+    fn test_visit_in_scope_f_down_jump_on_c() -> Result<()> {
         let tree = scoped_test_tree();
         let mut visitor = TestVisitor::new(
-            Box::new(visit_event_on("plus", TreeNodeRecursion::Jump)),
+            Box::new(visit_event_on("c", TreeNodeRecursion::Jump)),
             Box::new(visit_continue),
         );
         tree.visit_in_scope(&mut visitor)?;
-        // Jump on Plus: skip Plus's children, continue with sibling gt
+        // Jump on c: skip c's children, continue with sibling f
         assert_eq!(
             visitor.visits,
             s(&[
-                "f_down(root)",
-                "f_down(and)",
-                "f_down(plus)",
-                "f_up(plus)",
-                "f_down(gt)",
-                "f_down(col_c)",
-                "f_up(col_c)",
-                "f_up(gt)",
-                "f_up(and)",
-                "f_up(root)",
+                "f_down(a)",
+                "f_down(b)",
+                "f_down(c)",
+                "f_up(c)",
+                "f_down(f)",
+                "f_down(g)",
+                "f_up(g)",
+                "f_up(f)",
+                "f_up(b)",
+                "f_up(a)",
             ])
         );
         Ok(())
     }
 
     #[test]
-    fn test_visit_in_scope_f_down_stop_on_col_a() -> Result<()> {
+    fn test_visit_in_scope_f_down_stop_on_d() -> Result<()> {
         let tree = scoped_test_tree();
         let mut visitor = TestVisitor::new(
-            Box::new(visit_event_on("col_a", TreeNodeRecursion::Stop)),
+            Box::new(visit_event_on("d", TreeNodeRecursion::Stop)),
             Box::new(visit_continue),
         );
         tree.visit_in_scope(&mut visitor)?;
         assert_eq!(
             visitor.visits,
             s(&[
-                "f_down(root)",
-                "f_down(and)",
-                "f_down(plus)",
-                "f_down(col_a)",
+                "f_down(a)",
+                "f_down(b)",
+                "f_down(c)",
+                "f_down(d)",
             ])
         );
         Ok(())
     }
 
     #[test]
-    fn test_visit_in_scope_f_up_jump_on_col_a() -> Result<()> {
+    fn test_visit_in_scope_f_up_jump_on_d() -> Result<()> {
         let tree = scoped_test_tree();
         let mut visitor = TestVisitor::new(
             Box::new(visit_continue),
-            Box::new(visit_event_on("col_a", TreeNodeRecursion::Jump)),
+            Box::new(visit_event_on("d", TreeNodeRecursion::Jump)),
         );
         tree.visit_in_scope(&mut visitor)?;
-        // Jump after f_up(col_a): continue with sibling col_b.
-        // col_b returns Continue, resetting the tnr, so plus's f_up IS called.
+        // Jump after f_up(d): continue with sibling e.
+        // e returns Continue, resetting the tnr, so c's f_up IS called.
         assert_eq!(
             visitor.visits,
             s(&[
-                "f_down(root)",
-                "f_down(and)",
-                "f_down(plus)",
-                "f_down(col_a)",
-                "f_up(col_a)",
-                "f_down(col_b)",
-                "f_up(col_b)",
-                "f_up(plus)",
-                "f_down(gt)",
-                "f_down(col_c)",
-                "f_up(col_c)",
-                "f_up(gt)",
-                "f_up(and)",
-                "f_up(root)",
+                "f_down(a)",
+                "f_down(b)",
+                "f_down(c)",
+                "f_down(d)",
+                "f_up(d)",
+                "f_down(e)",
+                "f_up(e)",
+                "f_up(c)",
+                "f_down(f)",
+                "f_down(g)",
+                "f_up(g)",
+                "f_up(f)",
+                "f_up(b)",
+                "f_up(a)",
             ])
         );
         Ok(())
     }
 
     #[test]
-    fn test_visit_in_scope_f_up_stop_on_col_a() -> Result<()> {
+    fn test_visit_in_scope_f_up_stop_on_d() -> Result<()> {
         let tree = scoped_test_tree();
         let mut visitor = TestVisitor::new(
             Box::new(visit_continue),
-            Box::new(visit_event_on("col_a", TreeNodeRecursion::Stop)),
+            Box::new(visit_event_on("d", TreeNodeRecursion::Stop)),
         );
         tree.visit_in_scope(&mut visitor)?;
         assert_eq!(
             visitor.visits,
             s(&[
-                "f_down(root)",
-                "f_down(and)",
-                "f_down(plus)",
-                "f_down(col_a)",
-                "f_up(col_a)",
+                "f_down(a)",
+                "f_down(b)",
+                "f_down(c)",
+                "f_down(d)",
+                "f_up(d)",
             ])
         );
         Ok(())
     }
 
     #[test]
-    fn test_visit_in_scope_f_up_jump_on_plus() -> Result<()> {
+    fn test_visit_in_scope_f_up_jump_on_c() -> Result<()> {
         let tree = scoped_test_tree();
         let mut visitor = TestVisitor::new(
             Box::new(visit_continue),
-            Box::new(visit_event_on("plus", TreeNodeRecursion::Jump)),
+            Box::new(visit_event_on("c", TreeNodeRecursion::Jump)),
         );
         tree.visit_in_scope(&mut visitor)?;
-        // Jump after f_up(plus): skip plus's parent f_up, continue with sibling gt.
-        // gt returns Continue which resets the tnr, so f_up(and) and f_up(root) are called.
+        // Jump after f_up(c): skip c's parent f_up, continue with sibling f.
+        // f returns Continue which resets the tnr, so f_up(b) and f_up(a) are called.
         assert_eq!(
             visitor.visits,
             s(&[
-                "f_down(root)",
-                "f_down(and)",
-                "f_down(plus)",
-                "f_down(col_a)",
-                "f_up(col_a)",
-                "f_down(col_b)",
-                "f_up(col_b)",
-                "f_up(plus)",
-                // gt is sibling of plus, so it gets visited
-                "f_down(gt)",
-                "f_down(col_c)",
-                "f_up(col_c)",
-                "f_up(gt)",
-                // gt returned Continue, resetting the tnr, so f_up(and) is called
-                "f_up(and)",
-                "f_up(root)",
+                "f_down(a)",
+                "f_down(b)",
+                "f_down(c)",
+                "f_down(d)",
+                "f_up(d)",
+                "f_down(e)",
+                "f_up(e)",
+                "f_up(c)",
+                // f is sibling of c, so it gets visited
+                "f_down(f)",
+                "f_down(g)",
+                "f_up(g)",
+                "f_up(f)",
+                // f returned Continue, resetting the tnr, so f_up(b) is called
+                "f_up(b)",
+                "f_up(a)",
             ])
         );
         Ok(())
@@ -3205,7 +3173,7 @@ pub(crate) mod tests {
         })?;
         assert_eq!(
             visits,
-            s(&["root", "and", "plus", "col_a", "col_b", "gt", "col_c"])
+            s(&["a", "b", "c", "d", "e", "f", "g"])
         );
         Ok(())
     }
@@ -3218,14 +3186,7 @@ pub(crate) mod tests {
             visits.push(n.data.clone());
             Ok(TreeNodeRecursion::Continue)
         })?;
-        let out_of_scope = [
-            "lambda1",
-            "lambda2",
-            "list_col",
-            "cmp",
-            "idx_col",
-            "inner_col",
-        ];
+        let out_of_scope = ["h", "l", "i", "j", "k", "m"];
         for name in &out_of_scope {
             assert!(
                 !visits.contains(&name.to_string()),
@@ -3236,35 +3197,35 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_apply_in_scope_jump_on_plus() -> Result<()> {
+    fn test_apply_in_scope_jump_on_c() -> Result<()> {
         let tree = scoped_test_tree();
         let mut visits = vec![];
         tree.apply_in_scope(|n| {
             visits.push(n.data.clone());
-            Ok(if n.data == "plus" {
+            Ok(if n.data == "c" {
                 TreeNodeRecursion::Jump
             } else {
                 TreeNodeRecursion::Continue
             })
         })?;
-        // Jump on Plus skips its children, continues to sibling gt
-        assert_eq!(visits, s(&["root", "and", "plus", "gt", "col_c"]));
+        // Jump on c skips its children, continues to sibling f
+        assert_eq!(visits, s(&["a", "b", "c", "f", "g"]));
         Ok(())
     }
 
     #[test]
-    fn test_apply_in_scope_stop_on_col_a() -> Result<()> {
+    fn test_apply_in_scope_stop_on_d() -> Result<()> {
         let tree = scoped_test_tree();
         let mut visits = vec![];
         tree.apply_in_scope(|n| {
             visits.push(n.data.clone());
-            Ok(if n.data == "col_a" {
+            Ok(if n.data == "d" {
                 TreeNodeRecursion::Stop
             } else {
                 TreeNodeRecursion::Continue
             })
         })?;
-        assert_eq!(visits, s(&["root", "and", "plus", "col_a"]));
+        assert_eq!(visits, s(&["a", "b", "c", "d"]));
         Ok(())
     }
 
@@ -3277,22 +3238,22 @@ pub(crate) mod tests {
         assert_eq!(
             collect_scoped_data(&result.data),
             s(&[
-                "f_down(root)",
-                "f_down(and)",
-                "f_down(plus)",
-                "f_down(col_a)",
-                "f_down(col_b)",
-                "f_down(gt)",
-                "f_down(col_c)",
+                "f_down(a)",
+                "f_down(b)",
+                "f_down(c)",
+                "f_down(d)",
+                "f_down(e)",
+                "f_down(f)",
+                "f_down(g)",
             ])
         );
-        // Lambda internals untouched in children path
+        // Scope h internals untouched in children path
         let children = collect_children_data(&result.data);
-        assert_eq!(children[0], "f_down(root)");
-        assert!(children.contains(&"lambda1".to_string()));
-        assert!(children.contains(&"lambda2".to_string()));
-        assert!(children.contains(&"list_col".to_string()));
-        assert!(children.contains(&"inner_col".to_string()));
+        assert_eq!(children[0], "f_down(a)");
+        assert!(children.contains(&"h".to_string()));
+        assert!(children.contains(&"l".to_string()));
+        assert!(children.contains(&"i".to_string()));
+        assert!(children.contains(&"m".to_string()));
         Ok(())
     }
 
@@ -3301,14 +3262,7 @@ pub(crate) mod tests {
         let tree = scoped_test_tree();
         let result = tree.transform_down_in_scope(transform_yes_in_scope("f_down"))?;
         let scoped = collect_scoped_data(&result.data);
-        let out_of_scope = [
-            "lambda1",
-            "lambda2",
-            "list_col",
-            "cmp",
-            "idx_col",
-            "inner_col",
-        ];
+        let out_of_scope = ["h", "l", "i", "j", "k", "m"];
         for v in &scoped {
             for name in &out_of_scope {
                 assert!(
@@ -3321,24 +3275,24 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_transform_down_in_scope_jump_on_plus() -> Result<()> {
+    fn test_transform_down_in_scope_jump_on_c() -> Result<()> {
         let tree = scoped_test_tree();
         let result = tree.transform_down_in_scope(transform_and_event_on_in_scope(
             "f_down",
-            "plus",
+            "c",
             TreeNodeRecursion::Jump,
         ))?;
-        // Plus is transformed but children skipped, gt still visited
+        // c is transformed but children skipped, f still visited
         assert_eq!(
             collect_scoped_data(&result.data),
             s(&[
-                "f_down(root)",
-                "f_down(and)",
-                "f_down(plus)",
-                "col_a",
-                "col_b",
-                "f_down(gt)",
-                "f_down(col_c)",
+                "f_down(a)",
+                "f_down(b)",
+                "f_down(c)",
+                "d",
+                "e",
+                "f_down(f)",
+                "f_down(g)",
             ])
         );
         Ok(())
@@ -3353,34 +3307,34 @@ pub(crate) mod tests {
         assert_eq!(
             collect_scoped_data(&result.data),
             s(&[
-                "f_up(root)",
-                "f_up(and)",
-                "f_up(plus)",
-                "f_up(col_a)",
-                "f_up(col_b)",
-                "f_up(gt)",
-                "f_up(col_c)",
+                "f_up(a)",
+                "f_up(b)",
+                "f_up(c)",
+                "f_up(d)",
+                "f_up(e)",
+                "f_up(f)",
+                "f_up(g)",
             ])
         );
         let children = collect_children_data(&result.data);
-        assert!(children.contains(&"lambda1".to_string()));
-        assert!(children.contains(&"lambda2".to_string()));
-        assert!(children.contains(&"inner_col".to_string()));
+        assert!(children.contains(&"h".to_string()));
+        assert!(children.contains(&"l".to_string()));
+        assert!(children.contains(&"m".to_string()));
         Ok(())
     }
 
     #[test]
-    fn test_transform_up_in_scope_stop_on_col_a() -> Result<()> {
+    fn test_transform_up_in_scope_stop_on_d() -> Result<()> {
         let tree = scoped_test_tree();
         let result = tree.transform_up_in_scope(transform_and_event_on_in_scope(
             "f_up",
-            "col_a",
+            "d",
             TreeNodeRecursion::Stop,
         ))?;
-        // Stop on col_a: only col_a transformed, everything else untouched
+        // Stop on d: only d transformed, everything else untouched
         assert_eq!(
             collect_scoped_data(&result.data),
-            s(&["root", "and", "plus", "f_up(col_a)", "col_b", "gt", "col_c",])
+            s(&["a", "b", "c", "f_up(d)", "e", "f", "g",])
         );
         Ok(())
     }
@@ -3397,18 +3351,18 @@ pub(crate) mod tests {
         assert_eq!(
             collect_scoped_data(&result.data),
             s(&[
-                "f_up(f_down(root))",
-                "f_up(f_down(and))",
-                "f_up(f_down(plus))",
-                "f_up(f_down(col_a))",
-                "f_up(f_down(col_b))",
-                "f_up(f_down(gt))",
-                "f_up(f_down(col_c))",
+                "f_up(f_down(a))",
+                "f_up(f_down(b))",
+                "f_up(f_down(c))",
+                "f_up(f_down(d))",
+                "f_up(f_down(e))",
+                "f_up(f_down(f))",
+                "f_up(f_down(g))",
             ])
         );
         let children = collect_children_data(&result.data);
-        assert!(children.contains(&"lambda1".to_string()));
-        assert!(children.contains(&"lambda2".to_string()));
+        assert!(children.contains(&"h".to_string()));
+        assert!(children.contains(&"l".to_string()));
         Ok(())
     }
 
@@ -3417,31 +3371,31 @@ pub(crate) mod tests {
     #[test]
     fn test_exists_in_scope_found_in_scope() -> Result<()> {
         let tree = scoped_test_tree();
-        assert!(tree.exists_in_scope(|n| Ok(n.data == "root"))?);
-        assert!(tree.exists_in_scope(|n| Ok(n.data == "and"))?);
-        assert!(tree.exists_in_scope(|n| Ok(n.data == "plus"))?);
-        assert!(tree.exists_in_scope(|n| Ok(n.data == "col_a"))?);
-        assert!(tree.exists_in_scope(|n| Ok(n.data == "col_b"))?);
-        assert!(tree.exists_in_scope(|n| Ok(n.data == "gt"))?);
-        assert!(tree.exists_in_scope(|n| Ok(n.data == "col_c"))?);
+        assert!(tree.exists_in_scope(|n| Ok(n.data == "a"))?);
+        assert!(tree.exists_in_scope(|n| Ok(n.data == "b"))?);
+        assert!(tree.exists_in_scope(|n| Ok(n.data == "c"))?);
+        assert!(tree.exists_in_scope(|n| Ok(n.data == "d"))?);
+        assert!(tree.exists_in_scope(|n| Ok(n.data == "e"))?);
+        assert!(tree.exists_in_scope(|n| Ok(n.data == "f"))?);
+        assert!(tree.exists_in_scope(|n| Ok(n.data == "g"))?);
         Ok(())
     }
 
     #[test]
-    fn test_exists_in_scope_not_found_lambda1_scope() -> Result<()> {
+    fn test_exists_in_scope_not_found_scope_h() -> Result<()> {
         let tree = scoped_test_tree();
-        assert!(!tree.exists_in_scope(|n| Ok(n.data == "lambda1"))?);
-        assert!(!tree.exists_in_scope(|n| Ok(n.data == "list_col"))?);
-        assert!(!tree.exists_in_scope(|n| Ok(n.data == "cmp"))?);
-        assert!(!tree.exists_in_scope(|n| Ok(n.data == "idx_col"))?);
+        assert!(!tree.exists_in_scope(|n| Ok(n.data == "h"))?);
+        assert!(!tree.exists_in_scope(|n| Ok(n.data == "i"))?);
+        assert!(!tree.exists_in_scope(|n| Ok(n.data == "j"))?);
+        assert!(!tree.exists_in_scope(|n| Ok(n.data == "k"))?);
         Ok(())
     }
 
     #[test]
-    fn test_exists_in_scope_not_found_nested_lambda2_scope() -> Result<()> {
+    fn test_exists_in_scope_not_found_nested_scope_l() -> Result<()> {
         let tree = scoped_test_tree();
-        assert!(!tree.exists_in_scope(|n| Ok(n.data == "lambda2"))?);
-        assert!(!tree.exists_in_scope(|n| Ok(n.data == "inner_col"))?);
+        assert!(!tree.exists_in_scope(|n| Ok(n.data == "l"))?);
+        assert!(!tree.exists_in_scope(|n| Ok(n.data == "m"))?);
         Ok(())
     }
 
@@ -3465,45 +3419,45 @@ pub(crate) mod tests {
         assert_eq!(
             collect_scoped_data(&result.data),
             s(&[
-                "f_up(f_down(root))",
-                "f_up(f_down(and))",
-                "f_up(f_down(plus))",
-                "f_up(f_down(col_a))",
-                "f_up(f_down(col_b))",
-                "f_up(f_down(gt))",
-                "f_up(f_down(col_c))",
+                "f_up(f_down(a))",
+                "f_up(f_down(b))",
+                "f_up(f_down(c))",
+                "f_up(f_down(d))",
+                "f_up(f_down(e))",
+                "f_up(f_down(f))",
+                "f_up(f_down(g))",
             ])
         );
         let children = collect_children_data(&result.data);
-        assert!(children.contains(&"lambda1".to_string()));
-        assert!(children.contains(&"lambda2".to_string()));
-        assert!(children.contains(&"inner_col".to_string()));
+        assert!(children.contains(&"h".to_string()));
+        assert!(children.contains(&"l".to_string()));
+        assert!(children.contains(&"m".to_string()));
         Ok(())
     }
 
     #[test]
-    fn test_rewrite_in_scope_f_down_jump_on_plus() -> Result<()> {
+    fn test_rewrite_in_scope_f_down_jump_on_c() -> Result<()> {
         let tree = scoped_test_tree();
         let mut rewriter = TestRewriter::new(
             Box::new(transform_and_event_on_in_scope(
                 "f_down",
-                "plus",
+                "c",
                 TreeNodeRecursion::Jump,
             )),
             Box::new(transform_yes_in_scope("f_up")),
         );
         let result = tree.rewrite_in_scope(&mut rewriter)?;
-        // Jump on Plus: children skipped, but sibling gt is visited
+        // Jump on c: children skipped, but sibling f is visited
         assert_eq!(
             collect_scoped_data(&result.data),
             s(&[
-                "f_up(f_down(root))",
-                "f_up(f_down(and))",
-                "f_up(f_down(plus))",
-                "col_a",
-                "col_b",
-                "f_up(f_down(gt))",
-                "f_up(f_down(col_c))",
+                "f_up(f_down(a))",
+                "f_up(f_down(b))",
+                "f_up(f_down(c))",
+                "d",
+                "e",
+                "f_up(f_down(f))",
+                "f_up(f_down(g))",
             ])
         );
         Ok(())
@@ -3513,272 +3467,272 @@ pub(crate) mod tests {
     // Each scope is tested with multiple traversal methods to ensure
     // no scope crossing occurs in any direction.
 
-    /// Build the Lambda2 subtree (innermost scope: lambda2 -> inner_col)
-    fn build_lambda2() -> TestTreeNode<String> {
-        let inner_col = TestTreeNode::new_leaf("inner_col".to_string());
-        TestTreeNode::new(vec![inner_col], "lambda2".to_string())
+    /// Build the scope_l subtree (innermost scope: l -> m)
+    fn build_scope_l() -> TestTreeNode<String> {
+        let m = TestTreeNode::new_leaf("m".to_string());
+        TestTreeNode::new(vec![m], "l".to_string())
     }
 
-    /// Build the Lambda1 subtree (middle scope: lambda1 -> [list_col, cmp -> idx_col])
-    fn build_lambda1() -> TestTreeNode<String> {
-        let lambda2 = build_lambda2();
-        let list_col = TestTreeNode::new_leaf("list_col".to_string());
-        let idx_col = TestTreeNode::new_leaf("idx_col".to_string());
-        let cmp = TestTreeNode::new_mixed(
-            vec![idx_col.clone(), lambda2.clone()],
-            vec![lambda2],
-            "cmp".to_string(),
+    /// Build the scope_h subtree (middle scope: h -> [i, j -> k])
+    fn build_scope_h() -> TestTreeNode<String> {
+        let l = build_scope_l();
+        let i = TestTreeNode::new_leaf("i".to_string());
+        let k = TestTreeNode::new_leaf("k".to_string());
+        let j = TestTreeNode::new_mixed(
+            vec![k.clone(), l.clone()],
+            vec![l],
+            "j".to_string(),
         );
-        TestTreeNode::new(vec![list_col, cmp], "lambda1".to_string())
+        TestTreeNode::new(vec![i, j], "h".to_string())
     }
 
-    // --- Lambda1 scope (middle): 4 in-scope nodes ---
+    // --- Scope h (middle): 4 in-scope nodes ---
 
     #[test]
-    fn test_lambda1_scope_apply() -> Result<()> {
-        let lambda1 = build_lambda1();
+    fn test_scope_h_apply() -> Result<()> {
+        let h = build_scope_h();
         let mut visits = vec![];
-        lambda1.apply_in_scope(|n| {
+        h.apply_in_scope(|n| {
             visits.push(n.data.clone());
             Ok(TreeNodeRecursion::Continue)
         })?;
-        assert_eq!(visits, s(&["lambda1", "list_col", "cmp", "idx_col"]));
-        assert!(!visits.contains(&"lambda2".to_string()));
-        assert!(!visits.contains(&"inner_col".to_string()));
+        assert_eq!(visits, s(&["h", "i", "j", "k"]));
+        assert!(!visits.contains(&"l".to_string()));
+        assert!(!visits.contains(&"m".to_string()));
         Ok(())
     }
 
     #[test]
-    fn test_lambda1_scope_visit() -> Result<()> {
-        let lambda1 = build_lambda1();
+    fn test_scope_h_visit() -> Result<()> {
+        let h = build_scope_h();
         let mut visitor =
             TestVisitor::new(Box::new(visit_continue), Box::new(visit_continue));
-        lambda1.visit_in_scope(&mut visitor)?;
+        h.visit_in_scope(&mut visitor)?;
         assert_eq!(
             visitor.visits,
             s(&[
-                "f_down(lambda1)",
-                "f_down(list_col)",
-                "f_up(list_col)",
-                "f_down(cmp)",
-                "f_down(idx_col)",
-                "f_up(idx_col)",
-                "f_up(cmp)",
-                "f_up(lambda1)",
+                "f_down(h)",
+                "f_down(i)",
+                "f_up(i)",
+                "f_down(j)",
+                "f_down(k)",
+                "f_up(k)",
+                "f_up(j)",
+                "f_up(h)",
             ])
         );
-        // Must not enter lambda2 scope
+        // Must not enter scope l
         for v in &visitor.visits {
             assert!(
-                !v.contains("lambda2"),
-                "lambda1 visit must not enter lambda2: {v}"
+                !v.contains("(l)"),
+                "scope h visit must not enter scope l: {v}"
             );
             assert!(
-                !v.contains("inner_col"),
-                "lambda1 visit must not enter lambda2: {v}"
+                !v.contains("(m)"),
+                "scope h visit must not enter scope l: {v}"
             );
         }
         Ok(())
     }
 
     #[test]
-    fn test_lambda1_scope_transform_down() -> Result<()> {
-        let lambda1 = build_lambda1();
-        let result = lambda1.transform_down_in_scope(transform_yes_in_scope("TX"))?;
+    fn test_scope_h_transform_down() -> Result<()> {
+        let h = build_scope_h();
+        let result = h.transform_down_in_scope(transform_yes_in_scope("TX"))?;
         assert_eq!(
             collect_scoped_data(&result.data),
-            s(&["TX(lambda1)", "TX(list_col)", "TX(cmp)", "TX(idx_col)",])
+            s(&["TX(h)", "TX(i)", "TX(j)", "TX(k)",])
         );
-        // Lambda2 untouched in children path
+        // Scope l untouched in children path
         let children = collect_children_data(&result.data);
-        assert!(children.contains(&"lambda2".to_string()));
-        assert!(children.contains(&"inner_col".to_string()));
+        assert!(children.contains(&"l".to_string()));
+        assert!(children.contains(&"m".to_string()));
         Ok(())
     }
 
     #[test]
-    fn test_lambda1_scope_transform_up() -> Result<()> {
-        let lambda1 = build_lambda1();
-        let result = lambda1.transform_up_in_scope(transform_yes_in_scope("TX"))?;
+    fn test_scope_h_transform_up() -> Result<()> {
+        let h = build_scope_h();
+        let result = h.transform_up_in_scope(transform_yes_in_scope("TX"))?;
         assert_eq!(
             collect_scoped_data(&result.data),
-            s(&["TX(lambda1)", "TX(list_col)", "TX(cmp)", "TX(idx_col)",])
+            s(&["TX(h)", "TX(i)", "TX(j)", "TX(k)",])
         );
         let children = collect_children_data(&result.data);
-        assert!(children.contains(&"lambda2".to_string()));
-        assert!(children.contains(&"inner_col".to_string()));
+        assert!(children.contains(&"l".to_string()));
+        assert!(children.contains(&"m".to_string()));
         Ok(())
     }
 
     #[test]
-    fn test_lambda1_scope_exists() -> Result<()> {
-        let lambda1 = build_lambda1();
+    fn test_scope_h_exists() -> Result<()> {
+        let h = build_scope_h();
         // In scope
-        assert!(lambda1.exists_in_scope(|n| Ok(n.data == "lambda1"))?);
-        assert!(lambda1.exists_in_scope(|n| Ok(n.data == "list_col"))?);
-        assert!(lambda1.exists_in_scope(|n| Ok(n.data == "cmp"))?);
-        assert!(lambda1.exists_in_scope(|n| Ok(n.data == "idx_col"))?);
-        // Out of scope (lambda2's scope)
-        assert!(!lambda1.exists_in_scope(|n| Ok(n.data == "lambda2"))?);
-        assert!(!lambda1.exists_in_scope(|n| Ok(n.data == "inner_col"))?);
+        assert!(h.exists_in_scope(|n| Ok(n.data == "h"))?);
+        assert!(h.exists_in_scope(|n| Ok(n.data == "i"))?);
+        assert!(h.exists_in_scope(|n| Ok(n.data == "j"))?);
+        assert!(h.exists_in_scope(|n| Ok(n.data == "k"))?);
+        // Out of scope (scope l)
+        assert!(!h.exists_in_scope(|n| Ok(n.data == "l"))?);
+        assert!(!h.exists_in_scope(|n| Ok(n.data == "m"))?);
         Ok(())
     }
 
     #[test]
-    fn test_lambda1_scope_rewrite() -> Result<()> {
-        let lambda1 = build_lambda1();
+    fn test_scope_h_rewrite() -> Result<()> {
+        let h = build_scope_h();
         let mut rewriter = TestRewriter::new(
             Box::new(transform_yes_in_scope("f_down")),
             Box::new(transform_yes_in_scope("f_up")),
         );
-        let result = lambda1.rewrite_in_scope(&mut rewriter)?;
+        let result = h.rewrite_in_scope(&mut rewriter)?;
         assert_eq!(
             collect_scoped_data(&result.data),
             s(&[
-                "f_up(f_down(lambda1))",
-                "f_up(f_down(list_col))",
-                "f_up(f_down(cmp))",
-                "f_up(f_down(idx_col))",
+                "f_up(f_down(h))",
+                "f_up(f_down(i))",
+                "f_up(f_down(j))",
+                "f_up(f_down(k))",
             ])
         );
         let children = collect_children_data(&result.data);
-        assert!(children.contains(&"lambda2".to_string()));
-        assert!(children.contains(&"inner_col".to_string()));
+        assert!(children.contains(&"l".to_string()));
+        assert!(children.contains(&"m".to_string()));
         Ok(())
     }
 
     #[test]
-    fn test_lambda1_scope_transform_down_up() -> Result<()> {
-        let lambda1 = build_lambda1();
-        let result = lambda1.transform_down_up_in_scope(
+    fn test_scope_h_transform_down_up() -> Result<()> {
+        let h = build_scope_h();
+        let result = h.transform_down_up_in_scope(
             transform_yes_in_scope("f_down"),
             transform_yes_in_scope("f_up"),
         )?;
         assert_eq!(
             collect_scoped_data(&result.data),
             s(&[
-                "f_up(f_down(lambda1))",
-                "f_up(f_down(list_col))",
-                "f_up(f_down(cmp))",
-                "f_up(f_down(idx_col))",
+                "f_up(f_down(h))",
+                "f_up(f_down(i))",
+                "f_up(f_down(j))",
+                "f_up(f_down(k))",
             ])
         );
         let children = collect_children_data(&result.data);
-        assert!(children.contains(&"lambda2".to_string()));
-        assert!(children.contains(&"inner_col".to_string()));
+        assert!(children.contains(&"l".to_string()));
+        assert!(children.contains(&"m".to_string()));
         Ok(())
     }
 
-    // --- Lambda2 scope (innermost): 2 in-scope nodes ---
+    // --- Scope l (innermost): 2 in-scope nodes ---
 
     #[test]
-    fn test_lambda2_scope_apply() -> Result<()> {
-        let lambda2 = build_lambda2();
+    fn test_scope_l_apply() -> Result<()> {
+        let l = build_scope_l();
         let mut visits = vec![];
-        lambda2.apply_in_scope(|n| {
+        l.apply_in_scope(|n| {
             visits.push(n.data.clone());
             Ok(TreeNodeRecursion::Continue)
         })?;
-        assert_eq!(visits, s(&["lambda2", "inner_col"]));
+        assert_eq!(visits, s(&["l", "m"]));
         Ok(())
     }
 
     #[test]
-    fn test_lambda2_scope_visit() -> Result<()> {
-        let lambda2 = build_lambda2();
+    fn test_scope_l_visit() -> Result<()> {
+        let l = build_scope_l();
         let mut visitor =
             TestVisitor::new(Box::new(visit_continue), Box::new(visit_continue));
-        lambda2.visit_in_scope(&mut visitor)?;
+        l.visit_in_scope(&mut visitor)?;
         assert_eq!(
             visitor.visits,
             s(&[
-                "f_down(lambda2)",
-                "f_down(inner_col)",
-                "f_up(inner_col)",
-                "f_up(lambda2)",
+                "f_down(l)",
+                "f_down(m)",
+                "f_up(m)",
+                "f_up(l)",
             ])
         );
         Ok(())
     }
 
     #[test]
-    fn test_lambda2_scope_transform_down() -> Result<()> {
-        let lambda2 = build_lambda2();
-        let result = lambda2.transform_down_in_scope(transform_yes_in_scope("TX"))?;
+    fn test_scope_l_transform_down() -> Result<()> {
+        let l = build_scope_l();
+        let result = l.transform_down_in_scope(transform_yes_in_scope("TX"))?;
         assert_eq!(
             collect_scoped_data(&result.data),
-            s(&["TX(lambda2)", "TX(inner_col)",])
+            s(&["TX(l)", "TX(m)",])
         );
         Ok(())
     }
 
     #[test]
-    fn test_lambda2_scope_transform_up() -> Result<()> {
-        let lambda2 = build_lambda2();
-        let result = lambda2.transform_up_in_scope(transform_yes_in_scope("TX"))?;
+    fn test_scope_l_transform_up() -> Result<()> {
+        let l = build_scope_l();
+        let result = l.transform_up_in_scope(transform_yes_in_scope("TX"))?;
         assert_eq!(
             collect_scoped_data(&result.data),
-            s(&["TX(lambda2)", "TX(inner_col)",])
+            s(&["TX(l)", "TX(m)",])
         );
         Ok(())
     }
 
     #[test]
-    fn test_lambda2_scope_transform_down_up() -> Result<()> {
-        let lambda2 = build_lambda2();
-        let result = lambda2.transform_down_up_in_scope(
+    fn test_scope_l_transform_down_up() -> Result<()> {
+        let l = build_scope_l();
+        let result = l.transform_down_up_in_scope(
             transform_yes_in_scope("f_down"),
             transform_yes_in_scope("f_up"),
         )?;
         assert_eq!(
             collect_scoped_data(&result.data),
-            s(&["f_up(f_down(lambda2))", "f_up(f_down(inner_col))",])
+            s(&["f_up(f_down(l))", "f_up(f_down(m))",])
         );
         Ok(())
     }
 
     #[test]
-    fn test_lambda2_scope_rewrite() -> Result<()> {
-        let lambda2 = build_lambda2();
+    fn test_scope_l_rewrite() -> Result<()> {
+        let l = build_scope_l();
         let mut rewriter = TestRewriter::new(
             Box::new(transform_yes_in_scope("f_down")),
             Box::new(transform_yes_in_scope("f_up")),
         );
-        let result = lambda2.rewrite_in_scope(&mut rewriter)?;
+        let result = l.rewrite_in_scope(&mut rewriter)?;
         assert_eq!(
             collect_scoped_data(&result.data),
-            s(&["f_up(f_down(lambda2))", "f_up(f_down(inner_col))",])
+            s(&["f_up(f_down(l))", "f_up(f_down(m))",])
         );
         Ok(())
     }
 
     #[test]
-    fn test_lambda2_scope_exists() -> Result<()> {
-        let lambda2 = build_lambda2();
-        assert!(lambda2.exists_in_scope(|n| Ok(n.data == "lambda2"))?);
-        assert!(lambda2.exists_in_scope(|n| Ok(n.data == "inner_col"))?);
-        // Not in any scope from lambda2's perspective
-        assert!(!lambda2.exists_in_scope(|n| Ok(n.data == "lambda1"))?);
-        assert!(!lambda2.exists_in_scope(|n| Ok(n.data == "col_a"))?);
+    fn test_scope_l_exists() -> Result<()> {
+        let l = build_scope_l();
+        assert!(l.exists_in_scope(|n| Ok(n.data == "l"))?);
+        assert!(l.exists_in_scope(|n| Ok(n.data == "m"))?);
+        // Not in any scope from l's perspective
+        assert!(!l.exists_in_scope(|n| Ok(n.data == "h"))?);
+        assert!(!l.exists_in_scope(|n| Ok(n.data == "d"))?);
         Ok(())
     }
 
     // --- Outer scope: transform must not affect any inner scope ---
 
     #[test]
-    fn test_outer_scope_transform_does_not_affect_lambda1() -> Result<()> {
+    fn test_outer_scope_transform_does_not_affect_scope_h() -> Result<()> {
         let tree = scoped_test_tree();
         let result = tree.transform_down_in_scope(transform_yes_in_scope("TX"))?;
         let all_data = collect_children_data(&result.data);
-        assert_eq!(all_data[0], "TX(root)");
-        // Lambda1 scope completely untouched
-        assert!(all_data.contains(&"lambda1".to_string()));
-        assert!(all_data.contains(&"list_col".to_string()));
-        assert!(all_data.contains(&"cmp".to_string()));
-        assert!(all_data.contains(&"idx_col".to_string()));
-        // Lambda2 scope completely untouched
-        assert!(all_data.contains(&"lambda2".to_string()));
-        assert!(all_data.contains(&"inner_col".to_string()));
+        assert_eq!(all_data[0], "TX(a)");
+        // Scope h completely untouched
+        assert!(all_data.contains(&"h".to_string()));
+        assert!(all_data.contains(&"i".to_string()));
+        assert!(all_data.contains(&"j".to_string()));
+        assert!(all_data.contains(&"k".to_string()));
+        // Scope l completely untouched
+        assert!(all_data.contains(&"l".to_string()));
+        assert!(all_data.contains(&"m".to_string()));
         Ok(())
     }
 
@@ -3790,12 +3744,12 @@ pub(crate) mod tests {
             transform_yes_in_scope("f_up"),
         )?;
         let all_data = collect_children_data(&result.data);
-        assert!(all_data.contains(&"lambda1".to_string()));
-        assert!(all_data.contains(&"list_col".to_string()));
-        assert!(all_data.contains(&"cmp".to_string()));
-        assert!(all_data.contains(&"idx_col".to_string()));
-        assert!(all_data.contains(&"lambda2".to_string()));
-        assert!(all_data.contains(&"inner_col".to_string()));
+        assert!(all_data.contains(&"h".to_string()));
+        assert!(all_data.contains(&"i".to_string()));
+        assert!(all_data.contains(&"j".to_string()));
+        assert!(all_data.contains(&"k".to_string()));
+        assert!(all_data.contains(&"l".to_string()));
+        assert!(all_data.contains(&"m".to_string()));
         Ok(())
     }
 
@@ -3804,13 +3758,13 @@ pub(crate) mod tests {
         let tree = scoped_test_tree();
         let result = tree.transform_up_in_scope(transform_yes_in_scope("TX"))?;
         let all_data = collect_children_data(&result.data);
-        // Lambda1 + Lambda2 scopes completely untouched
-        assert!(all_data.contains(&"lambda1".to_string()));
-        assert!(all_data.contains(&"list_col".to_string()));
-        assert!(all_data.contains(&"cmp".to_string()));
-        assert!(all_data.contains(&"idx_col".to_string()));
-        assert!(all_data.contains(&"lambda2".to_string()));
-        assert!(all_data.contains(&"inner_col".to_string()));
+        // Scope h + scope l completely untouched
+        assert!(all_data.contains(&"h".to_string()));
+        assert!(all_data.contains(&"i".to_string()));
+        assert!(all_data.contains(&"j".to_string()));
+        assert!(all_data.contains(&"k".to_string()));
+        assert!(all_data.contains(&"l".to_string()));
+        assert!(all_data.contains(&"m".to_string()));
         Ok(())
     }
 
