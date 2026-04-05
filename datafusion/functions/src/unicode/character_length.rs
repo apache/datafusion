@@ -17,8 +17,8 @@
 
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveArray,
-    StringArrayType,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, GenericStringArray, OffsetSizeTrait,
+    PrimitiveArray, StringViewArray,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
@@ -104,65 +104,98 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            character_length_general::<Int32Type, _>(&string_array)
+            character_length_offsets::<Int32Type, i32>(string_array)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            character_length_general::<Int64Type, _>(&string_array)
+            character_length_offsets::<Int64Type, i64>(string_array)
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
-            character_length_general::<Int32Type, _>(&string_array)
+            character_length_string_view::<Int32Type>(string_array)
         }
         _ => unreachable!("CharacterLengthFunc"),
     }
 }
 
-fn character_length_general<'a, T, V>(array: &V) -> Result<ArrayRef>
+/// Optimized character_length for offset-based string arrays (Utf8/LargeUtf8).
+/// For ASCII-only arrays, computes lengths directly from the offsets buffer
+/// without touching the string data at all.
+fn character_length_offsets<T, O>(array: &GenericStringArray<O>) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
-    V: StringArrayType<'a>,
+    O: OffsetSizeTrait,
 {
-    // String characters are variable length encoded in UTF-8, counting the
-    // number of chars requires expensive decoding, however checking if the
-    // string is ASCII only is relatively cheap.
-    // If strings are ASCII only, count bytes instead.
-    let is_array_ascii_only = array.is_ascii();
     let nulls = array.nulls().cloned();
-    let array = {
-        if is_array_ascii_only {
-            let values: Vec<_> = (0..array.len())
-                .map(|i| {
-                    // Safety: we are iterating with array.len() so the index is always valid
-                    let value = unsafe { array.value_unchecked(i) };
-                    T::Native::usize_as(value.len())
-                })
-                .collect();
-            PrimitiveArray::<T>::new(values.into(), nulls)
-        } else {
-            let values: Vec<_> = (0..array.len())
-                .map(|i| {
-                    // Safety: we are iterating with array.len() so the index is always valid
-                    if array.is_null(i) {
-                        T::default_value()
-                    } else {
-                        let value = unsafe { array.value_unchecked(i) };
-                        if value.is_empty() {
-                            T::default_value()
-                        } else if value.is_ascii() {
-                            T::Native::usize_as(value.len())
-                        } else {
-                            T::Native::usize_as(value.chars().count())
-                        }
-                    }
-                })
-                .collect();
-            PrimitiveArray::<T>::new(values.into(), nulls)
-        }
-    };
+    let offsets = array.offsets();
 
-    Ok(Arc::new(array))
+    if array.is_ascii() {
+        // ASCII: byte length == char length, compute from offsets only
+        let values: Vec<T::Native> = offsets
+            .windows(2)
+            .map(|w| T::Native::usize_as((w[1] - w[0]).as_usize()))
+            .collect();
+        Ok(Arc::new(PrimitiveArray::<T>::new(values.into(), nulls)))
+    } else {
+        let values: Vec<T::Native> = (0..array.len())
+            .map(|i| {
+                // Safety: i is within bounds
+                let value = unsafe { array.value_unchecked(i) };
+                if value.is_empty() {
+                    T::default_value()
+                } else if value.is_ascii() {
+                    T::Native::usize_as(value.len())
+                } else {
+                    T::Native::usize_as(value.chars().count())
+                }
+            })
+            .collect();
+        Ok(Arc::new(PrimitiveArray::<T>::new(values.into(), nulls)))
+    }
+}
+
+/// Optimized character_length for StringViewArray.
+/// For ASCII-only arrays, reads string lengths directly from the view metadata
+/// without touching string data.
+fn character_length_string_view<T>(array: &StringViewArray) -> Result<ArrayRef>
+where
+    T: ArrowPrimitiveType,
+    T::Native: OffsetSizeTrait,
+{
+    let nulls = array.nulls().cloned();
+    let views = array.views();
+
+    if array.is_ascii() {
+        // ASCII: byte length == char length, read length from view (first 4 bytes)
+        let values: Vec<T::Native> = views
+            .iter()
+            .map(|view| {
+                let len = (*view as u32) as usize;
+                T::Native::usize_as(len)
+            })
+            .collect();
+        Ok(Arc::new(PrimitiveArray::<T>::new(values.into(), nulls)))
+    } else {
+        let values: Vec<T::Native> = (0..array.len())
+            .map(|i| {
+                if array.is_null(i) {
+                    T::default_value()
+                } else {
+                    // Safety: i is within bounds
+                    let value = unsafe { array.value_unchecked(i) };
+                    if value.is_empty() {
+                        T::default_value()
+                    } else if value.is_ascii() {
+                        T::Native::usize_as(value.len())
+                    } else {
+                        T::Native::usize_as(value.chars().count())
+                    }
+                }
+            })
+            .collect();
+        Ok(Arc::new(PrimitiveArray::<T>::new(values.into(), nulls)))
+    }
 }
 
 #[cfg(test)]
