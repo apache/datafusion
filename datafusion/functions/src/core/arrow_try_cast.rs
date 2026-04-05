@@ -130,8 +130,8 @@ impl ScalarUDFImpl for ArrowTryCastFunc {
         args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let target_type = data_type_from_args(self.name(), &args)?;
-        let [source_arg, _type_arg] = take_function_args(self.name(), args)?;
+        let [source_arg, type_arg] = take_function_args(self.name(), args)?;
+        let target_type = data_type_from_args(self.name(), &type_arg)?;
 
         let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
