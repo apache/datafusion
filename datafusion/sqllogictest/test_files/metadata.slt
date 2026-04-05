@@ -347,5 +347,27 @@ select arrow_metadata(id) from table_with_metadata limit 1;
 ----
 {metadata_key: the id field}
 
+# Regression test: TRY_CAST should preserve source field metadata
+query DT
+SELECT
+    TRY_CAST(ts AS DATE) as try_casted,
+    arrow_metadata(TRY_CAST(ts AS DATE), 'metadata_key')
+FROM table_with_metadata;
+----
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+
+# Regression test: TRY_CAST preserves metadata on integer column
+query IT
+SELECT
+    TRY_CAST(id AS BIGINT) as try_casted,
+    arrow_metadata(TRY_CAST(id AS BIGINT), 'metadata_key')
+FROM table_with_metadata;
+----
+1 the id field
+NULL the id field
+3 the id field
+
 statement ok
 drop table table_with_metadata;

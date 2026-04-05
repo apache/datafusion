@@ -574,12 +574,22 @@ impl ExprSchemable for Expr {
                 id: _,
                 field: Some(field),
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::TryCast(TryCast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, destination_field)| {
+                    destination_field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(field.data_type().clone())
+                        .with_nullable(true)
+                        .with_metadata(destination_field.metadata().clone())
+                })
+                .map(Arc::new),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
             | Expr::Case(_)
-            | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
