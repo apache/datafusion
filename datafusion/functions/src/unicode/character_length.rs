@@ -177,17 +177,35 @@ where
             .collect();
         Ok(Arc::new(PrimitiveArray::<T>::new(values.into(), nulls)))
     } else {
-        let values: Vec<T::Native> = (0..array.len())
-            .map(|i| {
-                if array.is_null(i) {
+        let values: Vec<T::Native> = views
+            .iter()
+            .enumerate()
+            .map(|(i, raw_view)| {
+                let len = (*raw_view as u32) as usize;
+                if len == 0 {
                     T::default_value()
+                } else if len <= 12 {
+                    // Inlined string: count UTF-8 chars directly from the u128 view.
+                    // Bytes are at positions 4..4+len in the view (little-endian).
+                    // Shift right by 32 bits to get the string bytes in the low bits.
+                    let data = *raw_view >> 32;
+                    // Create a mask of just the high bit of each byte (0x80)
+                    // and the bit below it (0x40) to detect continuation bytes (10xxxxxx).
+                    // A continuation byte has bit7=1 and bit6=0.
+                    // ~data inverts: continuation bytes get bit7=0, bit6=1
+                    // (data >> 6) shifts bit7 into bit1 and bit6 into bit0
+                    // OR with ~data: for continuation bytes, bit6 is guaranteed 1
+                    // For non-continuation bytes, at least one of these will have bit7=1
+                    // We only need to check the high bit of each byte after the OR.
+                    let not_continuation =
+                        (data | (!data >> 1)) & 0x0080_0080_0080_0080_0080_0080u128;
+                    T::Native::usize_as(not_continuation.count_ones() as usize)
                 } else {
+                    // Non-inlined string: must access buffer data
                     // Safety: i is within bounds
                     let value = unsafe { array.value_unchecked(i) };
-                    if value.is_empty() {
-                        T::default_value()
-                    } else if value.is_ascii() {
-                        T::Native::usize_as(value.len())
+                    if value.is_ascii() {
+                        T::Native::usize_as(len)
                     } else {
                         T::Native::usize_as(value.chars().count())
                     }
