@@ -2870,22 +2870,22 @@ pub(crate) mod tests {
     // a scope, plus some scopes with only 1 in-scope child.
     //
     // OUTER SCOPE (root traversal visits these):
-    //   root → and → [plus, gt]
-    //     plus → [col_a, col_b]
-    //     gt   → [col_c, Lambda1]  ← Lambda1 is out of scope
+    //   root -> and -> [plus, gt]
+    //     plus -> [col_a, col_b]
+    //     gt   -> [col_c, Lambda1]  <- Lambda1 is out of scope
     //
     //   Scoped traversal: root, and, plus, col_a, col_b, gt, col_c
     //   (7 nodes, Lambda1 not entered)
     //
     // LAMBDA1 SCOPE (Lambda1's own traversal):
-    //   lambda1 → [list_col, cmp]
-    //     cmp   → [idx_col, Lambda2]  ← Lambda2 is out of scope
+    //   lambda1 -> [list_col, cmp]
+    //     cmp   -> [idx_col, Lambda2]  <- Lambda2 is out of scope
     //
     //   Scoped traversal: lambda1, list_col, cmp, idx_col
     //   (4 nodes, Lambda2 not entered)
     //
-    // LAMBDA2 SCOPE (Lambda2's own traversal — only 1 in-scope child):
-    //   lambda2 → [inner_col]
+    // LAMBDA2 SCOPE (Lambda2's own traversal -- only 1 in-scope child):
+    //   lambda2 -> [inner_col]
     //
     //   Scoped traversal: lambda2, inner_col
     //   (2 nodes)
@@ -2896,13 +2896,13 @@ pub(crate) mod tests {
     //                        /   \
     //                     plus    gt  (mixed: in_scope=[col_c], out=[Lambda1])
     //                    /   \    / \
-    //                col_a col_b col_c Lambda1 ← scope boundary
+    //                col_a col_b col_c Lambda1 <- scope boundary
     //                                  |
     //                              (in_scope=[list_col, cmp], out=[])
     //                                /       \
     //                          list_col      cmp (mixed: in_scope=[idx_col], out=[Lambda2])
     //                                        / \
-    //                                  idx_col  Lambda2 ← nested scope boundary
+    //                                  idx_col  Lambda2 <- nested scope boundary
     //                                           |
     //                                       (in_scope=[inner_col])
     //                                           |
@@ -2917,11 +2917,11 @@ pub(crate) mod tests {
 
         let plus = TestTreeNode::new(vec![col_a, col_b], "plus".to_string());
 
-        // --- Innermost lambda scope: Lambda2 → inner_col ---
+        // --- Innermost lambda scope: Lambda2 -> inner_col ---
         let inner_col = TestTreeNode::new_leaf("inner_col".to_string());
         let lambda2 = TestTreeNode::new(vec![inner_col], "lambda2".to_string());
 
-        // --- Middle lambda scope: Lambda1 → list_col, cmp ---
+        // --- Middle lambda scope: Lambda1 -> list_col, cmp ---
         let list_col = TestTreeNode::new_leaf("list_col".to_string());
         let idx_col = TestTreeNode::new_leaf("idx_col".to_string());
         // cmp has idx_col in scope, Lambda2 out of scope (new scope)
@@ -3513,13 +3513,13 @@ pub(crate) mod tests {
     // Each scope is tested with multiple traversal methods to ensure
     // no scope crossing occurs in any direction.
 
-    /// Build the Lambda2 subtree (innermost scope: lambda2 → inner_col)
+    /// Build the Lambda2 subtree (innermost scope: lambda2 -> inner_col)
     fn build_lambda2() -> TestTreeNode<String> {
         let inner_col = TestTreeNode::new_leaf("inner_col".to_string());
         TestTreeNode::new(vec![inner_col], "lambda2".to_string())
     }
 
-    /// Build the Lambda1 subtree (middle scope: lambda1 → [list_col, cmp → idx_col])
+    /// Build the Lambda1 subtree (middle scope: lambda1 -> [list_col, cmp -> idx_col])
     fn build_lambda1() -> TestTreeNode<String> {
         let lambda2 = build_lambda2();
         let list_col = TestTreeNode::new_leaf("list_col".to_string());
