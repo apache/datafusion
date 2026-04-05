@@ -391,5 +391,16 @@ FROM table_with_metadata;
 NULL the id field
 3 the id field
 
+# Regression test: TRY_CAST preserves metadata even when cast fails (returns NULL)
+query IT
+SELECT
+    TRY_CAST(name AS INT) as try_casted,
+    arrow_metadata(TRY_CAST(name AS INT), 'metadata_key')
+FROM table_with_metadata;
+----
+NULL the name field
+NULL the name field
+NULL the name field
+
 statement ok
 drop table table_with_metadata;
