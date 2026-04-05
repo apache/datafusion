@@ -186,17 +186,13 @@ where
                     T::default_value()
                 } else if len <= 12 {
                     // Inlined string: count UTF-8 chars directly from the u128 view.
-                    // Bytes are at positions 4..4+len in the view (little-endian).
-                    // Shift right by 32 bits to get the string bytes in the low bits.
-                    let data = *raw_view >> 32;
-                    // Create a mask of just the high bit of each byte (0x80)
-                    // and the bit below it (0x40) to detect continuation bytes (10xxxxxx).
-                    // A continuation byte has bit7=1 and bit6=0.
-                    // ~data inverts: continuation bytes get bit7=0, bit6=1
-                    // (data >> 6) shifts bit7 into bit1 and bit6 into bit0
-                    // OR with ~data: for continuation bytes, bit6 is guaranteed 1
-                    // For non-continuation bytes, at least one of these will have bit7=1
-                    // We only need to check the high bit of each byte after the OR.
+                    // Shift right 32 bits to get string bytes in low bits, then
+                    // mask to only the valid `len` bytes (remaining bytes may be garbage).
+                    let valid_mask = (1u128 << (len * 8)) - 1;
+                    let data = (*raw_view >> 32) & valid_mask;
+                    // Count non-continuation bytes: a UTF-8 continuation byte matches
+                    // 10xxxxxx, so (byte | (byte >> 1)) & 0x80 is set for all
+                    // non-continuation bytes (they have bit7=0 or bit6=1).
                     let not_continuation =
                         (data | (!data >> 1)) & 0x0080_0080_0080_0080_0080_0080u128;
                     T::Native::usize_as(not_continuation.count_ones() as usize)
