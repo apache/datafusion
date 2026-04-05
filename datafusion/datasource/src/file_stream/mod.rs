@@ -59,6 +59,11 @@ pub struct FileStream {
     file_opener: Arc<dyn FileOpener>,
     /// The stream state
     state: FileStreamState,
+    /// A spawned background task that opens the next file while the current
+    /// file is being scanned. This overlaps file-opening IO (metadata loading,
+    /// pruning, etc.) with the scan of the current file.
+    pending_next_file:
+        Option<tokio::task::JoinHandle<Result<BoxStream<'static, Result<RecordBatch>>>>>,
     /// File stream specific metrics
     file_stream_metrics: FileStreamMetrics,
     /// runtime baseline metrics
@@ -97,20 +102,59 @@ impl FileStream {
         Some(self.file_opener.open(part_file))
     }
 
+    /// Start opening the next file in the background via [`tokio::spawn`].
+    ///
+    /// This overlaps file-opening work (metadata loading, row group pruning,
+    /// bloom filter checks, etc.) with the scan of the current file.
+    fn start_next_file_prefetch(&mut self) {
+        if self.pending_next_file.is_some() || self.file_iter.is_empty() {
+            return;
+        }
+        match self.start_next_file() {
+            Some(Ok(future)) => {
+                self.pending_next_file = Some(tokio::spawn(future));
+            }
+            Some(Err(e)) => {
+                // open() failed synchronously; wrap as a ready-failed task
+                // so the error propagates through the normal Open state handling.
+                self.pending_next_file =
+                    Some(tokio::spawn(async move { Err(e) }));
+            }
+            None => {}
+        }
+    }
+
     fn poll_inner(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             match &mut self.state {
-                FileStreamState::Idle => match self.start_next_file().transpose() {
-                    Ok(Some(future)) => {
+                FileStreamState::Idle => {
+                    // Check if we have a prefetched file open from a previous scan
+                    if let Some(handle) = self.pending_next_file.take() {
                         self.file_stream_metrics.time_opening.start();
+                        let future: FileOpenFuture = Box::pin(async move {
+                            handle
+                                .await
+                                .map_err(|e| {
+                                    datafusion_common::DataFusionError::External(
+                                        Box::new(e),
+                                    )
+                                })?
+                        });
                         self.state = FileStreamState::Open { future };
+                    } else {
+                        match self.start_next_file().transpose() {
+                            Ok(Some(future)) => {
+                                self.file_stream_metrics.time_opening.start();
+                                self.state = FileStreamState::Open { future };
+                            }
+                            Ok(None) => return Poll::Ready(None),
+                            Err(e) => {
+                                self.state = FileStreamState::Error;
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                        }
                     }
-                    Ok(None) => return Poll::Ready(None),
-                    Err(e) => {
-                        self.state = FileStreamState::Error;
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                },
+                }
                 FileStreamState::Open { future } => match ready!(future.poll_unpin(cx)) {
                     Ok(reader) => {
                         self.file_stream_metrics.files_opened.add(1);
@@ -118,6 +162,8 @@ impl FileStream {
                         self.file_stream_metrics.time_scanning_until_data.start();
                         self.file_stream_metrics.time_scanning_total.start();
                         self.state = FileStreamState::Scan { reader };
+                        // Start opening the next file in the background
+                        self.start_next_file_prefetch();
                     }
                     Err(e) => {
                         self.file_stream_metrics.file_open_errors.add(1);

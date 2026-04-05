@@ -101,6 +101,7 @@ impl<'a> FileStreamBuilder<'a> {
             remain: config.limit,
             file_opener,
             state: FileStreamState::Idle,
+            pending_next_file: None,
             file_stream_metrics: FileStreamMetrics::new(metrics, partition),
             baseline_metrics: BaselineMetrics::new(metrics, partition),
             on_error,
