@@ -31,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use super::arrow_cast::data_type_from_args;
+use super::arrow_cast::data_type_from_type_arg;
 
 /// Like [`arrow_cast`](super::arrow_cast::ArrowCastFunc) but returns NULL on cast failure instead of erroring.
 ///
@@ -131,7 +131,7 @@ impl ScalarUDFImpl for ArrowTryCastFunc {
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [source_arg, type_arg] = take_function_args(self.name(), args)?;
-        let target_type = data_type_from_args(self.name(), &type_arg)?;
+        let target_type = data_type_from_type_arg(self.name(), &type_arg)?;
 
         let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
