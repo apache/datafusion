@@ -154,23 +154,20 @@ impl ScalarUDFImpl for ArrowCastFunc {
 
     fn simplify(
         &self,
-        mut args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // convert this into a real cast
         let target_type = data_type_from_args(self.name(), &args)?;
-        // remove second (type) argument
-        args.pop().unwrap();
-        let arg = args.pop().unwrap();
-
-        let source_type = info.get_data_type(&arg)?;
+        let [source_arg, _type_arg] = take_function_args(self.name(), args)?;
+        let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
             // the argument's data type is already the correct type
-            arg
+            source_arg
         } else {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
+                expr: Box::new(source_arg),
                 field: target_type.into_nullable_field_ref(),
             })
         };

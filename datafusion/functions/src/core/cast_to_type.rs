@@ -18,9 +18,7 @@
 //! [`CastToTypeFunc`]: Implementation of the `cast_to_type` function
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{
-    Result, datatype::DataTypeExt, internal_err, utils::take_function_args,
-};
+use datafusion_common::{Result, internal_err, utils::take_function_args};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
@@ -122,25 +120,21 @@ impl ScalarUDFImpl for CastToTypeFunc {
 
     fn simplify(
         &self,
-        mut args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let [_, type_arg] = take_function_args(self.name(), &args)?;
-        let target_type = info.get_data_type(type_arg)?;
+        let [source_arg, type_arg] = take_function_args(self.name(), args)?;
+        let target_type = info.get_data_type(&type_arg)?;
 
-        // remove second (reference) argument
-        args.pop().unwrap();
-        let arg = args.pop().unwrap();
-
-        let source_type = info.get_data_type(&arg)?;
+        let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
             // the argument's data type is already the correct type
-            arg
+            source_arg
         } else {
-            let nullable = source_field.is_nullable() || target_type == DataType::Null;
+            let nullable = info.nullable(&source_arg)? || target_type == DataType::Null;
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
+                expr: Box::new(source_arg),
                 field: Field::new("", target_type, nullable).into(),
             })
         };

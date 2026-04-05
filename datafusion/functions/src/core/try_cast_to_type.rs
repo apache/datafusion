@@ -107,22 +107,18 @@ impl ScalarUDFImpl for TryCastToTypeFunc {
 
     fn simplify(
         &self,
-        mut args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let [_, type_arg] = take_function_args(self.name(), &args)?;
-        let target_type = info.get_data_type(type_arg)?;
+        let [source_arg, type_arg] = take_function_args(self.name(), args)?;
+        let target_type = info.get_data_type(&type_arg)?;
 
-        // remove second (reference) argument
-        args.pop().unwrap();
-        let arg = args.pop().unwrap();
-
-        let source_type = info.get_data_type(&arg)?;
+        let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
-            arg
+            source_arg
         } else {
             Expr::TryCast(datafusion_expr::TryCast {
-                expr: Box::new(arg),
+                expr: Box::new(source_arg),
                 field: target_type.into_nullable_field_ref(),
             })
         };
