@@ -20,7 +20,9 @@
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use crate::physical_expr::{PhysicalExpr, with_new_children_if_necessary, with_new_children_in_scope_if_necessary};
+use crate::physical_expr::{
+    PhysicalExpr, with_new_children_if_necessary, with_new_children_in_scope_if_necessary,
+};
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::{ConcreteTreeNode, DynScopedTreeNode, DynTreeNode};

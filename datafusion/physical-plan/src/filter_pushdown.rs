@@ -40,7 +40,7 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use datafusion_common::{
     Result,
-    tree_node::{ScopedTreeNode, Transformed, TreeNode},
+    tree_node::{ScopedTreeNode, Transformed},
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -561,20 +561,27 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::ColumnarValue;
     use datafusion_physical_expr::expressions::Column;
+    use std::hash::Hash;
 
     /// A mock expression with an in-scope child and an out-of-scope child.
     /// Used to verify that scoped traversal does not modify out-of-scope children.
-    #[derive(Debug, Hash, Clone)]
+    #[derive(Debug, Clone)]
     struct ScopedExprMock {
         in_scope_child: Arc<dyn PhysicalExpr>,
         out_of_scope_child: Arc<dyn PhysicalExpr>,
     }
 
+    impl Hash for ScopedExprMock {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.in_scope_child.hash(state);
+            self.out_of_scope_child.hash(state);
+        }
+    }
+
     impl PartialEq for ScopedExprMock {
         fn eq(&self, other: &Self) -> bool {
             self.in_scope_child.as_ref() == other.in_scope_child.as_ref()
-                && self.out_of_scope_child.as_ref()
-                    == other.out_of_scope_child.as_ref()
+                && self.out_of_scope_child.as_ref() == other.out_of_scope_child.as_ref()
         }
     }
 
@@ -595,17 +602,11 @@ mod tests {
             self
         }
 
-        fn return_field(
-            &self,
-            input_schema: &Schema,
-        ) -> Result<Arc<Field>> {
+        fn return_field(&self, input_schema: &Schema) -> Result<Arc<Field>> {
             self.in_scope_child.return_field(input_schema)
         }
 
-        fn evaluate(
-            &self,
-            _batch: &RecordBatch,
-        ) -> Result<ColumnarValue> {
+        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
             unimplemented!("ScopedExprMock does not support evaluation")
         }
 
@@ -640,10 +641,7 @@ mod tests {
             }))
         }
 
-        fn fmt_sql(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-        ) -> std::fmt::Result {
+        fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             std::fmt::Display::fmt(&self, f)
         }
     }
@@ -661,8 +659,7 @@ mod tests {
         // The in-scope child references column "a@0" which exists in child schema
         let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
         // The out-of-scope child also references "a@0" but should NOT be remapped
-        let out_of_scope_child: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new("a", 0));
+        let out_of_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
 
         let filter: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
             in_scope_child,
@@ -712,8 +709,7 @@ mod tests {
         // The in-scope child references "a@0" - should be remapped to "a@1" in child schema
         let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
         // The out-of-scope child references "x@0" in the lambda schema - should NOT be touched
-        let out_of_scope_child: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new("x", 0));
+        let out_of_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 0));
 
         let filter: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
             in_scope_child,

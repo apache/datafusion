@@ -40,9 +40,7 @@ use std::{any::Any, sync::Arc};
 
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
-use datafusion_common::tree_node::{
-    ScopedTreeNode, Transformed, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{ScopedTreeNode, Transformed, TreeNodeRecursion};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use datafusion_physical_expr_common::utils::scatter;
 use itertools::Itertools;
@@ -1738,14 +1736,23 @@ mod tests {
         /// Represents the column at a given index in a RecordBatch that is inside a Spark lambda function
         ///
         /// This is the same as the datafusion [`datafusion::physical_expr::expressions::Column`] except that it store the entire info so that it can be used in lambda execution
-        #[derive(Debug, Hash, Clone)]
+        #[derive(Debug, Clone)]
         pub struct AllListElementMatchMiniLambda {
             child: Arc<dyn PhysicalExpr>,
             predicate_on_list_elements: Arc<dyn PhysicalExpr>,
         }
+
+        impl Hash for AllListElementMatchMiniLambda {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                self.child.hash(state);
+                self.predicate_on_list_elements.hash(state);
+            }
+        }
         impl PartialEq for AllListElementMatchMiniLambda {
             fn eq(&self, other: &Self) -> bool {
-                self.child.as_ref() == other.child.as_ref() && self.predicate_on_list_elements.as_ref() == other.predicate_on_list_elements.as_ref()
+                self.child.as_ref() == other.child.as_ref()
+                    && self.predicate_on_list_elements.as_ref()
+                        == other.predicate_on_list_elements.as_ref()
             }
         }
 
@@ -1755,17 +1762,21 @@ mod tests {
             pub fn new(
                 child: Arc<dyn PhysicalExpr>,
                 predicate_on_list_element: Arc<dyn PhysicalExpr>,
-            ) -> Arc<dyn PhysicalExpr> {
-                Arc::new(Self {
+            ) -> Self {
+                Self {
                     child,
-                    predicate_on_list_elements: predicate_on_list_element
-                })
+                    predicate_on_list_elements: predicate_on_list_element,
+                }
             }
         }
 
         impl std::fmt::Display for AllListElementMatchMiniLambda {
             fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-                write!(f, "all_match({:?}, {:?})", self.child, self.predicate_on_list_elements)
+                write!(
+                    f,
+                    "all_match({:?}, {:?})",
+                    self.child, self.predicate_on_list_elements
+                )
             }
         }
 
@@ -1774,47 +1785,80 @@ mod tests {
                 self
             }
 
-            fn return_field(&self, input_schema: &Schema) -> Result<arrow::datatypes::FieldRef> {
+            fn return_field(
+                &self,
+                input_schema: &Schema,
+            ) -> Result<arrow::datatypes::FieldRef> {
                 let is_child_nullable = self.child.nullable(input_schema)?;
-                Ok(Arc::new(Field::new("match", DataType::Boolean, is_child_nullable)))
+                Ok(Arc::new(Field::new(
+                    "match",
+                    DataType::Boolean,
+                    is_child_nullable,
+                )))
             }
 
             fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
                 let child = self.child.evaluate(batch)?;
-                let DataType::List(child_list_field) = self.child.data_type(batch.schema_ref())? else {
+                let DataType::List(child_list_field) =
+                    self.child.data_type(batch.schema_ref())?
+                else {
                     unreachable!()
-                    };
+                };
 
                 let child = child.to_array_of_size(batch.num_rows())?;
                 let list = child.as_list::<i32>();
 
                 let lambda_schema = Arc::new(Schema::new(Fields::from(vec![
                     Field::new("index", DataType::UInt32, false),
-                    child_list_field.as_ref().clone()
+                    child_list_field.as_ref().clone(),
                 ])));
 
-                assert_eq!(list.value_offsets()[0].as_usize(), 0, "this is mock implementation, it does not support sliced list");
-                assert_eq!(list.value_offsets().last().unwrap().as_usize(), list.values().len(), "this is mock implementation, it does not support sliced list");
+                assert_eq!(
+                    list.value_offsets()[0].as_usize(),
+                    0,
+                    "this is mock implementation, it does not support sliced list"
+                );
+                assert_eq!(
+                    list.value_offsets().last().unwrap().as_usize(),
+                    list.values().len(),
+                    "this is mock implementation, it does not support sliced list"
+                );
 
                 let list_values = list.values();
 
-                let new_batch = RecordBatch::try_new(Arc::clone(&lambda_schema), vec![
-                    Arc::new(list.offsets().lengths().flat_map(|list_len| 0..list_len as u32).collect::<UInt32Array>()),
-                    Arc::clone(list_values),
-                ])?;
+                let new_batch = RecordBatch::try_new(
+                    Arc::clone(&lambda_schema),
+                    vec![
+                        Arc::new(
+                            list.offsets()
+                                .lengths()
+                                .flat_map(|list_len| 0..list_len as u32)
+                                .collect::<UInt32Array>(),
+                        ),
+                        Arc::clone(list_values),
+                    ],
+                )?;
 
                 let any_match = self.predicate_on_list_elements.evaluate(&new_batch)?;
                 let any_match = any_match.to_array_of_size(list_values.len())?;
                 let any_match = any_match.as_boolean();
 
-                let all_match_per_list = list.offsets().windows(2).map(|start_and_end| {
-                    let length = start_and_end[1] - start_and_end[0];
-                    let list_matches = any_match.slice(start_and_end[0] as usize, length as usize);
+                let all_match_per_list = list
+                    .offsets()
+                    .windows(2)
+                    .map(|start_and_end| {
+                        let length = start_and_end[1] - start_and_end[0];
+                        let list_matches =
+                            any_match.slice(start_and_end[0] as usize, length as usize);
 
-                    list_matches.true_count() == list_matches.len() as usize
-                }).collect::<BooleanBuffer>();
+                        list_matches.true_count() == list_matches.len() as usize
+                    })
+                    .collect::<BooleanBuffer>();
 
-                let result = Arc::new(BooleanArray::new(all_match_per_list, list.nulls().cloned()));
+                let result = Arc::new(BooleanArray::new(
+                    all_match_per_list,
+                    list.nulls().cloned(),
+                ));
 
                 Ok(ColumnarValue::Array(result))
             }
@@ -1840,16 +1884,18 @@ mod tests {
             }
 
             fn with_new_children_in_scope(
-                    self: Arc<Self>,
-                    children_in_scope: Vec<Arc<dyn PhysicalExpr>>,
-                ) -> Result<Arc<dyn PhysicalExpr>> {
-                    assert_eq!(children_in_scope.len(), 1);
-                    let mut iter = children_in_scope.into_iter();
-                    Ok(Arc::new(Self {
-                        child: iter.next().unwrap(),
-                        // TODO - but what if child has changed to not be list or the data type has changed??
-                        predicate_on_list_elements: Arc::clone(&self.predicate_on_list_elements),
-                    }))
+                self: Arc<Self>,
+                children_in_scope: Vec<Arc<dyn PhysicalExpr>>,
+            ) -> Result<Arc<dyn PhysicalExpr>> {
+                assert_eq!(children_in_scope.len(), 1);
+                let mut iter = children_in_scope.into_iter();
+                Ok(Arc::new(Self {
+                    child: iter.next().unwrap(),
+                    // TODO - but what if child has changed to not be list or the data type has changed??
+                    predicate_on_list_elements: Arc::clone(
+                        &self.predicate_on_list_elements,
+                    ),
+                }))
             }
 
             fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1861,42 +1907,50 @@ mod tests {
             Arc::new(Field::new("col_1", DataType::Utf8, true)),
             Arc::new(Field::new("col_2", DataType::Utf8, true)),
             Arc::new(Field::new("col_3", DataType::Utf8, true)),
-            Arc::new(Field::new("list", DataType::new_list(DataType::UInt32, true), true)),
+            Arc::new(Field::new(
+                "list",
+                DataType::new_list(DataType::UInt32, true),
+                true,
+            )),
         ]));
 
         let input_list = ListArray::from_iter_primitive::<UInt32Type, _, _>(vec![
-                // all even place numbers are even
-               Some(vec![Some(0), Some(1), Some(2)]),
-               None,
-               // Not all even place are even but all odd place are odd
-               Some(vec![Some(0), Some(1), Some(1)]),
-
-               // Not odd and not even in corresponding places
-               Some(vec![Some(1), Some(2)]),
-            ]);
+            // all even place numbers are even
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            // Not all even place are even but all odd place are odd
+            Some(vec![Some(0), Some(1), Some(1)]),
+            // Not odd and not even in corresponding places
+            Some(vec![Some(1), Some(2)]),
+        ]);
 
         let batch = RecordBatch::try_new(
             input_schema,
             vec![
-              new_null_array(&DataType::Utf8, input_list.len()),
-              new_null_array(&DataType::Utf8, input_list.len()),
-              new_null_array(&DataType::Utf8, input_list.len()),
-              Arc::new(input_list),
-            ]
-        ).unwrap();
+                new_null_array(&DataType::Utf8, input_list.len()),
+                new_null_array(&DataType::Utf8, input_list.len()),
+                new_null_array(&DataType::Utf8, input_list.len()),
+                Arc::new(input_list),
+            ],
+        )
+        .unwrap();
         let schema = batch.schema();
 
         fn create_when_expr(is_even: bool) -> Arc<dyn PhysicalExpr> {
             let idx_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("idx", 0));
             let item_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("item", 1));
-            AllListElementMatchMiniLambda::new(
+            Arc::new(AllListElementMatchMiniLambda::new(
                 Arc::new(Column::new("list", 3)),
-                create_both_odd_or_even(&idx_col, &item_col, is_even)
-            )
+                create_both_odd_or_even(&idx_col, &item_col, is_even),
+            ))
         }
 
-        fn create_both_odd_or_even(idx_column: &Arc<dyn PhysicalExpr>, list_item_column: &Arc<dyn PhysicalExpr>, is_even: bool) -> Arc<dyn PhysicalExpr> {
-            let equal_value = if is_even { 0 } else {1};
+        fn create_both_odd_or_even(
+            idx_column: &Arc<dyn PhysicalExpr>,
+            list_item_column: &Arc<dyn PhysicalExpr>,
+            is_even: bool,
+        ) -> Arc<dyn PhysicalExpr> {
+            let equal_value = if is_even { 0 } else { 1 };
             let idx_equal = module_2_equal_value(idx_column, equal_value);
             let item_equal = module_2_equal_value(list_item_column, equal_value);
 
@@ -1905,19 +1959,27 @@ mod tests {
                 vec![(idx_equal, item_equal)],
                 // if idx not equal than true
                 Some(lit(true)),
-            ).unwrap()
+            )
+            .unwrap()
         }
 
-        fn module_2_equal_value(left: &Arc<dyn PhysicalExpr>, equal_value: u32) -> Arc<dyn PhysicalExpr> {
-            let modulo2 = BinaryExpr::new(Arc::clone(&left), Operator::Modulo, lit(2u32));
-            let equal_value = BinaryExpr::new(Arc::new(modulo2), Operator::Eq, lit(equal_value));
+        fn module_2_equal_value(
+            left: &Arc<dyn PhysicalExpr>,
+            equal_value: u32,
+        ) -> Arc<dyn PhysicalExpr> {
+            let modulo2 = BinaryExpr::new(Arc::clone(left), Operator::Modulo, lit(2u32));
+            let equal_value =
+                BinaryExpr::new(Arc::new(modulo2), Operator::Eq, lit(equal_value));
 
             Arc::new(equal_value)
         }
 
         let expr = generate_case_when_with_type_coercion(
             None,
-            vec![(create_when_expr(true), lit("both even")), (create_when_expr(false), lit("both odd"))],
+            vec![
+                (create_when_expr(true), lit("both even")),
+                (create_when_expr(false), lit("both odd")),
+            ],
             None,
             schema.as_ref(),
         )?;
@@ -1926,7 +1988,8 @@ mod tests {
             .into_array(batch.num_rows())
             .expect("Failed to convert to array");
 
-        let expected = &StringArray::from(vec![Some("both even"), None, Some("both odd"), None]);
+        let expected =
+            &StringArray::from(vec![Some("both even"), None, Some("both odd"), None]);
 
         assert_eq!(expected, result.as_string::<i32>());
 

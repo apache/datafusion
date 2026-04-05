@@ -334,6 +334,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::expressions::{Literal, binary, cast, col, in_list, lit};
+    use std::hash::Hash;
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field};
@@ -350,10 +351,17 @@ pub(crate) mod tests {
     /// This simulates a lambda-like expression where the `in_scope_child`
     /// references columns in the outer schema and the `out_of_scope_child`
     /// references columns in a different (lambda) schema.
-    #[derive(Debug, Hash, Clone)]
+    #[derive(Debug, Clone)]
     pub(crate) struct ScopedExprMock {
         pub in_scope_child: Arc<dyn PhysicalExpr>,
         pub out_of_scope_child: Arc<dyn PhysicalExpr>,
+    }
+
+    impl Hash for ScopedExprMock {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.in_scope_child.hash(state);
+            self.out_of_scope_child.hash(state);
+        }
     }
 
     impl PartialEq for ScopedExprMock {
@@ -380,10 +388,7 @@ pub(crate) mod tests {
             self
         }
 
-        fn return_field(
-            &self,
-            input_schema: &Schema,
-        ) -> Result<Arc<Field>> {
+        fn return_field(&self, input_schema: &Schema) -> Result<Arc<Field>> {
             self.in_scope_child.return_field(input_schema)
         }
 

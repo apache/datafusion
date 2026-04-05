@@ -27,7 +27,7 @@ use crate::utils::collect_columns;
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
-use datafusion_common::tree_node::{ScopedTreeNode, Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{ScopedTreeNode, Transformed, TransformedResult};
 use datafusion_common::{
     Result, ScalarValue, Statistics, assert_or_internal_err, internal_datafusion_err,
     plan_err,
@@ -3046,8 +3046,7 @@ pub(crate) mod tests {
         // Projection: [c@2 as c_new, a@0 as a_new, b@1 as b_new]
         // After unproject: in_scope should become c@2, out_of_scope should stay x@0
         let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a_new", 1));
-        let out_of_scope_child: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new("x", 0));
+        let out_of_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 0));
 
         let expr: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
             in_scope_child,
@@ -3107,17 +3106,18 @@ pub(crate) mod tests {
         ]));
 
         let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-        let out_of_scope_child: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new("x", 0));
+        let out_of_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 0));
 
         let scoped_expr: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
             in_scope_child,
             out_of_scope_child,
         });
 
-        let ordering =
-            LexOrdering::new(vec![PhysicalSortExpr::new(scoped_expr, SortOptions::new(false, false))])
-                .unwrap();
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            scoped_expr,
+            SortOptions::new(false, false),
+        )])
+        .unwrap();
 
         let result = project_ordering(&ordering, &schema).expect("Should project");
 
@@ -3155,8 +3155,7 @@ pub(crate) mod tests {
         ]));
 
         let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-        let out_of_scope_child: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new("x", 0));
+        let out_of_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 0));
 
         let scoped_expr: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
             in_scope_child,

@@ -657,6 +657,7 @@ mod tests {
     use datafusion_common::{assert_contains, record_batch};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, Literal, col, lit};
+    use std::hash::Hash;
 
     fn create_test_schema() -> (Schema, Schema) {
         let physical_schema = Schema::new(vec![
@@ -1737,17 +1738,23 @@ mod tests {
 
     /// A mock expression with an in-scope child and an out-of-scope child.
     /// Used to verify that scoped traversal does not modify out-of-scope children.
-    #[derive(Debug, Hash, Clone)]
+    #[derive(Debug, Clone)]
     struct ScopedExprMock {
         in_scope_child: Arc<dyn PhysicalExpr>,
         out_of_scope_child: Arc<dyn PhysicalExpr>,
     }
 
+    impl Hash for ScopedExprMock {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.in_scope_child.hash(state);
+            self.out_of_scope_child.hash(state);
+        }
+    }
+
     impl PartialEq for ScopedExprMock {
         fn eq(&self, other: &Self) -> bool {
             self.in_scope_child.as_ref() == other.in_scope_child.as_ref()
-                && self.out_of_scope_child.as_ref()
-                    == other.out_of_scope_child.as_ref()
+                && self.out_of_scope_child.as_ref() == other.out_of_scope_child.as_ref()
         }
     }
 
@@ -1768,10 +1775,7 @@ mod tests {
             self
         }
 
-        fn return_field(
-            &self,
-            input_schema: &Schema,
-        ) -> Result<Arc<Field>> {
+        fn return_field(&self, input_schema: &Schema) -> Result<Arc<Field>> {
             self.in_scope_child.return_field(input_schema)
         }
 
@@ -1813,10 +1817,7 @@ mod tests {
             }))
         }
 
-        fn fmt_sql(
-            &self,
-            f: &mut std::fmt::Formatter<'_>,
-        ) -> std::fmt::Result {
+        fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             std::fmt::Display::fmt(&self, f)
         }
     }
@@ -1826,8 +1827,7 @@ mod tests {
         // The in-scope child references column "a" which should be replaced
         let in_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
         // The out-of-scope child also references a column "a" but should NOT be replaced
-        let out_of_scope_child: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new("a", 0));
+        let out_of_scope_child: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
 
         let expr: Arc<dyn PhysicalExpr> = Arc::new(ScopedExprMock {
             in_scope_child,

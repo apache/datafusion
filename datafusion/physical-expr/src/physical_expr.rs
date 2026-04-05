@@ -22,7 +22,7 @@ use crate::{LexOrdering, PhysicalSortExpr, create_physical_expr};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::tree_node::{ScopedTreeNode, Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{ScopedTreeNode, Transformed, TransformedResult};
 use datafusion_common::{DFSchema, HashMap};
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::execution_props::ExecutionProps;
