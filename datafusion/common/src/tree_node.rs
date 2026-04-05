@@ -1818,19 +1818,18 @@ pub(crate) mod tests {
     //                    C (mixed)       H
     //                  /   \
     // B (Same scope as C)   D (new scope)
-    // |
-    // A
+    //                       |
+    //                       A
     //
-    // TreeNode (children) traversal visits ALL nodes: J, I, F, E, C, B, A, D, G, H
-    //   (new/new_mixed set both children and children_in_new_scope)
+    // TreeNode (children) traversal visits ALL nodes: J, I, F, E, C, B, D, A, G, H
+    //   (new/new_mixed set both children and children_in_same_scope)
     //
-    // ScopedTreeNode (children_in_new_scope) traversal visits: J, I, F, G, H
-    //   (skips E, C, B, A, D — E and D are in new scopes, the rest are
-    //    unreachable via scoped traversal)
+    // ScopedTreeNode (children_in_same_scope) traversal visits: J, I, F, G, H
+    //   (skips E which is out of F's scope; skips C, B, D, A which are under E)
     fn test_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_d = TestTreeNode::new_leaf("d".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new_mixed(
             vec![node_b, node_d.clone()],
             vec![node_d],
@@ -1858,10 +1857,10 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_down(a)",
-            "f_up(a)",
             "f_up(b)",
             "f_down(d)",
+            "f_down(a)",
+            "f_up(a)",
             "f_up(d)",
             "f_up(c)",
             "f_up(e)",
@@ -1881,8 +1880,8 @@ pub(crate) mod tests {
     // Expected transformed tree after a combined traversal
     fn transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_up(f_down(b))".to_string());
-        let node_d = TestTreeNode::new_leaf("f_up(f_down(d))".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
         let node_c =
             TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
@@ -1897,8 +1896,8 @@ pub(crate) mod tests {
     // Expected transformed tree after a top-down traversal
     fn transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
-        let node_d = TestTreeNode::new_leaf("f_down(d)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_down(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_down(h)".to_string());
@@ -1911,8 +1910,8 @@ pub(crate) mod tests {
     // Expected transformed tree after a bottom-up traversal
     fn transformed_up_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_up(b)".to_string());
-        let node_d = TestTreeNode::new_leaf("f_up(d)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_up(h)".to_string());
@@ -1931,10 +1930,10 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_down(a)",
-            "f_up(a)",
             "f_up(b)",
             "f_down(d)",
+            "f_down(a)",
+            "f_up(a)",
             "f_up(d)",
             "f_up(c)",
             "f_up(e)",
@@ -1953,8 +1952,8 @@ pub(crate) mod tests {
 
     fn f_down_jump_on_a_transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
-        let node_d = TestTreeNode::new_leaf("f_down(d)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_down(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_down(h)".to_string());
@@ -1987,8 +1986,8 @@ pub(crate) mod tests {
 
     fn f_down_jump_on_e_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
-        let node_d = TestTreeNode::new_leaf("d".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
         let node_h = TestTreeNode::new_leaf("f_up(f_down(h))".to_string());
@@ -2001,8 +2000,8 @@ pub(crate) mod tests {
 
     fn f_down_jump_on_e_transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
-        let node_d = TestTreeNode::new_leaf("d".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_down(h)".to_string());
@@ -2021,12 +2020,10 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
+            "f_up(b)",
+            "f_down(d)",
             "f_down(a)",
             "f_up(a)",
-            "f_down(d)",
-            "f_up(d)",
-            "f_up(c)",
-            "f_up(e)",
             "f_down(g)",
             "f_down(h)",
             "f_up(h)",
@@ -2042,10 +2039,10 @@ pub(crate) mod tests {
 
     fn f_up_jump_on_a_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
-        let node_d = TestTreeNode::new_leaf("f_up(f_down(d))".to_string());
-        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
-        let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_up(f_down(h))".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
         let node_f =
@@ -2056,10 +2053,10 @@ pub(crate) mod tests {
 
     fn f_up_jump_on_a_transformed_up_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
-        let node_d = TestTreeNode::new_leaf("f_up(d)".to_string());
-        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
-        let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
         let node_h = TestTreeNode::new_leaf("f_up(h)".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_up(g)".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_up(f)".to_string());
@@ -2076,10 +2073,10 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_down(a)",
-            "f_up(a)",
             "f_up(b)",
             "f_down(d)",
+            "f_down(a)",
+            "f_up(a)",
             "f_up(d)",
             "f_up(c)",
             "f_up(e)",
@@ -2114,6 +2111,8 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
+            "f_up(b)",
+            "f_down(d)",
             "f_down(a)",
         ]
         .into_iter()
@@ -2123,8 +2122,8 @@ pub(crate) mod tests {
 
     fn f_down_stop_on_a_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
-        let node_d = TestTreeNode::new_leaf("d".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2136,8 +2135,8 @@ pub(crate) mod tests {
 
     fn f_down_stop_on_a_transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
-        let node_d = TestTreeNode::new_leaf("d".to_string());
+        let node_b = TestTreeNode::new_leaf("f_down(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2157,8 +2156,8 @@ pub(crate) mod tests {
 
     fn f_down_stop_on_e_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
-        let node_d = TestTreeNode::new_leaf("d".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2170,8 +2169,8 @@ pub(crate) mod tests {
 
     fn f_down_stop_on_e_transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
-        let node_d = TestTreeNode::new_leaf("d".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2190,6 +2189,8 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
+            "f_up(b)",
+            "f_down(d)",
             "f_down(a)",
             "f_up(a)",
         ]
@@ -2200,8 +2201,8 @@ pub(crate) mod tests {
 
     fn f_up_stop_on_a_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
-        let node_d = TestTreeNode::new_leaf("d".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2213,8 +2214,8 @@ pub(crate) mod tests {
 
     fn f_up_stop_on_a_transformed_up_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
-        let node_d = TestTreeNode::new_leaf("d".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2233,10 +2234,10 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_down(a)",
-            "f_up(a)",
             "f_up(b)",
             "f_down(d)",
+            "f_down(a)",
+            "f_up(a)",
             "f_up(d)",
             "f_up(c)",
             "f_up(e)",
@@ -2248,8 +2249,8 @@ pub(crate) mod tests {
 
     fn f_up_stop_on_e_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_up(f_down(b))".to_string());
-        let node_d = TestTreeNode::new_leaf("f_up(f_down(d))".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
         let node_c =
             TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
@@ -2262,8 +2263,8 @@ pub(crate) mod tests {
 
     fn f_up_stop_on_e_transformed_up_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
-        let node_b = TestTreeNode::new(vec![node_a], "f_up(b)".to_string());
-        let node_d = TestTreeNode::new_leaf("f_up(d)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
