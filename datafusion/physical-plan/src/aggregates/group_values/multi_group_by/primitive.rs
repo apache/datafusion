@@ -203,6 +203,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             Nulls::Some
         };
 
+        self.group_values.reserve(rows.len());
+
         match (NULLABLE, all_null_or_non_null) {
             (true, Nulls::Some) => {
                 for &row in rows {

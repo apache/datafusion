@@ -157,6 +157,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             Nulls::Some
         };
 
+        self.views.reserve(rows.len());
+
         match all_null_or_non_null {
             Nulls::Some => {
                 for &row in rows {
