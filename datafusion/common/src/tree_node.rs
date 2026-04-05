@@ -453,7 +453,7 @@ pub trait TreeNode: Sized {
 /// Scope is left for implementers to define, for `PhysicalExpr` child is defined in scope if it have the same input schema as current `PhysicalExpr`.
 pub trait ScopedTreeNode: TreeNode {
     /// Visit the tree node with a [`TreeNodeVisitor`], performing a
-    /// depth-first walk of the node and its children.
+    /// depth-first walk of the node and its children that are in the same scope.
     ///
     /// [`TreeNodeVisitor::f_down()`] is called in top-down order (before
     /// children are visited), [`TreeNodeVisitor::f_up()`] is called in
@@ -463,8 +463,8 @@ pub trait ScopedTreeNode: TreeNode {
     /// Specifies how the tree walk ended. See [`TreeNodeRecursion`] for details.
     ///
     /// # See Also:
-    /// * [`Self::apply`] for inspecting nodes with a closure
-    /// * [`Self::rewrite`] to rewrite owned `TreeNode`s
+    /// * [`Self::apply_in_scope`] for inspecting nodes with a closure
+    /// * [`Self::rewrite_in_scope`] to rewrite owned `ScopedTreeNode`s
     ///
     /// # Example
     /// Consider the following tree structure:
@@ -497,7 +497,7 @@ pub trait ScopedTreeNode: TreeNode {
     }
 
     /// Rewrite the tree node with a [`TreeNodeRewriter`], performing a
-    /// depth-first walk of the node and its children.
+    /// depth-first walk of the node and its children that are in the same scope.
     ///
     /// [`TreeNodeRewriter::f_down()`] is called in top-down order (before
     /// children are visited), [`TreeNodeRewriter::f_up()`] is called in
@@ -505,7 +505,7 @@ pub trait ScopedTreeNode: TreeNode {
     ///
     /// Note: If using the default [`TreeNodeRewriter::f_up`] or
     /// [`TreeNodeRewriter::f_down`] that do nothing, consider using
-    /// [`Self::transform_down`] instead.
+    /// [`Self::transform_down_in_scope`] instead.
     ///
     /// # Return Value
     /// The returns value specifies how the tree walk should proceed. See
@@ -513,10 +513,10 @@ pub trait ScopedTreeNode: TreeNode {
     /// recursion stops immediately.
     ///
     /// # See Also
-    /// * [`Self::visit`] for inspecting (without modification) `TreeNode`s
-    /// * [Self::transform_down_up] for a top-down (pre-order) traversal.
-    /// * [Self::transform_down] for a top-down (pre-order) traversal.
-    /// * [`Self::transform_up`] for a bottom-up (post-order) traversal.
+    /// * [`Self::visit_in_scope`] for inspecting (without modification) `ScopedTreeNode`s
+    /// * [Self::transform_down_up_in_scope] for a top-down (pre-order) traversal.
+    /// * [Self::transform_down_in_scope] for a top-down (pre-order) traversal.
+    /// * [`Self::transform_up_in_scope`] for a bottom-up (post-order) traversal.
     ///
     /// # Example
     /// Consider the following tree structure:
@@ -547,15 +547,15 @@ pub trait ScopedTreeNode: TreeNode {
         )
     }
 
-    /// Applies `f` to the node then each of its children, recursively (a
-    /// top-down, pre-order traversal).
+    /// Applies `f` to the node then each of its children that are in the
+    /// same scope, recursively (a top-down, pre-order traversal).
     ///
     /// The return [`TreeNodeRecursion`] controls the recursion and can cause
     /// an early return.
     ///
     /// # See Also
-    /// * [`Self::transform_down`] for the equivalent transformation API.
-    /// * [`Self::visit`] for both top-down and bottom up traversal.
+    /// * [`Self::transform_down_in_scope`] for the equivalent transformation API.
+    /// * [`Self::visit_in_scope`] for both top-down and bottom up traversal.
     fn apply_in_scope<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
         mut f: F,
@@ -587,15 +587,15 @@ pub trait ScopedTreeNode: TreeNode {
     }
 
     /// Recursively rewrite the tree using `f` in a top-down (pre-order)
-    /// fashion.
+    /// fashion, limited to children in the same scope.
     ///
-    /// `f` is applied to the node first, and then its children.
+    /// `f` is applied to the node first, and then its children in scope.
     ///
     /// # See Also
     /// * [`Self::transform_down`] for the same transformation but in all children ignoring scope
     /// * [`Self::transform_up_in_scope`] for a bottom-up (post-order) traversal.
     /// * [Self::transform_down_up_in_scope] for a combined traversal with closures
-    /// * [`Self::rewrite`] for a combined traversal with a visitor
+    /// * [`Self::rewrite_in_scope`] for a combined traversal with a visitor
     fn transform_down_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         mut f: F,
@@ -617,14 +617,14 @@ pub trait ScopedTreeNode: TreeNode {
     }
 
     /// Recursively rewrite the node using `f` in a bottom-up (post-order)
-    /// fashion.
+    /// fashion, limited to children in the same scope.
     ///
-    /// `f` is applied to the node's  children first, and then to the node itself.
+    /// `f` is applied to the node's children in scope first, and then to the node itself.
     ///
     /// # See Also
-    /// * [`Self::transform_down`] top-down (pre-order) traversal.
-    /// * [Self::transform_down_up] for a combined traversal with closures
-    /// * [`Self::rewrite`] for a combined traversal with a visitor
+    /// * [`Self::transform_down_in_scope`] top-down (pre-order) traversal.
+    /// * [Self::transform_down_up_in_scope] for a combined traversal with closures
+    /// * [`Self::rewrite_in_scope`] for a combined traversal with a visitor
     fn transform_up_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         mut f: F,
@@ -641,7 +641,16 @@ pub trait ScopedTreeNode: TreeNode {
         transform_up_impl(self, &mut f)
     }
 
-    /// Same as [`Self::transform_down_up`] but limited to the same scope
+    /// Transforms the node using `f_down` while traversing the tree top-down
+    /// (pre-order), and using `f_up` while traversing the tree bottom-up
+    /// (post-order), limited to children in the same scope.
+    ///
+    /// Same as [`Self::transform_down_up`] but limited to the same scope.
+    ///
+    /// # See Also
+    /// * [`Self::transform_up_in_scope`] for a bottom-up (post-order) traversal.
+    /// * [Self::transform_down_in_scope] for a top-down (pre-order) traversal.
+    /// * [`Self::rewrite_in_scope`] for a combined traversal with a visitor
     fn transform_down_up_in_scope<
         FD: FnMut(Self) -> Result<Transformed<Self>>,
         FU: FnMut(Self) -> Result<Transformed<Self>>,
@@ -670,7 +679,8 @@ pub trait ScopedTreeNode: TreeNode {
         transform_down_up_impl(self, &mut f_down, &mut f_up)
     }
 
-    /// Returns true if `f` returns true for any node in the tree.
+    /// Returns true if `f` returns true for any node in the tree
+    /// that is in the same scope.
     ///
     /// Stops recursion as soon as a matching node is found
     fn exists_in_scope<F: FnMut(&Self) -> Result<bool>>(&self, mut f: F) -> Result<bool> {
@@ -688,8 +698,8 @@ pub trait ScopedTreeNode: TreeNode {
 
     /// Low-level API used to implement other APIs.
     ///
-    /// If you want to implement the [`TreeNode`] trait for your own type, you
-    /// should implement this method and [`Self::map_children`].
+    /// If you want to implement the [`ScopedTreeNode`] trait for your own type, you
+    /// should implement this method and [`Self::map_children_in_scope`].
     ///
     /// Users should use one of the higher level APIs described on [`Self`].
     ///
@@ -702,12 +712,12 @@ pub trait ScopedTreeNode: TreeNode {
 
     /// Low-level API used to implement other APIs.
     ///
-    /// If you want to implement the [`TreeNode`] trait for your own type, you
-    /// should implement this method and [`Self::apply_children`].
+    /// If you want to implement the [`ScopedTreeNode`] trait for your own type, you
+    /// should implement this method and [`Self::apply_children_in_scope`].
     ///
     /// Users should use one of the higher level APIs described on [`Self`].
     ///
-    /// Description: Apply `f` to rewrite the node's children (but not the node itself).
+    /// Description: Apply `f` to rewrite the node's children in scope (but not the node itself).
     fn map_children_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: F,
