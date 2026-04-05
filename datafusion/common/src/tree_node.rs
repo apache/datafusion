@@ -1778,7 +1778,6 @@ pub(crate) mod tests {
             &'n self,
             f: F,
         ) -> Result<TreeNodeRecursion> {
-            // TODO - should call apply elements
             self.children_in_scope.apply_elements(f)
         }
 
@@ -3167,7 +3166,8 @@ pub(crate) mod tests {
             Box::new(visit_event_on("plus", TreeNodeRecursion::Jump)),
         );
         tree.visit_in_scope(&mut visitor)?;
-        // Jump after f_up(plus): continue with sibling gt, skip f_up(and)
+        // Jump after f_up(plus): skip plus's parent f_up, continue with sibling gt.
+        // gt returns Continue which resets the tnr, so f_up(and) and f_up(root) are called.
         assert_eq!(
             visitor.visits,
             s(&[
@@ -3184,8 +3184,7 @@ pub(crate) mod tests {
                 "f_down(col_c)",
                 "f_up(col_c)",
                 "f_up(gt)",
-                // and's f_up is skipped (Jump from plus), but root f_up happens
-                // because gt returned Continue, resetting the last tnr
+                // gt returned Continue, resetting the tnr, so f_up(and) is called
                 "f_up(and)",
                 "f_up(root)",
             ])
