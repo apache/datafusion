@@ -140,14 +140,16 @@ where
     } else {
         let values: Vec<T::Native> = (0..array.len())
             .map(|i| {
-                // Safety: i is within bounds
-                let value = unsafe { array.value_unchecked(i) };
-                if value.is_empty() {
+                if array.is_null(i) {
                     T::default_value()
-                } else if value.is_ascii() {
-                    T::Native::usize_as(value.len())
                 } else {
-                    T::Native::usize_as(value.chars().count())
+                    // Safety: i is within bounds and not null
+                    let value = unsafe { array.value_unchecked(i) };
+                    if value.is_ascii() {
+                        T::Native::usize_as(value.len())
+                    } else {
+                        T::Native::usize_as(value.chars().count())
+                    }
                 }
             })
             .collect();
