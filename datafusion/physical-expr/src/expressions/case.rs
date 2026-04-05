@@ -1858,7 +1858,10 @@ mod tests {
         }
 
         let input_schema = Arc::new(Schema::new(vec![
-            Arc::new(Field::new("list", DataType::new_list(DataType::UInt32, true), true))
+            Arc::new(Field::new("col_1", DataType::Utf8, true)),
+            Arc::new(Field::new("col_2", DataType::Utf8, true)),
+            Arc::new(Field::new("col_3", DataType::Utf8, true)),
+            Arc::new(Field::new("list", DataType::new_list(DataType::UInt32, true), true)),
         ]));
 
         let input_list = ListArray::from_iter_primitive::<UInt32Type, _, _>(vec![
@@ -1875,7 +1878,10 @@ mod tests {
         let batch = RecordBatch::try_new(
             input_schema,
             vec![
-              Arc::new(input_list)
+              new_null_array(&DataType::Utf8, input_list.len()),
+              new_null_array(&DataType::Utf8, input_list.len()),
+              new_null_array(&DataType::Utf8, input_list.len()),
+              Arc::new(input_list),
             ]
         ).unwrap();
         let schema = batch.schema();
@@ -1887,7 +1893,7 @@ mod tests {
             let idx_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("idx", 0));
             let item_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("item", 1));
             AllListElementMatchMiniLambda::new(
-                Arc::new(Column::new("list", 0)),
+                Arc::new(Column::new("list", 3)),
                 create_both_odd_or_even(&idx_col, &item_col, is_even)
             )
         }
