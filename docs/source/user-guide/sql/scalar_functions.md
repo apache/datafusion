@@ -5323,7 +5323,7 @@ cast_to_type(expression, reference)
 
 #### Arguments
 
-- **expression**: Expression to cast. The expression can be a constant, a column, or a function, and any combination of operators.
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
 - **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
 
 #### Example
@@ -5406,7 +5406,7 @@ try_cast_to_type(expression, reference)
 
 #### Arguments
 
-- **expression**: Expression to cast. The expression can be a constant, a column, or a function, and any combination of operators.
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
 - **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
 
 #### Example
