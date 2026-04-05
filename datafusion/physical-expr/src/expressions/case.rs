@@ -1886,9 +1886,6 @@ mod tests {
         ).unwrap();
         let schema = batch.schema();
 
-        // case
-        //  WHEN have_all(list, item -> idx % 2 == 0 && item % 2 == 0) THEN "all even values"
-        //  WHEN have_all(list, item -> idx % 2 == 1 && item % 2 == 1) THEN "all odd values are odd"
         fn create_when_expr(is_even: bool) -> Arc<dyn PhysicalExpr> {
             let idx_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("idx", 0));
             let item_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("item", 1));
