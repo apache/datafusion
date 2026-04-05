@@ -220,6 +220,28 @@ FROM table_with_metadata;
 2020-09-08
 2020-09-08
 
+# Regression test: CAST should preserve source field metadata
+query DT
+SELECT
+    CAST(ts AS DATE) as casted,
+    arrow_metadata(CAST(ts AS DATE), 'metadata_key')
+FROM table_with_metadata;
+----
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+
+# Regression test: CAST preserves metadata on integer column
+query IT
+SELECT
+    CAST(id AS BIGINT) as casted,
+    arrow_metadata(CAST(id AS BIGINT), 'metadata_key')
+FROM table_with_metadata;
+----
+1 the id field
+NULL the id field
+3 the id field
+
 # Regression test: distinct with cast
 query D
 SELECT DISTINCT (ts::DATE) AS dist
