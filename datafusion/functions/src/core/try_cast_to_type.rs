@@ -49,7 +49,7 @@ use datafusion_macros::user_doc;
 ```"#,
     argument(
         name = "expression",
-        description = "Expression to cast. The expression can be a constant, column, or function, and any combination of operators."
+        description = "The expression to cast. It can be a constant, column, or function, and any combination of operators."
     ),
     argument(
         name = "reference",
