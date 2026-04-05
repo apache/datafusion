@@ -31,6 +31,15 @@ macro_rules! handle_transform_recursion {
     }};
 }
 
+/// These macros are used to determine continuation during transforming traversals.
+macro_rules! handle_transform_recursion_in_scope {
+    ($F_DOWN:expr, $F_CHILD:expr, $F_UP:expr) => {{
+        $F_DOWN?
+            .transform_children(|n| n.map_children_in_scope($F_CHILD))?
+            .transform_parent($F_UP)
+    }};
+}
+
 /// API for inspecting and rewriting tree data structures.
 ///
 /// The `TreeNode` API is used to express algorithms separately from traversing
@@ -430,6 +439,274 @@ pub trait TreeNode: Sized {
     ///
     /// Description: Apply `f` to rewrite the node's children (but not the node itself).
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>>;
+}
+
+/// API for inspecting and rewriting tree data structures.
+/// 
+/// See [`TreeNode`] for more details.
+/// 
+/// This add the notion of scopes to [`TreeNode`] and allow you to operate in that.
+/// 
+/// Scope is left for implementators to define, for `PhysicalExpr` child is defined in scope if it have the same input schema as current `PhysicalExpr`.
+pub trait ScopedTreeNode: TreeNode {
+    /// Visit the tree node with a [`TreeNodeVisitor`], performing a
+    /// depth-first walk of the node and its children.
+    ///
+    /// [`TreeNodeVisitor::f_down()`] is called in top-down order (before
+    /// children are visited), [`TreeNodeVisitor::f_up()`] is called in
+    /// bottom-up order (after children are visited).
+    ///
+    /// # Return Value
+    /// Specifies how the tree walk ended. See [`TreeNodeRecursion`] for details.
+    ///
+    /// # See Also:
+    /// * [`Self::apply`] for inspecting nodes with a closure
+    /// * [`Self::rewrite`] to rewrite owned `TreeNode`s
+    ///
+    /// # Example
+    /// Consider the following tree structure:
+    /// ```text
+    /// ParentNode
+    ///    left: ChildNode1
+    ///    right: ChildNode2
+    /// ```
+    ///
+    /// Here, the nodes would be visited using the following order:
+    /// ```text
+    /// TreeNodeVisitor::f_down(ParentNode)
+    /// TreeNodeVisitor::f_down(ChildNode1)
+    /// TreeNodeVisitor::f_up(ChildNode1)
+    /// TreeNodeVisitor::f_down(ChildNode2)
+    /// TreeNodeVisitor::f_up(ChildNode2)
+    /// TreeNodeVisitor::f_up(ParentNode)
+    /// ```
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    fn visit_in_scope<'n, V: TreeNodeVisitor<'n, Node = Self>>(
+        &'n self,
+        visitor: &mut V,
+    ) -> Result<TreeNodeRecursion> {
+        visitor
+            .f_down(self)?
+            .visit_children(|| self.apply_children_in_scope(|c| c.visit(visitor)))?
+            .visit_parent(|| visitor.f_up(self))
+    }
+
+    /// Rewrite the tree node with a [`TreeNodeRewriter`], performing a
+    /// depth-first walk of the node and its children.
+    ///
+    /// [`TreeNodeRewriter::f_down()`] is called in top-down order (before
+    /// children are visited), [`TreeNodeRewriter::f_up()`] is called in
+    /// bottom-up order (after children are visited).
+    ///
+    /// Note: If using the default [`TreeNodeRewriter::f_up`] or
+    /// [`TreeNodeRewriter::f_down`] that do nothing, consider using
+    /// [`Self::transform_down`] instead.
+    ///
+    /// # Return Value
+    /// The returns value specifies how the tree walk should proceed. See
+    /// [`TreeNodeRecursion`] for details. If an [`Err`] is returned, the
+    /// recursion stops immediately.
+    ///
+    /// # See Also
+    /// * [`Self::visit`] for inspecting (without modification) `TreeNode`s
+    /// * [Self::transform_down_up] for a top-down (pre-order) traversal.
+    /// * [Self::transform_down] for a top-down (pre-order) traversal.
+    /// * [`Self::transform_up`] for a bottom-up (post-order) traversal.
+    ///
+    /// # Example
+    /// Consider the following tree structure:
+    /// ```text
+    /// ParentNode
+    ///    left: ChildNode1
+    ///    right: ChildNode2
+    /// ```
+    ///
+    /// Here, the nodes would be visited using the following order:
+    /// ```text
+    /// TreeNodeRewriter::f_down(ParentNode)
+    /// TreeNodeRewriter::f_down(ChildNode1)
+    /// TreeNodeRewriter::f_up(ChildNode1)
+    /// TreeNodeRewriter::f_down(ChildNode2)
+    /// TreeNodeRewriter::f_up(ChildNode2)
+    /// TreeNodeRewriter::f_up(ParentNode)
+    /// ```
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    fn rewrite_in_scope<R: TreeNodeRewriter<Node = Self>>(
+        self,
+        rewriter: &mut R,
+    ) -> Result<Transformed<Self>> {
+        handle_transform_recursion_in_scope!(
+            rewriter.f_down(self),
+            |c| c.rewrite_in_scope(rewriter),
+            |n| { rewriter.f_up(n) }
+        )
+    }
+
+    /// Applies `f` to the node then each of its children, recursively (a
+    /// top-down, pre-order traversal).
+    ///
+    /// The return [`TreeNodeRecursion`] controls the recursion and can cause
+    /// an early return.
+    ///
+    /// # See Also
+    /// * [`Self::transform_down`] for the equivalent transformation API.
+    /// * [`Self::visit`] for both top-down and bottom up traversal.
+    fn apply_in_scope<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+        &'n self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+        fn apply_impl<
+            'n,
+            N: ScopedTreeNode,
+            F: FnMut(&'n N) -> Result<TreeNodeRecursion>,
+        >(
+            node: &'n N,
+            f: &mut F,
+        ) -> Result<TreeNodeRecursion> {
+            f(node)?.visit_children(|| node.apply_children_in_scope(|c| apply_impl(c, f)))
+        }
+
+        apply_impl(self, &mut f)
+    }
+
+    /// Recursively rewrite the node's children and then the node using `f`
+    /// (a bottom-up post-order traversal).
+    ///
+    /// A synonym of [`Self::transform_up_in_scope`].
+    fn transform_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        self.transform_up_in_scope(f)
+    }
+
+    /// Recursively rewrite the tree using `f` in a top-down (pre-order)
+    /// fashion.
+    ///
+    /// `f` is applied to the node first, and then its children.
+    ///
+    /// # See Also
+    /// * [`Self::transform_down`] for the same transformation but in all children ignoring scope
+    /// * [`Self::transform_up_in_scope`] for a bottom-up (post-order) traversal.
+    /// * [Self::transform_down_up_in_scope] for a combined traversal with closures
+    /// * [`Self::rewrite`] for a combined traversal with a visitor
+    fn transform_down_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+        fn transform_down_impl<
+            N: ScopedTreeNode,
+            F: FnMut(N) -> Result<Transformed<N>>,
+        >(
+            node: N,
+            f: &mut F,
+        ) -> Result<Transformed<N>> {
+            f(node)?.transform_children(|n| {
+                n.map_children_in_scope(|c| transform_down_impl(c, f))
+            })
+        }
+
+        transform_down_impl(self, &mut f)
+    }
+
+    /// Recursively rewrite the node using `f` in a bottom-up (post-order)
+    /// fashion.
+    ///
+    /// `f` is applied to the node's  children first, and then to the node itself.
+    ///
+    /// # See Also
+    /// * [`Self::transform_down`] top-down (pre-order) traversal.
+    /// * [Self::transform_down_up] for a combined traversal with closures
+    /// * [`Self::rewrite`] for a combined traversal with a visitor
+    fn transform_up_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+        fn transform_up_impl<N: ScopedTreeNode, F: FnMut(N) -> Result<Transformed<N>>>(
+            node: N,
+            f: &mut F,
+        ) -> Result<Transformed<N>> {
+            node.map_children_in_scope(|c| transform_up_impl(c, f))?
+                .transform_parent(f)
+        }
+
+        transform_up_impl(self, &mut f)
+    }
+
+    /// Same as [`Self::transform_down_up`] but limited to the same scope
+    fn transform_down_up_in_scope<
+        FD: FnMut(Self) -> Result<Transformed<Self>>,
+        FU: FnMut(Self) -> Result<Transformed<Self>>,
+    >(
+        self,
+        mut f_down: FD,
+        mut f_up: FU,
+    ) -> Result<Transformed<Self>> {
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+        fn transform_down_up_impl<
+            N: ScopedTreeNode,
+            FD: FnMut(N) -> Result<Transformed<N>>,
+            FU: FnMut(N) -> Result<Transformed<N>>,
+        >(
+            node: N,
+            f_down: &mut FD,
+            f_up: &mut FU,
+        ) -> Result<Transformed<N>> {
+            handle_transform_recursion_in_scope!(
+                f_down(node),
+                |c| transform_down_up_impl(c, f_down, f_up),
+                f_up
+            )
+        }
+
+        transform_down_up_impl(self, &mut f_down, &mut f_up)
+    }
+
+    /// Returns true if `f` returns true for any node in the tree.
+    ///
+    /// Stops recursion as soon as a matching node is found
+    fn exists_in_scope<F: FnMut(&Self) -> Result<bool>>(&self, mut f: F) -> Result<bool> {
+        let mut found = false;
+        self.apply_in_scope(|n| {
+            Ok(if f(n)? {
+                found = true;
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })
+        .map(|_| found)
+    }
+
+    /// Low-level API used to implement other APIs.
+    ///
+    /// If you want to implement the [`TreeNode`] trait for your own type, you
+    /// should implement this method and [`Self::map_children`].
+    ///
+    /// Users should use one of the higher level APIs described on [`Self`].
+    ///
+    /// Description: Apply `f` to inspect node's children that are in the same scope as this node (but not the node
+    /// itself), scope is defined by the node.
+    fn apply_children_in_scope<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+        &'n self,
+        f: F,
+    ) -> Result<TreeNodeRecursion>;
+
+    /// Low-level API used to implement other APIs.
+    ///
+    /// If you want to implement the [`TreeNode`] trait for your own type, you
+    /// should implement this method and [`Self::apply_children`].
+    ///
+    /// Users should use one of the higher level APIs described on [`Self`].
+    ///
+    /// Description: Apply `f` to rewrite the node's children (but not the node itself).
+    fn map_children_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: F,
     ) -> Result<Transformed<Self>>;
@@ -1293,6 +1570,57 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
     }
 }
 
+/// Helper trait for implementing [`ScopedTreeNode`] that have children stored as
+/// `Arc`s. If some trait object, such as `dyn T`, implements this trait,
+/// its related `Arc<dyn T>` will automatically implement [`ScopedTreeNode`].
+pub trait DynScopedTreeNode: DynTreeNode {
+    /// Returns all children of the specified `ScopedTreeNode`.
+    fn arc_children_in_scope(&self) -> Vec<&Arc<Self>>;
+
+    /// Constructs a new node with the specified children in scope.
+    fn with_new_arc_children_in_scope(
+        &self,
+        arc_self: Arc<Self>,
+        new_children: Vec<Arc<Self>>,
+    ) -> Result<Arc<Self>>;
+}
+
+/// Blanket implementation for any `Arc<T>` where `T` implements [`DynScopedTreeNode`]
+/// (such as [`Arc<dyn PhysicalExpr>`]).
+impl<T: DynScopedTreeNode + ?Sized> ScopedTreeNode for Arc<T> {
+    fn apply_children_in_scope<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+        &'n self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.arc_children_in_scope().into_iter().apply_until_stop(f)
+    }
+
+    fn map_children_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        let children_in_scope = self.arc_children_in_scope();
+        if !children_in_scope.is_empty() {
+            let new_children_in_scope = children_in_scope
+                .into_iter()
+                .cloned()
+                .map_until_stop_and_collect(f)?;
+            // Propagate up `new_children_in_scope.transformed` and `new_children_in_scope.tnr`
+            // along with the node containing transformed children.
+            if new_children_in_scope.transformed {
+                let arc_self = Arc::clone(&self);
+                new_children_in_scope.map_data(|new_children_in_scope| {
+                    self.with_new_arc_children_in_scope(arc_self, new_children_in_scope)
+                })
+            } else {
+                Ok(Transformed::new(self, false, new_children_in_scope.tnr))
+            }
+        } else {
+            Ok(Transformed::no(self))
+        }
+    }
+}
+
 /// Instead of implementing [`TreeNode`], it's recommended to implement a [`ConcreteTreeNode`] for
 /// trees that contain nodes with payloads. This approach ensures safe execution of algorithms
 /// involving payloads, by enforcing rules for detaching and reattaching child nodes.
@@ -1338,24 +1666,53 @@ pub(crate) mod tests {
 
     use crate::Result;
     use crate::tree_node::{
-        Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRewriter,
-        TreeNodeVisitor,
+        ScopedTreeNode, Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+        TreeNodeRewriter, TreeNodeVisitor,
     };
 
     #[derive(Debug, Eq, Hash, PartialEq, Clone)]
     pub struct TestTreeNode<T> {
         pub(crate) children: Vec<TestTreeNode<T>>,
+        pub(crate) children_in_scope: Vec<TestTreeNode<T>>,
         pub(crate) data: T,
     }
 
     impl<T> TestTreeNode<T> {
         pub(crate) fn new(children: Vec<TestTreeNode<T>>, data: T) -> Self {
-            Self { children, data }
+            Self {
+                children,
+                children_in_scope: vec![],
+                data,
+            }
+        }
+
+        pub(crate) fn new_scoped(
+            children_in_scope: Vec<TestTreeNode<T>>,
+            data: T,
+        ) -> Self {
+            Self {
+                children: vec![],
+                children_in_scope,
+                data,
+            }
+        }
+
+        pub(crate) fn new_mixed(
+            children: Vec<TestTreeNode<T>>,
+            children_in_scope: Vec<TestTreeNode<T>>,
+            data: T,
+        ) -> Self {
+            Self {
+                children,
+                children_in_scope,
+                data,
+            }
         }
 
         pub(crate) fn new_leaf(data: T) -> Self {
             Self {
                 children: vec![],
+                children_in_scope: vec![],
                 data,
             }
         }
@@ -1387,6 +1744,31 @@ pub(crate) mod tests {
         }
     }
 
+    impl<T> ScopedTreeNode for TestTreeNode<T> {
+        fn apply_children_in_scope<
+            'n,
+            F: FnMut(&'n Self) -> Result<TreeNodeRecursion>,
+        >(
+            &'n self,
+            f: F,
+        ) -> Result<TreeNodeRecursion> {
+            // TODO - should call apply elements
+            self.children_in_scope.apply_elements(f)
+        }
+
+        fn map_children_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
+            self,
+            f: F,
+        ) -> Result<Transformed<Self>> {
+            Ok(self.children_in_scope.map_elements(f)?.update_data(
+                |new_children_in_scope| Self {
+                    children_in_scope: new_children_in_scope,
+                    ..self
+                },
+            ))
+        }
+    }
+
     impl<'a, T: 'a> TreeNodeContainer<'a, Self> for TestTreeNode<T> {
         fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
             &'a self,
@@ -1403,28 +1785,28 @@ pub(crate) mod tests {
         }
     }
 
-    //       J
-    //       |
-    //       I
-    //       |
-    //       F
-    //     /   \
-    //    E     G
-    //    |     |
-    //    C     H
+    //              J
+    //              |
+    //              I
+    //              |
+    //              F (mixed)
+    //             /  \
+    //    E (scoped)  G
+    //    |           |
+    //    C (mixed)   H
     //  /   \
-    // B     D
+    // B     D (scoped)
     //       |
     //       A
     fn test_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
         let node_b = TestTreeNode::new_leaf("b".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
-        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
-        let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
+        let node_d = TestTreeNode::new_scoped(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new_mixed(vec![node_b], vec![node_d], "c".to_string());
+        let node_e = TestTreeNode::new_scoped(vec![node_c], "e".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
-        let node_f = TestTreeNode::new(vec![node_e, node_g], "f".to_string());
+        let node_f = TestTreeNode::new_mixed(vec![node_g], vec![node_e], "f".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
         TestTreeNode::new(vec![node_i], "j".to_string())
     }
