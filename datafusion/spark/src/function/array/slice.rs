@@ -15,13 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, Int64Builder};
+use arrow::array::{Array, ArrayData, ArrayRef, Int64Builder, ListArray};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
-};
+use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, ReturnFieldArgs,
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -80,21 +78,26 @@ impl ScalarUDFImpl for SparkSlice {
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
-        Ok(Arc::new(Field::new(
-            "slice",
-            args.arg_fields[0].data_type().clone(),
-            nullable,
-        )))
+        let data_type = match args.arg_fields[0].data_type() {
+            DataType::Null => {
+                DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)))
+            }
+            dt => dt.clone(),
+        };
+
+        Ok(Arc::new(Field::new("slice", data_type, nullable)))
     }
 
     fn invoke_with_args(
         &self,
         mut func_args: ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        if func_args.args[0].data_type() == DataType::Null
-            && let Some(result) = check_null_types(&func_args.args[0])
-        {
-            return Ok(result);
+        if func_args.args[0].data_type() == DataType::Null {
+            let len = match &func_args.args[0] {
+                ColumnarValue::Array(a) => a.len(),
+                ColumnarValue::Scalar(_) => func_args.number_rows,
+            };
+            return Ok(ColumnarValue::Array(list_null_array(len)));
         }
 
         let array_len = func_args
@@ -131,14 +134,9 @@ impl ScalarUDFImpl for SparkSlice {
     }
 }
 
-fn check_null_types(cv: &ColumnarValue) -> Option<ColumnarValue> {
-    match cv {
-        ColumnarValue::Scalar(ScalarValue::Null) => {
-            Some(ColumnarValue::create_null_array(1))
-        }
-        ColumnarValue::Array(_) => Some(cv.clone()),
-        _ => None,
-    }
+fn list_null_array(len: usize) -> ArrayRef {
+    let list_type = DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)));
+    Arc::new(ListArray::from(ArrayData::new_null(&list_type, len)))
 }
 
 fn calculate_start_end(args: &[ArrayRef]) -> Result<(ArrayRef, ArrayRef)> {
@@ -188,9 +186,30 @@ fn calculate_start_end(args: &[ArrayRef]) -> Result<(ArrayRef, ArrayRef)> {
 mod tests {
     use super::*;
     use arrow::array::NullArray;
-    use arrow::datatypes::DataType::List;
     use arrow::datatypes::Field;
     use datafusion_common::ScalarValue;
+    use datafusion_common::cast::as_list_array;
+    use datafusion_expr::ReturnFieldArgs;
+
+    #[test]
+    fn test_spark_slice_function_when_input_is_null() {
+        let slice = SparkSlice::new();
+        let arg_fields: Vec<Arc<Field>> = vec![
+            Arc::new(Field::new("a", DataType::Null, true)),
+            Arc::new(Field::new("s", DataType::Int64, true)),
+            Arc::new(Field::new("l", DataType::Int64, true)),
+        ];
+        let out = slice
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &[],
+            })
+            .unwrap();
+        assert_eq!(
+            out.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)))
+        );
+    }
 
     #[test]
     fn test_spark_slice_function_when_input_array_is_null() {
@@ -202,21 +221,23 @@ mod tests {
 
         let args = ScalarFunctionArgs {
             args: input_args,
-            arg_fields: vec![Arc::new(Field::new(
-                "item",
-                List(FieldRef::new(Field::new("f", DataType::Int64, true))),
-                false,
-            ))],
+            arg_fields: vec![Arc::new(Field::new("item", DataType::Null, true))],
             number_rows: 1,
             return_field: Arc::new(Field::new(
-                "item",
-                List(FieldRef::new(Field::new_list_field(DataType::Int64, true))),
-                false,
+                "slice",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Null, true))),
+                true,
             )),
             config_options: Arc::new(Default::default()),
         };
         let slice = SparkSlice::new();
         let result = slice.invoke_with_args(args).unwrap();
-        assert_eq!(*result.to_array(1).unwrap(), *Arc::new(NullArray::new(1)));
+        let arr = result.to_array(1).unwrap();
+        let list = as_list_array(&arr).unwrap();
+        assert_eq!(
+            arr.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)))
+        );
+        assert!(list.is_null(0));
     }
 }

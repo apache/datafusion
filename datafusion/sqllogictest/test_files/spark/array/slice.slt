@@ -132,3 +132,8 @@ query ?
 SELECT slice(slice(NULL, 1, 2), 1, 2)
 ----
 NULL
+
+query ?
+SELECT slice(slice(make_array(NULL), 1, 2), 1, 2)
+----
+[NULL]
