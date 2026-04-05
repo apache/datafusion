@@ -1685,42 +1685,16 @@ pub(crate) mod tests {
     #[derive(Debug, Eq, Hash, PartialEq, Clone)]
     pub struct TestTreeNode<T> {
         pub(crate) children: Vec<TestTreeNode<T>>,
-        pub(crate) children_in_scope: Vec<TestTreeNode<T>>,
+        pub(crate) children_in_same_scope: Vec<TestTreeNode<T>>,
         pub(crate) data: T,
     }
 
     impl<T: Clone> TestTreeNode<T> {
+        /// Creates a node where all children are in the same scope.
         pub(crate) fn new(children: Vec<TestTreeNode<T>>, data: T) -> Self {
             Self {
+                children_in_same_scope: children.clone(),
                 children,
-                children_in_scope: vec![],
-                data,
-            }
-        }
-
-        /// Creates a node where all children are in scope.
-        /// Automatically sets `children` = clone of `children_in_scope`.
-        pub(crate) fn new_scoped(
-            children_in_scope: Vec<TestTreeNode<T>>,
-            data: T,
-        ) -> Self {
-            Self {
-                children: children_in_scope.clone(),
-                children_in_scope,
-                data,
-            }
-        }
-
-        /// Creates a node with explicit `children` (all, in order) and
-        /// `children_in_scope` (the scoped subset).
-        pub(crate) fn new_mixed(
-            all_children: Vec<TestTreeNode<T>>,
-            children_in_scope: Vec<TestTreeNode<T>>,
-            data: T,
-        ) -> Self {
-            Self {
-                children: all_children,
-                children_in_scope,
                 data,
             }
         }
@@ -1728,7 +1702,7 @@ pub(crate) mod tests {
         pub(crate) fn new_leaf(data: T) -> Self {
             Self {
                 children: vec![],
-                children_in_scope: vec![],
+                children_in_same_scope: vec![],
                 data,
             }
         }
@@ -1737,13 +1711,36 @@ pub(crate) mod tests {
             self.children.is_empty()
         }
 
-        /// Strip children_in_scope recursively - used to compare trees
-        /// in TreeNode tests where children_in_scope is not relevant.
+        /// Strip children_in_new_scope recursively - used to compare trees
+        /// in TreeNode tests where children_in_new_scope is not relevant.
         fn strip_scope(self) -> Self {
             Self {
                 children: self.children.into_iter().map(|c| c.strip_scope()).collect(),
-                children_in_scope: vec![],
+                children_in_same_scope: vec![],
                 data: self.data,
+            }
+        }
+    }
+
+    impl<T: Clone + PartialEq> TestTreeNode<T> {
+        /// Creates a node with explicit `children` (all, in order).
+        /// `out_of_scope_children` are children that start a new scope
+        /// (i.e., NOT in the current node's scope). The remaining children
+        /// are computed as `children_in_same_scope`.
+        pub(crate) fn new_mixed(
+            all_children: Vec<TestTreeNode<T>>,
+            out_of_scope_children: Vec<TestTreeNode<T>>,
+            data: T,
+        ) -> Self {
+            let children_in_same_scope = all_children
+                .iter()
+                .filter(|c| !out_of_scope_children.contains(c))
+                .cloned()
+                .collect();
+            Self {
+                children: all_children,
+                children_in_same_scope,
+                data,
             }
         }
     }
@@ -1778,16 +1775,16 @@ pub(crate) mod tests {
             &'n self,
             f: F,
         ) -> Result<TreeNodeRecursion> {
-            self.children_in_scope.apply_elements(f)
+            self.children_in_same_scope.apply_elements(f)
         }
 
         fn map_children_in_scope<F: FnMut(Self) -> Result<Transformed<Self>>>(
             self,
             f: F,
         ) -> Result<Transformed<Self>> {
-            Ok(self.children_in_scope.map_elements(f)?.update_data(
-                |new_children_in_scope| Self {
-                    children_in_scope: new_children_in_scope,
+            Ok(self.children_in_same_scope.map_elements(f)?.update_data(
+                |new_children| Self {
+                    children_in_same_scope: new_children,
                     ..self
                 },
             ))
@@ -1810,35 +1807,36 @@ pub(crate) mod tests {
         }
     }
 
-    //              J
-    //              |
-    //              I
-    //              |
-    //              F (mixed)
-    //             /  \
-    //    E (scoped)  G
-    //    |           |
-    //    C (mixed)   H
-    //  /   \
-    // B     D (scoped)
-    //       |
-    //       A
+    //                                 J
+    //                                 |
+    //                                 I
+    //                                 |
+    //                                 F (mixed)
+    //                                /  \
+    //                    E (new scope)   G (same scope as F)
+    //                    |               |
+    //                    C (mixed)       H
+    //                  /   \
+    // B (Same scope as C)   D (new scope)
+    // |
+    // A
     //
-    // TreeNode (children) traversal visits ALL nodes: J, I, F, E, C, B, D, A, G, H
-    //   (new_scoped/new_mixed auto-add children_in_scope to children)
+    // TreeNode (children) traversal visits ALL nodes: J, I, F, E, C, B, A, D, G, H
+    //   (new/new_mixed set both children and children_in_new_scope)
     //
-    // ScopedTreeNode (children_in_scope) traversal visits: J, I, F, E, C, D, A
-    //   (skips B, G, H which are only in children, not children_in_scope)
+    // ScopedTreeNode (children_in_new_scope) traversal visits: J, I, F, G, H
+    //   (skips E, C, B, A, D — E and D are in new scopes, the rest are
+    //    unreachable via scoped traversal)
     fn test_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_b = TestTreeNode::new_leaf("b".to_string());
-        let node_d = TestTreeNode::new_scoped(vec![node_a], "d".to_string());
+        let node_d = TestTreeNode::new_leaf("d".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
         let node_c = TestTreeNode::new_mixed(
             vec![node_b, node_d.clone()],
             vec![node_d],
             "c".to_string(),
         );
-        let node_e = TestTreeNode::new_scoped(vec![node_c], "e".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new_mixed(
@@ -1846,8 +1844,8 @@ pub(crate) mod tests {
             vec![node_e],
             "f".to_string(),
         );
-        let node_i = TestTreeNode::new_scoped(vec![node_f], "i".to_string());
-        TestTreeNode::new_scoped(vec![node_i], "j".to_string())
+        let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
+        TestTreeNode::new(vec![node_i], "j".to_string())
     }
 
     // Continue on all nodes
@@ -1860,10 +1858,10 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_up(b)",
-            "f_down(d)",
             "f_down(a)",
             "f_up(a)",
+            "f_up(b)",
+            "f_down(d)",
             "f_up(d)",
             "f_up(c)",
             "f_up(e)",
@@ -1883,8 +1881,8 @@ pub(crate) mod tests {
     // Expected transformed tree after a combined traversal
     fn transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new_leaf("f_up(f_down(d))".to_string());
         let node_c =
             TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
@@ -1899,8 +1897,8 @@ pub(crate) mod tests {
     // Expected transformed tree after a top-down traversal
     fn transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
-        let node_b = TestTreeNode::new_leaf("f_down(b)".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
+        let node_d = TestTreeNode::new_leaf("f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_down(h)".to_string());
@@ -1913,8 +1911,8 @@ pub(crate) mod tests {
     // Expected transformed tree after a bottom-up traversal
     fn transformed_up_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
-        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_up(b)".to_string());
+        let node_d = TestTreeNode::new_leaf("f_up(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_up(h)".to_string());
@@ -1933,10 +1931,10 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_up(b)",
-            "f_down(d)",
             "f_down(a)",
             "f_up(a)",
+            "f_up(b)",
+            "f_down(d)",
             "f_up(d)",
             "f_up(c)",
             "f_up(e)",
@@ -1955,8 +1953,8 @@ pub(crate) mod tests {
 
     fn f_down_jump_on_a_transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
-        let node_b = TestTreeNode::new_leaf("f_down(b)".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
+        let node_d = TestTreeNode::new_leaf("f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_down(h)".to_string());
@@ -1989,8 +1987,8 @@ pub(crate) mod tests {
 
     fn f_down_jump_on_e_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_b = TestTreeNode::new_leaf("b".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
+        let node_d = TestTreeNode::new_leaf("d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
         let node_h = TestTreeNode::new_leaf("f_up(f_down(h))".to_string());
@@ -2003,8 +2001,8 @@ pub(crate) mod tests {
 
     fn f_down_jump_on_e_transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_b = TestTreeNode::new_leaf("b".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
+        let node_d = TestTreeNode::new_leaf("d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_down(h)".to_string());
@@ -2023,10 +2021,12 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_up(b)",
-            "f_down(d)",
             "f_down(a)",
             "f_up(a)",
+            "f_down(d)",
+            "f_up(d)",
+            "f_up(c)",
+            "f_up(e)",
             "f_down(g)",
             "f_down(h)",
             "f_up(h)",
@@ -2042,10 +2042,10 @@ pub(crate) mod tests {
 
     fn f_up_jump_on_a_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
-        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
-        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
+        let node_d = TestTreeNode::new_leaf("f_up(f_down(d))".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
         let node_h = TestTreeNode::new_leaf("f_up(f_down(h))".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
         let node_f =
@@ -2056,10 +2056,10 @@ pub(crate) mod tests {
 
     fn f_up_jump_on_a_transformed_up_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
-        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
-        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
-        let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
+        let node_d = TestTreeNode::new_leaf("f_up(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
         let node_h = TestTreeNode::new_leaf("f_up(h)".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_up(g)".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_up(f)".to_string());
@@ -2076,10 +2076,10 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_up(b)",
-            "f_down(d)",
             "f_down(a)",
             "f_up(a)",
+            "f_up(b)",
+            "f_down(d)",
             "f_up(d)",
             "f_up(c)",
             "f_up(e)",
@@ -2114,8 +2114,6 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_up(b)",
-            "f_down(d)",
             "f_down(a)",
         ]
         .into_iter()
@@ -2125,8 +2123,8 @@ pub(crate) mod tests {
 
     fn f_down_stop_on_a_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
-        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
+        let node_d = TestTreeNode::new_leaf("d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2138,8 +2136,8 @@ pub(crate) mod tests {
 
     fn f_down_stop_on_a_transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
-        let node_b = TestTreeNode::new_leaf("f_down(b)".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
+        let node_d = TestTreeNode::new_leaf("d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2159,8 +2157,8 @@ pub(crate) mod tests {
 
     fn f_down_stop_on_e_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_b = TestTreeNode::new_leaf("b".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
+        let node_d = TestTreeNode::new_leaf("d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2172,8 +2170,8 @@ pub(crate) mod tests {
 
     fn f_down_stop_on_e_transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("a".to_string());
-        let node_b = TestTreeNode::new_leaf("b".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
+        let node_d = TestTreeNode::new_leaf("d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2192,8 +2190,6 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_up(b)",
-            "f_down(d)",
             "f_down(a)",
             "f_up(a)",
         ]
@@ -2204,8 +2200,8 @@ pub(crate) mod tests {
 
     fn f_up_stop_on_a_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_down(b)".to_string());
+        let node_d = TestTreeNode::new_leaf("d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2217,8 +2213,8 @@ pub(crate) mod tests {
 
     fn f_up_stop_on_a_transformed_up_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
-        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "b".to_string());
+        let node_d = TestTreeNode::new_leaf("d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2237,10 +2233,10 @@ pub(crate) mod tests {
             "f_down(e)",
             "f_down(c)",
             "f_down(b)",
-            "f_up(b)",
-            "f_down(d)",
             "f_down(a)",
             "f_up(a)",
+            "f_up(b)",
+            "f_down(d)",
             "f_up(d)",
             "f_up(c)",
             "f_up(e)",
@@ -2252,8 +2248,8 @@ pub(crate) mod tests {
 
     fn f_up_stop_on_e_transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new_leaf("f_up(f_down(d))".to_string());
         let node_c =
             TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
@@ -2266,8 +2262,8 @@ pub(crate) mod tests {
 
     fn f_up_stop_on_e_transformed_up_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
-        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
+        let node_b = TestTreeNode::new(vec![node_a], "f_up(b)".to_string());
+        let node_d = TestTreeNode::new_leaf("f_up(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
         let node_h = TestTreeNode::new_leaf("h".to_string());
@@ -2433,7 +2429,8 @@ pub(crate) mod tests {
                 let mut rewriter = TestRewriter::new(Box::new($F_DOWN), Box::new($F_UP));
                 let actual = tree.rewrite(&mut rewriter)?;
                 let actual_stripped = actual.update_data(|d| d.strip_scope());
-                assert_eq!(actual_stripped, $EXPECTED_TREE);
+                let expected_stripped = ($EXPECTED_TREE).update_data(|d| d.strip_scope());
+                assert_eq!(actual_stripped, expected_stripped);
 
                 Ok(())
             }
@@ -2447,7 +2444,8 @@ pub(crate) mod tests {
                 let tree = test_tree();
                 let actual = tree.transform_down_up($F_DOWN, $F_UP)?;
                 let actual_stripped = actual.update_data(|d| d.strip_scope());
-                assert_eq!(actual_stripped, $EXPECTED_TREE);
+                let expected_stripped = ($EXPECTED_TREE).update_data(|d| d.strip_scope());
+                assert_eq!(actual_stripped, expected_stripped);
 
                 Ok(())
             }
@@ -2461,7 +2459,8 @@ pub(crate) mod tests {
                 let tree = test_tree();
                 let actual = tree.transform_down($F)?;
                 let actual_stripped = actual.update_data(|d| d.strip_scope());
-                assert_eq!(actual_stripped, $EXPECTED_TREE);
+                let expected_stripped = ($EXPECTED_TREE).update_data(|d| d.strip_scope());
+                assert_eq!(actual_stripped, expected_stripped);
 
                 Ok(())
             }
@@ -2475,7 +2474,8 @@ pub(crate) mod tests {
                 let tree = test_tree();
                 let actual = tree.transform_up($F)?;
                 let actual_stripped = actual.update_data(|d| d.strip_scope());
-                assert_eq!(actual_stripped, $EXPECTED_TREE);
+                let expected_stripped = ($EXPECTED_TREE).update_data(|d| d.strip_scope());
+                assert_eq!(actual_stripped, expected_stripped);
 
                 Ok(())
             }
@@ -2914,40 +2914,40 @@ pub(crate) mod tests {
         let col_b = TestTreeNode::new_leaf("col_b".to_string());
         let col_c = TestTreeNode::new_leaf("col_c".to_string());
 
-        let plus = TestTreeNode::new_scoped(vec![col_a, col_b], "plus".to_string());
+        let plus = TestTreeNode::new(vec![col_a, col_b], "plus".to_string());
 
         // --- Innermost lambda scope: Lambda2 → inner_col ---
         let inner_col = TestTreeNode::new_leaf("inner_col".to_string());
-        let lambda2 = TestTreeNode::new_scoped(vec![inner_col], "lambda2".to_string());
+        let lambda2 = TestTreeNode::new(vec![inner_col], "lambda2".to_string());
 
         // --- Middle lambda scope: Lambda1 → list_col, cmp ---
         let list_col = TestTreeNode::new_leaf("list_col".to_string());
         let idx_col = TestTreeNode::new_leaf("idx_col".to_string());
-        // cmp has idx_col in scope, Lambda2 out of scope
+        // cmp has idx_col in scope, Lambda2 out of scope (new scope)
         let cmp = TestTreeNode::new_mixed(
             vec![idx_col.clone(), lambda2.clone()],
-            vec![idx_col],
+            vec![lambda2],
             "cmp".to_string(),
         );
         let lambda1 =
-            TestTreeNode::new_scoped(vec![list_col, cmp], "lambda1".to_string());
+            TestTreeNode::new(vec![list_col, cmp], "lambda1".to_string());
 
         // --- Outer scope ---
-        // gt has col_c in scope, Lambda1 out of scope
+        // gt has col_c in scope, Lambda1 out of scope (new scope)
         let gt = TestTreeNode::new_mixed(
             vec![col_c.clone(), lambda1.clone()],
-            vec![col_c],
+            vec![lambda1],
             "gt".to_string(),
         );
-        let and = TestTreeNode::new_scoped(vec![plus, gt], "and".to_string());
+        let and = TestTreeNode::new(vec![plus, gt], "and".to_string());
 
-        TestTreeNode::new_scoped(vec![and], "root".to_string())
+        TestTreeNode::new(vec![and], "root".to_string())
     }
 
-    /// Collect all data reachable via children_in_scope (scoped DFS).
+    /// Collect all data reachable via children_in_new_scope (scoped DFS).
     fn collect_scoped_data(node: &TestTreeNode<String>) -> Vec<String> {
         let mut result = vec![node.data.clone()];
-        for child in &node.children_in_scope {
+        for child in &node.children_in_same_scope {
             result.extend(collect_scoped_data(child));
         }
         result
@@ -2962,14 +2962,14 @@ pub(crate) mod tests {
         result
     }
 
-    // Scoped transform helpers that preserve both children and children_in_scope
+    // Scoped transform helpers that preserve both children and children_in_new_scope
     fn transform_yes_in_scope<N: Display, T: Display + From<String>>(
         transformation_name: N,
     ) -> impl FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>> {
         move |node| {
             Ok(Transformed::yes(TestTreeNode {
                 children: node.children,
-                children_in_scope: node.children_in_scope,
+                children_in_same_scope: node.children_in_same_scope,
                 data: format!("{}({})", transformation_name, node.data).into(),
             }))
         }
@@ -2988,7 +2988,7 @@ pub(crate) mod tests {
         move |node| {
             let new_node = TestTreeNode {
                 children: node.children,
-                children_in_scope: node.children_in_scope,
+                children_in_same_scope: node.children_in_same_scope,
                 data: format!("{}({})", transformation_name, node.data).into(),
             };
             Ok(if node.data == d {
@@ -3515,7 +3515,7 @@ pub(crate) mod tests {
     /// Build the Lambda2 subtree (innermost scope: lambda2 → inner_col)
     fn build_lambda2() -> TestTreeNode<String> {
         let inner_col = TestTreeNode::new_leaf("inner_col".to_string());
-        TestTreeNode::new_scoped(vec![inner_col], "lambda2".to_string())
+        TestTreeNode::new(vec![inner_col], "lambda2".to_string())
     }
 
     /// Build the Lambda1 subtree (middle scope: lambda1 → [list_col, cmp → idx_col])
@@ -3525,10 +3525,10 @@ pub(crate) mod tests {
         let idx_col = TestTreeNode::new_leaf("idx_col".to_string());
         let cmp = TestTreeNode::new_mixed(
             vec![idx_col.clone(), lambda2.clone()],
-            vec![idx_col],
+            vec![lambda2],
             "cmp".to_string(),
         );
-        TestTreeNode::new_scoped(vec![list_col, cmp], "lambda1".to_string())
+        TestTreeNode::new(vec![list_col, cmp], "lambda1".to_string())
     }
 
     // --- Lambda1 scope (middle): 4 in-scope nodes ---
@@ -3828,7 +3828,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_node_with_only_children_no_scope() -> Result<()> {
+    fn test_node_new_has_all_children_in_scope() -> Result<()> {
         let child = TestTreeNode::new_leaf("child".to_string());
         let parent = TestTreeNode::new(vec![child], "parent".to_string());
 
@@ -3837,7 +3837,7 @@ pub(crate) mod tests {
             scoped_visits.push(n.data.clone());
             Ok(TreeNodeRecursion::Continue)
         })?;
-        assert_eq!(scoped_visits, vec!["parent"]);
+        assert_eq!(scoped_visits, vec!["parent", "child"]);
 
         let mut all_visits = vec![];
         parent.apply(|n| {
