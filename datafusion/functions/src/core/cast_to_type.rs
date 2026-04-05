@@ -125,7 +125,6 @@ impl ScalarUDFImpl for CastToTypeFunc {
     ) -> Result<ExprSimplifyResult> {
         let [source_arg, type_arg] = take_function_args(self.name(), args)?;
         let target_type = info.get_data_type(&type_arg)?;
-
         let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
             // the argument's data type is already the correct type
