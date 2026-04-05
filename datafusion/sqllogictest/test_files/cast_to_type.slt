@@ -21,25 +21,25 @@
 
 # Basic string to integer cast
 query I
-SELECT cast_to_type('42', NULL::INTEGER);
+SELECT cast_to_type('42', 1::INTEGER);
 ----
 42
 
 # String to double cast
 query R
-SELECT cast_to_type('3.14', NULL::DOUBLE);
+SELECT cast_to_type('3.14', 1.0::DOUBLE);
 ----
 3.14
 
 # Integer to string cast
 query T
-SELECT cast_to_type(42, NULL::VARCHAR);
+SELECT cast_to_type(42, 'a'::VARCHAR);
 ----
 42
 
 # Integer to double cast
 query R
-SELECT cast_to_type(42, NULL::DOUBLE);
+SELECT cast_to_type(42, 0.0::DOUBLE);
 ----
 42
 
@@ -49,17 +49,29 @@ SELECT cast_to_type(42, 0::INTEGER);
 ----
 42
 
+# Second argument is a typed NULL double
+query R
+SELECT cast_to_type('3.14', NULL::DOUBLE);
+----
+3.14
+
+# Second argument is a typed NULL integer
+query I
+SELECT cast_to_type(42, NULL::INTEGER);
+----
+42
+
+# Second argument is a typed NULL string
+query T
+SELECT cast_to_type('42', NULL::VARCHAR);
+----
+42
+
 # NULL first argument
 query I
 SELECT cast_to_type(NULL, 0::INTEGER);
 ----
 NULL
-
-# NULL reference (type still applies)
-query I
-SELECT cast_to_type('42', NULL::INTEGER);
-----
-42
 
 # CASE expression as first argument
 query I
@@ -107,9 +119,15 @@ SELECT cast_to_type('1.5', double_col) FROM t1 LIMIT 1;
 ----
 1.5
 
+# Case statement as second argument
+query I
+SELECT cast_to_type('42', CASE WHEN random() < 2 THEN 1 ELSE 0 END);
+----
+42
+
 # Use with column values as first argument
 query R
-SELECT cast_to_type(int_col, NULL::DOUBLE) FROM t1;
+SELECT cast_to_type(int_col, 1.0::DOUBLE) FROM t1;
 ----
 1
 2
@@ -167,12 +185,21 @@ statement ok
 INSERT INTO t_nullable VALUES (1), (NULL);
 
 statement ok
-CREATE VIEW v_cast_null AS SELECT cast_to_type(x, NULL::DOUBLE) as a FROM t_nullable;
+CREATE VIEW v_cast_null AS SELECT cast_to_type(x, 1.0::DOUBLE) as a FROM t_nullable;
 
 query TTT
 SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_cast_null';
 ----
 a Float64 YES
+
+# If we cast to the null type itself the result is nullable even if the input is not
+statement ok
+CREATE VIEW v_cast_to_null AS SELECT cast_to_type(42, null) as a;
+
+query TTT
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_cast_to_null';
+----
+a Null YES
 
 statement ok
 DROP VIEW v_cast_null;
@@ -302,7 +329,7 @@ DROP TABLE t2;
 
 # try_cast_to_type is always nullable (cast can fail)
 statement ok
-CREATE VIEW v_trycast AS SELECT try_cast_to_type(42, NULL::INTEGER) as a;
+CREATE VIEW v_trycast AS SELECT try_cast_to_type(42, 1::INTEGER) as a;
 
 query TTT
 SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'v_trycast';
