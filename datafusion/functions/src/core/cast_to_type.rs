@@ -137,10 +137,11 @@ impl ScalarUDFImpl for CastToTypeFunc {
             // the argument's data type is already the correct type
             arg
         } else {
+            let nullable = source_field.is_nullable() || target_type == DataType::Null;
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
-                field: target_type.into_nullable_field_ref(),
+                field: Field::new("", target_type, nullable).into(),
             })
         };
         Ok(ExprSimplifyResult::Simplified(new_expr))
