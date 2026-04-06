@@ -34,6 +34,7 @@ use datafusion::optimizer::optimize_unions::OptimizeUnions;
 use datafusion_common::parquet_config::DFParquetWriterVersion;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_expr::utils::find_aggregate_exprs;
+use datafusion_functions_aggregate::grouping::grouping;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
 use std::any::Any;
@@ -1194,7 +1195,6 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(0.5),
             Some(lit(50)),
         ),
-        // grouping(lit(1)), // #TODO Error: Context("resolve_grouping_function", Plan("Argument Int32(1) to grouping function is not in grouping columns ")
         bit_and(lit(2)),
         bit_or(lit(2)),
         bit_xor(lit(2)),
@@ -1233,6 +1233,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
     ];
 
+    // Split expressions into aggregate and non-aggregate
     let agg_exprs: Vec<Expr> = expr_list
         .iter()
         .filter(|e| !find_aggregate_exprs(vec![*e]).is_empty())
@@ -1245,19 +1246,32 @@ async fn roundtrip_expr_api() -> Result<()> {
         .cloned()
         .collect();
 
-    let plan_non_agg = table.clone().select(non_agg_exprs)?.into_optimized_plan()?;
-    let bytes_non_agg = logical_plan_to_bytes(&plan_non_agg)?;
-    let logical_round_trip_non_agg =
-        logical_plan_from_bytes(&bytes_non_agg, &ctx.task_ctx())?;
-    assert_eq!(
-        format!("{plan_non_agg}"),
-        format!("{logical_round_trip_non_agg}")
-    );
+    // Non-aggregate expressions roundtrip
+    if !non_agg_exprs.is_empty() {
+        let plan_non_agg = table.clone().select(non_agg_exprs)?.into_optimized_plan()?;
+        let bytes_non_agg = logical_plan_to_bytes(&plan_non_agg)?;
+        let roundtrip_non_agg = logical_plan_from_bytes(&bytes_non_agg, &ctx.task_ctx())?;
+        assert_eq!(format!("{plan_non_agg}"), format!("{roundtrip_non_agg}"));
+    }
 
-    let plan_agg = table.aggregate(vec![], agg_exprs)?.into_optimized_plan()?;
-    let bytes_agg = logical_plan_to_bytes(&plan_agg)?;
-    let logical_round_trip_agg = logical_plan_from_bytes(&bytes_agg, &ctx.task_ctx())?;
-    assert_eq!(format!("{plan_agg}"), format!("{logical_round_trip_agg}"));
+    // Aggregate expressions roundtrip
+    if !agg_exprs.is_empty() {
+        let plan_agg = table
+            .clone()
+            .aggregate(vec![], agg_exprs)?
+            .into_optimized_plan()?;
+        let bytes_agg = logical_plan_to_bytes(&plan_agg)?;
+        let roundtrip_agg = logical_plan_from_bytes(&bytes_agg, &ctx.task_ctx())?;
+        assert_eq!(format!("{plan_agg}"), format!("{roundtrip_agg}"));
+    }
+
+    // Separate grouping() test
+    let plan_group = table
+        .aggregate(vec![lit(1)], vec![grouping(lit(1))])?
+        .into_optimized_plan()?;
+    let bytes_group = logical_plan_to_bytes(&plan_group)?;
+    let roundtrip_group = logical_plan_from_bytes(&bytes_group, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan_group}"), format!("{roundtrip_group}"));
 
     Ok(())
 }
