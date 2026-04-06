@@ -2319,33 +2319,33 @@ b NULL NULL 7732.315789473684
 query TI
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 65
 b 68
-c 122
-d 124
-e 115
+c 118
+d 123
+e 112
 
 
 # csv_query_approx_percentile_cont_with_weight (should be the same as above)
 query TI
 SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 65
 b 68
-c 122
-d 124
-e 115
+c 118
+d 123
+e 112
 
 
 # using approx_percentile_cont on 2 columns with same signature
 query TII
 SELECT c1, approx_percentile_cont(c2, 0.95) AS c2, approx_percentile_cont(c3, 0.95) AS c3 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 5 73
+a 5 65
 b 5 68
-c 5 122
-d 5 124
-e 5 115
+c 5 118
+d 5 123
+e 5 112
 
 # error is unique to this UDAF
 query TRR
@@ -2362,51 +2362,51 @@ e 3 40.333333333333
 query TI
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a -101
-b -114
-c -109
+a -100
+b -111
+c -107
 d -98
-e -93
+e -85
 
 # csv_query_approx_percentile_cont_with_weight (2)
 query TI
 SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 65
 b 68
-c 122
-d 124
-e 115
+c 118
+d 123
+e 112
 
 # csv_query_approx_percentile_cont_with_weight alternate syntax
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 65
 b 68
-c 122
-d 124
-e 115
+c 118
+d 123
+e 112
 
 
 query TI
 SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a -101
-b -114
-c -109
+a -100
+b -111
+c -107
 d -98
-e -93
+e -85
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 query TI
 SELECT c1, approx_percentile_cont(0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 65
 b 68
-c 122
-d 124
-e 115
+c 118
+d 123
+e 112
 
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
