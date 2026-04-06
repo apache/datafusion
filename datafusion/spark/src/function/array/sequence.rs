@@ -16,14 +16,15 @@
 // under the License.
 
 use crate::function::functions_nested_utils::make_scalar_function;
+use arrow::array::{Array, Int64Builder};
 use arrow::datatypes::{DataType, Field, FieldRef, IntervalMonthDayNano};
+use datafusion_common::cast::as_int64_array;
 use datafusion_common::internal_err;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions_nested::range::Range;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `sequence` expression.
@@ -48,10 +49,6 @@ impl SparkSequence {
 }
 
 impl ScalarUDFImpl for SparkSequence {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "sequence"
     }
@@ -146,12 +143,21 @@ impl ScalarUDFImpl for SparkSequence {
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }
+
         match args[0].data_type() {
-            DataType::Int64 => make_scalar_function(|args| {
-                Range::generate_series().gen_range_inner(args)
-            })(args),
+            DataType::Int64 => {
+                validate_int64_sequence_step(args)?;
+                let optional_new_args = add_step_argument_if_not_exists(args)?;
+                let new_args = match optional_new_args {
+                    Some(new_args) => &new_args.to_owned(),
+                    None => args,
+                };
+                make_scalar_function(|args| {
+                    Range::generate_series().gen_range_inner(args)
+                })(new_args)
+            }
             DataType::Date32 | DataType::Date64 => {
-                let optional_new_args = add_interval_if_not_exists(args);
+                let optional_new_args = add_interval_argument_if_not_exists(args);
                 let new_args = match optional_new_args {
                     Some(new_args) => &new_args.to_owned(),
                     None => args,
@@ -161,7 +167,7 @@ impl ScalarUDFImpl for SparkSequence {
                 )
             }
             DataType::Timestamp(_, _) => {
-                let optional_new_args = add_interval_if_not_exists(args);
+                let optional_new_args = add_interval_argument_if_not_exists(args);
                 let new_args = match optional_new_args {
                     Some(new_args) => &new_args.to_owned(),
                     None => args,
@@ -178,6 +184,64 @@ impl ScalarUDFImpl for SparkSequence {
             }
         }
     }
+}
+
+/// Validates explicit `step` for 3-argument integer `sequence` (Spark semantics).
+fn validate_int64_sequence_step(args: &[ColumnarValue]) -> Result<()> {
+    if args.len() != 3 {
+        return Ok(());
+    }
+    let arrays = ColumnarValue::values_to_arrays(args)?;
+    let start = as_int64_array(&arrays[0])?;
+    let stop = as_int64_array(&arrays[1])?;
+    let step = as_int64_array(&arrays[2])?;
+    for i in 0..start.len() {
+        if start.is_null(i) || stop.is_null(i) || step.is_null(i) {
+            continue;
+        }
+        let s = start.value(i);
+        let e = stop.value(i);
+        let st = step.value(i);
+        if st == 0 {
+            return exec_err!("Step cannot be 0 for sequence");
+        }
+        if s < e && st <= 0 {
+            return exec_err!("When start < stop, step must be positive");
+        }
+        if s > e && st >= 0 {
+            return exec_err!("When start > stop, step must be negative");
+        }
+    }
+    Ok(())
+}
+
+/// When only start and stop are given, Spark picks step `1` if start ≤ stop and `-1` if start > stop.
+fn add_step_argument_if_not_exists(
+    args: &[ColumnarValue],
+) -> Result<Option<Vec<ColumnarValue>>> {
+    if args.len() != 2 {
+        return Ok(None);
+    }
+    let arrays = ColumnarValue::values_to_arrays(args)?;
+    let start = as_int64_array(&arrays[0])?;
+    let stop = as_int64_array(&arrays[1])?;
+    let len = start.len();
+    let mut step = Int64Builder::with_capacity(len);
+    for i in 0..len {
+        if start.is_null(i) || stop.is_null(i) {
+            step.append_null();
+        } else if start.value(i) > stop.value(i) {
+            step.append_value(-1);
+        } else {
+            step.append_value(1);
+        }
+    }
+    let step = step.finish();
+    Ok(Some(vec![
+        args[0].clone(),
+        args[1].clone(),
+        ColumnarValue::Array(Arc::new(step)),
+    ]))
 }
 
 fn check_type(
@@ -242,7 +306,9 @@ fn check_interval_type_by_first_type(
     }
 }
 
-fn add_interval_if_not_exists(args: &[ColumnarValue]) -> Option<Vec<ColumnarValue>> {
+fn add_interval_argument_if_not_exists(
+    args: &[ColumnarValue],
+) -> Option<Vec<ColumnarValue>> {
     if args.len() == 2 {
         let mut new_args = args.to_owned();
         new_args.push(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(

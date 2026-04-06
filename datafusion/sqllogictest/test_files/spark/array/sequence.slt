@@ -40,11 +40,6 @@ SELECT sequence(0, 5, 1);
 [0, 1, 2, 3, 4, 5]
 
 query ?
-SELECT sequence(5, 0, 1);
-----
-[5, 4, 3, 2, 1, 0]
-
-query ?
 SELECT sequence(-3::int, 3::int);
 ----
 [-3, -2, -1, 0, 1, 2, 3]
@@ -290,3 +285,39 @@ SELECT sequence(1);
 DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: num of input parameters should be 2 or 3. No function matches the given name and argument types 'sequence(Int64)'. You might need to add explicit type casts.
 	Candidate functions:
 	sequence(UserDefined)
+
+
+query ?
+SELECT sequence(2, 2);
+----
+[2]
+
+query ?
+SELECT sequence(-2, -2);
+----
+[-2]
+
+query error
+SELECT sequence(5, 0, 1);
+----
+DataFusion error: Execution error: When start > stop, step must be negative
+
+
+query error
+SELECT sequence(0, 5, -1);
+----
+DataFusion error: Execution error: When start < stop, step must be positive
+
+
+query error
+SELECT sequence(1, 5, 0);
+----
+DataFusion error: Execution error: Step cannot be 0 for sequence
+
+
+query error
+SELECT sequence(5, 1, 0);
+----
+DataFusion error: Execution error: Step cannot be 0 for sequence
+
+
