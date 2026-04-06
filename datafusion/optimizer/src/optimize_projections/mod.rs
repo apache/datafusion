@@ -747,6 +747,7 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// # Parameters
 ///
 /// * `left_len` - The length of the left child.
+/// * `right_len` - The length of the right child.
 /// * `indices` - A slice of requirement indices.
 /// * `join_type` - The type of join (e.g. `INNER`, `LEFT`, `RIGHT`).
 ///
@@ -770,7 +771,7 @@ fn split_join_requirements(
             indices.split_off(left_len)
         }
         JoinType::LeftMark => {
-            // LeftMark output: [left_cols(0..left_len), mark(left_len)]
+            // LeftMark output: [left_cols(0..left_len), mark]
             // The mark column is synthetic (produced by the join itself),
             // so discard it and route only to the left child.
             let (left_indices, _mark) = indices.split_off(left_len);
@@ -2322,52 +2323,27 @@ mod tests {
 
     #[test]
     fn optimize_projections_left_mark_join_with_outer_join() -> Result<()> {
-        use datafusion_expr::utils::disjunction;
-        use datafusion_expr::{exists, out_ref_col};
-
         let table_a = test_table_scan_with_name("a")?;
         let table_b = test_table_scan_with_name("b")?;
-
-        let sq_a = Arc::new(
-            LogicalPlanBuilder::from(test_table_scan_with_name("sq_a")?)
-                .filter(col("sq_a.a").eq(out_ref_col(DataType::UInt32, "a.a")))?
-                .project(vec![lit(1)])?
-                .build()?,
-        );
-
-        let sq_b = Arc::new(
-            LogicalPlanBuilder::from(test_table_scan_with_name("sq_b")?)
-                .filter(col("sq_b.b").eq(out_ref_col(DataType::UInt32, "a.b")))?
-                .project(vec![lit(1)])?
-                .build()?,
-        );
-
-        let exists_a = exists(sq_a);
-        let exists_b = exists(sq_b);
+        let table_c = test_table_scan_with_name("c")?;
 
         let plan = LogicalPlanBuilder::from(table_a)
-            .filter(disjunction(vec![exists_a, exists_b]).unwrap())?
-            .join(table_b, JoinType::Left, (vec!["a"], vec!["a"]), None)?
+            .join(table_b, JoinType::LeftMark, (vec!["a"], vec!["a"]), None)?
+            .project(vec![col("a.a"), col("a.b"), col("a.c")])?
+            .join(table_c, JoinType::Left, (vec!["a"], vec!["a"]), None)?
             .build()?;
 
-        let optimizer = Optimizer::new();
-        let config = OptimizerContext::new();
-        let result = optimizer.optimize(plan, &config, observe);
-        assert!(
-            result.is_ok(),
-            "Full optimizer should not fail with schema mismatch: {:?}",
-            result.err()
-        );
-        let optimized = result.unwrap();
-        let plan_str = format!("{optimized}");
-        // Verify no double projection — the projection we add to strip mark
-        // columns should be merged by optimize_projections, not left stacked.
-        assert!(
-            !plan_str.contains("Projection: a.a, a.b, a.c\n            Projection:"),
-            "Double projection should be merged by optimize_projections"
-        );
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: a.a = c.a
+          Projection: a.a, a.b, a.c
+            LeftMark Join: a.a = b.a
+              TableScan: a projection=[a, b, c]
+              TableScan: b projection=[a]
+          TableScan: c projection=[a, b, c]
+        "
+        )
     }
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
