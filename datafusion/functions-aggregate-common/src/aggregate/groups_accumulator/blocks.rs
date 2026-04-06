@@ -190,7 +190,7 @@ impl<Ty: Clone + Debug> Block for Vec<Ty> {
 
     fn len(&self) -> usize {
         self.len()
-    }   
+    }
 }
 
 impl<T: Clone + Debug> GeneralBlocks<T> {

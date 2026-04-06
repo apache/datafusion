@@ -919,7 +919,8 @@ where
             total_num_groups,
             |_, group_index, partial_count| {
                 // SAFETY: group_index is guaranteed to be in bounds
-                let count = unsafe { self.counts.get_unchecked_mut(group_index as usize) };
+                let count =
+                    unsafe { self.counts.get_unchecked_mut(group_index as usize) };
                 *count += partial_count;
             },
         );

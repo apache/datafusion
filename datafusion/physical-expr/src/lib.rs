@@ -54,7 +54,7 @@ pub mod execution_props {
 }
 
 pub use aggregate::groups_accumulator::{FlatNullState, GroupsAccumulatorAdapter};
-pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
+pub use analysis::{AnalysisContext, ExprBoundaries, analyze};
 pub use equivalence::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, calculate_union,
 };

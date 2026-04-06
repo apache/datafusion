@@ -435,7 +435,7 @@ where
                     result.iter().map(ScalarValue::size_of_vec).sum::<usize>();
             }
             EmitTo::NextBlock => {
-                return internal_err!("first_last does not support blocked groups")
+                return internal_err!("first_last does not support blocked groups");
             }
         }
 

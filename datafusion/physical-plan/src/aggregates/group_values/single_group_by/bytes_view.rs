@@ -121,7 +121,7 @@ impl GroupValues for GroupValuesBytesView {
             EmitTo::NextBlock => {
                 return internal_err!(
                     "group_values_bytes_view does not support blocked groups"
-                )
+                );
             }
         };
 

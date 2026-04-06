@@ -38,7 +38,7 @@ use log::debug;
 
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},

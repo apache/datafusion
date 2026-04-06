@@ -231,7 +231,9 @@ impl GroupValues for GroupValuesRows {
                 output
             }
             EmitTo::NextBlock => {
-                return internal_err!("group_values_rows does not support blocked groups");
+                return internal_err!(
+                    "group_values_rows does not support blocked groups"
+                );
             }
         };
 
