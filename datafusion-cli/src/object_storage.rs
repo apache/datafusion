@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod instrumented;
+pub mod mmap;
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
@@ -32,6 +33,7 @@ use datafusion::{
     execution::context::SessionState,
 };
 use log::debug;
+use mmap::MmapObjectStore;
 use object_store::{
     ClientOptions, CredentialProvider,
     Error::Generic,
@@ -564,6 +566,10 @@ pub(crate) async fn get_object_store(
                 .with_url(url.origin().ascii_serialization())
                 .build()?,
         ),
+        "file" => {
+            // Mmap local files for zero copy reads from the page cache, avoiding blocking I/O
+            Arc::new(MmapObjectStore::new())
+        }
         _ => {
             // For other types, try to get from `object_store_registry`:
             state
