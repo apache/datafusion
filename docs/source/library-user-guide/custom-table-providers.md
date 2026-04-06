@@ -39,26 +39,26 @@ to produce results:
 
 1. **[TableProvider]** -- Describes the table (schema, capabilities) and
    produces an execution plan when queried. This is part of the **Logical Plan**.
-2. **[ExecutionPlan]** -- Describes *how* to compute the result: partitioning,
+2. **[ExecutionPlan]** -- Describes _how_ to compute the result: partitioning,
    ordering, and child plan relationships. This is part of the **Physical Plan**.
-3. **[SendableRecordBatchStream]** -- The async stream that *actually does the
-   work*, yielding `RecordBatch`es one at a time.
+3. **[SendableRecordBatchStream]** -- The async stream that _actually does the
+   work_, yielding `RecordBatch`es one at a time.
 
 Think of these as a funnel: `TableProvider::scan()` is called once during
 planning to create an `ExecutionPlan`, then `ExecutionPlan::execute()` is called
 once per partition to create a stream, and those streams are where rows are
 actually produced during execution.
 
-[TableProvider]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
-[ExecutionPlan]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
-[SendableRecordBatchStream]: https://docs.rs/datafusion/latest/datafusion/execution/type.SendableRecordBatchStream.html
-[MemTable]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemTable.html
-[StreamTable]: https://docs.rs/datafusion/latest/datafusion/datasource/stream/struct.StreamTable.html
-[ListingTable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
-[ViewTable]: https://docs.rs/datafusion/latest/datafusion/datasource/view/struct.ViewTable.html
-[PlanProperties]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.PlanProperties.html
-[StreamingTableExec]: https://docs.rs/datafusion/latest/datafusion/physical_plan/streaming/struct.StreamingTableExec.html
-[DataSourceExec]: https://docs.rs/datafusion/latest/datafusion/datasource/source/struct.DataSourceExec.html
+[tableprovider]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+[executionplan]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
+[sendablerecordbatchstream]: https://docs.rs/datafusion/latest/datafusion/execution/type.SendableRecordBatchStream.html
+[memtable]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemTable.html
+[streamtable]: https://docs.rs/datafusion/latest/datafusion/datasource/stream/struct.StreamTable.html
+[listingtable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
+[viewtable]: https://docs.rs/datafusion/latest/datafusion/datasource/view/struct.ViewTable.html
+[planproperties]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.PlanProperties.html
+[streamingtableexec]: https://docs.rs/datafusion/latest/datafusion/physical_plan/streaming/struct.StreamingTableExec.html
+[datasourceexec]: https://docs.rs/datafusion/latest/datafusion/datasource/source/struct.DataSourceExec.html
 
 ## Background: Logical and Physical Planning
 
@@ -77,7 +77,7 @@ SQL / DataFrame API
 
 ### Logical Planning
 
-A **logical plan** describes *what* the query computes without specifying *how*.
+A **logical plan** describes _what_ the query computes without specifying _how_.
 It is a tree of relational operators -- `TableScan`, `Filter`, `Projection`,
 `Aggregate`, `Join`, `Sort`, `Limit`, and so on. The logical optimizer rewrites
 this tree to reduce work while preserving the query's meaning. Some logical
@@ -114,7 +114,7 @@ to scan" are made. The physical optimizer then refines this tree further with re
 
 Your `TableProvider` sits at the boundary between logical and physical planning.
 During logical optimization, DataFusion determines which filters and projections
-*could* be pushed down to the source. When `scan()` is called during physical
+_could_ be pushed down to the source. When `scan()` is called during physical
 planning, those hints are passed to you. By implementing capabilities like
 `supports_filters_pushdown`, you influence what the optimizer can do -- and the
 metadata you declare in your `ExecutionPlan` (partitioning, ordering) directly
@@ -126,18 +126,18 @@ Not every custom data source requires implementing all three layers from
 scratch. DataFusion provides building blocks that let you plug in at whatever
 level makes sense:
 
-| If your data is... | Start with | You implement |
-|---|---|---|
-| Already in `RecordBatch`es in memory | [MemTable] | Nothing -- just construct it |
-| An async stream of batches | [StreamTable] | A stream factory |
-| A logical transformation of other tables | [ViewTable] wrapping a logical plan | The logical plan |
-| A variant of an existing file format | [ListingTable] with a custom [FileFormat] wrapping an existing one | A thin `FileFormat` wrapper |
+| If your data is...                                 | Start with                                                                | You implement                  |
+| -------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------ |
+| Already in `RecordBatch`es in memory               | [MemTable]                                                                | Nothing -- just construct it   |
+| An async stream of batches                         | [StreamTable]                                                             | A stream factory               |
+| A logical transformation of other tables           | [ViewTable] wrapping a logical plan                                       | The logical plan               |
+| A variant of an existing file format               | [ListingTable] with a custom [FileFormat] wrapping an existing one        | A thin `FileFormat` wrapper    |
 | Files in a custom format on disk or object storage | [ListingTable] with a custom [FileFormat], [FileSource], and [FileOpener] | The format, source, and opener |
-| A custom source needing full control | `TableProvider` + `ExecutionPlan` + stream | All three layers |
+| A custom source needing full control               | `TableProvider` + `ExecutionPlan` + stream                                | All three layers               |
 
-[FileFormat]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/trait.FileFormat.html
-[FileSource]: https://docs.rs/datafusion-datasource/latest/datafusion_datasource/file/trait.FileSource.html
-[FileOpener]: https://docs.rs/datafusion-datasource/latest/datafusion_datasource/file_stream/trait.FileOpener.html
+[fileformat]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/trait.FileFormat.html
+[filesource]: https://docs.rs/datafusion-datasource/latest/datafusion_datasource/file/trait.FileSource.html
+[fileopener]: https://docs.rs/datafusion-datasource/latest/datafusion_datasource/file_stream/trait.FileOpener.html
 
 If your data is file-based, `ListingTable` handles file discovery, partition
 column inference, and plan construction -- you only need to implement
@@ -147,8 +147,8 @@ or [ParquetSource] and [ParquetOpener] for a full custom implementation to
 use as a reference.
 
 [custom_file_format example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/custom_file_format.rs
-[ParquetSource]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ParquetSource.html
-[ParquetOpener]: https://github.com/apache/datafusion/blob/main/datafusion/datasource-parquet/src/opener.rs
+[parquetsource]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ParquetSource.html
+[parquetopener]: https://github.com/apache/datafusion/blob/main/datafusion/datasource-parquet/src/opener.rs
 
 The rest of this post focuses on the full `TableProvider` + `ExecutionPlan` +
 stream path, which gives you complete control and applies to any data source.
@@ -209,7 +209,7 @@ variant that provides additional pushdown information for other advanced use cas
 
 This is a critical point: **`scan()` runs during planning, not execution.** It
 should return quickly. Best practice is to avoid performing I/O, network
-calls, or heavy computation here. The `scan` method's job is to *describe* how
+calls, or heavy computation here. The `scan` method's job is to _describe_ how
 the data will be produced, not to produce it. All the real work belongs in the
 stream (Layer 3).
 
@@ -308,7 +308,7 @@ Consider how your data source naturally divides its data:
   you can split it into ranges.
 
 **Advanced: aligning with `target_partitions`.** Once you have something
-working, you can tune further. Having *too many* partitions is not free: each
+working, you can tune further. Having _too many_ partitions is not free: each
 partition adds scheduling overhead, and downstream operators may need to
 repartition the data anyway. The session configuration exposes a
 **target partition count** that reflects how many partitions the optimizer
@@ -383,8 +383,7 @@ APIs, transforming data, etc.
 ### Using RecordBatchStreamAdapter
 
 The easiest way to create a `SendableRecordBatchStream` is with
-[RecordBatchStreamAdapter]. It bridges any `futures::Stream<Item =
-Result<RecordBatch>>` into the `SendableRecordBatchStream` type:
+[RecordBatchStreamAdapter]. It bridges any `futures::Stream<Item = Result<RecordBatch>>` into the `SendableRecordBatchStream` type:
 
 ```rust,ignore
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -414,7 +413,7 @@ fn execute(
 }
 ```
 
-[RecordBatchStreamAdapter]: https://docs.rs/datafusion/latest/datafusion/physical_plan/stream/struct.RecordBatchStreamAdapter.html
+[recordbatchstreamadapter]: https://docs.rs/datafusion/latest/datafusion/physical_plan/stream/struct.RecordBatchStreamAdapter.html
 
 ### Blocking Work: Use a Separate Thread Pool
 
@@ -461,11 +460,11 @@ in the DataFusion repository.
 
 This table summarizes what belongs at each layer:
 
-| Layer | Runs During | Should Do | Should NOT Do |
-|---|---|---|---|
-| `TableProvider::scan()` | Planning | Build an `ExecutionPlan` with metadata | I/O, network calls, heavy computation |
-| `ExecutionPlan::execute()` | Execution (once per partition) | Construct a stream, set up channels | Block on async work, read data |
-| `RecordBatchStream` (polling) | Execution | All I/O, computation, data production | -- |
+| Layer                         | Runs During                    | Should Do                              | Should NOT Do                         |
+| ----------------------------- | ------------------------------ | -------------------------------------- | ------------------------------------- |
+| `TableProvider::scan()`       | Planning                       | Build an `ExecutionPlan` with metadata | I/O, network calls, heavy computation |
+| `ExecutionPlan::execute()`    | Execution (once per partition) | Construct a stream, set up channels    | Block on async work, read data        |
+| `RecordBatchStream` (polling) | Execution                      | All I/O, computation, data production  | --                                    |
 
 The guiding principle: **push work as late as possible.** Planning should be
 fast so the optimizer can do its job. Execution setup should be fast so all
@@ -498,7 +497,7 @@ need, rather than reading everything and filtering it afterward.
 When DataFusion plans a query with a `WHERE` clause, it passes the filter
 predicates to your `scan()` method as the `filters` parameter. By default,
 DataFusion assumes your provider cannot handle any filters and inserts a
-`FilterExec` node above your scan to apply them. But if your source *can*
+`FilterExec` node above your scan to apply them. But if your source _can_
 evaluate some predicates during scanning -- for example, by skipping files,
 partitions, or row groups that cannot match -- you can eliminate a huge amount
 of unnecessary I/O.
