@@ -1589,9 +1589,18 @@ fn ree_coercion(
 /// This is a union of string coercion rules and specified rules:
 /// 1. At least one side of lhs and rhs should be string type (Utf8 / LargeUtf8)
 /// 2. Data type of the other side should be able to cast to string type
+/// 3. Binary and string types cannot be mixed
 fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     string_coercion(lhs_type, rhs_type).or_else(|| match (lhs_type, rhs_type) {
+        // Allow pure binary + binary
+        (Binary, Binary) => Some(Binary),
+        (LargeBinary, LargeBinary) => Some(LargeBinary),
+        (BinaryView, BinaryView) => Some(BinaryView),
+        // Deny mixed binary + string
+        (Binary | LargeBinary | BinaryView, Utf8 | LargeUtf8 | Utf8View) => None,
+        (Utf8 | LargeUtf8 | Utf8View, Binary | LargeBinary | BinaryView) => None,
+        // Predicate-based coercion rules are following
         (Utf8View, from_type) | (from_type, Utf8View) => {
             string_concat_internal_coercion(from_type, &Utf8View)
         }
@@ -1604,7 +1613,6 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
             string_coercion(lhs_value_type, rhs_value_type).or(None)
         }
-        (Binary, Binary) => Some(Utf8),
         _ => None,
     })
 }

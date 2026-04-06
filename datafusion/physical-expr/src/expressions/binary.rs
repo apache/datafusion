@@ -46,6 +46,7 @@ use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
+    concat_elements_binary_array, concat_elements_binary_view_array,
     concat_elements_utf8view, regex_match_dyn, regex_match_dyn_scalar,
 };
 
@@ -928,18 +929,6 @@ fn pre_selection_scatter(
 }
 
 fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
-    if *left.data_type() == DataType::Binary && *right.data_type() == DataType::Binary {
-        // Cast Binary to Utf8 to validate UTF-8 encoding before concatenation
-        // Follow widespread approach of PostgreSQL, sqlite, DuckDB, Snowflake
-        // Spark does it in a different way by making a binary-to-binary concatenation
-        let left = cast(left.as_ref(), &DataType::Utf8)?;
-        let right = cast(right.as_ref(), &DataType::Utf8)?;
-        return Ok(Arc::new(concat_elements_utf8(
-            left.as_string::<i32>(),
-            right.as_string::<i32>(),
-        )?));
-    }
-
     Ok(match left.data_type() {
         DataType::Utf8 => Arc::new(concat_elements_utf8(
             left.as_string::<i32>(),
@@ -952,6 +941,18 @@ fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
         DataType::Utf8View => Arc::new(concat_elements_utf8view(
             left.as_string_view(),
             right.as_string_view(),
+        )?),
+        DataType::Binary => Arc::new(concat_elements_binary_array::<i32>(
+            left.as_binary(),
+            right.as_binary(),
+        )?),
+        DataType::LargeBinary => Arc::new(concat_elements_binary_array::<i64>(
+            left.as_binary(),
+            right.as_binary(),
+        )?),
+        DataType::BinaryView => Arc::new(concat_elements_binary_view_array(
+            left.as_binary_view(),
+            right.as_binary_view(),
         )?),
         other => {
             return internal_err!(
