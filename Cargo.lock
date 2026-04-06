@@ -2259,7 +2259,6 @@ dependencies = [
  "regex",
  "sha2",
  "tokio",
- "unicode-segmentation",
  "uuid",
 ]
 

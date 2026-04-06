@@ -78,6 +78,16 @@ impl LeftRightSlicer for RightSlicer {
     }
 }
 
+/// Returns the byte offset of the `n`th codepoint in `string`,
+/// or `string.len()` if the string has fewer than `n` codepoints.
+#[inline]
+pub(crate) fn byte_offset_of_char(string: &str, n: usize) -> usize {
+    string
+        .char_indices()
+        .nth(n)
+        .map_or(string.len(), |(i, _)| i)
+}
+
 /// Calculate the byte length of the substring of `n` chars from string `string`
 #[inline]
 fn left_right_byte_length(string: &str, n: i64) -> usize {
@@ -88,11 +98,9 @@ fn left_right_byte_length(string: &str, n: i64) -> usize {
             .map(|(index, _)| index)
             .unwrap_or(0),
         Ordering::Equal => 0,
-        Ordering::Greater => string
-            .char_indices()
-            .nth(n.unsigned_abs().min(usize::MAX as u64) as usize)
-            .map(|(index, _)| index)
-            .unwrap_or(string.len()),
+        Ordering::Greater => {
+            byte_offset_of_char(string, n.unsigned_abs().min(usize::MAX as u64) as usize)
+        }
     }
 }
 
