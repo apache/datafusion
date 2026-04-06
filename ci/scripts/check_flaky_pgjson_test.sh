@@ -7,11 +7,11 @@
 # Usage:
 #   ./ci/scripts/check_flaky_pgjson_test.sh [ITERATIONS]
 #
-# Default: 10 iterations
+# Default: 100 iterations
 
 set -euo pipefail
 
-ITERATIONS="${1:-10}"
+ITERATIONS="${1:-100}"
 PASS=0
 FAIL=0
 RESULTS=()
