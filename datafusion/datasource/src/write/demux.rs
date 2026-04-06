@@ -261,7 +261,7 @@ fn generate_file_path(
         base_output_path
             .prefix()
             .clone()
-            .child(format!("{write_id}_{part_idx}.{file_extension}"))
+            .join(format!("{write_id}_{part_idx}.{file_extension}"))
     } else {
         base_output_path.prefix().to_owned()
     }
@@ -589,8 +589,8 @@ fn compute_hive_style_file_path(
 ) -> Path {
     let mut file_path = base_output_path.prefix().clone();
     for j in 0..part_key.len() {
-        file_path = file_path.child(format!("{}={}", partition_by[j].0, part_key[j]));
+        file_path = file_path.join(format!("{}={}", partition_by[j].0, part_key[j]));
     }
 
-    file_path.child(format!("{write_id}.{file_extension}"))
+    file_path.join(format!("{write_id}.{file_extension}"))
 }
