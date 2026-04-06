@@ -582,7 +582,6 @@ impl ExprSchemable for Expr {
                         .clone()
                         .with_data_type(field.data_type().clone())
                         .with_nullable(true)
-                        .with_metadata(destination_field.metadata().clone())
                 })
                 .map(Arc::new),
             Expr::Like(_)
