@@ -87,7 +87,6 @@ num-traits = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
-
 uuid = { workspace = true, features = ["v4"], optional = true }
 
 [dev-dependencies]

@@ -276,7 +276,8 @@ fn lpad_scalar_unicode<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
                 let char_count = string.chars().count();
 
                 if target_len < char_count {
-                    builder.append_value(&string[..byte_offset_of_char(string, target_len)]);
+                    builder
+                        .append_value(&string[..byte_offset_of_char(string, target_len)]);
                 } else if fill_chars.is_empty() {
                     builder.append_value(string);
                 } else {
@@ -427,7 +428,9 @@ where
                     fill_chars_buf.extend(fill.chars());
 
                     if target_len < char_count {
-                        builder.append_value(&string[..byte_offset_of_char(string, target_len)]);
+                        builder.append_value(
+                            &string[..byte_offset_of_char(string, target_len)],
+                        );
                     } else if fill_chars_buf.is_empty() {
                         builder.append_value(string);
                     } else {
@@ -482,7 +485,9 @@ where
                     let char_count = string.chars().count();
 
                     if target_len < char_count {
-                        builder.append_value(&string[..byte_offset_of_char(string, target_len)]);
+                        builder.append_value(
+                            &string[..byte_offset_of_char(string, target_len)],
+                        );
                     } else {
                         for _ in 0..(target_len - char_count) {
                             builder.write_str(" ")?;

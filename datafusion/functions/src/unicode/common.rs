@@ -78,8 +78,8 @@ impl LeftRightSlicer for RightSlicer {
     }
 }
 
-/// Returns the byte offset of the `n`th codepoint in `string`,
-/// or `string.len()` if the string has fewer than `n` codepoints.
+/// Returns the byte offset of the `n`th codepoint in `string`, or
+/// `string.len()` if the string has fewer than `n` codepoints.
 #[inline]
 pub(crate) fn byte_offset_of_char(string: &str, n: usize) -> usize {
     string

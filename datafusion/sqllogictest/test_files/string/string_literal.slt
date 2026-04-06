@@ -315,7 +315,6 @@ NULL
 # lpad counts Unicode codepoints, not grapheme clusters.
 # chr(769) is U+0301 COMBINING ACUTE ACCENT — 'e' || chr(769) is 2 codepoints
 # but renders as a single grapheme cluster.
-# Use equality comparisons to avoid encoding ambiguity in expected output.
 
 # Input with combining character: 'e' + combining accent + 'x' = 3 codepoints.
 # Padding to 4 means 1 space prepended.
@@ -615,7 +614,6 @@ NULL
 
 # rpad counts Unicode codepoints, not grapheme clusters.
 # chr(769) is U+0301 COMBINING ACUTE ACCENT.
-# Use equality comparisons to avoid encoding ambiguity in expected output.
 
 # Input with combining character: 'e' + combining accent + 'x' = 3 codepoints.
 # Padding to 4 means 1 space appended.
@@ -1891,7 +1889,6 @@ Utf8View
 
 # translate operates on Unicode codepoints, not grapheme clusters.
 # chr(769) is U+0301 COMBINING ACUTE ACCENT.
-# Use equality comparisons to avoid encoding ambiguity in expected output.
 
 # Replacing a combining accent (a single codepoint) with another character.
 # 'e' || chr(769) is 2 codepoints; translating chr(769) → 'X' replaces just the accent.
