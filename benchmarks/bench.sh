@@ -612,7 +612,11 @@ data_tpch() {
     else
         echo " Copying answers to ${TPCH_DIR}/answers"
         mkdir -p "${TPCH_DIR}/answers"
-        docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
+        BASE_GH_URL="https://raw.githubusercontent.com/scalytics/TPCH-Docker/refs/heads/main/data/tpch/2.18.0_rc2/dbgen/answers"
+        for i in $(seq 1 22); do
+            OUT_FILE="q${i}.out"
+            wget -q --timeout=30 --tries=3 -O "${TPCH_DIR}/answers/${OUT_FILE}" "${BASE_GH_URL}/${OUT_FILE}"
+        done
     fi
 
     if [ "$FORMAT" = "parquet" ]; then
