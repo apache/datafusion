@@ -401,7 +401,7 @@ where
             }
             (blk_size, emit_to) => {
                 return internal_err!(
-                    "invalid emit_to for mode, block_size:{blk_size:?}, emit_to:{emit_to:?}",
+                    "invalid emit_to for mode, block_size:{blk_size:?}, emit_to:{emit_to:?}"
                 );
             }
         };
