@@ -598,6 +598,26 @@
 </div>
 </section>
 </section>
+<section id="comparison-and-ordering">
+<h2>Comparison and Ordering<a class="headerlink" href="#comparison-and-ordering" title="Link to this heading">#</a></h2>
+<p>DataFusion supports comparing <code class="docutils literal notranslate"><span class="pre">STRUCT</span></code> values with standard comparison operators
+(<code class="docutils literal notranslate"><span class="pre">=</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>). Ordering comparisons are lexicographical and
+follow DataFusion’s default ascending comparison behavior, where <code class="docutils literal notranslate"><span class="pre">NULL</span></code> sorts
+before non-<code class="docutils literal notranslate"><span class="pre">NULL</span></code> values.</p>
+<section id="examples">
+<h3>Examples<a class="headerlink" href="#examples" title="Link to this heading">#</a></h3>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="err">}</span><span class="p">;</span>
+<span class="c1">-- true</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="k">NULL</span><span class="err">}</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">;</span>
+<span class="c1">-- true</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="k">NULL</span><span class="err">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="k">NULL</span><span class="err">}</span><span class="p">;</span>
+<span class="c1">--true</span>
+</pre></div>
+</div>
+</section>
+</section>
 <section id="migration-guide-from-positional-to-name-based-matching">
 <h2>Migration Guide: From Positional to Name-Based Matching<a class="headerlink" href="#migration-guide-from-positional-to-name-based-matching" title="Link to this heading">#</a></h2>
 <p>If you have existing code that relied on <strong>positional</strong> struct field matching, you may need to update it.</p>
@@ -801,6 +821,10 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#null-handling-for-missing-fields">NULL Handling for Missing Fields</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#example-partial-field-overlap">Example: Partial Field Overlap</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#limitations">Limitations</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#comparison-and-ordering">Comparison and Ordering</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#examples">Examples</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#migration-guide-from-positional-to-name-based-matching">Migration Guide: From Positional to Name-Based Matching</a><ul class="nav section-nav flex-column">

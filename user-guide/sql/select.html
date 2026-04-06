@@ -479,7 +479,7 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 </section>
 <section id="join-clause">
 <h2>JOIN clause<a class="headerlink" href="#join-clause" title="Link to this heading">#</a></h2>
-<p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">NATURAL</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code>, and <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code>.</p>
+<p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">NATURAL</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code>, and <code class="docutils literal notranslate"><span class="pre">LATERAL</span> <span class="pre">JOIN</span></code>.</p>
 <p>The following examples are based on this table:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
@@ -617,6 +617,89 @@ only the right table’s columns.</p>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 </pre></div>
 </div>
+</section>
+<section id="lateral-join">
+<h3>LATERAL JOIN<a class="headerlink" href="#lateral-join" title="Link to this heading">#</a></h3>
+<p>A <code class="docutils literal notranslate"><span class="pre">LATERAL</span> <span class="pre">JOIN</span></code> allows the right-hand side of a join to reference columns from
+the left-hand side. Conceptually, the subquery on the right is evaluated once
+for each row of the left-hand table, which makes it possible to “parameterize” a
+subquery with values from preceding tables.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">LATERAL</span></code> keyword is required; DataFusion does not implicitly detect
+correlation in <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause subqueries.</p>
+<p>The following examples use these tables:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">departments</span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;HR&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Eng&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Sales&#39;</span><span class="p">);</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">employees</span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">dept_id</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span>
+<span class="w">  </span><span class="p">(</span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Alice&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Bob&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">30</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Carol&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+<section id="comma-syntax">
+<h4>Comma syntax<a class="headerlink" href="#comma-syntax" title="Link to this heading">#</a></h4>
+<p>The most concise form places <code class="docutils literal notranslate"><span class="pre">LATERAL</span></code> after a comma in the <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause.
+Rows from the left table that have no matching rows in the subquery are excluded
+(inner join semantics).</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">d</span><span class="p">.</span><span class="n">name</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">dept</span><span class="p">,</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">name</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">emp</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">departments</span><span class="w"> </span><span class="n">d</span><span class="p">,</span><span class="w"> </span><span class="k">LATERAL</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="n">employees</span><span class="p">.</span><span class="n">name</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">employees</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">employees</span><span class="p">.</span><span class="n">dept_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">d</span><span class="p">.</span><span class="n">id</span>
+<span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">e</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">dept</span><span class="p">,</span><span class="w"> </span><span class="n">emp</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">------+-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">dept</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">emp</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------+-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Eng</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="n">Carol</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">HR</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">Alice</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">HR</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">Bob</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------+-------+</span>
+</pre></div>
+</div>
+</section>
+<section id="cross-join-lateral">
+<h4>CROSS JOIN LATERAL<a class="headerlink" href="#cross-join-lateral" title="Link to this heading">#</a></h4>
+<p>Equivalent to the comma syntax above.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">d</span><span class="p">.</span><span class="n">name</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">dept</span><span class="p">,</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">name</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">emp</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">departments</span><span class="w"> </span><span class="n">d</span>
+<span class="k">CROSS</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="k">LATERAL</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="n">employees</span><span class="p">.</span><span class="n">name</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">employees</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">employees</span><span class="p">.</span><span class="n">dept_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">d</span><span class="p">.</span><span class="n">id</span>
+<span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">e</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">dept</span><span class="p">,</span><span class="w"> </span><span class="n">emp</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">------+-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">dept</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">emp</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------+-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Eng</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="n">Carol</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">HR</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">Alice</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">HR</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">Bob</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------+-------+</span>
+</pre></div>
+</div>
+</section>
+<section id="join-lateral-on">
+<h4>JOIN LATERAL … ON<a class="headerlink" href="#join-lateral-on" title="Link to this heading">#</a></h4>
+<p><code class="docutils literal notranslate"><span class="pre">JOIN</span> <span class="pre">LATERAL</span></code> with an <code class="docutils literal notranslate"><span class="pre">ON</span></code> clause applies the <code class="docutils literal notranslate"><span class="pre">ON</span></code> condition as an additional
+filter after the lateral subquery is evaluated.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">d</span><span class="p">.</span><span class="n">name</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">dept</span><span class="p">,</span><span class="w"> </span><span class="n">sub</span><span class="p">.</span><span class="n">emp</span><span class="p">,</span><span class="w"> </span><span class="n">sub</span><span class="p">.</span><span class="n">cnt</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">departments</span><span class="w"> </span><span class="n">d</span>
+<span class="k">JOIN</span><span class="w"> </span><span class="k">LATERAL</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">cnt</span><span class="p">,</span><span class="w"> </span><span class="k">min</span><span class="p">(</span><span class="n">employees</span><span class="p">.</span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">emp</span>
+<span class="w">    </span><span class="k">FROM</span><span class="w"> </span><span class="n">employees</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">employees</span><span class="p">.</span><span class="n">dept_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">d</span><span class="p">.</span><span class="n">id</span>
+<span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">sub</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">sub</span><span class="p">.</span><span class="n">cnt</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">dept</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">------+-------+-----+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">dept</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">emp</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">cnt</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------+-------+-----+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Eng</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="n">Carol</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">   </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">HR</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">Alice</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------+-------+-----+</span>
+</pre></div>
+</div>
+</section>
+<section id="limitations">
+<h4>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">#</a></h4>
+<p>The following patterns are not yet supported:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">JOIN</span> <span class="pre">LATERAL</span></code> (lateral join with outer join semantics).</p></li>
+<li><p>Outer references in the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list of the lateral subquery (e.g., <code class="docutils literal notranslate"><span class="pre">LATERAL</span> <span class="pre">(SELECT</span> <span class="pre">outer.col</span> <span class="pre">+</span> <span class="pre">1)</span></code>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">HAVING</span></code> in lateral subqueries.</p></li>
+</ul>
+</section>
 </section>
 </section>
 <section id="group-by-clause">
@@ -949,6 +1032,13 @@ The SQL dialect can be set like this:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#right-semi-join">RIGHT SEMI JOIN</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#left-anti-join">LEFT ANTI JOIN</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#right-anti-join">RIGHT ANTI JOIN</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#lateral-join">LATERAL JOIN</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#comma-syntax">Comma syntax</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#cross-join-lateral">CROSS JOIN LATERAL</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#join-lateral-on">JOIN LATERAL … ON</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#limitations">Limitations</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#group-by-clause">GROUP BY clause</a></li>

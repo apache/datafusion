@@ -498,6 +498,17 @@ the results of a subquery or list of values.</p>
 </pre></div>
 </div>
 </section>
+<section id="in-with-tuple-like-values-and-null">
+<h4><code class="docutils literal notranslate"><span class="pre">IN</span></code> with tuple-like values and <code class="docutils literal notranslate"><span class="pre">NULL</span></code><a class="headerlink" href="#in-with-tuple-like-values-and-null" title="Link to this heading">#</a></h4>
+<p>For tuple-like values, <code class="docutils literal notranslate"><span class="pre">IN</span></code> uses DataFusion’s struct equality semantics:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">));</span>
+<span class="c1">-- false</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">)</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">));</span>
+<span class="c1">-- true</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 <section id="select-clause-subqueries">
@@ -544,6 +555,7 @@ operated on by the outer query.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">expression1</span><span class="p">[,</span><span class="w"> </span><span class="n">expression2</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">expressionN</span><span class="p">]</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;</span><span class="n">subquery</span><span class="o">&gt;</span><span class="p">)</span>
 </pre></div>
 </div>
+<p>To reference columns from other tables in the same <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause, use <a class="reference internal" href="select.html#lateral-join"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">LATERAL</span> <span class="pre">JOIN</span></code></span></a>.</p>
 <section id="id1">
 <h3>Example<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
 <p>The following query returns the average of maximum values per room.
@@ -847,6 +859,7 @@ returns 0 rows.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#not-exists">[ NOT ] EXISTS</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#not-in">[ NOT ] IN</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#examples">Examples</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#in-with-tuple-like-values-and-null"><code class="docutils literal notranslate"><span class="pre">IN</span></code> with tuple-like values and <code class="docutils literal notranslate"><span class="pre">NULL</span></code></a></li>
 </ul>
 </li>
 </ul>
