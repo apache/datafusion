@@ -26,6 +26,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
+use crate::aggregates::{AggregateExec, AggregateMode};
 use crate::column_rewriter::PhysicalColumnRewriter;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
@@ -39,7 +40,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
@@ -733,6 +734,10 @@ pub fn remove_unnecessary_projections(
         if is_projection_removable(projection) {
             return Ok(Transformed::yes(Arc::clone(projection.input())));
         }
+        // Try to absorb rename-only projections into the child:
+        if let Some(new_child) = try_absorb_rename_projection(projection)? {
+            return Ok(Transformed::yes(new_child));
+        }
         // If it does, check if we can push it under its child(ren):
         projection
             .input()
@@ -755,6 +760,59 @@ fn is_projection_removable(projection: &ProjectionExec) -> bool {
         };
         col.name() == proj_expr.alias && col.index() == idx
     }) && exprs.len() == projection.input().schema().fields().len()
+}
+
+/// If a projection only renames columns, try to absorb the rename into
+/// the child operator, eliminating the projection entirely.
+fn try_absorb_rename_projection(
+    projection: &ProjectionExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let exprs = projection.expr();
+    let input = projection.input();
+    let input_field_count = input.schema().fields().len();
+
+    let is_rename_only = exprs.len() == input_field_count
+        && exprs.iter().enumerate().all(|(idx, proj_expr)| {
+            proj_expr
+                .expr
+                .as_any()
+                .downcast_ref::<Column>()
+                .map(|col| col.index() == idx)
+                .unwrap_or(false)
+        });
+
+    if !is_rename_only {
+        return Ok(None);
+    }
+
+    let old_schema = input.schema();
+    let new_fields: Vec<Arc<arrow::datatypes::Field>> = exprs
+        .iter()
+        .enumerate()
+        .map(|(idx, proj_expr)| {
+            let field = old_schema.field(idx);
+            Arc::new(field.as_ref().clone().with_name(&proj_expr.alias))
+        })
+        .collect();
+    let new_schema = Arc::new(Schema::new_with_metadata(
+        new_fields,
+        old_schema.metadata().clone(),
+    ));
+
+    if let Some(agg) = input.downcast_ref::<AggregateExec>()
+        && matches!(
+            agg.mode(),
+            AggregateMode::Final
+                | AggregateMode::FinalPartitioned
+                | AggregateMode::Single
+                | AggregateMode::SinglePartitioned
+        )
+    {
+        let new_agg: AggregateExec = agg.with_output_schema(new_schema)?;
+        return Ok(Some(Arc::new(new_agg)));
+    }
+
+    Ok(None)
 }
 
 /// Given the expression set of a projection, checks if the projection causes

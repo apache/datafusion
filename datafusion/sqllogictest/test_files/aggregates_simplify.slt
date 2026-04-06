@@ -166,15 +166,14 @@ logical_plan
 04)------Projection: sum_simplify_t.column1 + Int64(1) AS __common_expr_1
 05)--------TableScan: sum_simplify_t projection=[column1]
 physical_plan
-01)ProjectionExec: expr=[sum(alias1)@0 as sum(DISTINCT sum_simplify_t.column1 + Int64(1)), sum(alias2)@1 as sum(sum_simplify_t.column1 + Int64(1))]
-02)--AggregateExec: mode=Final, gby=[], aggr=[sum(alias1), sum(alias2)]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[sum(alias1), sum(alias2)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[alias2]
-06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[__common_expr_1@0 as alias1], aggr=[alias2]
-08)--------------ProjectionExec: expr=[column1@0 + 1 as __common_expr_1]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)AggregateExec: mode=Final, gby=[], aggr=[sum(alias1), sum(alias2)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[sum(alias1), sum(alias2)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[alias2]
+05)--------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[__common_expr_1@0 as alias1], aggr=[alias2]
+07)------------ProjectionExec: expr=[column1@0 + 1 as __common_expr_1]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # FILTER clauses with different aggregate arguments
 query II

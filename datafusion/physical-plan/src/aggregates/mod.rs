@@ -35,6 +35,7 @@ use crate::{
     SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::utils::collect_columns;
 use parking_lot::Mutex;
 use std::collections::HashSet;
@@ -711,6 +712,37 @@ impl AggregateExec {
 
     pub fn cache(&self) -> &PlanProperties {
         &self.cache
+    }
+
+    /// Clone this exec with a new output schema that only renames fields.
+    pub fn with_output_schema(&self, schema: SchemaRef) -> Result<Self> {
+        let eq_properties = self
+            .cache
+            .eq_properties
+            .clone()
+            .with_new_schema(Arc::clone(&schema))?;
+        let output_partitioning = remap_partitioning(&self.cache.partitioning, &schema);
+        let cache = PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            self.cache.emission_type,
+            self.cache.boundedness,
+        );
+        Ok(Self {
+            schema,
+            cache: Arc::new(cache),
+            required_input_ordering: self.required_input_ordering.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode: self.input_order_mode.clone(),
+            mode: self.mode,
+            group_by: Arc::clone(&self.group_by),
+            aggr_expr: Arc::clone(&self.aggr_expr),
+            filter_expr: Arc::clone(&self.filter_expr),
+            limit_options: self.limit_options,
+            input: Arc::clone(&self.input),
+            input_schema: Arc::clone(&self.input_schema),
+            dynamic_filter: self.dynamic_filter.clone(),
+        })
     }
 
     /// Create a new hash aggregate execution plan
@@ -1595,6 +1627,35 @@ impl ExecutionPlan for AggregateExec {
         }
 
         Ok(result)
+    }
+}
+
+/// Remap Column references in a Partitioning to use new schema field names.
+fn remap_partitioning(
+    partitioning: &Partitioning,
+    new_schema: &SchemaRef,
+) -> Partitioning {
+    match partitioning {
+        Partitioning::Hash(exprs, n) => {
+            let new_exprs: Vec<Arc<dyn PhysicalExpr>> = exprs
+                .iter()
+                .map(|e| {
+                    if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                        let idx = col.index();
+                        if idx < new_schema.fields().len() {
+                            Arc::new(Column::new(new_schema.field(idx).name(), idx))
+                                as Arc<dyn PhysicalExpr>
+                        } else {
+                            Arc::clone(e)
+                        }
+                    } else {
+                        Arc::clone(e)
+                    }
+                })
+                .collect();
+            Partitioning::Hash(new_exprs, *n)
+        }
+        other => other.clone(),
     }
 }
 
