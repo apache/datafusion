@@ -39,21 +39,27 @@ for i in $(seq 1 "$ITERATIONS"); do
     if [[ $cargo_exit -eq 0 ]]; then
         STATUS="PASS"
         PASS=$((PASS + 1))
+        RESULTS+=("  Run $i: $STATUS")
+        echo "  Run $i: $STATUS"
     else
         STATUS="FAIL"
         FAIL=$((FAIL + 1))
-        # Show the failure detail on the first failure for quick diagnosis
-        if [[ $FAIL -eq 1 ]]; then
-            echo ""
-            echo "--- First failure output ---"
-            echo "$output" | tail -40
-            echo "----------------------------"
-            echo ""
-        fi
-    fi
+        RESULTS+=("  Run $i: $STATUS")
+        echo "  Run $i: $STATUS"
 
-    RESULTS+=("  Run $i: $STATUS")
-    echo "  Run $i: $STATUS"
+        echo ""
+        echo "--- First failure output ---"
+        echo "$output" | tail -40
+        echo "----------------------------"
+        echo ""
+
+        echo "Stopping on first failure."
+        echo ""
+        echo "=== Results ==="
+        echo "  Passed : $PASS / $i"
+        echo "  Failed : $FAIL / $i"
+        exit 1
+    fi
 done
 
 echo ""
