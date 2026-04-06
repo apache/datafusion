@@ -2321,8 +2321,45 @@ mod tests {
         )
     }
 
+    // Regression test for https://github.com/apache/datafusion/issues/20083
+    // Optimizer must not fail when LeftMark joins from EXISTS OR EXISTS
+    // feed into a Left join.
     #[test]
-    fn optimize_projections_left_mark_join_with_outer_join() -> Result<()> {
+    fn optimize_projections_exists_or_exists_with_outer_join() -> Result<()> {
+        use datafusion_expr::utils::disjunction;
+        use datafusion_expr::{exists, out_ref_col};
+
+        let table_a = test_table_scan_with_name("a")?;
+        let table_b = test_table_scan_with_name("b")?;
+
+        let sq_a = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_a")?)
+                .filter(col("sq_a.a").eq(out_ref_col(DataType::UInt32, "a.a")))?
+                .project(vec![lit(1)])?
+                .build()?,
+        );
+
+        let sq_b = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_b")?)
+                .filter(col("sq_b.b").eq(out_ref_col(DataType::UInt32, "a.b")))?
+                .project(vec![lit(1)])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(table_a)
+            .filter(disjunction(vec![exists(sq_a), exists(sq_b)]).unwrap())?
+            .join(table_b, JoinType::Left, (vec!["a"], vec!["a"]), None)?
+            .build()?;
+
+        let optimizer = Optimizer::new();
+        let config = OptimizerContext::new();
+        optimizer.optimize(plan, &config, observe)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_projections_left_mark_join_with_projection() -> Result<()> {
         let table_a = test_table_scan_with_name("a")?;
         let table_b = test_table_scan_with_name("b")?;
         let table_c = test_table_scan_with_name("c")?;
