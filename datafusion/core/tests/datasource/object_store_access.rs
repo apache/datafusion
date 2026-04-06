@@ -228,6 +228,63 @@ async fn query_multi_csv_file() {
     );
 }
 
+/// Test that a CSV file split into byte ranges via repartitioning exercises
+/// range-based object store access.
+///
+/// With a single file and `target_partitions=3`, the repartitioner produces
+/// exactly 3 ranges.  For each range, `calculate_range` calls
+/// `find_first_newline` via a GET for every non-file boundary it touches
+/// (the start boundary if `start > 0`, the end boundary if `end < file_size`),
+/// plus one GET for the actual data — so 2 GETs for the first range (end scan
+/// + data), 3 for the middle range (start scan + end scan + data), and 2 for
+/// the last range (start scan + data) = 7 data GETs total.  Additionally,
+/// adjacent ranges share a boundary position, so each shared boundary is scanned
+/// twice — once as the left range's end and again as the right range's start —
+/// producing the duplicate GETs visible in the snapshot.  Add the 1 HEAD for
+/// file-size metadata = **8 total**.
+///
+/// This differs from the JSON reader which uses [`AlignedBoundaryStream`] and
+/// needs only 1 GET per range.
+///
+/// This test documents the current request pattern to catch regressions.
+#[tokio::test]
+async fn query_csv_file_with_byte_range_partitions() {
+    let test = Test::new().with_single_file_csv_for_range_test().await;
+    // Lower the repartition_file_min_size threshold so the small test file gets
+    // split, and set target_partitions=3 to produce exactly 3 ranges.
+    test.query("SET datafusion.optimizer.repartition_file_min_size = 0")
+        .await;
+    test.query("SET datafusion.execution.target_partitions = 3")
+        .await;
+    assert_snapshot!(
+        test.query("select * from csv_range_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.00001 | 1e-12 | false |
+    | 0.00002 | 2e-12 | false |
+    | 0.00003 | 3e-12 | false |
+    | 0.00004 | 4e-12 | false |
+    | 0.00005 | 5e-12 | false |
+    | 0.00006 | 6e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 8
+    - GET  (opts) path=csv_range_table.csv head=true
+    - GET  (opts) path=csv_range_table.csv range=42-129
+    - GET  (opts) path=csv_range_table.csv range=0-49
+    - GET  (opts) path=csv_range_table.csv range=42-129
+    - GET  (opts) path=csv_range_table.csv range=85-129
+    - GET  (opts) path=csv_range_table.csv range=49-89
+    - GET  (opts) path=csv_range_table.csv range=85-129
+    - GET  (opts) path=csv_range_table.csv range=89-129
+    "
+    );
+}
+
 #[tokio::test]
 async fn query_partitioned_csv_file() {
     let test = Test::new().with_partitioned_csv().await;
@@ -684,6 +741,23 @@ impl Test {
         }
         // register table
         self.register_partitioned_csv("csv_table_partitioned", "/data/")
+            .await
+    }
+
+    /// Register a single CSV file with six equal-length rows for byte-range
+    /// repartitioning tests. With a single file and `target_partitions=3`, the
+    /// repartitioner creates exactly 3 ranges.
+    async fn with_single_file_csv_for_range_test(self) -> Test {
+        let csv_data = "c1,c2,c3\n\
+                        0.00001,1e-12,false\n\
+                        0.00002,2e-12,false\n\
+                        0.00003,3e-12,false\n\
+                        0.00004,4e-12,false\n\
+                        0.00005,5e-12,false\n\
+                        0.00006,6e-12,false\n";
+        self.with_bytes("/csv_range_table.csv", csv_data)
+            .await
+            .register_csv("csv_range_table", "/csv_range_table.csv")
             .await
     }
 
