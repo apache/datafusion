@@ -25,6 +25,9 @@ natively support, you can teach DataFusion to read it by implementing a
 **custom table provider**. This post walks through the three layers you need to
 understand to design a table provider and where planning and execution work should happen.
 
+For details on how table constraints such as primary keys or unique
+constraints are handled, see [Table Constraint Enforcement](table-constraints.md).
+
 This content is based on the blog post
 [Writing Custom Table Providers in Apache DataFusion](https://datafusion.apache.org/blog/2026/03/31/writing-table-providers/)
 by [Tim Saucer](https://github.com/timsaucer).
@@ -239,9 +242,7 @@ provider's `scan()` method returns one. The required methods are:
 impl ExecutionPlan for MyExecPlan {
     fn name(&self) -> &str { "MyExecPlan" }
 
-    fn as_any(&self) -> &dyn Any { self }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -504,7 +505,28 @@ of unnecessary I/O.
 
 To opt in, implement `supports_filters_pushdown`:
 
-```rust,ignore
+```rust
+# use std::any::Any;
+# use std::sync::Arc;
+# use arrow::datatypes::SchemaRef;
+# use datafusion::catalog::{TableProvider, Session};
+# use datafusion::common::Result;
+# use datafusion::datasource::TableType;
+# use datafusion::logical_expr::{Expr, BinaryExpr, Operator, TableProviderFilterPushDown};
+# use datafusion::physical_plan::ExecutionPlan;
+#
+# fn is_partition_column(_expr: &Expr) -> bool { false }
+#
+# #[derive(Debug)]
+# struct MyFilterTable;
+#
+# #[async_trait::async_trait]
+# impl TableProvider for MyFilterTable {
+#     fn as_any(&self) -> &dyn Any { self }
+#     fn schema(&self) -> SchemaRef { todo!() }
+#     fn table_type(&self) -> TableType { TableType::Base }
+#     async fn scan(&self, _: &dyn Session, _: Option<&Vec<usize>>, _: &[Expr], _: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> { todo!() }
+#
 fn supports_filters_pushdown(
     &self,
     filters: &[&Expr],
@@ -523,6 +545,7 @@ fn supports_filters_pushdown(
         }
     }).collect())
 }
+# }
 ```
 
 The three possible responses for each filter are:
@@ -623,10 +646,27 @@ one or more Parquet files for that date. By pushing down a filter on the `date`
 column, the provider can skip entire directories -- avoiding the I/O of listing
 and reading files that cannot possibly match the query.
 
-```rust,ignore
+```rust
+# use std::any::Any;
+# use std::collections::HashMap;
+# use std::fmt;
+# use std::sync::Arc;
+# use arrow::datatypes::SchemaRef;
+# use datafusion::catalog::{TableProvider, Session};
+# use datafusion::common::Result;
+# use datafusion::common::tree_node::TreeNodeRecursion;
+# use datafusion::datasource::TableType;
+# use datafusion::execution::SendableRecordBatchStream;
+# use datafusion::execution::context::TaskContext;
+# use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
+# use datafusion::physical_expr::EquivalenceProperties;
+# use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, PlanProperties};
+# use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+#
 /// A table provider backed by date-partitioned directories.
 /// Each date directory contains data files; by filtering on the
 /// `date` column we can skip entire directories of I/O.
+# #[derive(Debug)]
 struct DatePartitionedTable {
     schema: SchemaRef,
     /// Maps date strings ("2026-03-01") to directory paths
@@ -681,7 +721,7 @@ impl TableProvider for DatePartitionedTable {
         Ok(Arc::new(DatePartitionedExec {
             schema: Arc::clone(&self.schema),
             directories: dirs,
-            properties: PlanProperties::new(
+            properties: Arc::new(PlanProperties::new(
                 EquivalenceProperties::new(
                     Arc::clone(&self.schema),
                 ),
@@ -690,7 +730,7 @@ impl TableProvider for DatePartitionedTable {
                 Partitioning::UnknownPartitioning(num_dirs),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
-            ),
+            )),
         }))
     }
 }
@@ -712,6 +752,28 @@ impl DatePartitionedTable {
         todo!("extract date literals from filter expressions")
     }
 }
+#
+# #[derive(Debug)]
+# struct DatePartitionedExec {
+#     schema: SchemaRef,
+#     directories: Vec<String>,
+#     properties: Arc<PlanProperties>,
+# }
+#
+# impl DisplayAs for DatePartitionedExec {
+#     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+#         write!(f, "DatePartitionedExec")
+#     }
+# }
+#
+# impl ExecutionPlan for DatePartitionedExec {
+#     fn name(&self) -> &str { "DatePartitionedExec" }
+#     fn properties(&self) -> &Arc<PlanProperties> { &self.properties }
+#     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> { vec![] }
+#     fn with_new_children(self: Arc<Self>, _: Vec<Arc<dyn ExecutionPlan>>) -> Result<Arc<dyn ExecutionPlan>> { Ok(self) }
+#     fn execute(&self, _: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> { todo!() }
+#     fn apply_expressions(&self, _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
+# }
 ```
 
 The key insight is that the filter pushdown decision (`supports_filters_pushdown`)
@@ -862,6 +924,28 @@ impl ExecutionPlan for CountingExec {
 #     ) -> Result<TreeNodeRecursion> {
 #         Ok(TreeNodeRecursion::Continue)
 #     }
+}
+```
+
+## Using Your Table Provider
+
+Once you have implemented a `TableProvider`, register it with a `SessionContext`
+to make it queryable:
+
+```rust,ignore
+use datafusion::execution::context::SessionContext;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let provider = CountingTable::new(4, 1000);
+    ctx.register_table("counting", Arc::new(provider))?;
+
+    let df = ctx.sql("SELECT * FROM counting LIMIT 10").await?;
+    df.show().await?;
+
+    Ok(())
 }
 ```
 
