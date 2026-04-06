@@ -21,8 +21,8 @@
 //! parquet writer by inspecting file metadata (compressed sizes, page
 //! boundaries) on the written files.
 
-use arrow::array::{Int32Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::{AsArray, Int32Array, StringArray};
+use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::config::{CdcOptions, TableParquetOptions};
@@ -121,24 +121,9 @@ async fn cdc_data_round_trip() {
         .unwrap();
 
     let row = &result[0];
-    let count = row
-        .column(0)
-        .as_any()
-        .downcast_ref::<arrow::array::Int64Array>()
-        .unwrap()
-        .value(0);
-    let min_id = row
-        .column(1)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .unwrap()
-        .value(0);
-    let max_id = row
-        .column(2)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .unwrap()
-        .value(0);
+    let count = row.column(0).as_primitive::<Int64Type>().value(0);
+    let min_id = row.column(1).as_primitive::<Int32Type>().value(0);
+    let max_id = row.column(2).as_primitive::<Int32Type>().value(0);
 
     assert_eq!(count, 5000);
     assert_eq!(min_id, 0);
