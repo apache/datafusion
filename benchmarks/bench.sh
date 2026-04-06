@@ -900,7 +900,7 @@ data_imdb() {
                 if [ "${DOWNLOADED_SIZE}" != "${expected_size}" ]; then
                     echo "Error: Download size mismatch"
                     echo "Expected: ${expected_size}"
-                    echo "Got: ${DOWNLADED_SIZE}"
+                    echo "Got: ${DOWNLOADED_SIZE}"
                     echo "Please re-initiate the download"
                     return 1
                 fi

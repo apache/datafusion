@@ -1867,7 +1867,7 @@ impl NestedLoopJoinStream {
             bitmap.set_bit(l_index, true);
         }
 
-        // 2. Maybe updateh the right bitmap
+        // 2. Maybe update the right bitmap
         if self.should_track_unmatched_right {
             debug_assert!(self.current_right_batch_matched.is_some());
             // after bit-wise or, it will be put back
@@ -2198,7 +2198,7 @@ fn build_unmatched_batch(
             // 2. Fill left side with nulls
             let flipped_bitmap = not(&batch_bitmap)?;
 
-            // create a recordbatch, with left_schema, of only one row of all nulls
+            // create a record batch, with left_schema, of only one row of all nulls
             let left_null_columns: Vec<Arc<dyn Array>> = another_side_schema
                 .fields()
                 .iter()
