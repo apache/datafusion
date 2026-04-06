@@ -59,7 +59,7 @@ use std::error::Error;
 use std::fmt::Formatter;
 use std::ops::Range;
 use std::sync::Arc;
-use std::task::Poll::{Pending, Ready};
+use std::task::Poll;
 use std::time::Duration;
 use tokio::runtime::{Handle, Runtime};
 use tokio::select;
@@ -292,19 +292,19 @@ async fn spill_reader_stream_yield() -> Result<(), Box<dyn Error>> {
         // Ideally, the stream will yield before the loop ends
         for _ in 0..buffer_capacity {
             match mock_stream.as_mut().poll_next(cx) {
-                Ready(Some(Ok(batch))) => {
+                Poll::Ready(Some(Ok(batch))) => {
                     collected.push(batch);
                 }
-                Ready(Some(Err(e))) => {
-                    return Ready(Some(Err(e)));
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(e)));
                 }
-                Ready(None) => {
+                Poll::Ready(None) => {
                     break;
                 }
-                Pending => {
+                Poll::Pending => {
                     // polling inner stream may return Pending only when it reaches budget, since
                     // we intentionally made ProducerStream always return Ready
-                    return Pending;
+                    return Poll::Pending;
                 }
             }
         }
@@ -778,10 +778,10 @@ async fn stream_yields(
     // The task returns Ready when the stream yielded with either Ready or Pending
     let join_handle = child_runtime.spawn(std::future::poll_fn(move |cx| {
         match stream.poll_next_unpin(cx) {
-            Ready(Some(Ok(_))) => Ready(Ready(Ok(()))),
-            Ready(Some(Err(e))) => Ready(Ready(Err(e))),
-            Ready(None) => Ready(Ready(Ok(()))),
-            Pending => Ready(Pending),
+            Poll::Ready(Some(Ok(_))) => Poll::Ready(Poll::Ready(Ok(()))),
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Poll::Ready(Err(e))),
+            Poll::Ready(None) => Poll::Ready(Poll::Ready(Ok(()))),
+            Poll::Pending => Poll::Ready(Poll::Pending),
         }
     }));
 
@@ -791,9 +791,9 @@ async fn stream_yields(
     let yielded = select! {
         result = join_handle => {
             match result {
-                Ok(Pending) => Yielded::ReadyOrPending,
-                Ok(Ready(Ok(_))) => Yielded::ReadyOrPending,
-                Ok(Ready(Err(e))) => Yielded::Err(e),
+                Ok(Poll::Pending) => Yielded::ReadyOrPending,
+                Ok(Poll::Ready(Ok(_))) => Yielded::ReadyOrPending,
+                Ok(Poll::Ready(Err(e))) => Yielded::Err(e),
                 Err(_) => Yielded::Err(exec_datafusion_err!("join error")),
             }
         },
