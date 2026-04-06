@@ -132,21 +132,24 @@ where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    // Erase the future’s output type first:
+    // Fast path: if no custom tracer is set, avoid type erasure overhead
+    if GLOBAL_TRACER.get().is_none() {
+        return future.boxed();
+    }
+
+    // Slow path: erase the future's output type, pass through tracer, then downcast
     let erased_future = async move {
         let result = future.await;
         Box::new(result) as Box<dyn Any + Send>
     }
     .boxed();
 
-    // Forward through the global tracer:
     get_tracer()
         .trace_future(erased_future)
-        // Downcast from `Box<dyn Any + Send>` back to `T`:
         .map(|any_box| {
             *any_box
                 .downcast::<T>()
-                .expect("Tracer must preserve the future’s output type!")
+                .expect("Tracer must preserve the future's output type!")
         })
         .boxed()
 }
@@ -169,20 +172,23 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    // Erase the closure’s return type first:
+    // Fast path: if no custom tracer is set, avoid type erasure overhead
+    if GLOBAL_TRACER.get().is_none() {
+        return Box::new(f);
+    }
+
+    // Slow path: erase, trace, downcast
     let erased_closure = Box::new(|| {
         let result = f();
         Box::new(result) as Box<dyn Any + Send>
     });
 
-    // Forward through the global tracer:
     let traced_closure = get_tracer().trace_block(erased_closure);
 
-    // Downcast from `Box<dyn Any + Send>` back to `T`:
     Box::new(move || {
         let any_box = traced_closure();
         *any_box
             .downcast::<T>()
-            .expect("Tracer must preserve the closure’s return type!")
+            .expect("Tracer must preserve the closure's return type!")
     })
 }
