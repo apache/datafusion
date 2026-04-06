@@ -65,14 +65,19 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::sync::Arc;
 
-/// Buffer capacity (in bytes) inserted between SPM and DataSourceExec when
-/// sort elimination removes the buffering SortExec.
+/// Per-partition buffer capacity (in bytes) inserted between SPM and
+/// DataSourceExec when sort elimination removes the buffering SortExec.
 ///
-/// SortExec buffers all input data in memory (with spill support) before
-/// outputting sorted results. When we eliminate SortExec, SPM reads directly
-/// from I/O-bound sources. BufferExec compensates by buffering batches in
-/// the background, allowing I/O to pipeline with merge computation.
-const BUFFER_CAPACITY_AFTER_SORT_ELIMINATION: usize = 8 * 1024 * 1024; // 8 MB
+/// SortExec buffers all input data in memory (potentially GB per partition)
+/// before outputting sorted results. When we eliminate SortExec, SPM reads
+/// directly from I/O-bound sources. BufferExec compensates with bounded
+/// buffering, allowing I/O to pipeline with merge computation.
+///
+/// This is strictly less memory than the SortExec it replaces, and only
+/// inserted when PushdownSort eliminates a SortExec — no impact on other
+/// query plans. BufferExec also integrates with MemoryPool, so it respects
+/// the global memory limit and won't cause OOM.
+const BUFFER_CAPACITY_AFTER_SORT_ELIMINATION: usize = 64 * 1024 * 1024; // 64 MB
 
 /// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources.
 ///
