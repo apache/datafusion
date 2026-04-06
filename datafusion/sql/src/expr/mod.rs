@@ -40,7 +40,9 @@ use datafusion_expr::{
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_functions_nested::expr_fn::{array_has, array_max, array_min};
+use datafusion_functions_nested::expr_fn::{
+    array_has, array_max, array_min, array_position, cardinality,
+};
 
 mod binary_op;
 mod function;
@@ -610,7 +612,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 _ => {
                     let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
                     let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
-                    plan_any_op(left_expr, right_expr, &compare_op)
+                    plan_quantified_op(&left_expr, &right_expr, &compare_op, false)
                 }
             },
             SQLExpr::AllOp {
@@ -626,7 +628,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     schema,
                     planner_context,
                 ),
-                _ => not_impl_err!("ALL only supports subquery comparison currently"),
+                _ => {
+                    let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
+                    let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
+                    plan_quantified_op(&left_expr, &right_expr, &compare_op, true)
+                }
             },
             #[expect(deprecated)]
             SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
@@ -1234,58 +1240,80 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
-/// Builds a CASE expression that handles NULL semantics for `x <op> ANY(arr)`:
+/// Plans `left_expr <compare_op> ANY/ALL(right_expr)` with proper SQL NULL semantics.
 ///
-/// ```text
-/// CASE
-///   WHEN <min_or_max>(arr) IS NOT NULL THEN <comparison>
-///   WHEN arr IS NOT NULL THEN FALSE          -- empty or all-null array
-///   ELSE NULL                                -- NULL array
-/// END
-/// ```
-fn any_op_with_null_handling(bound: Expr, comparison: Expr, arr: Expr) -> Result<Expr> {
-    when(bound.is_not_null(), comparison)
-        .when(arr.is_not_null(), lit(false))
-        .otherwise(lit(ScalarValue::Boolean(None)))
-}
-
-/// Plans a `<left> <op> ANY(<right>)` expression for non-subquery operands.
-fn plan_any_op(
-    left_expr: Expr,
-    right_expr: Expr,
+/// When `is_all` is false (ANY): returns TRUE if any element satisfies the condition.
+/// When `is_all` is true (ALL): returns TRUE if all elements satisfy the condition.
+///
+/// CASE/WHEN structure:
+///   WHEN arr IS NULL        → NULL
+///   WHEN empty              → is_all (ANY:false, ALL:true)
+///   WHEN lhs IS NULL        → NULL
+///   WHEN decisive_condition → !is_all (ANY:true match found, ALL:false violation found)
+///   WHEN has_nulls          → NULL
+///   ELSE                    → is_all (ANY:false, ALL:true)
+fn plan_quantified_op(
+    left_expr: &Expr,
+    right_expr: &Expr,
     compare_op: &BinaryOperator,
+    is_all: bool,
 ) -> Result<Expr> {
-    match compare_op {
-        BinaryOperator::Eq => Ok(array_has(right_expr, left_expr)),
-        BinaryOperator::NotEq => {
-            let min = array_min(right_expr.clone());
-            let max = array_max(right_expr.clone());
-            // NOT EQ is true when either bound differs from left
-            let comparison = min
-                .not_eq(left_expr.clone())
-                .or(max.clone().not_eq(left_expr));
-            any_op_with_null_handling(max, comparison, right_expr)
+    let null_arr_check = right_expr.clone().is_null();
+    let empty_check = cardinality(right_expr.clone()).eq(lit(0u64));
+    let null_lhs_check = left_expr.clone().is_null();
+    // DataFusion's array_position uses is_null() checks internally (not equality),
+    // so it can locate NULL elements even though NULL = NULL is NULL in standard SQL.
+    let has_nulls = array_position(right_expr.clone(), lit(ScalarValue::Null), lit(1i64))
+        .is_not_null();
+
+    let decisive_condition = match (compare_op, is_all) {
+        (BinaryOperator::Eq, false) => array_has(right_expr.clone(), left_expr.clone()),
+        (BinaryOperator::NotEq, true) => array_has(right_expr.clone(), left_expr.clone()),
+        (BinaryOperator::Eq, true) | (BinaryOperator::NotEq, false) => {
+            let all_equal = array_min(right_expr.clone())
+                .eq(left_expr.clone())
+                .and(array_max(right_expr.clone()).eq(left_expr.clone()));
+            Expr::Not(Box::new(all_equal))
         }
-        BinaryOperator::Gt => {
-            let min = array_min(right_expr.clone());
-            any_op_with_null_handling(min.clone(), min.lt(left_expr), right_expr)
+        (BinaryOperator::Gt, false) => {
+            left_expr.clone().gt(array_min(right_expr.clone()))
         }
-        BinaryOperator::Lt => {
-            let max = array_max(right_expr.clone());
-            any_op_with_null_handling(max.clone(), max.gt(left_expr), right_expr)
+        (BinaryOperator::Gt, true) => Expr::Not(Box::new(
+            left_expr.clone().gt(array_max(right_expr.clone())),
+        )),
+        (BinaryOperator::Lt, false) => {
+            left_expr.clone().lt(array_max(right_expr.clone()))
         }
-        BinaryOperator::GtEq => {
-            let min = array_min(right_expr.clone());
-            any_op_with_null_handling(min.clone(), min.lt_eq(left_expr), right_expr)
+        (BinaryOperator::Lt, true) => Expr::Not(Box::new(
+            left_expr.clone().lt(array_min(right_expr.clone())),
+        )),
+        (BinaryOperator::GtEq, false) => {
+            left_expr.clone().gt_eq(array_min(right_expr.clone()))
         }
-        BinaryOperator::LtEq => {
-            let max = array_max(right_expr.clone());
-            any_op_with_null_handling(max.clone(), max.gt_eq(left_expr), right_expr)
+        (BinaryOperator::GtEq, true) => Expr::Not(Box::new(
+            left_expr.clone().gt_eq(array_max(right_expr.clone())),
+        )),
+        (BinaryOperator::LtEq, false) => {
+            left_expr.clone().lt_eq(array_max(right_expr.clone()))
         }
-        _ => plan_err!(
-            "Unsupported AnyOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
-        ),
-    }
+        (BinaryOperator::LtEq, true) => Expr::Not(Box::new(
+            left_expr.clone().lt_eq(array_min(right_expr.clone())),
+        )),
+        _ => {
+            let quantifier = if is_all { "AllOp" } else { "AnyOp" };
+            return plan_err!(
+                "Unsupported {quantifier}: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
+            );
+        }
+    };
+
+    let null_bool = lit(ScalarValue::Boolean(None));
+    when(null_arr_check, null_bool.clone())
+        .when(empty_check, lit(is_all))
+        .when(null_lhs_check, null_bool.clone())
+        .when(decisive_condition, lit(!is_all))
+        .when(has_nulls, null_bool)
+        .otherwise(lit(is_all))
 }
 
 #[cfg(test)]
