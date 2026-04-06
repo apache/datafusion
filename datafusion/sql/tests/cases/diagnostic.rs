@@ -370,6 +370,20 @@ fn test_unary_op_plus_with_non_column() -> Result<()> {
 }
 
 #[test]
+fn test_duplicate_cte_name() -> Result<()> {
+    let query = "WITH /*first*/cte/*first*/ AS (SELECT 1), /*dup*/cte/*dup*/ AS (SELECT 2) SELECT 1";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @r#"WITH query name "cte" specified more than once"#);
+    assert_eq!(diag.span, Some(spans["dup"]));
+    assert_snapshot!(diag.notes[0].message, @r#""cte" previously defined here"#);
+    assert_eq!(diag.notes[0].span, Some(spans["first"]));
+    assert_snapshot!(diag.notes[1].message, @"WITH query names must be unique");
+    assert_eq!(diag.notes[1].span, None);
+    Ok(())
+}
+
+#[test]
 fn test_syntax_error() -> Result<()> {
     // create a table with a column of type varchar
     let query = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 /*int*/int/*int*/) LOCATION 'foo.csv'";
