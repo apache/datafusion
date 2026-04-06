@@ -3688,13 +3688,13 @@ impl PartialOrd for Aggregate {
 
 /// Returns the highest duplicate ordinal across all grouping sets in `group_expr`.
 ///
-/// The ordinal counts how many times a given grouping set pattern has already
-/// appeared before the current occurrence.  For example, if the same set
-/// appears three times the ordinals are 0, 1, 2 and this function returns 2.
+/// The ordinal for each occurrence of a grouping set pattern is its 0-based
+/// index among identical entries. For example, if the same set appears three
+/// times, the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
-        let mut counts: HashMap<&Vec<Expr>, usize> = HashMap::new();
+        let mut counts: HashMap<&[Expr], usize> = HashMap::new();
         for set in sets {
             *counts.entry(set).or_insert(0) += 1;
         }
@@ -5018,6 +5018,14 @@ mod tests {
                 .unwrap()
                 .is_nullable()
         );
+    }
+
+    #[test]
+    fn grouping_id_type_accounts_for_duplicate_ordinal_bits() {
+        // 8 grouping columns fit in UInt8 when there are no duplicate ordinals,
+        // but adding one duplicate ordinal bit widens the type to UInt16.
+        assert_eq!(Aggregate::grouping_id_type(8, 0), DataType::UInt8);
+        assert_eq!(Aggregate::grouping_id_type(8, 1), DataType::UInt16);
     }
 
     #[test]

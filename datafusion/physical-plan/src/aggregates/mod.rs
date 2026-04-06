@@ -400,7 +400,8 @@ impl PhysicalGroupBy {
     /// Returns the Arrow data type of the `__grouping_id` column.
     ///
     /// The type is chosen to be wide enough to hold both the semantic bitmask
-    /// (in the low `n` bits) and the duplicate ordinal (in the high bits).
+    /// (in the low `n` bits, where `n` is the number of grouping expressions)
+    /// and the duplicate ordinal (in the high bits).
     fn grouping_id_data_type(&self) -> DataType {
         Aggregate::grouping_id_type(self.expr.len(), max_duplicate_ordinal(&self.groups))
     }
