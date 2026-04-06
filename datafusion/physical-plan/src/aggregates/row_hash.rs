@@ -755,10 +755,9 @@ pub(crate) fn create_group_accumulator(
 
 /// Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
 /// The blocked optimization will be enabled when:
-///   - When `enable_aggregation_blocked_groups` is true(default to true)
+///   - `enable_aggregation_blocked_groups` is true(still default to false now)
 ///   - It is not streaming aggregation(because blocked mode can't support Emit::first(exact n))
 ///   - The spilling is disabled(still need to consider more to support it efficiently)
-///   - The accumulator is not empty(I am still not sure about logic in this case)
 ///   - [`GroupValues::supports_blocked_groups`] and all [`GroupsAccumulator::supports_blocked_groups`] are true
 ///
 /// [`GroupValues::supports_blocked_groups`]: crate::aggregates::group_values::GroupValues::supports_blocked_groups
@@ -778,7 +777,6 @@ fn maybe_enable_blocked_groups(
         .execution
         .enable_aggregation_blocked_groups
         || !matches!(group_ordering, GroupOrdering::None)
-        || accumulators.is_empty()
         || !matches!(context.memory_pool().memory_limit(), MemoryLimit::Infinite)
     {
         return Ok(false);
@@ -1315,10 +1313,6 @@ impl GroupedHashAggregateStream {
                 ExecutionState::ProducingBlocks
             }
         } else {
-            // TODO: support spilling when blocked group optimization is on
-            // (`enable_blocked_groups` is true)
-            assert!(!self.enable_blocked_groups);
-
             // Spill any remaining data to disk. There is some performance overhead in
             // writing out this last chunk of data and reading it back. The benefit of
             // doing this is that memory usage for this stream is reduced, and the more
