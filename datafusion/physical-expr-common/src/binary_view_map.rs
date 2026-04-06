@@ -164,11 +164,8 @@ impl ArrowBytesViewMap {
     /// For each value in `values`, calls `observe_fn` with the entry's index
     /// (sequential, starting from 0). This index is the same for both new and
     /// previously seen values, serving as the group index for `GROUP BY`.
-    pub fn insert_if_new<OP>(
-        &mut self,
-        values: &ArrayRef,
-        observe_fn: OP,
-    ) where
+    pub fn insert_if_new<OP>(&mut self, values: &ArrayRef, observe_fn: OP)
+    where
         OP: FnMut(usize),
     {
         // Sanity check array type
@@ -193,11 +190,8 @@ impl ArrowBytesViewMap {
     /// simpler and understand and reducing code bloat due to duplication.
     ///
     /// See comments on `insert_if_new` for more details
-    fn insert_if_new_inner<OP, B>(
-        &mut self,
-        values: &ArrayRef,
-        mut observe_fn: OP,
-    ) where
+    fn insert_if_new_inner<OP, B>(&mut self, values: &ArrayRef, mut observe_fn: OP)
+    where
         OP: FnMut(usize),
         B: ByteViewType,
     {
