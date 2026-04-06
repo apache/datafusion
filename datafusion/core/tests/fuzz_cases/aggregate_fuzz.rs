@@ -18,9 +18,11 @@
 use std::sync::Arc;
 
 use super::record_batch_generator::get_supported_types_columns;
-use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
     AggregationFuzzerBuilder, DatasetGeneratorConfig,
+};
+use crate::fuzz_cases::aggregation_fuzzer::{
+    SessionContextOptions, query_builder::QueryBuilder,
 };
 
 use arrow::array::{
@@ -233,18 +235,27 @@ async fn test_median() {
 // Testing `blocked groups optimization`
 // Details of this optimization can see:
 // https://github.com/apache/datafusion/issues/7065
+//
+// To ensure the blocked groups path is actually exercised, we must satisfy
+// *all* conditions checked by `can_enable_blocked_groups`:
+//
+//   1. `GroupOrdering::None`       — disable sort hints (`sort_hint: Some(false)`)
+//      so the aggregation is not streaming.
+//   2. `OutOfMemoryMode::ReportError` — no memory limit / spilling (default).
+//   3. `group_values.supports_blocked_groups() == true`
+//      — only `GroupValuesPrimitive` returns true, so we restrict to
+//        *single* numeric group-by column (`with_max_group_by_columns(1)`
+//        + `set_group_by_columns(numeric_columns())`).
+//   4. Every accumulator `supports_blocked_groups() == true`
+//      — currently only sum/min/max support this, so we limit aggregates
+//        to those functions with numeric arguments.
+//   5. Config knob enabled — force it via `enable_blocked_groups: Some(true)`.
+//
+// With all five conditions met, `enable_blocked_groups` is guaranteed true
+// and `alter_block_size` will be called on both group values and accumulators.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_blocked_groups_optimization() {
     let data_gen_config = baseline_config();
-
-    // Blocked groups supporting lists:
-    //
-    // `GroupAccumulator`:
-    //    - PrimitiveGroupsAccumulator
-    //
-    // `GroupValues`:
-    //   - GroupValuesPrimitive
-    //
 
     // Test `Numeric aggregation` + `Single group by`
     let aggr_functions = ["sum", "min", "max"];
@@ -265,6 +276,11 @@ async fn test_blocked_groups_optimization() {
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
+        .session_context_options(SessionContextOptions {
+            enable_blocked_groups: Some(true),
+            sort_hint: Some(false),
+            ..Default::default()
+        })
         .build()
         .run()
         .await;
