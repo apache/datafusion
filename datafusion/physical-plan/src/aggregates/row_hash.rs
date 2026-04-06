@@ -694,7 +694,7 @@ impl GroupedHashAggregateStream {
         let can_enable_blocked_groups = can_enable_blocked_groups(
             &group_ordering,
             &oom_mode,
-            group_values.as_ref(),
+            &group_values,
             &accumulators,
         );
 
@@ -705,10 +705,12 @@ impl GroupedHashAggregateStream {
             .enable_aggregation_blocked_groups
             && can_enable_blocked_groups;
 
-        group_values.alter_block_size(Some(block_size))?;
-        accumulators
-            .iter_mut()
-            .try_for_each(|acc| acc.alter_block_size(Some(block_size)))?;
+        if enable_blocked_groups {
+            group_values.alter_block_size(Some(batch_size))?;
+            accumulators
+                .iter_mut()
+                .try_for_each(|acc| acc.alter_block_size(Some(batch_size)))?;
+        }
 
         // Metrics for aggregation stats
         let reduction_factor = if agg.mode == AggregateMode::Partial {
@@ -781,7 +783,7 @@ pub(crate) fn create_group_accumulator(
 fn can_enable_blocked_groups(
     group_ordering: &GroupOrdering,
     oom_mode: &OutOfMemoryMode,
-    group_values: &dyn GroupValues,
+    group_values: &Box<dyn GroupValues>,
     accumulators: &[Box<dyn GroupsAccumulator>],
 ) -> bool {
     if !matches!(group_ordering, GroupOrdering::None)
@@ -793,10 +795,7 @@ fn can_enable_blocked_groups(
     let group_values_supports_blocked = group_values.supports_blocked_groups();
     let accumulators_support_blocked =
         accumulators.iter().all(|acc| acc.supports_blocked_groups());
-    match (group_values_supports_blocked, accumulators_support_blocked) {
-        (true, true) => true,
-        _ => false,
-    }
+    group_values_supports_blocked && accumulators_support_blocked
 }
 
 // fn maybe_enable_blocked_groups(

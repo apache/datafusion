@@ -62,10 +62,33 @@ pub struct SessionContextGenerator {
     /// The upper bound of the randomly generated target partitions,
     /// and the lower bound will be 1
     max_target_partitions: usize,
+
+    /// Force-enable or force-disable specific options, overriding random generation
+    options: SessionContextOptions,
+}
+
+/// Options to force-enable or force-disable specific session config knobs.
+///
+/// - `None`        → randomized by the fuzzer (default behavior)
+/// - `Some(true)`  → always enabled
+/// - `Some(false)` → always disabled
+#[derive(Debug, Clone, Default)]
+pub struct SessionContextOptions {
+    pub skip_partial: Option<bool>,
+    pub sort_hint: Option<bool>,
+    pub enable_blocked_groups: Option<bool>,
 }
 
 impl SessionContextGenerator {
     pub fn new(dataset_ref: Arc<Dataset>, table_name: &str) -> Self {
+        Self::new_with_options(dataset_ref, table_name, SessionContextOptions::default())
+    }
+
+    pub fn new_with_options(
+        dataset_ref: Arc<Dataset>,
+        table_name: &str,
+        options: SessionContextOptions,
+    ) -> Self {
         let candidate_skip_partial_params = vec![
             SkipPartialParams::ensure_trigger(),
             SkipPartialParams::ensure_not_trigger(),
@@ -80,6 +103,7 @@ impl SessionContextGenerator {
             max_batch_size,
             candidate_skip_partial_params,
             max_target_partitions,
+            options,
         }
     }
 }
@@ -127,13 +151,22 @@ impl SessionContextGenerator {
 
         let target_partitions = rng.random_range(1..=self.max_target_partitions);
 
-        let skip_partial_params_idx =
-            rng.random_range(0..self.candidate_skip_partial_params.len());
-        let skip_partial_params =
-            self.candidate_skip_partial_params[skip_partial_params_idx];
+        let skip_partial_params = match self.options.skip_partial {
+            Some(true) => SkipPartialParams::ensure_trigger(),
+            Some(false) => SkipPartialParams::ensure_not_trigger(),
+            None => {
+                let idx =
+                    rng.random_range(0..self.candidate_skip_partial_params.len());
+                self.candidate_skip_partial_params[idx]
+            }
+        };
 
+        let sort_hint_enabled = self
+            .options
+            .sort_hint
+            .unwrap_or_else(|| rng.random_bool(0.5));
         let (provider, sort_hint) =
-            if rng.random_bool(0.5) && !self.dataset.sort_keys.is_empty() {
+            if sort_hint_enabled && !self.dataset.sort_keys.is_empty() {
                 // Sort keys exist and random to push down
                 let sort_exprs = self
                     .dataset
@@ -146,7 +179,10 @@ impl SessionContextGenerator {
                 (provider, false)
             };
 
-        let enable_aggregation_blocked_groups = rng.gen_bool(0.5);
+        let enable_aggregation_blocked_groups = self
+            .options
+            .enable_blocked_groups
+            .unwrap_or_else(|| rng.random_bool(0.5));
 
         let builder = GeneratedSessionContextBuilder {
             batch_size,

@@ -46,6 +46,7 @@ mod fuzzer;
 pub mod query_builder;
 
 pub use crate::fuzz_cases::record_batch_generator::ColumnDescr;
+pub use context_generator::SessionContextOptions;
 pub use data_generator::DatasetGeneratorConfig;
 pub use fuzzer::*;
 
