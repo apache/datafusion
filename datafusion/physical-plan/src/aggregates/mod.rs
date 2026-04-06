@@ -1049,6 +1049,17 @@ impl AggregateExec {
     /// output_rows = min(output_rows, limit)           // if TopK active
     /// ```
     ///
+    /// **Example 1 — single group key:**
+    /// `GROUP BY city` where input_rows = 10,000, NDV(city) = 200
+    /// → output_rows = min(10_000, 200) = 200
+    ///
+    /// **Example 2 — two group keys with TopK:**
+    /// `GROUP BY city, category` where input_rows = 10,000, NDV(city) = 200,
+    /// NDV(category) = 5, limit = 100
+    /// → ndv = 200 × 5 = 1,000
+    /// → output_rows = min(10_000, 1_000) = 1,000
+    /// → output_rows = min(1_000, 100) = 100
+    ///
     /// When `input_rows` is absent but NDV is available, falls back to:
     ///
     /// ```text
@@ -1103,47 +1114,7 @@ impl AggregateExec {
                 })
             }
             _ => {
-                // When the input row count is 1, we can adopt that statistic keeping its reliability.
-                // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
-                let num_rows = if let Some(value) = child_statistics.num_rows.get_value()
-                {
-                    if *value > 1 {
-                        let mut num_rows = child_statistics.num_rows.to_inexact();
-
-                        if !self.group_by.expr.is_empty()
-                            && let Some(ndv) = self.compute_group_ndv(child_statistics)
-                        {
-                            num_rows = num_rows.map(|n| n.min(ndv));
-                        }
-
-                        // If TopK mode is active, cap output rows by the limit
-                        if let Some(limit_opts) = &self.limit_options {
-                            num_rows = num_rows.map(|n| n.min(limit_opts.limit));
-                        }
-
-                        num_rows
-                    } else if *value == 0 {
-                        child_statistics.num_rows
-                    } else {
-                        // num_rows = 1 case
-                        let grouping_set_num = self.group_by.groups.len();
-                        child_statistics.num_rows.map(|x| x * grouping_set_num)
-                    }
-                } else {
-                    let ndv = if !self.group_by.expr.is_empty() {
-                        self.compute_group_ndv(child_statistics)
-                    } else {
-                        None
-                    };
-                    match (ndv, &self.limit_options) {
-                        (Some(n), Some(limit_opts)) => {
-                            Precision::Inexact(n.min(limit_opts.limit))
-                        }
-                        (Some(n), None) => Precision::Inexact(n),
-                        (None, Some(limit_opts)) => Precision::Inexact(limit_opts.limit),
-                        (None, None) => Precision::Absent,
-                    }
-                };
+                let num_rows = self.estimate_num_rows(child_statistics);
 
                 let total_byte_size = num_rows
                     .get_value()
@@ -1163,11 +1134,59 @@ impl AggregateExec {
         }
     }
 
+    /// Estimates the output row count for grouped aggregations, combining NDV,
+    /// input row count, and TopK limit into a single [`Precision<usize>`].
+    fn estimate_num_rows(&self, child_statistics: &Statistics) -> Precision<usize> {
+        let ndv = if !self.group_by.expr.is_empty() {
+            self.compute_group_ndv(child_statistics)
+        } else {
+            None
+        };
+        let limit = self.limit_options.as_ref().map(|lo| lo.limit);
+
+        if let Some(&value) = child_statistics.num_rows.get_value() {
+            if value > 1 {
+                let mut num_rows = child_statistics.num_rows.to_inexact();
+                if let Some(ndv) = ndv {
+                    num_rows = num_rows.map(|n| n.min(ndv));
+                }
+                if let Some(limit) = limit {
+                    num_rows = num_rows.map(|n| n.min(limit));
+                }
+                num_rows
+            } else if value == 0 {
+                child_statistics.num_rows
+            } else {
+                let grouping_set_num = self.group_by.groups.len();
+                child_statistics.num_rows.map(|x| x * grouping_set_num)
+            }
+        } else {
+            match (ndv, limit) {
+                (Some(n), Some(l)) => Precision::Inexact(n.min(l)),
+                (Some(n), None) => Precision::Inexact(n),
+                (None, Some(l)) => Precision::Inexact(l),
+                (None, None) => Precision::Absent,
+            }
+        }
+    }
+
     /// Computes the estimated number of distinct groups across all grouping sets.
     /// For each grouping set, computes `product(NDV_i + null_adj_i)` for active columns,
     /// then sums across all sets. Returns `None` if any active column is not a direct
-    /// column reference or lacks `distinct_count` stats.
+    /// column reference or lacks `distinct_count` stats. Non-column expressions
+    /// (e.g. `abs(a)`) are not yet supported because expression-level statistics
+    /// propagation is still in progress (see <https://github.com/apache/datafusion/pull/21122>).
     /// When `null_count` is absent or unknown, null_adjustment defaults to 0.
+    ///
+    /// **Single key:** `GROUP BY a` where NDV(a) = 100, null_count(a) = 5
+    /// → product = max(100 + 1, 1) = 101, total = 101
+    ///
+    /// **Two keys:** `GROUP BY a, b` where NDV(a) = 100, NDV(b) = 50, no nulls
+    /// → product = 100 × 50 = 5,000, total = 5,000
+    ///
+    /// **Grouping sets:** `GROUPING SETS ((a), (b), (a, b))` with NDV(a) = 100, NDV(b) = 50
+    /// → set(a) = 100, set(b) = 50, set(a, b) = 100 × 50 = 5,000
+    /// → total = 100 + 50 + 5,000 = 5,150
     fn compute_group_ndv(&self, child_statistics: &Statistics) -> Option<usize> {
         let mut total: usize = 0;
         for group_mask in &self.group_by.groups {
