@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-ITERATIONS="${1:-100}"
+ITERATIONS="${1:-200}"
 PASS=0
 FAIL=0
 RESULTS=()
