@@ -28,18 +28,28 @@ echo ""
 for i in $(seq 1 "$ITERATIONS"); do
     # Run only the explain sqllogictest file.
     # The -- explain argument matches files whose path contains "explain".
-    if cargo test \
-            --quiet \
+    # Capture both stdout and stderr; use the exit code of cargo test directly.
+    output=$(cargo test \
             --manifest-path "$REPO_ROOT/Cargo.toml" \
             -p datafusion-sqllogictest \
             --test sqllogictests \
             -- explain \
-            2>&1 | grep -q "test result: ok"; then
+            2>&1) && cargo_exit=0 || cargo_exit=$?
+
+    if [[ $cargo_exit -eq 0 ]]; then
         STATUS="PASS"
         PASS=$((PASS + 1))
     else
         STATUS="FAIL"
         FAIL=$((FAIL + 1))
+        # Show the failure detail on the first failure for quick diagnosis
+        if [[ $FAIL -eq 1 ]]; then
+            echo ""
+            echo "--- First failure output ---"
+            echo "$output" | tail -40
+            echo "----------------------------"
+            echo ""
+        fi
     fi
 
     RESULTS+=("  Run $i: $STATUS")
