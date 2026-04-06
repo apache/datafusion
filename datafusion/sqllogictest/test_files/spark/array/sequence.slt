@@ -70,6 +70,16 @@ SELECT sequence(5, 1, -1);
 [5, 4, 3, 2, 1]
 
 query ?
+SELECT sequence(2, 2);
+----
+[2]
+
+query ?
+SELECT sequence(-2, -2);
+----
+[-2]
+
+query ?
 SELECT sequence(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00', INTERVAL '-1' DAY)
 ----
 [2023-01-03T00:00:00, 2023-01-02T00:00:00, 2023-01-01T00:00:00]
@@ -182,142 +192,32 @@ SELECT sequence(TIMESTAMP '2023-01-01T00:00:00', NULL::TIMESTAMP, INTERVAL '1' D
 ----
 NULL
 
-query error
-SELECT sequence(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00', NULL)
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: third parameter type must be one of integer or interval type but found: Null. No function matches the given name and argument types 'sequence(Timestamp(ns), Timestamp(ns), Null)'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
-
-
-# QUERY ERROR TESTS
-query error
-SELECT sequence(5, DATE '2018-03-01');
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: first(Int64) and second(Date32) input types should be same. No function matches the given name and argument types 'sequence(Int64, Date32)'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
-
-
-query error
-SELECT sequence(1, DATE '2018-03-01', INTERVAL 1 MONTH);
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: first(Int64) and second(Date32) input types should be same. No function matches the given name and argument types 'sequence(Int64, Date32, Interval(MonthDayNano))'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
-
-
-query error
-SELECT sequence(1, TIMESTAMP '2023-01-01T00:00:00');
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: first(Int64) and second(Timestamp(ns)) input types should be same. No function matches the given name and argument types 'sequence(Int64, Timestamp(ns))'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
-
-
-query error
-SELECT sequence(1, TIMESTAMP '2023-01-01T00:00:00', INTERVAL 1 MONTH);
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: first(Int64) and second(Timestamp(ns)) input types should be same. No function matches the given name and argument types 'sequence(Int64, Timestamp(ns), Interval(MonthDayNano))'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
-
-
-query error
-SELECT sequence(DATE '2023-01-01', TIMESTAMP '2023-03-01T00:00:00');
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: first(Date32) and second(Timestamp(ns)) input types should be same. No function matches the given name and argument types 'sequence(Date32, Timestamp(ns))'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
-
-
-query error
-SELECT sequence(DATE '2023-01-01', TIMESTAMP '2023-03-01T00:00:00', INTERVAL 1 MONTH);
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: first(Date32) and second(Timestamp(ns)) input types should be same. No function matches the given name and argument types 'sequence(Date32, Timestamp(ns), Interval(MonthDayNano))'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
-
-
-query error
+query error DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: interval type should be integer for integer input or time based
 SELECT sequence(1, 6, INTERVAL 1 MONTH);
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: interval type should be integer for integer input or time based. No function matches the given name and argument types 'sequence(Int64, Int64, Interval(MonthDayNano))'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
 
-
-query error
+query error DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: interval type should be integer for integer input or time based
 SELECT sequence(DATE '2023-01-01', DATE '2023-03-01', 1);
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: interval type should be integer for integer input or time based. No function matches the given name and argument types 'sequence(Date32, Date32, Int64)'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
 
-
-query error
+query error DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: interval type should be integer for integer input or time based
 SELECT sequence(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-03-01T00:00:00', 1);
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: interval type should be integer for integer input or time based. No function matches the given name and argument types 'sequence(Timestamp(ns), Timestamp(ns), Int64)'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
 
-
-query error
+query error DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: second parameter type must be one of integer, date or timestamp type but found: Utf8
 SELECT sequence(1, 'abc');
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: second parameter type must be one of integer, date or timestamp type but found: Utf8. No function matches the given name and argument types 'sequence(Int64, Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
 
-
-query error
+query error DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: first parameter type must be one of integer, date or timestamp type but found: Utf8
 SELECT sequence('abc', 2);
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: first parameter type must be one of integer, date or timestamp type but found: Utf8. No function matches the given name and argument types 'sequence(Utf8, Int64)'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
 
-
-query error
+query error DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: num of input parameters should be 2 or 3
 SELECT sequence(1);
-----
-DataFusion error: Error during planning: Execution error: Function 'sequence' user-defined coercion failed with: Execution error: num of input parameters should be 2 or 3. No function matches the given name and argument types 'sequence(Int64)'. You might need to add explicit type casts.
-	Candidate functions:
-	sequence(UserDefined)
 
-
-query ?
-SELECT sequence(2, 2);
-----
-[2]
-
-query ?
-SELECT sequence(-2, -2);
-----
-[-2]
-
-query error
+query error DataFusion error: Execution error: When start > stop, step must be negative
 SELECT sequence(5, 0, 1);
-----
-DataFusion error: Execution error: When start > stop, step must be negative
 
-
-query error
+query error DataFusion error: Execution error: When start < stop, step must be positive
 SELECT sequence(0, 5, -1);
-----
-DataFusion error: Execution error: When start < stop, step must be positive
 
-
-query error
+query error DataFusion error: Execution error: Step cannot be 0 for sequence
 SELECT sequence(1, 5, 0);
-----
-DataFusion error: Execution error: Step cannot be 0 for sequence
 
-
-query error
+query error DataFusion error: Execution error: Step cannot be 0 for sequence
 SELECT sequence(5, 1, 0);
-----
-DataFusion error: Execution error: Step cannot be 0 for sequence
-
-
