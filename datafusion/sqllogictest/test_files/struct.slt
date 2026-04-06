@@ -1116,7 +1116,7 @@ select [
 query ?
 select [[{x: 1, y: 2}], [{y: 4, x: 3}]];
 ----
-[[{x: 1, y: 2}], [{x: 3, y: 4}]]
+[[{y: 2, x: 1}], [{y: 4, x: 3}]]
 
 # Test array literal with float type coercion across elements
 query ?
@@ -1664,6 +1664,10 @@ order by id;
 1 1 100
 2 1 300
 3 2 150
+
+# Config reset
+statement ok
+RESET datafusion.sql_parser.dialect;
 
 statement ok
 drop table t_agg_window;

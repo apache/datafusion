@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::ffi::c_void;
 use std::ops::Range;
 
@@ -205,6 +206,13 @@ unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) 
 
 impl From<Box<dyn PartitionEvaluator>> for FFI_PartitionEvaluator {
     fn from(evaluator: Box<dyn PartitionEvaluator>) -> Self {
+        if (evaluator.as_ref() as &dyn Any).is::<ForeignPartitionEvaluator>() {
+            let evaluator = (evaluator as Box<dyn Any>)
+                .downcast::<ForeignPartitionEvaluator>()
+                .expect("already checked type");
+            return evaluator.evaluator;
+        }
+
         let is_causal = evaluator.is_causal();
         let supports_bounded_execution = evaluator.supports_bounded_execution();
         let include_rank = evaluator.include_rank();

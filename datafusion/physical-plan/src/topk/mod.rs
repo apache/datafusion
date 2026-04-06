@@ -27,7 +27,8 @@ use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    RecordOutput,
 };
 use crate::spill::get_record_batch_memory_size;
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
@@ -647,6 +648,7 @@ impl TopKMetrics {
         Self {
             baseline: BaselineMetrics::new(metrics, partition),
             row_replacements: MetricBuilder::new(metrics)
+                .with_category(MetricCategory::Rows)
                 .counter("row_replacements", partition),
         }
     }
@@ -1059,7 +1061,7 @@ impl RecordBatchStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float64Array, Int32Array, RecordBatch};
+    use arrow::array::{Float64Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::assert_batches_eq;

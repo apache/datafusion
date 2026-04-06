@@ -1931,10 +1931,12 @@ fn project_with_validation(
     expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
 ) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
+    let mut has_wildcard = false;
     for (e, validate) in expr {
         let e = e.into();
         match e {
             SelectExpr::Wildcard(opt) => {
+                has_wildcard = true;
                 let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
 
                 // If there is a REPLACE statement, replace that column with the given
@@ -1955,6 +1957,7 @@ fn project_with_validation(
                 }
             }
             SelectExpr::QualifiedWildcard(table_ref, opt) => {
+                has_wildcard = true;
                 let expanded =
                     expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
 
@@ -1983,6 +1986,12 @@ fn project_with_validation(
                 }
             }
         }
+    }
+    if has_wildcard && projected_expr.is_empty() && !plan.schema().fields().is_empty() {
+        return plan_err!(
+            "SELECT list is empty after resolving * expressions, \
+             the wildcard expanded to zero columns"
+        );
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
@@ -2123,6 +2132,8 @@ pub fn wrap_projection_for_join_if_necessary(
             .into_iter()
             .map(Expr::Column)
             .collect::<Vec<_>>();
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+        // Expr contains Arc with interior mutability but is intentionally used as hash key
         let join_key_items = alias_join_keys
             .iter()
             .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))
@@ -2259,7 +2270,7 @@ mod tests {
     use super::*;
     use crate::lit_with_metadata;
     use crate::logical_plan::StringifiedPlan;
-    use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
+    use crate::{col, expr, expr_fn::exists, in_subquery, scalar_subquery};
 
     use crate::test::function_stub::sum;
     use datafusion_common::{

@@ -941,7 +941,6 @@ pub fn in_list(
 mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast};
-    use arrow::buffer::NullBuffer;
     use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;

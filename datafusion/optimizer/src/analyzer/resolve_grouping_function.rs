@@ -72,6 +72,7 @@ fn group_expr_to_bitmap_index(group_expr: &[Expr]) -> Result<HashMap<&Expr, usiz
         .collect::<HashMap<_, _>>())
 }
 
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn replace_grouping_exprs(
     input: Arc<LogicalPlan>,
     schema: &DFSchema,
@@ -158,6 +159,7 @@ fn contains_grouping_function(exprs: &[Expr]) -> bool {
 }
 
 /// Validate that the arguments to the grouping function are in the group by clause.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn validate_args(
     function: &AggregateFunction,
     group_by_expr: &HashMap<&Expr, usize>,
@@ -178,6 +180,7 @@ fn validate_args(
     }
 }
 
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn grouping_function_on_id(
     function: &AggregateFunction,
     group_by_expr: &HashMap<&Expr, usize>,

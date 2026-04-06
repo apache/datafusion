@@ -147,6 +147,7 @@ pub fn map_from_keys_values_offsets_nulls(
     )?))
 }
 
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
 fn map_deduplicate_keys(
     flat_keys: &ArrayRef,
     flat_values: &ArrayRef,

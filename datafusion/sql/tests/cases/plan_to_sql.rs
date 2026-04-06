@@ -362,6 +362,17 @@ fn roundtrip_statement_with_dialect_3() -> Result<(), DataFusionError> {
 }
 
 #[test]
+fn roundtrip_statement_postgres_any_array_expr() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select left from array where 1 = any(left);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @r#"SELECT "array"."left" FROM "array" WHERE 1 = ANY("array"."left")"#,
+    );
+    Ok(())
+}
+
+#[test]
 fn roundtrip_statement_with_dialect_4() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
         sql: "select j1_id from (select 1 as j1_id);",
@@ -1736,6 +1747,42 @@ fn test_sort_with_push_down_fetch() -> Result<()> {
     assert_snapshot!(
         sql,
         @"SELECT t1.id, t1.age FROM t1 ORDER BY t1.age ASC NULLS FIRST LIMIT 10"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_sort_with_scalar_fn_and_push_down_fetch() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("search_phrase", DataType::Utf8, false),
+        Field::new("event_time", DataType::Utf8, false),
+    ]);
+
+    let substr_udf = unicode::substr();
+
+    // Build a plan that mimics the DF52 optimizer output:
+    // Projection(search_phrase) → Sort(substr(event_time), fetch=10)
+    //   → Projection(search_phrase, event_time) → Filter → TableScan
+    // This triggers a subquery because the outer projection differs from the inner one.
+    // The ORDER BY scalar function must not reference the inner table qualifier.
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .filter(col("search_phrase").not_eq(lit("")))?
+        .project(vec![col("search_phrase"), col("event_time")])?
+        .sort_with_limit(
+            vec![
+                substr_udf
+                    .call(vec![col("event_time"), lit(1), lit(5)])
+                    .sort(true, true),
+            ],
+            Some(10),
+        )?
+        .project(vec![col("search_phrase")])?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT t1.search_phrase FROM (SELECT t1.search_phrase, t1.event_time FROM t1 WHERE (t1.search_phrase <> '') ORDER BY substr(t1.event_time, 1, 5) ASC NULLS FIRST LIMIT 10)"
     );
     Ok(())
 }

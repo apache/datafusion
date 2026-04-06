@@ -382,7 +382,7 @@ fn try_cast_binary(
 mod tests {
     use super::*;
     use arrow::compute::{CastOptions, cast_with_options};
-    use arrow::datatypes::{Field, Fields, TimeUnit};
+    use arrow::datatypes::{Field, Fields};
     use std::sync::Arc;
 
     #[derive(Debug, Clone)]

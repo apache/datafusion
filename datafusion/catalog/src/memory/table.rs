@@ -594,10 +594,6 @@ impl ExecutionPlan for DmlResultExec {
         "DmlResultExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

@@ -15,13 +15,187 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query T
+SELECT soundex('Miller');
+----
+M460
 
-## Original Query: SELECT soundex('Miller');
-## PySpark 3.5.5 Result: {'soundex(Miller)': 'M460', 'typeof(soundex(Miller))': 'string', 'typeof(Miller)': 'string'}
-#query
-#SELECT soundex('Miller'::string);
+query T
+SELECT soundex(NULL);
+----
+NULL
+
+query T
+SELECT soundex('');
+----
+(empty)
+
+query T
+SELECT soundex('Apache Spark');
+----
+A122
+
+query T
+SELECT soundex('123');
+----
+123
+
+query T
+SELECT soundex('a123');
+----
+A000
+
+query T
+SELECT soundex('Datafusion');
+----
+D312
+
+query T
+SELECT soundex('Ashcroft');
+----
+A261
+
+query T
+SELECT soundex('B1B');
+----
+B100
+
+query T
+SELECT soundex('B B');
+----
+B100
+
+query T
+SELECT soundex('BAB');
+----
+B100
+
+query T
+SELECT soundex('#hello');
+----
+#hello
+
+query T
+SELECT soundex(' hello');
+----
+ hello
+
+query T
+SELECT soundex('\thello');
+----
+\thello
+
+query T
+SELECT soundex('😀hello');
+----
+😀hello
+
+query T
+SELECT soundex('123');
+----
+123
+
+query T
+SELECT soundex('1abc');
+----
+1abc
+
+query T
+SELECT soundex('A');
+----
+A000
+
+query T
+SELECT soundex('BFPV');
+----
+B000
+
+query T
+SELECT soundex('Robert');
+----
+R163
+
+query T
+SELECT soundex('Rupert');
+----
+R163
+
+query T
+SELECT soundex(NULL);
+----
+NULL
+
+query T
+SELECT soundex('');
+----
+(empty)
+
+query T
+SELECT soundex('robert');
+----
+R163
+
+query T
+SELECT soundex('rObErT');
+----
+R163
+
+query T
+SELECT soundex('Müller');
+----
+M460
+
+query T
+SELECT soundex('Abcdefghijklmnop');
+----
+A123
+
+query T
+SELECT soundex('Lloyd');
+----
+L300
+
+query T
+SELECT soundex('BWB');
+----
+B000
+
+query T
+SELECT soundex('BHB');
+----
+B000
+
+query T
+SELECT soundex('Tymczak');
+----
+T522
+
+query T
+SELECT soundex('Aeiou');
+----
+A000
+
+query T
+SELECT soundex('1Robert');
+----
+1Robert
+
+query T
+SELECT soundex('Smith-Jones');
+----
+S532
+
+query T
+SELECT soundex('#');
+----
+#
+
+query T
+SELECT soundex('\nhello');
+----
+\nhello
+
+query T
+SELECT concat(soundex('   '), 'Spark')
+----
+   Spark

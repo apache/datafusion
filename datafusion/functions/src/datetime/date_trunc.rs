@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
@@ -42,8 +41,8 @@ use datafusion_common::{
 };
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -167,7 +166,21 @@ impl DateTruncGranularity {
     argument(
         name = "expression",
         description = "Timestamp or time expression to operate on. Can be a constant, column, or function."
-    )
+    ),
+    sql_example = r#"```sql
+> SELECT date_trunc('month', '2024-05-15T10:30:00');
++-----------------------------------------------+
+| date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
++-----------------------------------------------+
+| 2024-05-01T00:00:00                           |
++-----------------------------------------------+
+> SELECT date_trunc('hour', '2024-05-15T10:30:00');
++----------------------------------------------+
+| date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
++----------------------------------------------+
+| 2024-05-15T10:00:00                          |
++----------------------------------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DateTruncFunc {
@@ -211,10 +224,6 @@ impl DateTruncFunc {
 }
 
 impl ScalarUDFImpl for DateTruncFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "date_trunc"
     }
@@ -241,10 +250,7 @@ impl ScalarUDFImpl for DateTruncFunc {
         )))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         let (granularity, array) = (&args[0], &args[1]);
 
@@ -769,7 +775,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     #[test]
     fn date_trunc_test() {
@@ -1011,7 +1017,7 @@ mod tests {
                 Field::new("a", DataType::Utf8, false).into(),
                 Field::new("b", input.data_type().clone(), false).into(),
             ];
-            let args = datafusion_expr::ScalarFunctionArgs {
+            let args = ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(ScalarValue::from("day")),
                     ColumnarValue::Array(Arc::new(input)),
@@ -1199,7 +1205,7 @@ mod tests {
                 Field::new("a", DataType::Utf8, false).into(),
                 Field::new("b", input.data_type().clone(), false).into(),
             ];
-            let args = datafusion_expr::ScalarFunctionArgs {
+            let args = ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(ScalarValue::from("hour")),
                     ColumnarValue::Array(Arc::new(input)),
@@ -1367,7 +1373,7 @@ mod tests {
                     Field::new("a", DataType::Utf8, false).into(),
                     Field::new("b", input.data_type().clone(), false).into(),
                 ];
-                let args = datafusion_expr::ScalarFunctionArgs {
+                let args = ScalarFunctionArgs {
                     args: vec![
                         ColumnarValue::Scalar(ScalarValue::from(*granularity)),
                         ColumnarValue::Array(Arc::new(input)),

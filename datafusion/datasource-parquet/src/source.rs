@@ -895,7 +895,6 @@ mod tests {
     #[test]
     fn test_reverse_scan_with_other_options() {
         use arrow::datatypes::Schema;
-        use datafusion_common::config::TableParquetOptions;
 
         let schema = Arc::new(Schema::empty());
         let options = TableParquetOptions::default();

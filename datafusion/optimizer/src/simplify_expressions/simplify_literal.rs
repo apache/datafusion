@@ -51,8 +51,11 @@ where
 
     log::debug!("Parsing expr {:?} to type {}", expr, T::DATA_TYPE);
 
-    let simplifier =
-        ExprSimplifier::new(SimplifyContext::default().with_schema(Arc::clone(&schema)));
+    let simplifier = ExprSimplifier::new(
+        SimplifyContext::builder()
+            .with_schema(Arc::clone(&schema))
+            .build(),
+    );
 
     // Simplify and coerce expression in case of constant arithmetic operations (e.g., 10 + 5)
     let simplified_expr: Expr = simplifier
