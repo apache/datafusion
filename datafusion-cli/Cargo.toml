@@ -39,9 +39,9 @@ arrow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = "1.8.14"
 aws-credential-types = "1.2.13"
+bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { version = "4.5.60", features = ["cargo", "derive"] }
-bytes = { workspace = true }
 datafusion = { workspace = true, features = [
     "avro",
     "compression",
@@ -79,5 +79,5 @@ ctor = { workspace = true }
 insta = { workspace = true }
 insta-cmd = "0.6.0"
 rstest = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["minio"] }
 tempfile = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["minio"] }
