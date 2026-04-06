@@ -170,7 +170,7 @@ liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
 memchr = "2.8.0"
 num-traits = { version = "0.2" }
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.13.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "58.1.0", default-features = false, features = [
     "arrow",
@@ -198,6 +198,9 @@ tokio-util = "0.7"
 url = "2.5.7"
 uuid = "1.23"
 zstd = { version = "0.13", default-features = false }
+
+[patch.crates-io]
+object_store = { git = "https://github.com/Dandandan/arrow-rs-object-store.git", branch = "io-uring-get-ranges" }
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
