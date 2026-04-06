@@ -2161,6 +2161,116 @@ DROP TABLE null_src_b;
 statement ok
 DROP TABLE tf_nulls_last;
 
+# ===========================================================
+# Test G: BufferExec insertion when sort elimination removes
+# SortExec under SortPreservingMergeExec.
+#
+# When PushdownSort eliminates SortExec(preserve_partitioning=true),
+# SPM loses SortExec's memory buffer. A BufferExec is inserted to
+# compensate, allowing I/O pipelining with merge computation.
+# ===========================================================
+
+# Create files with reversed naming: c_low has smallest values,
+# a_high has largest — alphabetical order ≠ sort key order.
+statement ok
+CREATE TABLE tg_src_low(id INT, value INT) AS VALUES (1, 100), (2, 200), (3, 300);
+
+statement ok
+CREATE TABLE tg_src_mid(id INT, value INT) AS VALUES (4, 400), (5, 500), (6, 600);
+
+statement ok
+CREATE TABLE tg_src_high(id INT, value INT) AS VALUES (7, 700), (8, 800), (9, 900), (10, 1000);
+
+query I
+COPY (SELECT * FROM tg_src_low ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM tg_src_mid ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM tg_src_high ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet';
+----
+4
+
+# Use target_partitions=2 so files are split across 2 groups.
+# Files are in wrong alphabetical order → validated_output_ordering strips ordering
+# → EnforceSorting adds SortExec(preserve_partitioning) + SPM
+# → PushdownSort eliminates SortExec and inserts BufferExec
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE EXTERNAL TABLE tg_buffer(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tg_buffer/'
+WITH ORDER (id ASC);
+
+# Test G.1: BufferExec appears between SPM and DataSourceExec
+query TT
+EXPLAIN SELECT * FROM tg_buffer ORDER BY id ASC;
+----
+logical_plan
+01)Sort: tg_buffer.id ASC NULLS LAST
+02)--TableScan: tg_buffer projection=[id, value]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--BufferExec: capacity=8388608
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+# Verify correctness
+query II
+SELECT * FROM tg_buffer ORDER BY id ASC;
+----
+1 100
+2 200
+3 300
+4 400
+5 500
+6 600
+7 700
+8 800
+9 900
+10 1000
+
+# Test G.2: LIMIT query with BufferExec
+query TT
+EXPLAIN SELECT * FROM tg_buffer ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: tg_buffer.id ASC NULLS LAST, fetch=3
+02)--TableScan: tg_buffer projection=[id, value]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST], fetch=3
+02)--BufferExec: capacity=8388608
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet]]}, projection=[id, value], limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+query II
+SELECT * FROM tg_buffer ORDER BY id ASC LIMIT 3;
+----
+1 100
+2 200
+3 300
+
+# Cleanup Test G
+statement ok
+DROP TABLE tg_src_low;
+
+statement ok
+DROP TABLE tg_src_mid;
+
+statement ok
+DROP TABLE tg_src_high;
+
+statement ok
+DROP TABLE tg_buffer;
+
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok
 SET datafusion.execution.target_partitions = 4;

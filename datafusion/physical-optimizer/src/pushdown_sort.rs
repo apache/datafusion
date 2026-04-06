@@ -60,13 +60,19 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::buffer::BufferExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::sync::Arc;
 
-/// Prefetch buffer size for SortPreservingMergeExec when sort elimination
-/// removes the buffering SortExec between SPM and DataSourceExec.
-const SPM_PREFETCH_AFTER_SORT_ELIMINATION: usize = 16;
+/// Buffer capacity (in bytes) inserted between SPM and DataSourceExec when
+/// sort elimination removes the buffering SortExec.
+///
+/// SortExec buffers all input data in memory (with spill support) before
+/// outputting sorted results. When we eliminate SortExec, SPM reads directly
+/// from I/O-bound sources. BufferExec compensates by buffering batches in
+/// the background, allowing I/O to pipeline with merge computation.
+const BUFFER_CAPACITY_AFTER_SORT_ELIMINATION: usize = 8 * 1024 * 1024; // 8 MB
 
 /// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources.
 ///
@@ -92,11 +98,11 @@ impl PhysicalOptimizerRule for PushdownSort {
         }
 
         // Use transform_down to find and optimize all SortExec nodes (including nested ones)
-        // Also handles SPM → SortExec pattern to set prefetch when sort is eliminated
+        // Also handles SPM → SortExec pattern to insert BufferExec when sort is eliminated
         plan.transform_down(|plan: Arc<dyn ExecutionPlan>| {
             // Pattern 1: SPM → SortExec(preserve_partitioning)
             // When we eliminate the SortExec, SPM loses its memory buffer and reads
-            // directly from I/O-bound sources. Set a larger prefetch to pipeline I/O.
+            // directly from I/O-bound sources. Insert a BufferExec to compensate.
             if let Some(spm) = plan.downcast_ref::<SortPreservingMergeExec>()
                 && let Some(sort_child) = spm.input().downcast_ref::<SortExec>()
                 && sort_child.preserve_partitioning()
@@ -110,13 +116,16 @@ impl PhysicalOptimizerRule for PushdownSort {
                         } else {
                             inner
                         };
+                        // Insert BufferExec to replace SortExec's buffering role.
+                        // SortExec buffered all data in memory; BufferExec provides
+                        // bounded buffering so SPM doesn't stall on I/O.
+                        let buffered: Arc<dyn ExecutionPlan> = Arc::new(BufferExec::new(
+                            inner,
+                            BUFFER_CAPACITY_AFTER_SORT_ELIMINATION,
+                        ));
                         let new_spm =
-                            SortPreservingMergeExec::new(spm.expr().clone(), inner)
-                                .with_fetch(spm.fetch())
-                                .with_round_robin_repartition(
-                                    spm.enable_round_robin_repartition(),
-                                )
-                                .with_prefetch(SPM_PREFETCH_AFTER_SORT_ELIMINATION);
+                            SortPreservingMergeExec::new(spm.expr().clone(), buffered)
+                                .with_fetch(spm.fetch());
                         return Ok(Transformed::yes(Arc::new(new_spm)));
                     }
                     SortOrderPushdownResult::Inexact { inner } => {
@@ -127,10 +136,7 @@ impl PhysicalOptimizerRule for PushdownSort {
                             spm.expr().clone(),
                             Arc::new(new_sort),
                         )
-                        .with_fetch(spm.fetch())
-                        .with_round_robin_repartition(
-                            spm.enable_round_robin_repartition(),
-                        );
+                        .with_fetch(spm.fetch());
                         return Ok(Transformed::yes(Arc::new(new_spm)));
                     }
                     SortOrderPushdownResult::Unsupported => {
