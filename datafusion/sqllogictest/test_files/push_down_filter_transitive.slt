@@ -1,0 +1,224 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for transitive predicate propagation through join chains
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# Tables with overlapping 'a' values to test join chains
+# t1 ∩ t2 ∩ t3 on a: {1, 2, 5}
+# t1 ∩ t2 ∩ t3 ∩ t4 on a: {1, 2, 5}
+
+statement ok
+CREATE TABLE t1(a INT, b INT, c INT)
+AS VALUES
+(1, 10, 100),
+(2, 20, 200),
+(3, 30, 300),
+(5, 50, 500),
+(8, 80, 800);
+
+statement ok
+CREATE TABLE t2(a INT, b INT, c INT)
+AS VALUES
+(1, 11, 101),
+(2, 21, 201),
+(3, 31, 301),
+(5, 51, 501),
+(6, 61, 601);
+
+statement ok
+CREATE TABLE t3(a INT, b INT, c INT)
+AS VALUES
+(1, 12, 102),
+(2, 22, 202),
+(5, 52, 502),
+(7, 72, 702),
+(9, 92, 902);
+
+statement ok
+CREATE TABLE t4(a INT, b INT, c INT)
+AS VALUES
+(1, 13, 103),
+(2, 23, 203),
+(3, 33, 303),
+(5, 53, 503),
+(8, 83, 803);
+
+####
+# Three-table INNER JOIN chain with transitive predicate
+# Filter on t1.a > 3 should propagate to t2 and t3 through:
+# t1.a = t2.a AND t2.a = t3.a
+####
+
+# Verify the optimized plan shows the filter pushed to all three tables
+query TT
+EXPLAIN SELECT t1.a, t2.b, t3.c
+FROM t1
+JOIN t2 ON t1.a = t2.a
+JOIN t3 ON t2.a = t3.a
+WHERE t1.a > 3;
+----
+logical_plan
+01)Projection: t1.a, t2.b, t3.c
+02)--Inner Join: t2.a = t3.a
+03)----Inner Join: t1.a = t2.a
+04)------Filter: t1.a > Int32(3)
+05)--------TableScan: t1 projection=[a]
+06)------Filter: t2.a > Int32(3)
+07)--------TableScan: t2 projection=[a, b]
+08)----Filter: t3.a > Int32(3)
+09)------TableScan: t3 projection=[a, c]
+
+# Verify correct query results
+query III
+SELECT t1.a, t2.b, t3.c
+FROM t1
+JOIN t2 ON t1.a = t2.a
+JOIN t3 ON t2.a = t3.a
+WHERE t1.a > 3;
+----
+5 51 502
+
+####
+# Four-table INNER JOIN chain
+# t1.a = t2.a, t2.a = t3.a, t3.a = t4.a, WHERE t1.a = 1
+# Transitive filter should push t*.a = 1 to ALL four tables
+####
+
+query TT
+EXPLAIN SELECT t1.a, t2.b, t3.b, t4.b
+FROM t1
+JOIN t2 ON t1.a = t2.a
+JOIN t3 ON t2.a = t3.a
+JOIN t4 ON t3.a = t4.a
+WHERE t1.a = 1;
+----
+logical_plan
+01)Projection: t1.a, t2.b, t3.b, t4.b
+02)--Inner Join: t3.a = t4.a
+03)----Projection: t1.a, t2.b, t3.a, t3.b
+04)------Inner Join: t2.a = t3.a
+05)--------Inner Join: t1.a = t2.a
+06)----------Filter: t1.a = Int32(1)
+07)------------TableScan: t1 projection=[a]
+08)----------Filter: t2.a = Int32(1)
+09)------------TableScan: t2 projection=[a, b]
+10)--------Filter: t3.a = Int32(1)
+11)----------TableScan: t3 projection=[a, b]
+12)----Filter: t4.a = Int32(1)
+13)------TableScan: t4 projection=[a, b]
+
+query IIII
+SELECT t1.a, t2.b, t3.b, t4.b
+FROM t1
+JOIN t2 ON t1.a = t2.a
+JOIN t3 ON t2.a = t3.a
+JOIN t4 ON t3.a = t4.a
+WHERE t1.a = 1;
+----
+1 11 12 13
+
+####
+# Mixed INNER + LEFT JOIN chain
+# Filter should propagate through INNER join and into LEFT join right side
+# (because > is null-restricting)
+####
+
+query TT
+EXPLAIN SELECT t1.a, t2.b, t3.c
+FROM t1
+JOIN t2 ON t1.a = t2.a
+LEFT JOIN t3 ON t2.a = t3.a
+WHERE t1.a > 3;
+----
+logical_plan
+01)Projection: t1.a, t2.b, t3.c
+02)--Left Join: t2.a = t3.a
+03)----Inner Join: t1.a = t2.a
+04)------Filter: t1.a > Int32(3)
+05)--------TableScan: t1 projection=[a]
+06)------Filter: t2.a > Int32(3)
+07)--------TableScan: t2 projection=[a, b]
+08)----Filter: t3.a > Int32(3)
+09)------TableScan: t3 projection=[a, c]
+
+# LEFT JOIN preserves left side rows even when right has no match
+query III rowsort
+SELECT t1.a, t2.b, t3.c
+FROM t1
+JOIN t2 ON t1.a = t2.a
+LEFT JOIN t3 ON t2.a = t3.a
+WHERE t1.a > 1;
+----
+2 21 202
+3 31 NULL
+5 51 502
+
+####
+# Verify correctness: three-table join returns same results with and without filter
+####
+
+query III rowsort
+SELECT t1.a, t2.b, t3.c
+FROM t1
+JOIN t2 ON t1.a = t2.a
+JOIN t3 ON t2.a = t3.a;
+----
+1 11 102
+2 21 202
+5 51 502
+
+# With filter that matches some rows
+query III rowsort
+SELECT t1.a, t2.b, t3.c
+FROM t1
+JOIN t2 ON t1.a = t2.a
+JOIN t3 ON t2.a = t3.a
+WHERE t1.a >= 2;
+----
+2 21 202
+5 51 502
+
+# With filter that matches no rows
+query III rowsort
+SELECT t1.a, t2.b, t3.c
+FROM t1
+JOIN t2 ON t1.a = t2.a
+JOIN t3 ON t2.a = t3.a
+WHERE t1.a > 100;
+----
+
+####
+# Cleanup
+####
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;
+
+statement ok
+DROP TABLE t4;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
