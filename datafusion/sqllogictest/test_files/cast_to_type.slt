@@ -152,8 +152,12 @@ SELECT cast_to_type('2024-01-15', NULL::DATE);
 2024-01-15
 
 # Error on invalid cast
-statement error
+statement error Cannot cast string 'not_a_number' to value of Int32 type
 SELECT cast_to_type('not_a_number', NULL::INTEGER);
+
+# Error on invalid target type
+statement error Unsupported SQL type INVALID
+SELECT cast_to_type('42', NULL::INVALID);
 
 statement ok
 DROP TABLE t1;
