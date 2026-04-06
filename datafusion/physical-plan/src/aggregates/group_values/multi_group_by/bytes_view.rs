@@ -162,23 +162,31 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         match all_null_or_non_null {
             Nulls::Some => {
+                let input_views = arr.views();
                 for &row in rows {
                     if arr.is_null(row) {
                         self.nulls.append(true);
                         self.views.push(0);
                     } else {
                         self.nulls.append(false);
-                        self.do_append_val_inner(arr, row);
+                        // SAFETY: row is a valid index
+                        let input_view =
+                            unsafe { *input_views.get_unchecked(row) };
+                        self.do_append_val_with_view(arr, row, input_view);
                     }
                 }
             }
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
+                let input_views = arr.views();
                 let has_buffers = !arr.data_buffers().is_empty();
                 if has_buffers {
                     for &row in rows {
-                        self.do_append_val_inner(arr, row);
+                        // SAFETY: row is a valid index
+                        let input_view =
+                            unsafe { *input_views.get_unchecked(row) };
+                        self.do_append_val_with_view(arr, row, input_view);
                     }
                 } else {
                     // All values are inline — just copy the views directly
@@ -205,6 +213,19 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     {
         // SAFETY: row is a valid index
         let input_view = unsafe { *array.views().get_unchecked(row) };
+        self.do_append_val_with_view(array, row, input_view);
+    }
+
+    /// Append a value with a pre-fetched input view, avoiding redundant view lookups
+    #[inline(always)]
+    fn do_append_val_with_view(
+        &mut self,
+        array: &GenericByteViewArray<B>,
+        row: usize,
+        input_view: u128,
+    ) where
+        B: ByteViewType,
+    {
         let value_len = input_view as u32;
 
         let view = if value_len <= 12 {
@@ -274,10 +295,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // SAFETY: the `lhs_row` and rhs_row` are valid
         let exist_view = unsafe { *self.views.get_unchecked(lhs_row) };
-        let exist_view_len = exist_view as u32;
-
         let input_view = unsafe { *array.views().get_unchecked(rhs_row) };
-        let input_view_len = input_view as u32;
 
         // fast path, if we know there are no buffers, then the view must be inlined
         // so we can simply compare the u128 views
@@ -285,27 +303,19 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             return exist_view == input_view;
         }
 
-        // The check logic
-        //   - Check len equality
-        //   - If inlined, check inlined value
-        //   - If non-inlined, check prefix and then check value in buffer
-        //     when needed
-        if exist_view_len != input_view_len {
+        // Compare the lower 8 bytes (len + prefix) in one shot.
+        // This rejects mismatches on either length or prefix with a single comparison.
+        let exist_lo = exist_view as u64;
+        let input_lo = input_view as u64;
+        if exist_lo != input_lo {
             return false;
         }
 
+        let exist_view_len = exist_view as u32;
         if exist_view_len <= 12 {
-            // both inlined, so compare inlined value
-            exist_view == input_view
+            // both inlined and len+prefix match — compare remaining inlined data
+            (exist_view >> 64) == (input_view >> 64)
         } else {
-            let exist_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
-            let input_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&input_view, 4) };
-
-            if exist_prefix != input_prefix {
-                return false;
-            }
 
             // get the full values and compare
             let exist_full = {
