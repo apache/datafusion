@@ -990,44 +990,19 @@ mod test {
         buffer::BooleanBuffer,
     };
     use rand::{Rng, rngs::ThreadRng};
-    use std::{cmp, collections::HashSet};
+    use std::{cmp, collections::HashMap, collections::HashSet};
 
+    /// Tests NullState accumulation with a deterministic fixture: 100 dense
+    /// group indices (0..100), fixed null/filter patterns, block_size=3,
+    /// acc_rounds=5. Covers flat and blocked modes, with/without nulls and filters.
     #[test]
-    fn accumulate() {
-        let group_indices = (0..100).collect();
-        let values = (0..100).map(|i| (i + 1) * 10).collect();
-        let values_with_nulls = (0..100)
-            .map(|i| if i % 3 == 0 { None } else { Some((i + 1) * 10) })
-            .collect();
-
-        // default to every fifth value being false, every even
-        // being null
-        let filter: BooleanArray = (0..100)
-            .map(|i| {
-                let is_even = i % 2 == 0;
-                let is_fifth = i % 5 == 0;
-                if is_even {
-                    None
-                } else if is_fifth {
-                    Some(false)
-                } else {
-                    Some(true)
-                }
-            })
-            .collect();
-
-        // Test flat style
-        Fixture {
-            group_indices,
-            values,
-            values_with_nulls,
-            filter,
-            block_size: 3,
-            acc_rounds: 5,
-        }
-        .run()
+    fn accumulate_fixed() {
+        Fixture::new_fixed().run();
     }
 
+    /// Tests NullState accumulation with 100 randomized fixtures.
+    /// Group indices are generated via hash-table-style dedup (dense 0..N),
+    /// matching real GroupedHashAggregateStream behavior.
     #[test]
     fn accumulate_fuzz() {
         let mut rng = rand::rng();
@@ -1058,24 +1033,77 @@ mod test {
     }
 
     impl Fixture {
+        fn new_fixed() -> Self {
+            let group_indices = (0..100).collect();
+            let values = (0..100).map(|i| (i + 1) * 10).collect();
+            let values_with_nulls = (0..100)
+                .map(|i| if i % 3 == 0 { None } else { Some((i + 1) * 10) })
+                .collect();
+
+            // default to every fifth value being false, every even
+            // being null
+            let filter: BooleanArray = (0..100)
+                .map(|i| {
+                    let is_even = i % 2 == 0;
+                    let is_fifth = i % 5 == 0;
+                    if is_even {
+                        None
+                    } else if is_fifth {
+                        Some(false)
+                    } else {
+                        Some(true)
+                    }
+                })
+                .collect();
+
+            Self {
+                group_indices,
+                values,
+                values_with_nulls,
+                filter,
+                block_size: 3,
+                acc_rounds: 5,
+            }
+        }
+
         fn new_random(rng: &mut ThreadRng) -> Self {
             // Number of input values in a batch
             let num_values: usize = rng.random_range(1..200);
-            // number of distinct groups
-            let num_groups: usize = rng.random_range(2..1000);
-            let max_group = num_groups - 1;
+            // number of distinct "raw keys" each row can map to
+            let num_distinct_keys: usize = rng.random_range(2..1000);
 
+            // Simulate hash-table dedup: each row gets a random raw key,
+            // and a HashMap assigns group indices sequentially (0, 1, 2, …).
+            // This guarantees group_indices are dense in 0..num_groups, just
+            // like real GroupedHashAggregateStream behavior.
+            //
+            // Example: raw keys = [7, 3, 7, 5, 3]
+            //   → first-seen order: 7→0, 3→1, 5→2
+            //   → group_indices   : [0, 1, 0, 2, 1]
+            //   → total_num_groups = 3  (all of 0,1,2 actually appeared)
+            let mut key_to_group: HashMap<usize, usize> = HashMap::new();
+            let mut next_group_index: usize = 0;
             let group_indices: Vec<usize> = (0..num_values)
-                .map(|_| rng.random_range(0..max_group))
+                .map(|_| {
+                    let raw_key = rng.random_range(0..num_distinct_keys);
+                    let len = key_to_group.len();
+                    *key_to_group.entry(raw_key).or_insert_with(|| {
+                        let idx = len;
+                        next_group_index = len + 1;
+                        idx
+                    })
+                })
                 .collect();
+
+            let num_groups = next_group_index;
 
             let values: Vec<u32> = (0..num_values).map(|_| rng.random()).collect();
 
             // random block size
-            let block_size = rng.gen_range(1..num_groups);
+            let block_size = rng.random_range(1..cmp::max(num_groups, 2));
 
             // random acc rounds
-            let acc_rounds = rng.gen_range(1..=group_indices.len());
+            let acc_rounds = rng.random_range(1..=group_indices.len());
 
             // 10% chance of false
             // 10% change of null
@@ -1428,7 +1456,7 @@ mod test {
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
-            let null_buffer = null_state.build(EmitTo::All);
+            let null_buffer = null_state.build_single_null_buffer();
             if let Some(nulls) = &null_buffer {
                 assert_eq!(*nulls, expected_null_buffer);
             }
