@@ -19,7 +19,7 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray, make_view};
+use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
@@ -157,17 +157,37 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             Nulls::Some
         };
 
+        // Pre-reserve capacity for views
+        self.views.reserve(rows.len());
+
         match all_null_or_non_null {
             Nulls::Some => {
                 for &row in rows {
-                    self.append_val_inner(array, row);
+                    if arr.is_null(row) {
+                        self.nulls.append(true);
+                        self.views.push(0);
+                    } else {
+                        self.nulls.append(false);
+                        self.do_append_val_inner(arr, row);
+                    }
                 }
             }
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
+                let has_buffers = !arr.data_buffers().is_empty();
+                if has_buffers {
+                    for &row in rows {
+                        self.do_append_val_inner(arr, row);
+                    }
+                } else {
+                    // All values are inline — just copy the views directly
+                    let input_views = arr.views();
+                    self.views.extend(
+                        rows.iter()
+                            // SAFETY: rows are valid indices
+                            .map(|&row| unsafe { *input_views.get_unchecked(row) }),
+                    );
                 }
             }
 
@@ -183,21 +203,31 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     where
         B: ByteViewType,
     {
-        let value: &[u8] = array.value(row).as_ref();
+        // SAFETY: row is a valid index
+        let input_view = unsafe { *array.views().get_unchecked(row) };
+        let value_len = input_view as u32;
 
-        let value_len = value.len();
         let view = if value_len <= 12 {
-            make_view(value, 0, 0)
+            // For inline values, the view is self-contained — copy it directly
+            // without accessing the underlying byte data
+            input_view
         } else {
-            // Ensure big enough block to hold the value firstly
-            self.ensure_in_progress_big_enough(value_len);
+            // For non-inline values, we need to copy the bytes into our buffers
+            // and create a new view pointing to our storage
+            let value: &[u8] = unsafe { array.value_unchecked(row).as_ref() };
 
-            // Append value
-            let buffer_index = self.completed.len();
-            let offset = self.in_progress.len();
+            // Ensure big enough block to hold the value firstly
+            self.ensure_in_progress_big_enough(value.len());
+
+            // Reuse length+prefix from input view, set our buffer location
+            let buffer_index = self.completed.len() as u32;
+            let offset = self.in_progress.len() as u32;
             self.in_progress.extend_from_slice(value);
 
-            make_view(value, buffer_index as u32, offset as u32)
+            ByteView::from(input_view)
+                .with_buffer_index(buffer_index)
+                .with_offset(offset)
+                .as_u128()
         };
 
         // Append view
