@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# check_flaky_pgjson_test.sh
+#
+# Runs the pgjson explain.slt test multiple times to determine whether
+# the failure at line 642 is flaky (non-deterministic) or consistent.
+#
+# Usage:
+#   ./ci/scripts/check_flaky_pgjson_test.sh [ITERATIONS]
+#
+# Default: 10 iterations
+
+set -euo pipefail
+
+ITERATIONS="${1:-10}"
+PASS=0
+FAIL=0
+RESULTS=()
+
+# Locate workspace root (directory containing Cargo.toml with [workspace])
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+echo "=== Flakiness check for: explain format pgjson select * from values (1) ==="
+echo "    File : datafusion/sqllogictest/test_files/explain.slt (line 642)"
+echo "    Iterations: $ITERATIONS"
+echo ""
+
+for i in $(seq 1 "$ITERATIONS"); do
+    # Run only the explain sqllogictest file.
+    # The -- explain argument matches files whose path contains "explain".
+    if cargo test \
+            --quiet \
+            --manifest-path "$REPO_ROOT/Cargo.toml" \
+            -p datafusion-sqllogictest \
+            --test sqllogictests \
+            -- explain \
+            2>&1 | grep -q "test result: ok"; then
+        STATUS="PASS"
+        PASS=$((PASS + 1))
+    else
+        STATUS="FAIL"
+        FAIL=$((FAIL + 1))
+    fi
+
+    RESULTS+=("  Run $i: $STATUS")
+    echo "  Run $i: $STATUS"
+done
+
+echo ""
+echo "=== Results ==="
+echo "  Passed : $PASS / $ITERATIONS"
+echo "  Failed : $FAIL / $ITERATIONS"
+echo ""
+
+if [[ $PASS -gt 0 && $FAIL -gt 0 ]]; then
+    echo "VERDICT: FLAKY — test result was non-deterministic ($PASS pass, $FAIL fail)"
+    exit 0
+elif [[ $FAIL -eq "$ITERATIONS" ]]; then
+    echo "VERDICT: CONSISTENTLY FAILING — not flaky, this is a deterministic bug"
+    echo ""
+    echo "Likely cause: serde_json is compiled without the 'preserve_order' feature,"
+    echo "so JSON object keys are sorted alphabetically (BTreeMap) instead of"
+    echo "preserving insertion order (IndexMap). The test expects insertion order:"
+    echo "  Node Type → Values → Plans → Output"
+    echo "but always gets alphabetical order:"
+    echo "  Node Type → Output → Plans → Values"
+    exit 1
+else
+    echo "VERDICT: CONSISTENTLY PASSING — test is healthy"
+    exit 0
+fi
