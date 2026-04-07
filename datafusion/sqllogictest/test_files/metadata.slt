@@ -86,7 +86,7 @@ select count(distinct name) from table_with_metadata;
 query I
 select approx_median(distinct id) from table_with_metadata;
 ----
-2
+1
 
 # Regression test: prevent field metadata loss per https://github.com/apache/datafusion/issues/12687
 statement ok

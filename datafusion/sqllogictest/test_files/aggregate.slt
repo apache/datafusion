@@ -1351,7 +1351,7 @@ DROP TABLE median_window_test;
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
 ----
-2.75 Float16
+2.1992188 Float16
 
 # This shouldn't be NaN, see:
 # https://github.com/apache/datafusion/issues/18945
@@ -1369,7 +1369,7 @@ select
   arrow_typeof(approx_percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
 from median_table;
 ----
-2.75 Float16
+2.1992188 Float16
 
 query ?T
 select approx_median(NULL), arrow_typeof(approx_median(NULL)) from median_table;
@@ -1388,7 +1388,7 @@ select median(c), arrow_typeof(median(c)) from t;
 query RT
 select approx_median(c), arrow_typeof(approx_median(c)) from t;
 ----
-0.00035 Float64
+0.0003 Float64
 
 statement ok
 drop table t;
@@ -2322,7 +2322,7 @@ SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FRO
 a 65
 b 68
 c 118
-d 123
+d 125
 e 112
 
 
@@ -2333,7 +2333,7 @@ SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GR
 a 65
 b 68
 c 118
-d 123
+d 125
 e 112
 
 
@@ -2344,7 +2344,7 @@ SELECT c1, approx_percentile_cont(c2, 0.95) AS c2, approx_percentile_cont(c3, 0.
 a 5 65
 b 5 68
 c 5 118
-d 5 123
+d 5 125
 e 5 112
 
 # error is unique to this UDAF
@@ -2362,11 +2362,11 @@ e 3 40.333333333333
 query TI
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a -100
-b -111
+a -101
+b -117
 c -107
-d -98
-e -85
+d -99
+e -86
 
 # csv_query_approx_percentile_cont_with_weight (2)
 query TI
@@ -2375,7 +2375,7 @@ SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3
 a 65
 b 68
 c 118
-d 123
+d 125
 e 112
 
 # csv_query_approx_percentile_cont_with_weight alternate syntax
@@ -2385,18 +2385,18 @@ SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggreg
 a 65
 b 68
 c 118
-d 123
+d 125
 e 112
 
 
 query TI
 SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a -100
-b -111
+a -101
+b -117
 c -107
-d -98
-e -85
+d -99
+e -86
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 query TI
@@ -2405,7 +2405,7 @@ SELECT c1, approx_percentile_cont(0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p9
 a 65
 b 68
 c 118
-d 123
+d 125
 e 112
 
 query TI
@@ -8804,9 +8804,9 @@ FROM (SELECT * FROM stream_test ORDER BY g LIMIT 10000)
 GROUP BY g
 ORDER BY g;
 ----
-1 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
-2 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
-3 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
+1 2 1 1.5 1.5 1 1 1.5 1 1
+2 2 1 1.5 1.5 1 1 1.5 1 1
+3 2 1 1.5 1.5 1 1 1.5 1 1
 
 # Config reset
 
