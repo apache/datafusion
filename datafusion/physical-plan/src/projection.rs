@@ -34,7 +34,6 @@ use crate::filter_pushdown::{
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr, check_if_same_properties};
-use std::any::Any;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -51,7 +50,6 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
-use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
@@ -283,10 +281,6 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -316,6 +310,17 @@ impl ExecutionPlan for ProjectionExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for proj_expr in self.projector.projection().as_ref().iter() {
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
+        }
+        Ok(tnr)
     }
 
     fn with_new_children(
@@ -354,12 +359,15 @@ impl ExecutionPlan for ProjectionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stats = self.input.partition_statistics(partition)?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let input_stats =
+            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let output_schema = self.schema();
-        self.projector
-            .projection()
-            .project_statistics(input_stats, &output_schema)
+        Ok(Arc::new(
+            self.projector
+                .projection()
+                .project_statistics(input_stats, &output_schema)?,
+        ))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -593,13 +601,7 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
         return Ok(None);
     };
 
-    // If the projection indices is the same as the input columns, we don't need to embed the projection to hash join.
-    // Check the projection_index is 0..n-1 and the length of projection_index is the same as the length of execution_plan schema fields.
-    if projection_index.len() == projection_index.last().unwrap() + 1
-        && projection_index.len() == execution_plan.schema().fields().len()
-    {
-        return Ok(None);
-    }
+    let columns_reduced = projection_index.len() < execution_plan.schema().fields().len();
 
     let new_execution_plan =
         Arc::new(execution_plan.with_projection(Some(projection_index.to_vec()))?);
@@ -634,9 +636,16 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
         Arc::clone(&new_execution_plan) as _,
     )?);
     if is_projection_removable(&new_projection) {
+        // Residual is identity — embedding fully absorbed the projection.
         Ok(Some(new_execution_plan))
-    } else {
+    } else if columns_reduced {
+        // Embedding reduced columns even though a residual is still needed
+        // for renames or expressions — worth keeping.
         Ok(Some(new_projection))
+    } else {
+        // No columns eliminated and residual still needed — embedding just
+        // adds an unnecessary column reorder inside the operator.
+        Ok(None)
     }
 }
 
@@ -718,20 +727,19 @@ pub fn try_pushdown_through_join(
 pub fn remove_unnecessary_projections(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let maybe_modified =
-        if let Some(projection) = plan.as_any().downcast_ref::<ProjectionExec>() {
-            // If the projection does not cause any change on the input, we can
-            // safely remove it:
-            if is_projection_removable(projection) {
-                return Ok(Transformed::yes(Arc::clone(projection.input())));
-            }
-            // If it does, check if we can push it under its child(ren):
-            projection
-                .input()
-                .try_swapping_with_projection(projection)?
-        } else {
-            return Ok(Transformed::no(plan));
-        };
+    let maybe_modified = if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+        // If the projection does not cause any change on the input, we can
+        // safely remove it:
+        if is_projection_removable(projection) {
+            return Ok(Transformed::yes(Arc::clone(projection.input())));
+        }
+        // If it does, check if we can push it under its child(ren):
+        projection
+            .input()
+            .try_swapping_with_projection(projection)?
+    } else {
+        return Ok(Transformed::no(plan));
+    };
     Ok(maybe_modified.map_or_else(|| Transformed::no(plan), Transformed::yes))
 }
 
@@ -1066,15 +1074,37 @@ fn try_unifying_projections(
 
 /// Collect all column indices from the given projection expressions.
 fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
-    // Collect indices and remove duplicates.
-    let mut indices = exprs
-        .iter()
-        .flat_map(|proj_expr| collect_columns(&proj_expr.expr))
-        .map(|x| x.index())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    indices.sort();
+    // Collect column indices in a deterministic order that preserves the
+    // projection's column ordering. For simple Column expressions, we use
+    // the column index directly. For complex expressions, we walk the
+    // expression tree to collect column references in traversal order.
+    // This allows the embedded projection to match the desired output
+    // column order, avoiding a residual ProjectionExec.
+    let mut seen = std::collections::HashSet::new();
+    let mut indices = Vec::new();
+    for proj_expr in exprs {
+        if let Some(col) = proj_expr.expr.as_any().downcast_ref::<Column>() {
+            // Simple column reference: preserve projection order.
+            if seen.insert(col.index()) {
+                indices.push(col.index());
+            }
+        } else {
+            // Complex expression: collect all referenced columns in
+            // expression tree traversal order (deterministic) to preserve
+            // the natural ordering of column references.
+            proj_expr
+                .expr
+                .apply(|expr| {
+                    if let Some(col) = expr.as_any().downcast_ref::<Column>()
+                        && seen.insert(col.index())
+                    {
+                        indices.push(col.index());
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+                .expect("closure always returns OK");
+        }
+    }
     indices
 }
 
@@ -1157,7 +1187,6 @@ fn new_columns_for_join_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     use crate::common::collect;
 
@@ -1189,7 +1218,8 @@ mod tests {
             expr,
             alias: "b-(1+a)".to_string(),
         }]);
-        assert_eq!(column_indices, vec![1, 7]);
+        // Tree traversal order: b@7 is visited before a@1
+        assert_eq!(column_indices, vec![7, 1]);
         Ok(())
     }
 

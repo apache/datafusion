@@ -17,7 +17,6 @@
 
 //! Test utilities for physical optimizer tests
 
-use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, LazyLock};
 
@@ -31,7 +30,9 @@ use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
     ColumnStatistics, JoinType, NullEquality, Result, Statistics, internal_err,
@@ -450,10 +451,6 @@ impl ExecutionPlan for RequirementsTestExec {
         "RequiredInputOrderingExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         self.input.properties()
     }
@@ -491,6 +488,20 @@ impl ExecutionPlan for RequirementsTestExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("Test exec does not support execution")
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in required_input_ordering if present
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = &self.required_input_ordering {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 
@@ -911,10 +922,6 @@ impl ExecutionPlan for TestScan {
         "TestScan"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
@@ -942,8 +949,8 @@ impl ExecutionPlan for TestScan {
         internal_err!("TestScan is for testing optimizer only, not for execution")
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema))
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 
     // This is the key method - implement sort pushdown
@@ -962,6 +969,28 @@ impl ExecutionPlan for TestScan {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_scan),
         })
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in output_ordering
+        let mut tnr = TreeNodeRecursion::Continue;
+        for ordering in &self.output_ordering {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+
+        // Visit expressions in requested_ordering if present
+        if let Some(ordering) = &self.requested_ordering {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+
+        Ok(tnr)
     }
 }
 

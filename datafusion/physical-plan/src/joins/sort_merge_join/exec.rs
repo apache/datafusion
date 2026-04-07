@@ -19,24 +19,25 @@
 //! A Sort-Merge join plan consumes two sorted children plans and produces
 //! joined output by given join type and other options.
 
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use super::bitwise_stream::BitwiseSortMergeJoinStream;
+use super::materializing_stream::MaterializingSortMergeJoinStream;
+use super::metrics::SortMergeJoinMetrics;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
-use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
-use crate::joins::sort_merge_join::stream::SortMergeJoinStream;
 use crate::joins::utils::{
     JoinFilter, JoinOn, JoinOnRef, build_join_schema, check_join_is_valid,
     estimate_join_statistics, reorder_output_after_swap,
     symmetric_join_output_partitioning,
 };
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
 use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on,
 };
+use crate::spill::spill_manager::SpillManager;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, Statistics, check_if_same_properties,
@@ -44,6 +45,7 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
     plan_err,
@@ -334,6 +336,8 @@ impl SortMergeJoinExec {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) {
             Ok(Arc::new(new_join))
         } else {
@@ -415,10 +419,6 @@ impl ExecutionPlan for SortMergeJoinExec {
         "SortMergeJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -448,6 +448,23 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join keys from both sides
+        let mut tnr = TreeNodeRecursion::Continue;
+        for (left, right) in &self.on {
+            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
+            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
+        }
+        // Apply to join filter expressions if present
+        if let Some(filter) = &self.filter {
+            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
+        }
+        Ok(tnr)
     }
 
     fn with_new_children(
@@ -504,37 +521,67 @@ impl ExecutionPlan for SortMergeJoinExec {
         let streamed = streamed.execute(partition, Arc::clone(&context))?;
         let buffered = buffered.execute(partition, Arc::clone(&context))?;
 
-        // create output buffer
         let batch_size = context.session_config().batch_size();
-
-        // create memory reservation
         let reservation = MemoryConsumer::new(format!("SMJStream[{partition}]"))
             .register(context.memory_pool());
-
-        // create join stream
-        Ok(Box::pin(SortMergeJoinStream::try_new(
-            context.session_config().spill_compression(),
-            Arc::clone(&self.schema),
-            self.sort_options.clone(),
-            self.null_equality,
-            streamed,
-            buffered,
-            on_streamed,
-            on_buffered,
-            self.filter.clone(),
-            self.join_type,
-            batch_size,
-            SortMergeJoinMetrics::new(partition, &self.metrics),
-            reservation,
+        let spill_manager = SpillManager::new(
             context.runtime_env(),
-        )?))
+            SpillMetrics::new(&self.metrics, partition),
+            buffered.schema(),
+        )
+        .with_compression_type(context.session_config().spill_compression());
+
+        if matches!(
+            self.join_type,
+            JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::RightSemi
+                | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
+        ) {
+            Ok(Box::pin(BitwiseSortMergeJoinStream::try_new(
+                Arc::clone(&self.schema),
+                self.sort_options.clone(),
+                self.null_equality,
+                streamed,
+                buffered,
+                on_streamed,
+                on_buffered,
+                self.filter.clone(),
+                self.join_type,
+                batch_size,
+                partition,
+                &self.metrics,
+                reservation,
+                spill_manager,
+                context.runtime_env(),
+            )?))
+        } else {
+            Ok(Box::pin(MaterializingSortMergeJoinStream::try_new(
+                Arc::clone(&self.schema),
+                self.sort_options.clone(),
+                self.null_equality,
+                streamed,
+                buffered,
+                on_streamed,
+                on_buffered,
+                self.filter.clone(),
+                self.join_type,
+                batch_size,
+                SortMergeJoinMetrics::new(partition, &self.metrics),
+                reservation,
+                spill_manager,
+                context.runtime_env(),
+            )?))
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // SortMergeJoinExec uses symmetric hash partitioning where both left and right
         // inputs are hash-partitioned on the join keys. This means partition `i` of the
         // left input is joined with partition `i` of the right input.
@@ -546,13 +593,16 @@ impl ExecutionPlan for SortMergeJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        estimate_join_statistics(
-            self.left.partition_statistics(partition)?,
-            self.right.partition_statistics(partition)?,
+        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(partition)?);
+        let right_stats =
+            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
+        Ok(Arc::new(estimate_join_statistics(
+            left_stats,
+            right_stats,
             &self.on,
             &self.join_type,
             &self.schema,
-        )
+        )?))
     }
 
     /// Tries to swap the projection with its input [`SortMergeJoinExec`]. If it can be done,

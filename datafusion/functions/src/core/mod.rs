@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 pub mod arrow_cast;
 pub mod arrow_metadata;
+pub mod arrow_try_cast;
 pub mod arrowtypeof;
 pub mod coalesce;
 pub mod expr_ext;
@@ -42,6 +43,7 @@ pub mod version;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, arrow_cast);
+make_udf_function!(arrow_try_cast::ArrowTryCastFunc, arrow_try_cast);
 make_udf_function!(nullif::NullIfFunc, nullif);
 make_udf_function!(nvl::NVLFunc, nvl);
 make_udf_function!(nvl2::NVL2Func, nvl2);
@@ -67,7 +69,11 @@ pub mod expr_fn {
         arg1 arg2
     ),(
         arrow_cast,
-        "Returns value2 if value1 is NULL; otherwise it returns value1",
+        "Casts a value to a specific Arrow data type",
+        arg1 arg2
+    ),(
+        arrow_try_cast,
+        "Casts a value to a specific Arrow data type, returning NULL if the cast fails",
         arg1 arg2
     ),(
         nvl,
@@ -140,6 +146,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         nullif(),
         arrow_cast(),
+        arrow_try_cast(),
         arrow_metadata(),
         nvl(),
         nvl2(),

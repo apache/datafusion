@@ -21,12 +21,14 @@
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType, file_stream::FileStream,
+    file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
     source::DataSource, statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
 };
@@ -78,7 +80,9 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Result;
+/// # use datafusion_common::tree_node::TreeNodeRecursion;
 /// # use datafusion_datasource::file::FileSource;
+/// # use datafusion_physical_plan::PhysicalExpr;
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -109,6 +113,7 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
+/// #  fn apply_expressions(&self, _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 /// #  }
 /// # impl ParquetSource {
 /// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
@@ -584,7 +589,11 @@ impl DataSource for FileScanConfig {
 
         let opener = source.create_file_opener(object_store, self, partition)?;
 
-        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        let stream = FileStreamBuilder::new(self)
+            .with_partition(partition)
+            .with_file_opener(opener)
+            .with_metrics(source.metrics())
+            .build()?;
         Ok(Box::pin(cooperative(stream)))
     }
 
@@ -777,7 +786,7 @@ impl DataSource for FileScanConfig {
         SchedulingType::Cooperative
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             // Get statistics for a specific partition
             // Note: FileGroup statistics include partition columns (computed from partition_values)
@@ -787,22 +796,28 @@ impl DataSource for FileScanConfig {
                 // Project the statistics based on the projection
                 let output_schema = self.projected_schema()?;
                 return if let Some(projection) = self.file_source.projection() {
-                    projection.project_statistics(stat.clone(), &output_schema)
+                    Ok(Arc::new(
+                        projection.project_statistics(stat.clone(), &output_schema)?,
+                    ))
                 } else {
-                    Ok(stat.clone())
+                    Ok(Arc::new(stat.clone()))
                 };
             }
             // If no statistics available for this partition, return unknown
-            Ok(Statistics::new_unknown(self.projected_schema()?.as_ref()))
+            Ok(Arc::new(Statistics::new_unknown(
+                self.projected_schema()?.as_ref(),
+            )))
         } else {
             // Return aggregate statistics across all partitions
             let statistics = self.statistics();
             let projection = self.file_source.projection();
             let output_schema = self.projected_schema()?;
             if let Some(projection) = &projection {
-                projection.project_statistics(statistics.clone(), &output_schema)
+                Ok(Arc::new(
+                    projection.project_statistics(statistics.clone(), &output_schema)?,
+                ))
             } else {
-                Ok(statistics)
+                Ok(Arc::new(statistics))
             }
         }
     }
@@ -886,28 +901,72 @@ impl DataSource for FileScanConfig {
         }
     }
 
+    /// Push sort requirements into file-based data sources.
+    ///
+    /// # Sort Pushdown Architecture
+    ///
+    /// When a partition (file group) contains multiple files in wrong order,
+    /// `validated_output_ordering()` strips the ordering and `EnforceSorting`
+    /// inserts a `SortExec`. This optimizer fixes the file order by sorting
+    /// files within each group by min/max statistics, enabling sort elimination.
+    ///
+    /// This applies to both single-partition and multi-partition plans — any
+    /// file group with multiple files in wrong order benefits.
+    ///
+    /// ```text
+    /// PushdownSort optimizer finds SortExec
+    ///   │
+    ///   ▼
+    /// FileScanConfig::try_pushdown_sort()
+    ///   │
+    ///   ├─► FileSource returns Exact
+    ///   │     (natural ordering satisfies request)
+    ///   │     → rebuild_with_source: sort files by stats, verify non-overlapping
+    ///   │     → SortExec removed, fetch (LIMIT) pushed to DataSourceExec
+    ///   │
+    ///   ├─► FileSource returns Inexact
+    ///   │     (reverse_row_groups=true)
+    ///   │     → SortExec kept, scan optimized
+    ///   │
+    ///   └─► FileSource returns Unsupported
+    ///         (ordering stripped because files in wrong order)
+    ///         → try_sort_file_groups_by_statistics():
+    ///           1. Sort files within each group by min/max statistics
+    ///           2. Re-check: non-overlapping + ordering valid?
+    ///              YES → Exact → SortExec removed
+    ///              NO  → Inexact (files reordered, Sort stays)
+    /// ```
     fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        // Delegate to FileSource to see if it can optimize for the requested ordering.
         let pushdown_result = self
             .file_source
             .try_pushdown_sort(order, &self.eq_properties())?;
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {
-                Ok(SortOrderPushdownResult::Exact {
-                    inner: self.rebuild_with_source(inner, true, order)?,
-                })
+                let config = self.rebuild_with_source(inner, true, order)?;
+                // rebuild_with_source keeps output_ordering only when all groups
+                // are non-overlapping. If output_ordering was cleared, files
+                // overlap despite within-file ordering → downgrade to Inexact.
+                if config.output_ordering.is_empty() {
+                    Ok(SortOrderPushdownResult::Inexact {
+                        inner: Arc::new(config),
+                    })
+                } else {
+                    Ok(SortOrderPushdownResult::Exact {
+                        inner: Arc::new(config),
+                    })
+                }
             }
             SortOrderPushdownResult::Inexact { inner } => {
                 Ok(SortOrderPushdownResult::Inexact {
-                    inner: self.rebuild_with_source(inner, false, order)?,
+                    inner: Arc::new(self.rebuild_with_source(inner, false, order)?),
                 })
             }
             SortOrderPushdownResult::Unsupported => {
-                Ok(SortOrderPushdownResult::Unsupported)
+                self.try_sort_file_groups_by_statistics(order)
             }
         }
     }
@@ -923,6 +982,21 @@ impl DataSource for FileScanConfig {
         };
         Some(Arc::new(new_config))
     }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the file source
+        self.file_source.apply_expressions(f)
+    }
+}
+
+/// Result of sorting files within groups by their min/max statistics.
+struct SortedFileGroups {
+    file_groups: Vec<FileGroup>,
+    any_reordered: bool,
+    all_non_overlapping: bool,
 }
 
 impl FileScanConfig {
@@ -1225,26 +1299,42 @@ impl FileScanConfig {
         &self.file_source
     }
 
-    /// Helper: Rebuild FileScanConfig with new file source
+    /// Rebuild FileScanConfig after sort pushdown, applying file-level optimizations.
+    ///
+    /// This is the core of sort pushdown for file-based sources. It performs
+    /// three optimizations depending on the pushdown result:
+    ///
+    /// ```text
+    /// ┌─────────────────────────────────────────────────────────────┐
+    /// │                 rebuild_with_source                         │
+    /// │                                                             │
+    /// │  1. Reverse file groups (if DESC matches reversed ordering) │
+    /// │  2. Sort files within groups by min/max statistics          │
+    /// │  3. If Exact + non-overlapping:                             │
+    /// │     Keep output_ordering → SortExec eliminated              │
+    /// │     Otherwise: clear output_ordering → SortExec stays       │
+    /// └─────────────────────────────────────────────────────────────┘
+    /// ```
+    ///
+    /// # Why sort files by statistics?
+    ///
+    /// Files within a partition (file group) are read sequentially. By sorting
+    /// them so that file_i.max <= file_{i+1}.min, the combined output stream
+    /// is already in order — no SortExec needed for that partition.
+    ///
+    /// Even when files overlap (Inexact), statistics-based ordering helps
+    /// TopK/LIMIT queries: reading low-value files first lets dynamic filters
+    /// prune high-value files earlier.
     fn rebuild_with_source(
         &self,
         new_file_source: Arc<dyn FileSource>,
         is_exact: bool,
         order: &[PhysicalSortExpr],
-    ) -> Result<Arc<dyn DataSource>> {
+    ) -> Result<FileScanConfig> {
         let mut new_config = self.clone();
 
         // Reverse file order (within each group) if the caller is requesting a reversal of this
         // scan's declared output ordering.
-        //
-        // Historically this function always reversed `file_groups` because it was only reached
-        // via `FileSource::try_reverse_output` (where a reversal was the only supported
-        // optimization).
-        //
-        // Now that `FileSource::try_pushdown_sort` is generic, we must not assume reversal: other
-        // optimizations may become possible (e.g. already-sorted data, statistics-based file
-        // reordering). Therefore we only reverse files when it is known to help satisfy the
-        // requested ordering.
         let reverse_file_groups = if self.output_ordering.is_empty() {
             false
         } else if let Some(requested) = LexOrdering::new(order.iter().cloned()) {
@@ -1271,13 +1361,273 @@ impl FileScanConfig {
 
         new_config.file_source = new_file_source;
 
-        // Phase 1: Clear output_ordering for Inexact
-        // (we're only reversing row groups, not guaranteeing perfect ordering)
-        if !is_exact {
+        // Sort files within groups by statistics when not reversing
+        let all_non_overlapping = if !reverse_file_groups {
+            if let Some(sort_order) = LexOrdering::new(order.iter().cloned()) {
+                let projected_schema = new_config.projected_schema()?;
+                let projection_indices = new_config
+                    .file_source
+                    .projection()
+                    .as_ref()
+                    .and_then(|p| ordered_column_indices_from_projection(p));
+                let result = Self::sort_files_within_groups_by_statistics(
+                    &new_config.file_groups,
+                    &sort_order,
+                    &projected_schema,
+                    projection_indices.as_deref(),
+                );
+                new_config.file_groups = result.file_groups;
+                result.all_non_overlapping
+            } else {
+                false
+            }
+        } else {
+            // When reversing, files are already reversed above. We skip
+            // statistics-based sorting here because it would undo the reversal.
+            // Note: reverse path is always Inexact, so all_non_overlapping
+            // is not used (is_exact is false).
+            false
+        };
+
+        if is_exact && all_non_overlapping {
+            // Truly exact: within-file ordering guaranteed and files are non-overlapping.
+            // Keep output_ordering so SortExec can be eliminated for each partition.
+            //
+            // We intentionally do NOT redistribute files across groups here.
+            // The planning-phase bin-packing may interleave file ranges across groups:
+            //
+            //   Group 0: [f1(1-10), f3(21-30)]   ← interleaved with group 1
+            //   Group 1: [f2(11-20), f4(31-40)]
+            //
+            // This interleaving is actually beneficial because SPM pulls from both
+            // partitions concurrently, keeping parallel I/O active:
+            //
+            //   SPM: pull P0 [1-10] → pull P1 [11-20] → pull P0 [21-30] → pull P1 [31-40]
+            //        ^^^^^^^^^^^^     ^^^^^^^^^^^^
+            //        both partitions scanning files simultaneously
+            //
+            // If we were to redistribute files consecutively:
+            //   Group 0: [f1(1-10), f2(11-20)]   ← all values < group 1
+            //   Group 1: [f3(21-30), f4(31-40)]
+            //
+            // SPM would read ALL of group 0 first (values always smaller), then group 1.
+            // This degrades to single-threaded sequential I/O — the other partition
+            // sits idle the entire time, losing the parallelism benefit.
+        } else {
             new_config.output_ordering = vec![];
         }
 
-        Ok(Arc::new(new_config))
+        Ok(new_config)
+    }
+
+    /// Sort files within each file group by their min/max statistics.
+    ///
+    /// No files are moved between groups — parallelism and group composition
+    /// are unchanged. Groups where statistics are unavailable are kept as-is.
+    ///
+    /// ```text
+    /// Before:  Group [file_c(20-30), file_a(0-9), file_b(10-19)]
+    /// After:   Group [file_a(0-9), file_b(10-19), file_c(20-30)]
+    ///                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ///                 sorted by min value, non-overlapping → Exact
+    /// ```
+    fn sort_files_within_groups_by_statistics(
+        file_groups: &[FileGroup],
+        sort_order: &LexOrdering,
+        projected_schema: &SchemaRef,
+        projection_indices: Option<&[usize]>,
+    ) -> SortedFileGroups {
+        let mut any_reordered = false;
+        let mut confirmed_non_overlapping: usize = 0;
+        let mut new_groups = Vec::with_capacity(file_groups.len());
+
+        for group in file_groups {
+            if group.len() <= 1 {
+                new_groups.push(group.clone());
+                confirmed_non_overlapping += 1;
+                continue;
+            }
+
+            let files: Vec<_> = group.iter().collect();
+
+            let statistics = match MinMaxStatistics::new_from_files(
+                sort_order,
+                projected_schema,
+                projection_indices,
+                files.iter().copied(),
+            ) {
+                Ok(stats) => stats,
+                Err(e) => {
+                    log::trace!(
+                        "Cannot sort file group by statistics: {e}. Keeping original order."
+                    );
+                    new_groups.push(group.clone());
+                    continue;
+                }
+            };
+
+            let sorted_indices = statistics.min_values_sorted();
+
+            let already_sorted = sorted_indices
+                .iter()
+                .enumerate()
+                .all(|(pos, (idx, _))| pos == *idx);
+
+            let sorted_group: FileGroup = if already_sorted {
+                group.clone()
+            } else {
+                any_reordered = true;
+                sorted_indices
+                    .iter()
+                    .map(|(idx, _)| files[*idx].clone())
+                    .collect()
+            };
+
+            let sorted_files: Vec<_> = sorted_group.iter().collect();
+            let is_non_overlapping = match MinMaxStatistics::new_from_files(
+                sort_order,
+                projected_schema,
+                projection_indices,
+                sorted_files.iter().copied(),
+            ) {
+                Ok(stats) => stats.is_sorted(),
+                Err(_) => false,
+            };
+
+            if is_non_overlapping {
+                confirmed_non_overlapping += 1;
+            }
+
+            new_groups.push(sorted_group);
+        }
+
+        SortedFileGroups {
+            file_groups: new_groups,
+            any_reordered,
+            all_non_overlapping: confirmed_non_overlapping == file_groups.len(),
+        }
+    }
+
+    /// Last-resort optimization when FileSource returns `Unsupported`.
+    ///
+    /// FileSource may return `Unsupported` because `eq_properties` had no
+    /// ordering — which happens when `validated_output_ordering()` stripped
+    /// the ordering because files were in the wrong order. After sorting
+    /// files by statistics, the ordering may become valid again.
+    ///
+    /// This method:
+    /// 1. Sorts files within groups by min/max statistics
+    /// 2. Re-checks if the sorted file order makes `output_ordering` valid
+    /// 3. If valid AND non-overlapping → `Exact` (SortExec eliminated!)
+    /// 4. If files were reordered but ordering not valid → `Inexact`
+    /// 5. If no files were reordered → `Unsupported`
+    ///
+    /// This handles the key case where files have correct within-file ordering
+    /// (e.g., Parquet sorting_columns metadata) but were listed in wrong order
+    /// (e.g., alphabetical order doesn't match sort key order).
+    fn try_sort_file_groups_by_statistics(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        let Some(sort_order) = LexOrdering::new(order.iter().cloned()) else {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        };
+
+        let projected_schema = self.projected_schema()?;
+        let projection_indices = self
+            .file_source
+            .projection()
+            .as_ref()
+            .and_then(|p| ordered_column_indices_from_projection(p));
+
+        let result = Self::sort_files_within_groups_by_statistics(
+            &self.file_groups,
+            &sort_order,
+            &projected_schema,
+            projection_indices.as_deref(),
+        );
+
+        if !result.any_reordered {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        let mut new_config = self.clone();
+        new_config.file_groups = result.file_groups;
+
+        // Re-check: now that files are sorted, does output_ordering become valid?
+        // This handles the case where validated_output_ordering() previously
+        // stripped the ordering because files were in the wrong order.
+        //
+        // IMPORTANT: We cannot claim Exact if any file in a non-last position
+        // contains NULLs in the sort columns. With NULLS LAST, NULLs within
+        // a file are placed after all non-null values. If the next file has
+        // non-null values smaller than the previous file's max, those values
+        // would incorrectly appear after the NULLs. Similarly for NULLS FIRST.
+        //
+        // Conservative approach: if any file has nulls in the sort columns,
+        // do not claim Exact. The SortExec will handle NULL ordering correctly.
+        if result.all_non_overlapping
+            && !self.output_ordering.is_empty()
+            && !Self::any_file_has_nulls_in_sort_columns(
+                &new_config.file_groups,
+                order,
+                &projected_schema,
+                projection_indices.as_deref(),
+            )
+        {
+            // Files are now non-overlapping, no NULLs in sort columns.
+            // Re-ask the FileSource if this ordering satisfies the request,
+            // using eq_properties computed from the NEW (sorted) file groups.
+            let new_eq_props = new_config.eq_properties();
+            if new_eq_props.ordering_satisfy(order.iter().cloned())? {
+                // The sorted file order makes the ordering valid → Exact!
+                return Ok(SortOrderPushdownResult::Exact {
+                    inner: Arc::new(new_config),
+                });
+            }
+        }
+
+        new_config.output_ordering = vec![];
+        Ok(SortOrderPushdownResult::Inexact {
+            inner: Arc::new(new_config),
+        })
+    }
+
+    /// Check if any file in any group has nulls in the sort columns.
+    fn any_file_has_nulls_in_sort_columns(
+        file_groups: &[FileGroup],
+        order: &[PhysicalSortExpr],
+        projected_schema: &SchemaRef,
+        projection_indices: Option<&[usize]>,
+    ) -> bool {
+        let Some(sort_columns) =
+            sort_columns_from_physical_sort_exprs_nullable(order, projected_schema)
+        else {
+            return true; // Can't determine, assume nulls exist
+        };
+
+        for group in file_groups {
+            for file in group.iter() {
+                let Some(stats) = file.statistics.as_ref() else {
+                    return true; // No stats, assume nulls exist
+                };
+                for col in &sort_columns {
+                    let stat_idx = projection_indices
+                        .map(|p| p[col.index()])
+                        .unwrap_or_else(|| col.index());
+                    if stat_idx >= stats.column_statistics.len() {
+                        return true;
+                    }
+                    let col_stats = &stats.column_statistics[stat_idx];
+                    match &col_stats.null_count {
+                        Precision::Exact(0) => {}           // No nulls, safe
+                        Precision::Exact(_) => return true, // Has nulls
+                        _ => return true, // Unknown null count, assume nulls
+                    }
+                }
+            }
+        }
+        false
     }
 }
 
@@ -1332,6 +1682,17 @@ fn ordered_column_indices_from_projection(
             Some(index)
         })
         .collect::<Option<Vec<usize>>>()
+}
+
+/// Extract Column references from sort expressions for null checking.
+fn sort_columns_from_physical_sort_exprs_nullable(
+    order: &[PhysicalSortExpr],
+    _schema: &SchemaRef,
+) -> Option<Vec<Column>> {
+    order
+        .iter()
+        .map(|expr| expr.expr.as_any().downcast_ref::<Column>().cloned())
+        .collect()
 }
 
 /// Check whether a given ordering is valid for all file groups by verifying
@@ -1438,6 +1799,22 @@ fn validate_orderings(
 ///
 ///              DataSourceExec
 /// ```
+///
+/// **Exception**: When files within a partition are **non-overlapping** (verified
+/// via min/max statistics) and each file is internally sorted, the combined
+/// output is still correctly sorted. Sort pushdown
+/// ([`FileScanConfig::try_pushdown_sort`]) detects this case and preserves
+/// `output_ordering`, allowing `SortExec` to be eliminated entirely.
+///
+/// ```text
+///   Partition 1 (files sorted by stats, non-overlapping):
+///   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+///   │   1.parquet      │  │   2.parquet      │  │   3.parquet      │
+///   │ A: [1..100]      │  │ A: [101..200]    │  │ A: [201..300]    │
+///   │ Sort: A, B, C    │  │ Sort: A, B, C    │  │ Sort: A, B, C    │
+///   └──────────────────┘  └──────────────────┘  └──────────────────┘
+///   max(1) <= min(2) ✓    max(2) <= min(3) ✓   → output_ordering preserved
+/// ```
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
@@ -1522,13 +1899,12 @@ mod tests {
     };
 
     use arrow::datatypes::Field;
+    use datafusion_common::ColumnStatistics;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, internal_err};
-    use datafusion_expr::{Operator, SortExpr};
+    use datafusion_expr::SortExpr;
     use datafusion_physical_expr::create_physical_sort_expr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
-    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     #[derive(Clone)]
     struct InexactSortPushdownSource {
@@ -1583,6 +1959,13 @@ mod tests {
             Ok(SortOrderPushdownResult::Inexact {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 
@@ -2581,6 +2964,628 @@ mod tests {
         assert_eq!(pushed_files[0].object_meta.location.as_ref(), "file2");
         assert_eq!(pushed_files[1].object_meta.location.as_ref(), "file1");
 
+        Ok(())
+    }
+
+    fn make_file_with_stats(name: &str, min: f64, max: f64) -> PartitionedFile {
+        PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
+            Statistics {
+                num_rows: Precision::Exact(100),
+                total_byte_size: Precision::Exact(1024),
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    min_value: Precision::Exact(ScalarValue::Float64(Some(min))),
+                    max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
+                    ..Default::default()
+                }],
+            },
+        ))
+    }
+
+    #[derive(Clone)]
+    struct ExactSortPushdownSource {
+        metrics: ExecutionPlanMetricsSet,
+        table_schema: TableSchema,
+    }
+
+    impl ExactSortPushdownSource {
+        fn new(table_schema: TableSchema) -> Self {
+            Self {
+                metrics: ExecutionPlanMetricsSet::new(),
+                table_schema,
+            }
+        }
+    }
+
+    impl FileSource for ExactSortPushdownSource {
+        fn create_file_opener(
+            &self,
+            _object_store: Arc<dyn object_store::ObjectStore>,
+            _base_config: &FileScanConfig,
+            _partition: usize,
+        ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
+            unimplemented!()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn table_schema(&self) -> &TableSchema {
+            &self.table_schema
+        }
+
+        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+            Arc::new(self.clone())
+        }
+
+        fn metrics(&self) -> &ExecutionPlanMetricsSet {
+            &self.metrics
+        }
+
+        fn file_type(&self) -> &str {
+            "mock_exact"
+        }
+
+        fn try_pushdown_sort(
+            &self,
+            _order: &[PhysicalSortExpr],
+            _eq_properties: &EquivalenceProperties,
+        ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+            Ok(SortOrderPushdownResult::Exact {
+                inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
+            })
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_source_files_get_sorted() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file3", 20.0, 30.0),
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+        ])];
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let files = pushed_config.file_groups[0].files();
+        assert_eq!(files[0].object_meta.location.as_ref(), "file1");
+        assert_eq!(files[1].object_meta.location.as_ref(), "file2");
+        assert_eq!(files[2].object_meta.location.as_ref(), "file3");
+        assert!(pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_source_already_sorted() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+            make_file_with_stats("file3", 20.0, 30.0),
+        ])];
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        assert!(matches!(result, SortOrderPushdownResult::Unsupported));
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_source_descending_sort() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file3", 20.0, 30.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+        ])];
+
+        let sort_expr = PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            arrow::compute::SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        );
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let files = pushed_config.file_groups[0].files();
+        assert_eq!(files[0].object_meta.location.as_ref(), "file3");
+        assert_eq!(files[1].object_meta.location.as_ref(), "file2");
+        assert_eq!(files[2].object_meta.location.as_ref(), "file1");
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_exact_source_non_overlapping_returns_exact() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+            make_file_with_stats("file3", 20.0, 30.0),
+        ])];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("Expected Exact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        assert!(!pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_exact_source_overlapping_downgraded_to_inexact() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 15.0),
+            make_file_with_stats("file2", 10.0, 25.0),
+            make_file_with_stats("file3", 20.0, 30.0),
+        ])];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact (downgraded), got {result:?}");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        assert!(pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_exact_source_out_of_order_returns_exact() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file3", 20.0, 30.0),
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+        ])];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("Expected Exact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let files = pushed_config.file_groups[0].files();
+        assert_eq!(files[0].object_meta.location.as_ref(), "file1");
+        assert_eq!(files[1].object_meta.location.as_ref(), "file2");
+        assert_eq!(files[2].object_meta.location.as_ref(), "file3");
+        assert!(!pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_source_single_file_groups() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let file_groups = vec![
+            FileGroup::new(vec![make_file_with_stats("file1", 0.0, 9.0)]),
+            FileGroup::new(vec![make_file_with_stats("file2", 10.0, 19.0)]),
+        ];
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        assert!(
+            matches!(result, SortOrderPushdownResult::Unsupported),
+            "Expected Unsupported for single-file groups"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_source_multiple_groups() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let file_groups = vec![
+            FileGroup::new(vec![
+                make_file_with_stats("file_b", 10.0, 19.0),
+                make_file_with_stats("file_a", 0.0, 9.0),
+            ]),
+            FileGroup::new(vec![
+                make_file_with_stats("file_d", 30.0, 39.0),
+                make_file_with_stats("file_c", 20.0, 29.0),
+            ]),
+        ];
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let files0 = pushed_config.file_groups[0].files();
+        assert_eq!(files0[0].object_meta.location.as_ref(), "file_a");
+        assert_eq!(files0[1].object_meta.location.as_ref(), "file_b");
+        let files1 = pushed_config.file_groups[1].files();
+        assert_eq!(files1[0].object_meta.location.as_ref(), "file_c");
+        assert_eq!(files1[1].object_meta.location.as_ref(), "file_d");
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_source_partial_statistics() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let file_groups = vec![
+            FileGroup::new(vec![
+                make_file_with_stats("file_b", 10.0, 19.0),
+                make_file_with_stats("file_a", 0.0, 9.0),
+            ]),
+            FileGroup::new(vec![
+                PartitionedFile::new("file_d".to_string(), 1024),
+                PartitionedFile::new("file_c".to_string(), 1024),
+            ]),
+        ];
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let files0 = pushed_config.file_groups[0].files();
+        assert_eq!(files0[0].object_meta.location.as_ref(), "file_a");
+        assert_eq!(files0[1].object_meta.location.as_ref(), "file_b");
+        let files1 = pushed_config.file_groups[1].files();
+        assert_eq!(files1[0].object_meta.location.as_ref(), "file_d");
+        assert_eq!(files1[1].object_meta.location.as_ref(), "file_c");
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_inexact_source_with_statistics_sorting() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
+
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file2", 10.0, 19.0),
+            make_file_with_stats("file1", 0.0, 9.0),
+        ])];
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let files = pushed_config.file_groups[0].files();
+        assert_eq!(files[0].object_meta.location.as_ref(), "file1");
+        assert_eq!(files[1].object_meta.location.as_ref(), "file2");
+        assert!(pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_exact_multi_group_preserves_parallelism() -> Result<()> {
+        // ExactSortPushdownSource + 4 non-overlapping files in 2 interleaved groups.
+        // Groups should NOT be redistributed — interleaved groups allow SPM to
+        // pull from both partitions concurrently, keeping parallel I/O active.
+        // Redistributing consecutively would make SPM read one partition at a
+        // time (all values in group 0 < group 1), degrading to single-threaded I/O.
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        // 2 groups with interleaved ranges (simulating bin-packing result):
+        // Group 0: [file_01(0-9), file_03(20-29)]
+        // Group 1: [file_02(10-19), file_04(30-39)]
+        let file_groups = vec![
+            FileGroup::new(vec![
+                make_file_with_stats("file_01", 0.0, 9.0),
+                make_file_with_stats("file_03", 20.0, 29.0),
+            ]),
+            FileGroup::new(vec![
+                make_file_with_stats("file_02", 10.0, 19.0),
+                make_file_with_stats("file_04", 30.0, 39.0),
+            ]),
+        ];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("Expected Exact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+
+        // 2 groups preserved (parallelism maintained)
+        assert_eq!(pushed_config.file_groups.len(), 2);
+
+        // Files within each group are sorted by stats, but groups are NOT
+        // redistributed — interleaved assignment from bin-packing is kept
+        let files0 = pushed_config.file_groups[0].files();
+        assert_eq!(files0[0].object_meta.location.as_ref(), "file_01");
+        assert_eq!(files0[1].object_meta.location.as_ref(), "file_03");
+        let files1 = pushed_config.file_groups[1].files();
+        assert_eq!(files1[0].object_meta.location.as_ref(), "file_02");
+        assert_eq!(files1[1].object_meta.location.as_ref(), "file_04");
+
+        // output_ordering preserved (Exact, each group internally non-overlapping)
+        assert!(!pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_reverse_preserves_file_order_with_stats() -> Result<()> {
+        // Reverse scan should reverse file order but NOT apply statistics-based
+        // sorting (which would undo the reversal). The result is Inexact.
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        // Files with stats, in ASC order. Output ordering is [a ASC].
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+            make_file_with_stats("file3", 20.0, 30.0),
+        ])];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        // Request DESC → reverse path
+        let result = config.try_pushdown_sort(&[sort_expr.reverse()])?;
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact for reverse scan, got {result:?}");
+        };
+        let pushed_config = inner
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+
+        // Files should be reversed (not re-sorted by stats)
+        let files = pushed_config.file_groups[0].files();
+        assert_eq!(files[0].object_meta.location.as_ref(), "file3");
+        assert_eq!(files[1].object_meta.location.as_ref(), "file2");
+        assert_eq!(files[2].object_meta.location.as_ref(), "file1");
+
+        // output_ordering cleared (Inexact)
+        assert!(pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    /// Helper: create a PartitionedFile with stats including null count
+    fn make_file_with_null_stats(
+        name: &str,
+        min: f64,
+        max: f64,
+        null_count: usize,
+    ) -> PartitionedFile {
+        PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
+            Statistics {
+                num_rows: Precision::Exact(100),
+                total_byte_size: Precision::Exact(1024),
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(null_count),
+                    min_value: Precision::Exact(ScalarValue::Float64(Some(min))),
+                    max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
+                    ..Default::default()
+                }],
+            },
+        ))
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_with_nulls_does_not_upgrade_to_exact() -> Result<()> {
+        // Files are non-overlapping but one has NULLs.
+        // Should NOT upgrade to Exact — NULLs would appear in wrong position.
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        // Files in wrong order (high min first) to trigger reordering
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_null_stats("b_no_nulls", 10.0, 19.0, 0),
+            make_file_with_null_stats("a_with_nulls", 0.0, 9.0, 5), // has NULLs
+        ])];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        // Should be Inexact (not Exact) because of NULLs
+        assert!(
+            matches!(result, SortOrderPushdownResult::Inexact { .. }),
+            "Expected Inexact due to NULLs, got {result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sort_pushdown_unsupported_no_nulls_upgrades_to_exact() -> Result<()> {
+        // Files are non-overlapping, no NULLs → should upgrade to Exact
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let file_source = Arc::new(MockSource::new(table_schema));
+
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_null_stats("b_high", 10.0, 19.0, 0),
+            make_file_with_null_stats("a_low", 0.0, 9.0, 0),
+        ])];
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr])?;
+        assert!(
+            matches!(result, SortOrderPushdownResult::Exact { .. }),
+            "Expected Exact (no NULLs), got {result:?}"
+        );
         Ok(())
     }
 }

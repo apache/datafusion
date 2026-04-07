@@ -42,6 +42,7 @@ pub use datafusion_catalog::default_table_source;
 pub use datafusion_catalog::memory;
 pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
+pub use datafusion_datasource::projection;
 pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::sink;
 pub use datafusion_datasource::source;
@@ -76,6 +77,7 @@ mod tests {
     use datafusion_physical_plan::collect;
     use std::{fs, sync::Arc};
     use tempfile::TempDir;
+    use url::Url;
 
     #[tokio::test]
     async fn can_override_physical_expr_adapter() {
@@ -103,7 +105,8 @@ mod tests {
         writer.write(&rec_batch).unwrap();
         writer.close().unwrap();
 
-        let location = Path::parse(path.to_str().unwrap()).unwrap();
+        let url = Url::from_file_path(path.canonicalize().unwrap()).unwrap();
+        let location = Path::from_url_path(url.path()).unwrap();
         let metadata = fs::metadata(path.as_path()).expect("Local file metadata");
         let meta = ObjectMeta {
             location,

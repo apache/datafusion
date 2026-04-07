@@ -33,6 +33,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_catalog::Session;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -154,10 +155,6 @@ impl ExecutionPlan for StatisticsValidation {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -181,12 +178,28 @@ impl ExecutionPlan for StatisticsValidation {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            Ok(Statistics::new_unknown(&self.schema))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema)))
         } else {
-            Ok(self.stats.clone())
+            Ok(Arc::new(self.stats.clone()))
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit expressions in the output ordering from equivalence properties
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = self.cache.output_ordering() {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 
@@ -238,7 +251,7 @@ async fn sql_basic() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
 
     // the statistics should be those of the source
-    assert_eq!(stats, physical_plan.partition_statistics(None)?);
+    assert_eq!(stats, *physical_plan.partition_statistics(None)?);
 
     Ok(())
 }
@@ -255,7 +268,7 @@ async fn sql_filter() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
     let stats = physical_plan.partition_statistics(None)?;
-    assert_eq!(stats.num_rows, Precision::Inexact(1));
+    assert_eq!(stats.num_rows, Precision::Inexact(7));
 
     Ok(())
 }
@@ -278,7 +291,7 @@ async fn sql_limit() -> Result<()> {
                 .collect(),
             total_byte_size: Precision::Absent
         },
-        physical_plan.partition_statistics(None)?
+        *physical_plan.partition_statistics(None)?
     );
 
     let df = ctx
@@ -287,7 +300,7 @@ async fn sql_limit() -> Result<()> {
         .unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is larger than the original number of lines, statistics remain unchanged
-    assert_eq!(stats, physical_plan.partition_statistics(None)?);
+    assert_eq!(stats, *physical_plan.partition_statistics(None)?);
 
     Ok(())
 }
@@ -307,7 +320,7 @@ async fn sql_window() -> Result<()> {
     let result = physical_plan.partition_statistics(None)?;
 
     assert_eq!(stats.num_rows, result.num_rows);
-    let col_stats = result.column_statistics;
+    let col_stats = &result.column_statistics;
     assert_eq!(2, col_stats.len());
     assert_eq!(stats.column_statistics[1], col_stats[0]);
 

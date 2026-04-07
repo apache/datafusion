@@ -976,3 +976,7 @@ query TITT
               END
 ----
 ns3 4 t3 m
+
+# Config reset
+statement ok
+RESET datafusion.execution.batch_size;

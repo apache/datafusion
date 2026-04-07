@@ -35,6 +35,7 @@ use datafusion_datasource::file_stream::FileOpener;
 use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -742,19 +743,17 @@ impl FileSource for ParquetSource {
     ///
     /// With both pieces of information, ParquetSource can decide what optimizations to apply.
     ///
-    /// # Phase 1 Behavior (Current)
-    /// Returns `Inexact` when reversing the row group scan order would help satisfy the
-    /// requested ordering. We still need a Sort operator at a higher level because:
-    /// - We only reverse row group read order, not rows within row groups
-    /// - This provides approximate ordering that benefits limit pushdown
-    ///
-    /// # Phase 2 (Future)
-    /// Could return `Exact` when we can guarantee perfect ordering through techniques like:
-    /// - File reordering based on statistics
-    /// - Detecting already-sorted data
-    ///   This would allow removing the Sort operator entirely.
+    /// # Behavior
+    /// - Returns `Exact` when the file's natural ordering (from Parquet metadata) already
+    ///   satisfies the requested ordering. This allows the Sort operator to be eliminated
+    ///   if the files within each group are also non-overlapping (checked by FileScanConfig).
+    /// - Returns `Inexact` when reversing the row group scan order would help satisfy the
+    ///   requested ordering. We still need a Sort operator at a higher level because:
+    ///   - We only reverse row group read order, not rows within row groups
+    ///   - This provides approximate ordering that benefits limit pushdown
     ///
     /// # Returns
+    /// - `Exact`: The file's natural ordering satisfies the request (within-file ordering guaranteed)
     /// - `Inexact`: Created an optimized source (e.g., reversed scan) that approximates the order
     /// - `Unsupported`: Cannot optimize for this ordering
     fn try_pushdown_sort(
@@ -764,6 +763,16 @@ impl FileSource for ParquetSource {
     ) -> datafusion_common::Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
         if order.is_empty() {
             return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        // Check if the natural (non-reversed) ordering already satisfies the request.
+        // Parquet metadata guarantees within-file ordering, so if the ordering matches
+        // we can return Exact. FileScanConfig will verify that files within each group
+        // are non-overlapping before declaring the entire scan as Exact.
+        if eq_properties.ordering_satisfy(order.iter().cloned())? {
+            return Ok(SortOrderPushdownResult::Exact {
+                inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
+            });
         }
 
         // Build new equivalence properties with the reversed ordering.
@@ -810,11 +819,26 @@ impl FileSource for ParquetSource {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
+    }
 
-        // TODO Phase 2: Add support for other optimizations:
-        // - File reordering based on min/max statistics
-        // - Detection of exact ordering (return Exact to remove Sort operator)
-        // - Partial sort pushdown for prefix matches
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn PhysicalExpr,
+        ) -> datafusion_common::Result<TreeNodeRecursion>,
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
+        // Visit predicate (filter) expression if present
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(predicate) = &self.predicate {
+            tnr = tnr.visit_sibling(|| f(predicate.as_ref()))?;
+        }
+
+        // Visit projection expressions
+        for proj_expr in &self.projection {
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
+        }
+
+        Ok(tnr)
     }
 }
 
@@ -874,7 +898,6 @@ mod tests {
     #[test]
     fn test_reverse_scan_with_other_options() {
         use arrow::datatypes::Schema;
-        use datafusion_common::config::TableParquetOptions;
 
         let schema = Arc::new(Schema::empty());
         let options = TableParquetOptions::default();

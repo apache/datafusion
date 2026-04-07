@@ -18,15 +18,16 @@
 use arrow::array::{Array, as_largestring_array};
 use arrow::datatypes::DataType;
 use datafusion_expr::sort_properties::ExprProperties;
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::string::concat;
 use crate::strings::{
     ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
 };
-use datafusion_common::cast::{as_string_array, as_string_view_array};
-use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
+use datafusion_common::cast::{as_binary_array, as_string_array, as_string_view_array};
+use datafusion_common::{
+    Result, ScalarValue, exec_datafusion_err, internal_err, plan_err,
+};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
@@ -68,18 +69,25 @@ impl ConcatFunc {
         use DataType::*;
         Self {
             signature: Signature::variadic(
-                vec![Utf8View, Utf8, LargeUtf8],
+                vec![Utf8View, Utf8, LargeUtf8, Binary],
                 Volatility::Immutable,
             ),
         }
     }
 }
 
-impl ScalarUDFImpl for ConcatFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
+fn deduce_return_type(arg_types: &[DataType]) -> DataType {
+    use DataType::*;
+    if arg_types.contains(&Utf8View) {
+        Utf8View
+    } else if arg_types.contains(&LargeUtf8) {
+        LargeUtf8
+    } else {
+        Utf8
     }
+}
 
+impl ScalarUDFImpl for ConcatFunc {
     fn name(&self) -> &str {
         "concat"
     }
@@ -88,19 +96,11 @@ impl ScalarUDFImpl for ConcatFunc {
         &self.signature
     }
 
+    /// Match the return type to the input types to avoid unnecessary casts. On
+    /// mixed inputs, prefer Utf8View; prefer LargeUtf8 over Utf8 to avoid
+    /// potential overflow on LargeUtf8 input.
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        let mut dt = &Utf8;
-        arg_types.iter().for_each(|data_type| {
-            if data_type == &Utf8View {
-                dt = data_type;
-            }
-            if data_type == &LargeUtf8 && dt != &Utf8View {
-                dt = data_type;
-            }
-        });
-
-        Ok(dt.to_owned())
+        Ok(deduce_return_type(arg_types))
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
@@ -108,17 +108,8 @@ impl ScalarUDFImpl for ConcatFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
-        let mut return_datatype = DataType::Utf8;
-        args.iter().for_each(|col| {
-            if col.data_type() == DataType::Utf8View {
-                return_datatype = col.data_type();
-            }
-            if col.data_type() == DataType::LargeUtf8
-                && return_datatype != DataType::Utf8View
-            {
-                return_datatype = col.data_type();
-            }
-        });
+        let arg_types: Vec<DataType> = args.iter().map(|c| c.data_type()).collect();
+        let return_datatype = deduce_return_type(&arg_types);
 
         let array_len = args.iter().find_map(|x| match x {
             ColumnarValue::Array(array) => Some(array.len()),
@@ -127,22 +118,28 @@ impl ScalarUDFImpl for ConcatFunc {
 
         // Scalar
         if array_len.is_none() {
-            let mut values = Vec::with_capacity(args.len());
+            let mut values: Vec<&[u8]> = Vec::with_capacity(args.len());
             for arg in &args {
                 let ColumnarValue::Scalar(scalar) = arg else {
                     return internal_err!("concat expected scalar value, got {arg:?}");
                 };
-
-                match scalar.try_as_str() {
-                    Some(Some(v)) => values.push(v),
-                    Some(None) => {} // null literal
-                    None => plan_err!(
-                        "Concat function does not support scalar type {}",
-                        scalar
-                    )?,
+                if let ScalarValue::Binary(Some(value)) = scalar {
+                    values.push(value);
+                } else {
+                    match scalar.try_as_str() {
+                        Some(Some(v)) => values.push(v.as_bytes()),
+                        Some(None) => {} // null literal
+                        None => plan_err!(
+                            "Concat function does not support scalar type {}",
+                            scalar
+                        )?,
+                    }
                 }
             }
-            let result = values.concat();
+            let concat_bytes = values.concat();
+            let result = std::str::from_utf8(&concat_bytes)
+                .map_err(|_| exec_datafusion_err!("invalid UTF-8 in binary literal"))?
+                .to_string();
 
             return match return_datatype {
                 DataType::Utf8View => {
@@ -173,6 +170,13 @@ impl ScalarUDFImpl for ConcatFunc {
                     if let Some(s) = maybe_value {
                         data_size += s.len() * len;
                         columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
+                    }
+                }
+                ColumnarValue::Scalar(ScalarValue::Binary(maybe_value)) => {
+                    if let Some(b) = maybe_value {
+                        // data_size is a capacity hint, so doesn't matter if it is chars or bytes
+                        data_size += b.len() * len;
+                        columns.push(ColumnarValueRef::Scalar(b.as_slice()));
                     }
                 }
                 ColumnarValue::Array(array) => {
@@ -214,6 +218,17 @@ impl ScalarUDFImpl for ConcatFunc {
                             };
                             columns.push(column);
                         }
+                        DataType::Binary => {
+                            let string_array = as_binary_array(array)?;
+
+                            data_size += string_array.values().len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableBinaryArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableBinaryArray(string_array)
+                            };
+                            columns.push(column);
+                        }
                         other => {
                             return plan_err!(
                                 "Input was {other} which is not a supported datatype for concat function"
@@ -235,7 +250,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     builder.append_offset();
                 }
 
-                let string_array = builder.finish(None);
+                let string_array = builder.finish(None)?;
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             DataType::Utf8View => {
@@ -244,10 +259,10 @@ impl ScalarUDFImpl for ConcatFunc {
                     columns
                         .iter()
                         .for_each(|column| builder.write::<true>(column, i));
-                    builder.append_offset();
+                    builder.append_offset()?;
                 }
 
-                let string_array = builder.finish();
+                let string_array = builder.finish(None)?;
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             DataType::LargeUtf8 => {
@@ -259,7 +274,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     builder.append_offset();
                 }
 
-                let string_array = builder.finish(None);
+                let string_array = builder.finish(None)?;
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             _ => unreachable!(),
@@ -380,8 +395,8 @@ mod tests {
     use super::*;
     use crate::utils::test::test_function;
     use DataType::*;
-    use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
+    use arrow::array::{LargeStringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
 
@@ -455,7 +470,33 @@ mod tests {
             Utf8View,
             StringViewArray
         );
-
+        test_function!(
+            ConcatFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(
+                    "Café".as_bytes().into()
+                ))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("cc".to_string()))),
+            ],
+            Ok(Some("Cafécc")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            ConcatFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(Vec::from(
+                    "Café".as_bytes()
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Binary(Some("cc".as_bytes().into()))),
+            ],
+            Ok(Some("Cafécc")),
+            &str,
+            Utf8,
+            StringArray
+        );
         Ok(())
     }
 

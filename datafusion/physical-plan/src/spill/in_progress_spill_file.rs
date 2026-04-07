@@ -62,7 +62,11 @@ impl InProgressSpillFile {
             ));
         }
         if self.writer.is_none() {
-            let schema = batch.schema();
+            // Use the SpillManager's declared schema rather than the batch's schema.
+            // Individual batches may have different schemas (e.g., different nullability)
+            // when they come from different branches of a UnionExec. The SpillManager's
+            // schema represents the canonical schema that all batches should conform to.
+            let schema = self.spill_writer.schema();
             if let Some(in_progress_file) = &mut self.in_progress_file {
                 self.writer = Some(IPCStreamWriter::new(
                     in_progress_file.path(),
@@ -136,5 +140,79 @@ impl InProgressSpillFile {
         }
 
         Ok(self.in_progress_file.take())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_physical_expr_common::metrics::{
+        ExecutionPlanMetricsSet, SpillMetrics,
+    };
+    use futures::TryStreamExt;
+
+    #[tokio::test]
+    async fn test_spill_file_uses_spill_manager_schema() -> Result<()> {
+        let nullable_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("val", DataType::Int64, true),
+        ]));
+        let non_nullable_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("val", DataType::Int64, false),
+        ]));
+
+        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let spill_metrics = SpillMetrics::new(&metrics_set, 0);
+        let spill_manager = Arc::new(SpillManager::new(
+            runtime,
+            spill_metrics,
+            Arc::clone(&nullable_schema),
+        ));
+
+        let mut in_progress = spill_manager.create_in_progress_file("test")?;
+
+        // First batch: non-nullable val (simulates literal-0 UNION branch)
+        let non_nullable_batch = RecordBatch::try_new(
+            Arc::clone(&non_nullable_schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(Int64Array::from(vec![0, 0, 0])),
+            ],
+        )?;
+        in_progress.append_batch(&non_nullable_batch)?;
+
+        // Second batch: nullable val with NULLs (simulates table UNION branch)
+        let nullable_batch = RecordBatch::try_new(
+            Arc::clone(&nullable_schema),
+            vec![
+                Arc::new(Int64Array::from(vec![4, 5, 6])),
+                Arc::new(Int64Array::from(vec![Some(10), None, Some(30)])),
+            ],
+        )?;
+        in_progress.append_batch(&nullable_batch)?;
+
+        let spill_file = in_progress.finish()?.unwrap();
+
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
+
+        // Stream schema should be nullable
+        assert_eq!(stream.schema(), nullable_schema);
+
+        let batches = stream.try_collect::<Vec<_>>().await?;
+        assert_eq!(batches.len(), 2);
+
+        // Both batches must have the SpillManager's nullable schema
+        assert_eq!(
+            batches[0],
+            non_nullable_batch.with_schema(Arc::clone(&nullable_schema))?
+        );
+        assert_eq!(batches[1], nullable_batch);
+
+        Ok(())
     }
 }

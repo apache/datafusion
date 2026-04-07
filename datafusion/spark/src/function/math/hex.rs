@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 
@@ -80,10 +79,6 @@ impl SparkHex {
 }
 
 impl ScalarUDFImpl for SparkHex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "hex"
     }

@@ -38,7 +38,7 @@ name = "datafusion_proto"
 default = ["parquet"]
 json = ["pbjson", "serde", "serde_json", "datafusion-proto-common/json"]
 parquet = ["datafusion-datasource-parquet", "datafusion-common/parquet", "datafusion/parquet"]
-avro = ["datafusion-datasource-avro", "datafusion-common/avro"]
+avro = ["datafusion-datasource-avro"]
 
 # Note to developers: do *not* add `datafusion` as a dependency in
 # this crate. See https://github.com/apache/datafusion/issues/17713

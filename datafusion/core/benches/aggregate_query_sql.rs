@@ -284,6 +284,50 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+
+    c.bench_function("array_agg_struct_query_group_by_mid_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_mid, array_agg(named_struct('market', dict10, 'price', f64)) \
+                 FROM t GROUP BY u64_mid",
+            )
+        })
+    });
+
+    c.bench_function("string_agg_query_group_by_few_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_narrow, string_agg(utf8, ',') \
+                 FROM t GROUP BY u64_narrow",
+            )
+        })
+    });
+
+    c.bench_function("string_agg_query_group_by_mid_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_mid, string_agg(utf8, ',') \
+                 FROM t GROUP BY u64_mid",
+            )
+        })
+    });
+
+    c.bench_function("string_agg_query_group_by_many_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_wide, string_agg(utf8, ',') \
+                 FROM t GROUP BY u64_wide",
+            )
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);

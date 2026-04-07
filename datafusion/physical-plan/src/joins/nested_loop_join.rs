@@ -17,7 +17,6 @@
 
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
-use std::any::Any;
 use std::fmt::Formatter;
 use std::ops::{BitOr, ControlFlow};
 use std::sync::Arc;
@@ -61,6 +60,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, Result, ScalarValue, Statistics, arrow_err, assert_eq_or_internal_err,
     internal_datafusion_err, internal_err, project_schema, unwrap_or_internal_err,
@@ -534,10 +534,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         "NestedLoopJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -555,6 +551,17 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join filter expressions if present
+        if let Some(filter) = &self.filter {
+            f(filter.expression().as_ref())?;
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -634,7 +641,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         // NestedLoopJoinExec is designed for joins without equijoin keys in the
         // ON clause (e.g., `t1 JOIN t2 ON (t1.v1 + t2.v1) % 2 = 0`). Any join
         // predicates are stored in `self.filter`, but `estimate_join_statistics`
@@ -648,11 +655,11 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // so we always request overall stats with `None`. Right side can have
         // multiple partitions, so we forward the partition parameter to get
         // partition-specific statistics when requested.
-        let left_stats = self.left.partition_statistics(None)?;
-        let right_stats = match partition {
+        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
+        let right_stats = Arc::unwrap_or_clone(match partition {
             Some(partition) => self.right.partition_statistics(Some(partition))?,
             None => self.right.partition_statistics(None)?,
-        };
+        });
 
         let stats = estimate_join_statistics(
             left_stats,
@@ -662,7 +669,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             &self.join_schema,
         )?;
 
-        Ok(stats.project(self.projection.as_ref()))
+        Ok(Arc::new(stats.project(self.projection.as_ref())))
     }
 
     /// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
@@ -911,7 +918,7 @@ impl NestedLoopJoinMetrics {
         Self {
             join_metrics: BuildProbeJoinMetrics::new(partition, metrics),
             selectivity: MetricBuilder::new(metrics)
-                .with_type(MetricType::SUMMARY)
+                .with_type(MetricType::Summary)
                 .ratio_metrics("selectivity", partition),
         }
     }
@@ -2323,8 +2330,8 @@ pub(crate) mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::assert_contains;
     use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_common::{ScalarValue, assert_contains};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};

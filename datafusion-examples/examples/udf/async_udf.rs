@@ -23,7 +23,7 @@
 //! making network requests. This can be used for tasks like fetching
 //! data from an external API such as a LLM service or an external database.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
@@ -160,10 +160,6 @@ impl AskLLM {
 /// information for the function, such as its name, signature, and return type.
 /// [async_trait]
 impl ScalarUDFImpl for AskLLM {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "ask_llm"
     }

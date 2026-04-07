@@ -715,7 +715,7 @@ impl BinaryExpr {
             StringConcat => concat_elements(&left, &right),
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
-            | IntegerDivide => {
+            | IntegerDivide | Colon => {
                 not_impl_err!(
                     "Binary operator '{:?}' is not supported in the physical expr",
                     self.op
@@ -933,6 +933,18 @@ fn pre_selection_scatter(
 }
 
 fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
+    if *left.data_type() == DataType::Binary && *right.data_type() == DataType::Binary {
+        // Cast Binary to Utf8 to validate UTF-8 encoding before concatenation
+        // Follow widespread approach of PostgreSQL, sqlite, DuckDB, Snowflake
+        // Spark does it in a different way by making a binary-to-binary concatenation
+        let left = cast(left.as_ref(), &DataType::Utf8)?;
+        let right = cast(right.as_ref(), &DataType::Utf8)?;
+        return Ok(Arc::new(concat_elements_utf8(
+            left.as_string::<i32>(),
+            right.as_string::<i32>(),
+        )?));
+    }
+
     Ok(match left.data_type() {
         DataType::Utf8 => Arc::new(concat_elements_utf8(
             left.as_string::<i32>(),

@@ -1392,6 +1392,82 @@ impl LogicalPlan {
         }
     }
 
+    /// Returns the skip (offset) of this plan node, if it has one.
+    ///
+    /// Only [`LogicalPlan::Limit`] carries a skip value; all other variants
+    /// return `Ok(None)`. Returns `Ok(None)` for a zero skip.
+    pub fn skip(&self) -> Result<Option<usize>> {
+        match self {
+            LogicalPlan::Limit(limit) => match limit.get_skip_type()? {
+                SkipType::Literal(0) => Ok(None),
+                SkipType::Literal(n) => Ok(Some(n)),
+                SkipType::UnsupportedExpr => Ok(None),
+            },
+            LogicalPlan::Sort(_) => Ok(None),
+            LogicalPlan::TableScan(_) => Ok(None),
+            LogicalPlan::Projection(_) => Ok(None),
+            LogicalPlan::Filter(_) => Ok(None),
+            LogicalPlan::Window(_) => Ok(None),
+            LogicalPlan::Aggregate(_) => Ok(None),
+            LogicalPlan::Join(_) => Ok(None),
+            LogicalPlan::Repartition(_) => Ok(None),
+            LogicalPlan::Union(_) => Ok(None),
+            LogicalPlan::EmptyRelation(_) => Ok(None),
+            LogicalPlan::Subquery(_) => Ok(None),
+            LogicalPlan::SubqueryAlias(_) => Ok(None),
+            LogicalPlan::Statement(_) => Ok(None),
+            LogicalPlan::Values(_) => Ok(None),
+            LogicalPlan::Explain(_) => Ok(None),
+            LogicalPlan::Analyze(_) => Ok(None),
+            LogicalPlan::Extension(_) => Ok(None),
+            LogicalPlan::Distinct(_) => Ok(None),
+            LogicalPlan::Dml(_) => Ok(None),
+            LogicalPlan::Ddl(_) => Ok(None),
+            LogicalPlan::Copy(_) => Ok(None),
+            LogicalPlan::DescribeTable(_) => Ok(None),
+            LogicalPlan::Unnest(_) => Ok(None),
+            LogicalPlan::RecursiveQuery(_) => Ok(None),
+        }
+    }
+
+    /// Returns the fetch (limit) of this plan node, if it has one.
+    ///
+    /// [`LogicalPlan::Sort`], [`LogicalPlan::TableScan`], and
+    /// [`LogicalPlan::Limit`] may carry a fetch value; all other variants
+    /// return `Ok(None)`.
+    pub fn fetch(&self) -> Result<Option<usize>> {
+        match self {
+            LogicalPlan::Sort(Sort { fetch, .. }) => Ok(*fetch),
+            LogicalPlan::TableScan(TableScan { fetch, .. }) => Ok(*fetch),
+            LogicalPlan::Limit(limit) => match limit.get_fetch_type()? {
+                FetchType::Literal(s) => Ok(s),
+                FetchType::UnsupportedExpr => Ok(None),
+            },
+            LogicalPlan::Projection(_) => Ok(None),
+            LogicalPlan::Filter(_) => Ok(None),
+            LogicalPlan::Window(_) => Ok(None),
+            LogicalPlan::Aggregate(_) => Ok(None),
+            LogicalPlan::Join(_) => Ok(None),
+            LogicalPlan::Repartition(_) => Ok(None),
+            LogicalPlan::Union(_) => Ok(None),
+            LogicalPlan::EmptyRelation(_) => Ok(None),
+            LogicalPlan::Subquery(_) => Ok(None),
+            LogicalPlan::SubqueryAlias(_) => Ok(None),
+            LogicalPlan::Statement(_) => Ok(None),
+            LogicalPlan::Values(_) => Ok(None),
+            LogicalPlan::Explain(_) => Ok(None),
+            LogicalPlan::Analyze(_) => Ok(None),
+            LogicalPlan::Extension(_) => Ok(None),
+            LogicalPlan::Distinct(_) => Ok(None),
+            LogicalPlan::Dml(_) => Ok(None),
+            LogicalPlan::Ddl(_) => Ok(None),
+            LogicalPlan::Copy(_) => Ok(None),
+            LogicalPlan::DescribeTable(_) => Ok(None),
+            LogicalPlan::Unnest(_) => Ok(None),
+            LogicalPlan::RecursiveQuery(_) => Ok(None),
+        }
+    }
+
     /// If this node's expressions contains any references to an outer subquery
     pub fn contains_outer_reference(&self) -> bool {
         let mut contains = false;
@@ -3490,7 +3566,9 @@ pub struct Aggregate {
     pub input: Arc<LogicalPlan>,
     /// Grouping expressions
     pub group_expr: Vec<Expr>,
-    /// Aggregate expressions
+    /// Aggregate expressions.
+    ///
+    /// Note these *must* be either [`Expr::AggregateFunction`] or [`Expr::Alias`]
     pub aggr_expr: Vec<Expr>,
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
@@ -4194,7 +4272,9 @@ impl Unnest {
                                 }
                                 DataType::List(_)
                                 | DataType::FixedSizeList(_, _)
-                                | DataType::LargeList(_) => {
+                                | DataType::LargeList(_)
+                                | DataType::ListView(_)
+                                | DataType::LargeListView(_) => {
                                     list_columns.push((
                                         index,
                                         ColumnUnnestList {
@@ -4269,7 +4349,11 @@ fn get_unnested_columns(
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+        DataType::List(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => {
             let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
             let new_field = Arc::new(Field::new(
                 col_name, data_type,
@@ -4306,7 +4390,9 @@ fn get_unnested_list_datatype_recursive(
     match data_type {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
             if depth == 1 {
                 return Ok(field.data_type().clone());
             }
@@ -4333,7 +4419,7 @@ mod tests {
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
-    use datafusion_common::{Constraint, ScalarValue, not_impl_err};
+    use datafusion_common::{Constraint, not_impl_err};
     use insta::{assert_debug_snapshot, assert_snapshot};
     use std::hash::DefaultHasher;
 
@@ -4456,49 +4542,49 @@ mod tests {
         [
           {
             "Plan": {
+              "Node Type": "Projection",
               "Expressions": [
                 "employee_csv.id"
               ],
-              "Node Type": "Projection",
-              "Output": [
-                "id"
-              ],
               "Plans": [
                 {
-                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Node Type": "Filter",
-                  "Output": [
-                    "id",
-                    "state"
-                  ],
+                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Plans": [
                     {
                       "Node Type": "Subquery",
-                      "Output": [
-                        "state"
-                      ],
                       "Plans": [
                         {
                           "Node Type": "TableScan",
+                          "Relation Name": "employee_csv",
+                          "Plans": [],
                           "Output": [
                             "state"
-                          ],
-                          "Plans": [],
-                          "Relation Name": "employee_csv"
+                          ]
                         }
+                      ],
+                      "Output": [
+                        "state"
                       ]
                     },
                     {
                       "Node Type": "TableScan",
+                      "Relation Name": "employee_csv",
+                      "Plans": [],
                       "Output": [
                         "id",
                         "state"
-                      ],
-                      "Plans": [],
-                      "Relation Name": "employee_csv"
+                      ]
                     }
+                  ],
+                  "Output": [
+                    "id",
+                    "state"
                   ]
                 }
+              ],
+              "Output": [
+                "id"
               ]
             }
           }

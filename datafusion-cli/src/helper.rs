@@ -19,6 +19,7 @@
 //! and auto-completion for file name during creating external table.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 
 use crate::highlighter::{Color, NoSyntaxHighlighter, SyntaxHighlighter};
 
@@ -40,6 +41,10 @@ pub struct CliHelper {
     completer: FilenameCompleter,
     dialect: Dialect,
     highlighter: Box<dyn Highlighter>,
+    /// Tracks whether to show the default hint. Set to `false` once the user
+    /// types anything, so the hint doesn't reappear after deleting back to
+    /// an empty line. Reset to `true` when the line is submitted.
+    show_hint: Cell<bool>,
 }
 
 impl CliHelper {
@@ -53,6 +58,7 @@ impl CliHelper {
             completer: FilenameCompleter::new(),
             dialect: *dialect,
             highlighter,
+            show_hint: Cell::new(true),
         }
     }
 
@@ -60,6 +66,11 @@ impl CliHelper {
         if *dialect != self.dialect {
             self.dialect = *dialect;
         }
+    }
+
+    /// Re-enable the default hint for the next prompt.
+    pub fn reset_hint(&self) {
+        self.show_hint.set(true);
     }
 
     fn validate_input(&self, input: &str) -> Result<ValidationResult> {
@@ -119,12 +130,11 @@ impl Hinter for CliHelper {
     type Hint = String;
 
     fn hint(&self, line: &str, _pos: usize, _ctx: &Context<'_>) -> Option<String> {
-        if line.trim().is_empty() {
-            let suggestion = Color::gray(DEFAULT_HINT_SUGGESTION);
-            Some(suggestion)
-        } else {
-            None
+        if !line.is_empty() {
+            self.show_hint.set(false);
         }
+        (self.show_hint.get() && line.trim().is_empty())
+            .then(|| Color::gray(DEFAULT_HINT_SUGGESTION))
     }
 }
 
@@ -133,12 +143,9 @@ impl Hinter for CliHelper {
 fn is_open_quote_for_location(line: &str, pos: usize) -> bool {
     let mut sql = line[..pos].to_string();
     sql.push('\'');
-    if let Ok(stmts) = DFParser::parse_sql(&sql)
-        && let Some(Statement::CreateExternalTable(_)) = stmts.back()
-    {
-        return true;
-    }
-    false
+    DFParser::parse_sql(&sql).is_ok_and(|stmts| {
+        matches!(stmts.back(), Some(Statement::CreateExternalTable(_)))
+    })
 }
 
 impl Completer for CliHelper {
@@ -161,7 +168,9 @@ impl Completer for CliHelper {
 impl Validator for CliHelper {
     fn validate(&self, ctx: &mut ValidationContext<'_>) -> Result<ValidationResult> {
         let input = ctx.input().trim_end();
-        self.validate_input(input)
+        let result = self.validate_input(input);
+        self.reset_hint();
+        result
     }
 }
 

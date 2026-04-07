@@ -138,10 +138,10 @@ SELECT substr(1, 3)
 statement error Function 'substr' failed to match any signature
 SELECT substr(1, 3, 4)
 
-statement error Execution error: negative substring length not allowed
+statement error Execution error: negative count not allowed
 select substr(arrow_cast('foo', 'Utf8View'), 1, -1);
 
-statement error Execution error: negative substring length not allowed
+statement error Execution error: negative count not allowed
 select substr('', 1, -1);
 
 # StringView scalar to StringView scalar
@@ -348,10 +348,34 @@ SELECT repeat('foo', 3)
 foofoofoo
 
 query T
+SELECT repeat(arrow_cast('foo', 'LargeUtf8'), 3)
+----
+foofoofoo
+
+query T
+SELECT repeat(arrow_cast('foo', 'Utf8View'), 3)
+----
+foofoofoo
+
+query T
 SELECT repeat(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 3)
 ----
 foofoofoo
 
+query T
+SELECT arrow_typeof(repeat('foo', 3))
+----
+Utf8
+
+query T
+SELECT arrow_typeof(repeat(arrow_cast('foo', 'LargeUtf8'), 3))
+----
+LargeUtf8
+
+query T
+SELECT arrow_typeof(repeat(arrow_cast('foo', 'Utf8View'), 3))
+----
+Utf8View
 
 query T
 SELECT replace('foobar', 'bar', 'hello')
@@ -388,6 +412,21 @@ query T
 SELECT reverse(arrow_cast('abcde', 'Utf8View'))
 ----
 edcba
+
+query T
+SELECT arrow_typeof(reverse('abcde'))
+----
+Utf8
+
+query T
+SELECT arrow_typeof(reverse(arrow_cast('abcde', 'LargeUtf8')))
+----
+LargeUtf8
+
+query T
+SELECT arrow_typeof(reverse(arrow_cast('abcde', 'Utf8View')))
+----
+Utf8View
 
 query T
 SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
@@ -1768,3 +1807,25 @@ SELECT
 ;
 ----
 48 176 32 40
+
+# translate preserves input string type
+
+query T
+SELECT translate(arrow_cast('12345', 'Utf8View'), '143', 'ax')
+----
+a2x5
+
+query T
+SELECT arrow_typeof(translate('12345', '143', 'ax'))
+----
+Utf8
+
+query T
+SELECT arrow_typeof(translate(arrow_cast('12345', 'LargeUtf8'), '143', 'ax'))
+----
+LargeUtf8
+
+query T
+SELECT arrow_typeof(translate(arrow_cast('12345', 'Utf8View'), '143', 'ax'))
+----
+Utf8View

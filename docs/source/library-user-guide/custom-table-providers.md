@@ -52,11 +52,12 @@ use std::any::Any;
 use std::sync::{Arc, Mutex};
 use std::collections::{BTreeMap, HashMap};
 use datafusion::common::Result;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     ExecutionPlan, SendableRecordBatchStream, DisplayAs, DisplayFormatType,
-    Statistics, PlanProperties
+    Statistics, PlanProperties, PhysicalExpr
 };
 use datafusion::execution::context::TaskContext;
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
@@ -97,10 +98,6 @@ impl DisplayAs for CustomExec {
 impl ExecutionPlan for CustomExec {
     fn name(&self) -> &str {
         "CustomExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {
@@ -152,6 +149,13 @@ impl ExecutionPlan for CustomExec {
             self.schema(),
             None,
         )?))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 ```
@@ -223,10 +227,6 @@ The `scan` method of the `TableProvider` returns a `Result<Arc<dyn ExecutionPlan
 #         "CustomExec"
 #     }
 #
-#     fn as_any(&self) -> &dyn Any {
-#         self
-#     }
-#
 #     fn schema(&self) -> SchemaRef {
 #         self.projected_schema.clone()
 #     }
@@ -277,12 +277,20 @@ The `scan` method of the `TableProvider` returns a `Result<Arc<dyn ExecutionPlan
 #             None,
 #         )?))
 #     }
+#
+#     fn apply_expressions(
+#         &self,
+#         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+#     ) -> Result<TreeNodeRecursion> {
+#         Ok(TreeNodeRecursion::Continue)
+#     }
 # }
 
 use async_trait::async_trait;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::logical_expr::expr::Expr;
 use datafusion::datasource::{TableProvider, TableType};
-use datafusion::physical_plan::project_schema;
+use datafusion::physical_plan::{project_schema, PhysicalExpr};
 use datafusion::catalog::Session;
 
 impl CustomExec {
@@ -415,10 +423,6 @@ This will allow you to use the custom table provider in DataFusion. For example,
 #         "CustomExec"
 #     }
 #
-#     fn as_any(&self) -> &dyn Any {
-#         self
-#     }
-#
 #     fn schema(&self) -> SchemaRef {
 #         self.projected_schema.clone()
 #     }
@@ -469,12 +473,20 @@ This will allow you to use the custom table provider in DataFusion. For example,
 #             None,
 #         )?))
 #     }
+#
+#     fn apply_expressions(
+#         &self,
+#         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+#     ) -> Result<TreeNodeRecursion> {
+#         Ok(TreeNodeRecursion::Continue)
+#     }
 # }
 
 # use async_trait::async_trait;
+# use datafusion::common::tree_node::TreeNodeRecursion;
 # use datafusion::logical_expr::expr::Expr;
 # use datafusion::datasource::{TableProvider, TableType};
-# use datafusion::physical_plan::project_schema;
+# use datafusion::physical_plan::{project_schema, PhysicalExpr};
 # use datafusion::catalog::Session;
 #
 # impl CustomExec {

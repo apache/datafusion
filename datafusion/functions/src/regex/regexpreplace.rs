@@ -36,10 +36,11 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::function::Hint;
-use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use regex::Regex;
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -111,10 +112,6 @@ impl RegexpReplaceFunc {
 }
 
 impl ScalarUDFImpl for RegexpReplaceFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regexp_replace"
     }
@@ -149,10 +146,7 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
         })
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
 
         let len = args

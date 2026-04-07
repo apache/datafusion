@@ -768,7 +768,7 @@ fn reverse_tuple<T, U>((first, second): (T, U)) -> (U, T) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{BinaryExpr, Column};
+    use crate::expressions::Column;
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
 
     use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};

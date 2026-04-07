@@ -17,7 +17,6 @@
 
 //! [`Correlation`]: correlation sample aggregations.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::mem::size_of_val;
 use std::sync::Arc;
@@ -96,11 +95,6 @@ impl Correlation {
 }
 
 impl AggregateUDFImpl for Correlation {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "corr"
     }
@@ -555,7 +549,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float64Array, UInt64Array};
 
     #[test]
     fn test_accumulate_correlation_states() {

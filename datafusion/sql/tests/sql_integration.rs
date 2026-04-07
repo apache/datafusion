@@ -19,7 +19,6 @@
 // Issue: <https://github.com/apache/datafusion/issues/18503>
 #![expect(clippy::needless_pass_by_value)]
 
-use std::any::Any;
 use std::hash::Hash;
 #[cfg(test)]
 use std::sync::Arc;
@@ -2806,6 +2805,138 @@ fn over_order_by_with_window_frame_double_end() {
 }
 
 #[test]
+fn window_function_only_in_order_by() {
+    let sql = "SELECT order_id FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
+        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_select_and_order_by() {
+    let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id) FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
+      Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_nested_expr() {
+    let sql =
+        "SELECT order_id FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id) + 1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW + Int64(1) ASC NULLS LAST
+        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_desc() {
+    let sql =
+        "SELECT order_id FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id) DESC";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW DESC NULLS FIRST
+        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn multiple_window_functions_in_order_by() {
+    let sql = "SELECT order_id FROM orders ORDER BY MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY order_id DESC)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
+        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+              TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_with_group_by() {
+    let sql = "SELECT order_id, SUM(qty) FROM orders GROUP BY order_id ORDER BY MAX(SUM(qty)) OVER (ORDER BY order_id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id, sum(orders.qty)
+      Sort: max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST
+        Projection: orders.order_id, sum(orders.qty), max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          WindowAggr: windowExpr=[[max(sum(orders.qty)) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            Aggregate: groupBy=[[orders.order_id]], aggr=[[sum(orders.qty)]]
+              TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_with_qualify() {
+    let sql = "SELECT person.id, ROW_NUMBER() OVER (PARTITION BY person.age ORDER BY person.id) as rn FROM person QUALIFY rn = 1 ORDER BY ROW_NUMBER() OVER (PARTITION BY person.age ORDER BY person.id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Sort: rn ASC NULLS LAST
+      Projection: person.id, row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+        Filter: row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1)
+          WindowAggr: windowExpr=[[row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: person
+    "
+    );
+}
+
+#[test]
+fn window_function_in_order_by_not_in_select() {
+    let sql =
+        "SELECT order_id FROM orders ORDER BY MIN(qty) OVER (PARTITION BY order_id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: orders.order_id
+      Sort: min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING ASC NULLS LAST
+        Projection: orders.order_id, min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+          WindowAggr: windowExpr=[[min(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
 fn over_order_by_with_window_frame_single_end() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
     let plan = logical_plan(sql).unwrap();
@@ -3315,10 +3446,6 @@ impl DummyUDF {
 }
 
 impl ScalarUDFImpl for DummyUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.name
     }
@@ -4257,6 +4384,16 @@ fn test_select_qualify_without_window_function() {
 }
 
 #[test]
+fn test_select_qualify_without_window_function_but_window_in_order_by() {
+    let sql = "SELECT person.id FROM person QUALIFY person.id > 1 ORDER BY ROW_NUMBER() OVER (ORDER BY person.id)";
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(
+        err.strip_backtrace(),
+        "Error during planning: QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
+    );
+}
+
+#[test]
 fn test_select_qualify_complex_condition() {
     let sql = "SELECT person.id, person.age, ROW_NUMBER() OVER (PARTITION BY person.age ORDER BY person.id) as rn, RANK() OVER (ORDER BY person.salary) as rank FROM person QUALIFY rn <= 2 AND rank <= 5";
     let plan = logical_plan(sql).unwrap();
@@ -4588,6 +4725,26 @@ fn plan_create_index() {
     }
 }
 
+#[test]
+fn test_table_function_with_unsupported_arg_propagates_error() {
+    let sql = "SELECT * FROM my_func(('a', 'b', 'c'))";
+    let dialect = &GenericDialect {};
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new(&context);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect);
+    let mut ast = result.unwrap();
+    let err = planner
+        .statement_to_plan(ast.pop_front().unwrap())
+        .expect_err("query should have failed");
+    let msg = err.strip_backtrace();
+    assert!(
+        !msg.contains("Table Functions are not supported"),
+        "tuple argument error should be propagated before reaching get_table_function_source, got: {msg}"
+    );
+    assert_contains!(msg, "Struct not supported");
+}
+
 fn assert_field_not_found(mut err: DataFusionError, name: &str) {
     let err = loop {
         match err {
@@ -4727,59 +4884,46 @@ fn test_custom_type_plan() -> Result<()> {
     "#
     );
 
+    let plan = plan_sql("SELECT UUID '00010203-0405-0607-0809-000102030506'");
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CAST(Utf8("00010203-0405-0607-0809-000102030506") AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>)
+      EmptyRelation: rows=1
+    "#
+    );
     Ok(())
 }
 
-fn error_message_test(sql: &str, err_msg_starts_with: &str) {
+fn error_message(sql: &str) -> String {
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert!(
-        err.strip_backtrace().starts_with(err_msg_starts_with),
-        "Expected error to start with '{}', but got: '{}'",
-        err_msg_starts_with,
-        err.strip_backtrace(),
-    );
+    err.strip_backtrace()
 }
 
 #[test]
 fn test_error_message_invalid_scalar_function_signature() {
-    error_message_test(
-        "select sqrt()",
-        "Error during planning: 'sqrt' does not support zero arguments",
+    assert!(
+        error_message("select sqrt()").starts_with(
+            r"Error during planning: 'sqrt' does not support zero arguments"
+        )
     );
-    error_message_test(
-        "select sqrt(1, 2)",
-        "Error during planning: Failed to coerce arguments",
-    );
+    assert!(error_message("select sqrt(1, 2)").starts_with(r"Error during planning: Failed to coerce arguments to satisfy a call to 'sqrt' function: coercion from Int64, Int64 to the signature Exact(Int64) failed"));
 }
 
 #[test]
 fn test_error_message_invalid_aggregate_function_signature() {
-    error_message_test(
-        "select sum()",
-        "Error during planning: Execution error: Function 'sum' user-defined coercion failed with \"Execution error: sum function requires 1 argument, got 0\"",
-    );
-    // We keep two different prefixes because they clarify each other.
-    // It might be incorrect, and we should consider keeping only one.
-    error_message_test(
-        "select max(9, 3)",
-        "Error during planning: Execution error: Function 'max' user-defined coercion failed",
-    );
+    assert!(error_message("select sum()").starts_with(r"Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0"));
+    assert!(error_message("select max(9, 3)").starts_with(r"Error during planning: Execution error: Function 'max' user-defined coercion failed with: Execution error: min/max was called with 2 arguments. It requires only 1"));
 }
 
 #[test]
 fn test_error_message_invalid_window_function_signature() {
-    error_message_test(
-        "select rank(1) over()",
-        "Error during planning: The function 'rank' expected zero argument but received 1",
-    );
+    assert!(error_message("select rank(1) over()").starts_with(r"Error during planning: The function 'rank' expected zero argument but received 1"));
 }
 
 #[test]
 fn test_error_message_invalid_window_aggregate_function_signature() {
-    error_message_test(
-        "select sum() over()",
-        "Error during planning: Execution error: Function 'sum' user-defined coercion failed with \"Execution error: sum function requires 1 argument, got 0\"",
-    );
+    assert!(error_message("select sum() over()").starts_with(r"Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0"));
 }
 
 // Test issue: https://github.com/apache/datafusion/issues/14058
@@ -4858,6 +5002,71 @@ fn test_using_join_wildcard_schema() {
             "t3.d".to_string()
         ]
     );
+}
+
+#[test]
+fn test_using_join_wildcard_schema_semi_anti() {
+    let s_columns = &["s.x1", "s.x2", "s.x3"];
+    let t_columns = &["t.x1", "t.x2", "t.x3"];
+
+    let sql = "WITH 
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s LEFT SEMI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t RIGHT SEMI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s LEFT ANTI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t RIGHT ANTI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    // Same as above, but with swapped s and t sides.
+    // Tests the issue fixed with #20990.
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t LEFT SEMI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s RIGHT SEMI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t LEFT ANTI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s RIGHT ANTI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
 }
 
 #[test]
