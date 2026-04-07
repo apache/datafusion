@@ -168,7 +168,7 @@ fn encode_dispatch(arr: &ArrayRef, charset: &str) -> Result<ArrayRef> {
             }
             Ok(Arc::new(builder.finish()))
         }
-        dt => exec_err!("encode expects a string or binary argument, got {:?}", dt),
+        dt => exec_err!("encode expects a string or binary argument, got {dt:?}"),
     }
 }
 
@@ -204,7 +204,7 @@ fn extract_charset(charset_arg: &ColumnarValue) -> Result<String> {
                 DataType::Utf8 => validate_constant_charset(&arr.as_string::<i32>()),
                 DataType::LargeUtf8 => validate_constant_charset(&arr.as_string::<i64>()),
                 DataType::Utf8View => validate_constant_charset(&arr.as_string_view()),
-                dt => exec_err!("encode charset argument must be a string, got {:?}", dt),
+                dt => exec_err!("encode charset argument must be a string, got {dt:?}"),
             }
         }
     }
@@ -294,7 +294,7 @@ mod tests {
     fn expect_binary_scalar(result: ColumnarValue) -> Vec<u8> {
         match result {
             ColumnarValue::Scalar(ScalarValue::Binary(Some(bytes))) => bytes,
-            other => panic!("Expected Binary scalar, got {:?}", other),
+            other => panic!("Expected Binary scalar, got {other:?}"),
         }
     }
 
@@ -317,12 +317,16 @@ mod tests {
 
     #[test]
     fn test_encode_iso_8859_1() {
+        // "naïve" — U+00EF (ï) is 0xEF in ISO-8859-1
         let result = eval_encode_scalar(
-            ScalarValue::Utf8(Some("caf\u{00E9}".into())),
+            ScalarValue::Utf8(Some("na\u{00EF}ve".into())),
             "ISO-8859-1",
         )
         .unwrap();
-        assert_eq!(expect_binary_scalar(result), vec![0x63, 0x61, 0x66, 0xE9]);
+        assert_eq!(
+            expect_binary_scalar(result),
+            vec![0x6E, 0x61, 0xEF, 0x76, 0x65]
+        );
     }
 
     #[test]
