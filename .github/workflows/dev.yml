@@ -51,6 +51,14 @@ jobs:
       # if you encounter error, see instructions inside the script
         run: ci/scripts/doc_prettier_check.sh
 
+  asf-yaml-check:
+    name: Validate required_status_checks in .asf.yaml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - run: pip install pyyaml
+      - run: python3 ci/scripts/check_asf_yaml_status_checks.py
+
   typos:
     name: Spell Check with Typos
     runs-on: ubuntu-latest

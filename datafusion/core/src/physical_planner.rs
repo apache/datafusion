@@ -1198,7 +1198,14 @@ impl DefaultPhysicalPlanner {
                 let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
             }
-            LogicalPlan::Subquery(_) => todo!(),
+            // The optimizer's decorrelation passes remove Subquery nodes
+            // for supported patterns. This error is hit for correlated
+            // patterns that the optimizer cannot (yet) decorrelate.
+            LogicalPlan::Subquery(_) => {
+                return not_impl_err!(
+                    "Physical plan does not support undecorrelated Subquery"
+                );
+            }
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
@@ -2086,6 +2093,7 @@ fn get_physical_expr_pair(
 /// A vector of unqualified filter expressions that can be passed to the TableProvider for execution.
 /// Returns an empty vector if no applicable filters are found.
 ///
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn extract_dml_filters(
     input: &Arc<LogicalPlan>,
     target: &TableReference,
@@ -3566,21 +3574,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_list_types() -> Result<()> {
-        // expression: "a in ('a', 1)"
+    async fn in_list_types_mixed_string_int_error() -> Result<()> {
+        // expression: "c1 in ('a', 1)" where c1 is Utf8
         let list = vec![lit("a"), lit(1i64)];
         let logical_plan = test_csv_scan()
             .await?
-            // filter clause needs the type coercion rule applied
             .filter(col("c12").lt(lit(0.05)))?
             .project(vec![col("c1").in_list(list, false)])?
             .build()?;
-        let execution_plan = plan(&logical_plan).await?;
-        // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
+        let e = plan(&logical_plan).await.unwrap_err().to_string();
 
-        let expected = r#"expr: BinaryExpr { left: BinaryExpr { left: Column { name: "c1", index: 0 }, op: Eq, right: Literal { value: Utf8("a"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }"#;
-
-        assert_contains!(format!("{execution_plan:?}"), expected);
+        assert_contains!(&e, "Cannot cast string 'a' to value of Int64 type");
 
         Ok(())
     }
@@ -3625,7 +3629,6 @@ mod tests {
 
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
-            .as_any()
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
@@ -3653,7 +3656,6 @@ mod tests {
 
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
-            .as_any()
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
@@ -3788,7 +3790,7 @@ mod tests {
             .unwrap();
 
         let plan = plan(&logical_plan).await.unwrap();
-        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+        if let Some(plan) = plan.downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert!(stringified_plans.len() >= 4);
             assert!(
@@ -3856,7 +3858,7 @@ mod tests {
             .handle_explain(&explain, &ctx.state())
             .await
             .unwrap();
-        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+        if let Some(plan) = plan.downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert_eq!(stringified_plans.len(), 1);
             assert_eq!(stringified_plans[0].plan.as_str(), "Test Err");
@@ -3996,10 +3998,6 @@ mod tests {
         }
 
         /// Return a reference to Any that can be used for downcasting
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
@@ -4162,9 +4160,6 @@ digraph {
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::empty())
         }
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!()
-        }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             self.0.iter().collect::<Vec<_>>()
         }
@@ -4215,9 +4210,6 @@ digraph {
             self: Arc<Self>,
             _children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
-        }
-        fn as_any(&self) -> &dyn Any {
             unimplemented!()
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -4342,9 +4334,6 @@ digraph {
             self: Arc<Self>,
             _children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
-        }
-        fn as_any(&self) -> &dyn Any {
             unimplemented!()
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -4758,6 +4747,6 @@ digraph {
             .unwrap();
 
         assert_eq!(plan.schema(), schema);
-        assert!(plan.as_any().is::<EmptyExec>());
+        assert!(plan.is::<EmptyExec>());
     }
 }

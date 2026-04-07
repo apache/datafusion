@@ -54,7 +54,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(|plan| {
             // Check if the plan is AggregateExec
-            let Some(agg_exec) = plan.as_any().downcast_ref::<AggregateExec>() else {
+            let Some(agg_exec) = plan.downcast_ref::<AggregateExec>() else {
                 return Ok(Transformed::no(plan));
             };
 
@@ -66,8 +66,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
             }
 
             // Check if the input is AggregateExec
-            let Some(input_agg_exec) =
-                agg_exec.input().as_any().downcast_ref::<AggregateExec>()
+            let Some(input_agg_exec) = agg_exec.input().downcast_ref::<AggregateExec>()
             else {
                 return Ok(Transformed::no(plan));
             };

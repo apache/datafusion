@@ -198,10 +198,6 @@ impl ExecutionPlan for OutputRequirementExec {
         "OutputRequirementExec"
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -340,9 +336,7 @@ impl PhysicalOptimizerRule for OutputRequirements {
             RuleMode::Add => require_top_ordering(plan),
             RuleMode::Remove => plan
                 .transform_up(|plan| {
-                    if let Some(sort_req) =
-                        plan.as_any().downcast_ref::<OutputRequirementExec>()
-                    {
+                    if let Some(sort_req) = plan.downcast_ref::<OutputRequirementExec>() {
                         Ok(Transformed::yes(sort_req.input()))
                     } else {
                         Ok(Transformed::no(plan))
@@ -389,7 +383,7 @@ fn require_top_ordering_helper(
     // Global ordering defines desired ordering in the final result.
     if children.len() != 1 {
         Ok((plan, false))
-    } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+    } else if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
         // In case of constant columns, output ordering of the `SortExec` would
         // be an empty set. Therefore; we check the sort expression field to
         // assign the requirements.
@@ -407,7 +401,7 @@ fn require_top_ordering_helper(
             )) as _,
             true,
         ))
-    } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
+    } else if let Some(spm) = plan.downcast_ref::<SortPreservingMergeExec>() {
         let reqs = OrderingRequirements::from(spm.expr().clone());
         let fetch = spm.fetch();
         Ok((

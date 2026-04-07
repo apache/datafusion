@@ -907,6 +907,25 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     }
 }
 
+impl dyn AggregateUDFImpl {
+    /// Returns `true` if the implementation is of type `T`.
+    ///
+    /// Works correctly when called on `Arc<dyn AggregateUDFImpl>` via auto-deref.
+    pub fn is<T: AggregateUDFImpl>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast to a concrete type `T`, returning `None` if the
+    /// implementation is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn AggregateUDFImpl>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: AggregateUDFImpl>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 impl PartialEq for dyn AggregateUDFImpl {
     fn eq(&self, other: &Self) -> bool {
         self.dyn_eq(other)

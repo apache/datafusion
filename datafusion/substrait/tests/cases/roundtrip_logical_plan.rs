@@ -568,7 +568,7 @@ async fn try_cast_decimal_to_int() -> Result<()> {
 
 #[tokio::test]
 async fn try_cast_decimal_to_string() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE a = TRY_CAST(b AS string)").await
+    roundtrip("SELECT * FROM data WHERE f = TRY_CAST(b AS string)").await
 }
 
 #[tokio::test]
