@@ -242,6 +242,12 @@ FROM table_with_metadata;
 NULL the id field
 3 the id field
 
+# Regression test: CAST with single-argument arrow_metadata (returns full map)
+query ?
+select arrow_metadata(CAST(id AS BIGINT)) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
+
 # Regression test: distinct with cast
 query D
 SELECT DISTINCT (ts::DATE) AS dist
@@ -401,6 +407,12 @@ FROM table_with_metadata;
 NULL the name field
 NULL the name field
 NULL the name field
+
+# Regression test: TRY_CAST with single-argument arrow_metadata (returns full map)
+query ?
+select arrow_metadata(TRY_CAST(id AS BIGINT)) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
 
 statement ok
 drop table table_with_metadata;
