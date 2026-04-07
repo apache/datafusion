@@ -356,7 +356,7 @@ where
         if rehash {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
                 let value = unsafe { array.value_unchecked(i) };
-                *hash = hash_strategy.rehash(&value, *hash);
+                *hash = combine_hashes(hash_strategy.hash_one(&value), *hash);
             }
         } else {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
@@ -367,7 +367,8 @@ where
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = hash_strategy.rehash(&value, hashes_buffer[i]);
+            hashes_buffer[i] =
+                combine_hashes(hash_strategy.hash_one(&value), hashes_buffer[i]);
         }
     } else {
         for i in array.nulls().unwrap().valid_indices() {
