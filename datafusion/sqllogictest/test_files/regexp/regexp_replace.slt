@@ -127,3 +127,30 @@ from (values ('a'), ('b')) as tbl(col);
 ----
 NULL NULL NULL
 NULL NULL NULL
+
+# If the overall pattern matches but capture group 1 does not participate,
+# regexp_replace(..., '\1') should substitute the empty string, not keep
+# the original input.
+query B
+SELECT regexp_replace('bzzz', '^(a)?b.*$', '\1') = '';
+----
+true
+
+# Stripping trailing .*$ must not change match semantics for inputs with
+# newlines when the original pattern does not use the 's' flag.
+query B
+SELECT regexp_replace(concat('http://x/', chr(10), 'rest'), '^https?://([^/]+)/.*$', '\1')
+       = concat('http://x/', chr(10), 'rest');
+----
+true
+
+# Inline multiline mode still allows only the matched prefix to be replaced.
+# The remainder of the string must be preserved.
+query B
+SELECT regexp_replace(
+           concat('http://x/path', chr(10), 'rest'),
+           '^(?m)https?://([^/]+)/.*$',
+           '\1'
+       ) = concat('x', chr(10), 'rest');
+----
+true
