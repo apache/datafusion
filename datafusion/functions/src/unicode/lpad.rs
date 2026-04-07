@@ -178,7 +178,7 @@ impl ScalarUDFImpl for LPadFunc {
 }
 
 use super::common::{
-    StringCharLen, measure_char_count, try_as_scalar_i64, try_as_scalar_str,
+    StringCharLen, char_count_or_boundary, try_as_scalar_i64, try_as_scalar_str,
 };
 
 /// Optimized lpad for constant target_len and fill arguments.
@@ -275,8 +275,8 @@ fn lpad_scalar_unicode<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
     for maybe_string in string_array.iter() {
         match maybe_string {
             Some(string) => {
-                match measure_char_count(string, target_len) {
-                    StringCharLen::TruncateAt(offset) => {
+                match char_count_or_boundary(string, target_len) {
+                    StringCharLen::ByteOffset(offset) => {
                         builder.append_value(&string[..offset]);
                     }
                     StringCharLen::CharCount(char_count) => {
@@ -427,8 +427,8 @@ where
                     fill_chars_buf.clear();
                     fill_chars_buf.extend(fill.chars());
 
-                    match measure_char_count(string, target_len) {
-                        StringCharLen::TruncateAt(offset) => {
+                    match char_count_or_boundary(string, target_len) {
+                        StringCharLen::ByteOffset(offset) => {
                             builder.append_value(&string[..offset]);
                         }
                         StringCharLen::CharCount(char_count) => {
@@ -484,8 +484,8 @@ where
                         builder.append_value(string);
                     }
                 } else {
-                    match measure_char_count(string, target_len) {
-                        StringCharLen::TruncateAt(offset) => {
+                    match char_count_or_boundary(string, target_len) {
+                        StringCharLen::ByteOffset(offset) => {
                             builder.append_value(&string[..offset]);
                         }
                         StringCharLen::CharCount(char_count) => {

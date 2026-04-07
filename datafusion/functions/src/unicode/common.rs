@@ -88,26 +88,26 @@ pub(crate) fn byte_offset_of_char(string: &str, n: usize) -> usize {
         .map_or(string.len(), |(i, _)| i)
 }
 
-/// Measures the character length of `string` in a single pass, returning
-/// early with the truncation byte offset if the string exceeds `n` chars.
+/// If `string` has more than `n` codepoints, returns the byte offset of
+/// the `n`-th codepoint boundary. Otherwise returns the total codepoint count.
 #[inline]
-pub(crate) fn measure_char_count(string: &str, n: usize) -> StringCharLen {
+pub(crate) fn char_count_or_boundary(string: &str, n: usize) -> StringCharLen {
     let mut count = 0;
     for (byte_idx, _) in string.char_indices() {
         if count == n {
-            return StringCharLen::TruncateAt(byte_idx);
+            return StringCharLen::ByteOffset(byte_idx);
         }
         count += 1;
     }
     StringCharLen::CharCount(count)
 }
 
-/// Result of [`measure_char_count`].
+/// Result of [`char_count_or_boundary`].
 pub(crate) enum StringCharLen {
-    /// The string has more than `n` chars; contains the byte offset at the
-    /// `n`-th character boundary (suitable for slicing `&string[..offset]`).
-    TruncateAt(usize),
-    /// The string has `n` or fewer chars; contains the exact character count.
+    /// The string has more than `n` codepoints; contains the byte offset
+    /// at the `n`-th codepoint boundary.
+    ByteOffset(usize),
+    /// The string has `n` or fewer codepoints; contains the exact count.
     CharCount(usize),
 }
 
