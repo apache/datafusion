@@ -41,7 +41,7 @@ pub use crate::aggregate::stats::StatsType;
 
 pub use binary::{BinaryExpr, binary, similar_to};
 pub use case::{CaseExpr, case};
-pub use cast::{CastExpr, cast, cast_with_target_field};
+pub use cast::{CastExpr, cast};
 pub use cast_column::CastColumnExpr;
 pub use column::{Column, col, with_new_schema};
 pub use datafusion_expr::utils::format_state_name;
@@ -56,3 +56,5 @@ pub use no_op::NoOp;
 pub use not::{NotExpr, not};
 pub use try_cast::{TryCastExpr, try_cast};
 pub use unknown_column::UnKnownColumn;
+
+pub(crate) use cast::cast_with_target_field;
