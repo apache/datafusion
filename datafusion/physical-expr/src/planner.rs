@@ -289,23 +289,17 @@ pub fn create_physical_expr(
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
         Expr::Cast(Cast { expr, field }) => {
-            if !field.metadata().is_empty() {
-                let (_, src_field) = expr.to_field(input_dfschema)?;
-                return plan_err!(
-                    "Cast from {} to {} is not supported",
-                    format_type_and_metadata(
-                        src_field.data_type(),
-                        Some(src_field.metadata()),
-                    ),
-                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
-                );
-            }
+            let expr = create_physical_expr(expr, input_dfschema, execution_props)?;
 
-            expressions::cast(
-                create_physical_expr(expr, input_dfschema, execution_props)?,
-                input_schema,
-                field.data_type().clone(),
-            )
+            // Reuse the standard CAST validation path, but preserve the logical
+            // target field instead of lowering to a type-only physical cast.
+            expressions::cast(Arc::clone(&expr), input_schema, field.data_type().clone())?;
+
+            Ok(Arc::new(expressions::CastExpr::new_with_target_field(
+                expr,
+                Arc::clone(field),
+                None,
+            )))
         }
         Expr::TryCast(TryCast { expr, field }) => {
             if !field.metadata().is_empty() {
@@ -476,7 +470,63 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_to_extension_type() -> Result<()> {
+    fn test_cast_lowering_preserves_target_field_metadata() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let target_field = Arc::new(
+            Field::new("cast_target", DataType::Int64, true).with_metadata(
+                [("target_meta".to_string(), "1".to_string())].into(),
+            ),
+        );
+        let cast_expr = Expr::Cast(Cast::new_from_field(
+            Box::new(col("a")),
+            Arc::clone(&target_field),
+        ));
+
+        let physical =
+            create_physical_expr(&cast_expr, &df_schema, &ExecutionProps::new())?;
+        let cast = physical
+            .as_any()
+            .downcast_ref::<expressions::CastExpr>()
+            .expect("planner should lower logical CAST to CastExpr");
+
+        assert_eq!(cast.target_field(), &target_field);
+        assert_eq!(physical.return_field(&schema)?, target_field);
+        assert!(physical.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_lowering_preserves_same_type_field_semantics() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let target_field = Arc::new(
+            Field::new("same_type_cast", DataType::Int32, true).with_metadata(
+                [("target_meta".to_string(), "same-type".to_string())].into(),
+            ),
+        );
+        let cast_expr = Expr::Cast(Cast::new_from_field(
+            Box::new(col("a")),
+            Arc::clone(&target_field),
+        ));
+
+        let physical =
+            create_physical_expr(&cast_expr, &df_schema, &ExecutionProps::new())?;
+        let cast = physical
+            .as_any()
+            .downcast_ref::<expressions::CastExpr>()
+            .expect("same-type casts should not be elided when the target field carries semantics");
+
+        assert_eq!(cast.target_field(), &target_field);
+        assert_eq!(physical.return_field(&schema)?, target_field);
+        assert!(physical.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_cast_to_extension_type_is_rejected() -> Result<()> {
         let extension_field_type = Arc::new(
             DataType::FixedSizeBinary(16)
                 .into_nullable_field()
@@ -486,17 +536,8 @@ mod tests {
                 ),
         );
         let expr = lit("3230e5d4-888e-408b-b09b-831f44aa0c58");
-        let cast_expr = Expr::Cast(Cast::new_from_field(
-            Box::new(expr.clone()),
-            Arc::clone(&extension_field_type),
-        ));
-        let err =
-            create_physical_expr(&cast_expr, &DFSchema::empty(), &ExecutionProps::new())
-                .unwrap_err();
-        assert!(err.message().contains("arrow.uuid"));
-
         let try_cast_expr = Expr::TryCast(TryCast::new_from_field(
-            Box::new(expr.clone()),
+            Box::new(expr),
             Arc::clone(&extension_field_type),
         ));
         let err = create_physical_expr(
