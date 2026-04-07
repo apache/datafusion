@@ -220,6 +220,34 @@ FROM table_with_metadata;
 2020-09-08
 2020-09-08
 
+# Regression test: CAST should preserve source field metadata
+query DT
+SELECT
+    CAST(ts AS DATE) as casted,
+    arrow_metadata(CAST(ts AS DATE), 'metadata_key')
+FROM table_with_metadata;
+----
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+
+# Regression test: CAST preserves metadata on integer column
+query IT
+SELECT
+    CAST(id AS BIGINT) as casted,
+    arrow_metadata(CAST(id AS BIGINT), 'metadata_key')
+FROM table_with_metadata;
+----
+1 the id field
+NULL the id field
+3 the id field
+
+# Regression test: CAST with single-argument arrow_metadata (returns full map)
+query ?
+select arrow_metadata(CAST(id AS BIGINT)) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
+
 # Regression test: distinct with cast
 query D
 SELECT DISTINCT (ts::DATE) AS dist
@@ -344,6 +372,45 @@ NULL the id field bar the name field
 # Test arrow_metadata with single argument (returns Map)
 query ?
 select arrow_metadata(id) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
+
+# Regression test: TRY_CAST should preserve source field metadata
+query DT
+SELECT
+    TRY_CAST(ts AS DATE) as try_casted,
+    arrow_metadata(TRY_CAST(ts AS DATE), 'metadata_key')
+FROM table_with_metadata;
+----
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+
+# Regression test: TRY_CAST preserves metadata on integer column
+query IT
+SELECT
+    TRY_CAST(id AS BIGINT) as try_casted,
+    arrow_metadata(TRY_CAST(id AS BIGINT), 'metadata_key')
+FROM table_with_metadata;
+----
+1 the id field
+NULL the id field
+3 the id field
+
+# Regression test: TRY_CAST preserves metadata even when cast fails (returns NULL)
+query IT
+SELECT
+    TRY_CAST(name AS INT) as try_casted,
+    arrow_metadata(TRY_CAST(name AS INT), 'metadata_key')
+FROM table_with_metadata;
+----
+NULL the name field
+NULL the name field
+NULL the name field
+
+# Regression test: TRY_CAST with single-argument arrow_metadata (returns full map)
+query ?
+select arrow_metadata(TRY_CAST(id AS BIGINT)) from table_with_metadata limit 1;
 ----
 {metadata_key: the id field}
 
