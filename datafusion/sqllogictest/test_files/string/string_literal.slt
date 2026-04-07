@@ -1904,7 +1904,7 @@ SELECT translate('e' || chr(769) || 'y', 'e', 'a') = 'a' || chr(769) || 'y'
 true
 
 # Deleting a combining accent (from longer than to).
-# 'e' || chr(769) || 'x' with chr(769) in from but no corresponding to entry → deleted.
+# 'e' || chr(769) || 'x' with chr(769) in `from` but no corresponding `to` entry → deleted.
 query BI
 SELECT translate('e' || chr(769) || 'x', chr(769), '') = 'ex',
        character_length(translate('e' || chr(769) || 'x', chr(769), ''))
