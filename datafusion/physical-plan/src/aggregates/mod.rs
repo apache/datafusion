@@ -2027,7 +2027,7 @@ pub fn evaluate_group_by(
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
     let max_ordinal = max_duplicate_ordinal(&group_by.groups);
-    let mut ordinal_per_pattern: HashMap<&Vec<bool>, usize> = HashMap::new();
+    let mut ordinal_per_pattern: HashMap<&[bool], usize> = HashMap::new();
     let exprs = evaluate_expressions_to_arrays(
         group_by.expr.iter().map(|(expr, _)| expr),
         batch,
