@@ -340,10 +340,8 @@ pub fn cast_with_target_field(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
     let cast_type = target_field.data_type();
-    if expr_type == *cast_type {
-        if is_default_target_field(&target_field) {
-            return Ok(Arc::clone(&expr));
-        }
+    if expr_type == *cast_type && is_default_target_field(&target_field) {
+        return Ok(Arc::clone(&expr));
     }
 
     let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
