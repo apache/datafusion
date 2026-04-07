@@ -125,6 +125,36 @@ CREATE TABLE group_median_table_nullable (
 ( 'group1', 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100,  101,   4294967294, arrow_cast(100,'UInt64'), 3.2,  5.5,   arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
 ( 'group1', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255,  65535, 4294967295, 18446744073709551615,     2.2,  2.2,   arrow_cast('NAN','Float64'), 0.0005, 0.0005 )
 
+query R
+select quantile_cont(col0, 0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+2.5
+
+query R
+select quantile_cont(col0, 0.75 order by col0 desc)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+1.5
+
+query R
+select quantile_cont(0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+2.5
+
+query R
+select quantile_cont(0.75 order by col0 desc)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+1.5
+
+query R
+select quantile_cont(0.75) within group (order by col0)
+from values (1), (2), (3) t(col0);
+----
+2.5
+
 #######
 # Error tests
 #######
@@ -8787,3 +8817,121 @@ set datafusion.execution.target_partitions = 4;
 
 statement ok
 DROP TABLE stream_test;
+
+
+#################
+# first_value on strings/binary with groups and ordering
+#################
+
+statement ok
+CREATE TABLE first_last_value_str_tests(id INT, sort_key INT, val TEXT) AS VALUES
+(1, 10, 'apple'),
+(1, 2,  'banana'),
+(1, 5,  'cherry'),
+(2, 100, 'dog'),
+(2, 200, 'elephant');
+
+# Utf8
+query IT
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 banana
+2 dog
+
+query IT
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 apple
+2 elephant
+
+# LargeUtf8
+query IT
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeUtf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 banana
+2 dog
+
+query IT
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeUtf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 apple
+2 elephant
+
+# Utf8View
+query IT
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8View') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 banana
+2 dog
+
+query IT
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8View') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 apple
+2 elephant
+
+# Binary
+query I?
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Binary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 62616e616e61
+2 646f67
+
+query I?
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Binary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 6170706c65
+2 656c657068616e74
+
+# LargeBinary
+query I?
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeBinary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 62616e616e61
+2 646f67
+
+query I?
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeBinary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 6170706c65
+2 656c657068616e74
+
+# BinaryView
+query I?
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(arrow_cast(val, 'Binary'), 'BinaryView') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 62616e616e61
+2 646f67
+
+query I?
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(arrow_cast(val, 'Binary'), 'BinaryView') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 6170706c65
+2 656c657068616e74
+
+statement ok
+DROP TABLE first_last_value_str_tests;

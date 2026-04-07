@@ -515,7 +515,6 @@ fn test_memory_after_projection() -> Result<()> {
     assert_eq!(
         after_optimize
             .clone()
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .unwrap()
             .data_source()
@@ -598,10 +597,7 @@ fn test_streaming_table_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let result = after_optimize
-        .as_any()
-        .downcast_ref::<StreamingTableExec>()
-        .unwrap();
+    let result = after_optimize.downcast_ref::<StreamingTableExec>().unwrap();
     assert_eq!(
         result.partition_schema(),
         &Arc::new(Schema::new(vec![
@@ -792,7 +788,6 @@ fn test_output_req_after_projection() -> Result<()> {
     );
     assert_eq!(
         after_optimize
-            .as_any()
             .downcast_ref::<OutputRequirementExec>()
             .unwrap()
             .required_input_ordering()[0]
@@ -805,7 +800,6 @@ fn test_output_req_after_projection() -> Result<()> {
         Arc::new(Column::new("b", 2)),
     ];
     if let Distribution::HashPartitioned(vec) = after_optimize
-        .as_any()
         .downcast_ref::<OutputRequirementExec>()
         .unwrap()
         .required_input_distribution()[0]
@@ -1036,7 +1030,6 @@ fn test_join_after_projection() -> Result<()> {
     assert_eq!(
         expected_filter_col_ind,
         after_optimize
-            .as_any()
             .downcast_ref::<SymmetricHashJoinExec>()
             .unwrap()
             .filter()
@@ -1313,8 +1306,8 @@ fn test_hash_join_after_projection() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@3 as c_from_right]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]
+    ProjectionExec: expr=[c@0 as c_from_left, b@1 as b_from_left, a@2 as a_from_left, c@3 as c_from_right]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[c@2, b@1, a@0, c@7]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "
@@ -1400,7 +1393,6 @@ fn test_repartition_after_projection() -> Result<()> {
 
     assert_eq!(
         after_optimize
-            .as_any()
             .downcast_ref::<RepartitionExec>()
             .unwrap()
             .partitioning()

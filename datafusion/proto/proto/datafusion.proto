@@ -1199,6 +1199,10 @@ message AnalyzeExecNode {
   bool show_statistics = 2;
   PhysicalPlanNode input = 3;
   datafusion_common.Schema schema = 4;
+  // Optional metric category filter.
+  // Empty means "plan only". Absent (has_metric_categories=false) means "all".
+  bool has_metric_categories = 5;
+  repeated string metric_categories = 6;
 }
 
 message CrossJoinExecNode {

@@ -70,3 +70,68 @@ query TT
 SELECT concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')), arrow_typeof(concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')));
 ----
 abc Utf8View
+
+# Test mixed types: Utf8 + Binary
+query TT
+SELECT concat(arrow_cast('hello', 'Utf8'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Utf8'), arrow_cast(' world', 'Binary')));
+----
+hello world Utf8
+
+# Test mixed types: Utf8View + Binary
+query TT
+SELECT concat(arrow_cast('hello', 'Utf8View'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Utf8View'), arrow_cast(' world', 'Binary')));
+----
+hello world Utf8View
+
+# Test mixed types: Binary + Binary
+query TT
+SELECT concat(arrow_cast('hello', 'Binary'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Binary'), arrow_cast(' world', 'Binary')));
+----
+hello world Utf8
+
+# Test mixed types with ws: Binary + Binary
+query TT
+SELECT concat_ws('|', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')), arrow_typeof(concat_ws('|', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')));
+----
+hello|world Utf8
+
+# Invalid UTF8 binaries for concatenation, scalar case
+# 636166c3a9 = café  , where c3a9 is a char é
+# 68656c6c6f = hello
+query error Execution error: invalid UTF-8 in binary literal
+SELECT concat(x'636166c3', x'68656c6c6f');
+
+query error Execution error: invalid UTF-8 in binary literal
+SELECT concat(x'636166c3', arrow_cast(x'68656c6c6f', 'Utf8View'));
+
+statement ok
+create table t as values (x'636166c3', x'68656c6c6f');
+
+# Invalid UTF8 sequence for concatenation, array case
+query error Arrow error: Invalid argument error: Invalid UTF8 sequence at string
+SELECT concat(column1, column2) from t;
+
+# Invalid UTF8 sequence for concatenation, array case
+query error DataFusion error: Execution error: invalid UTF-8 in binary literal
+SELECT concat(column1, arrow_cast(column2, 'Utf8View')) from t;
+
+statement ok
+drop table t
+
+statement ok
+create table t as values (x'636166c3', x'a968656c6c6f');
+
+# Invalid UTF8 binaries make a valid UTF8 sequence after concatenation, array case
+query T
+SELECT concat(column1, column2) from t;
+----
+caféhello
+
+statement ok
+drop table t
+
+# Invalid UTF8 binaries make a valid UTF8 sequence after concatenation, scalar case
+query T
+SELECT concat(x'636166c3', x'a968656c6c6f');
+----
+caféhello

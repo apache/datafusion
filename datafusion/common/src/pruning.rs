@@ -95,15 +95,17 @@ pub trait PruningStatistics {
     /// [`UInt64Array`]: arrow::array::UInt64Array
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 
-    /// Return the number of rows for the named column in each container
-    /// as an [`UInt64Array`].
+    /// Return the number of rows in each container as an [`UInt64Array`].
+    ///
+    /// Row counts are container-level (not column-specific) — the value
+    /// is the same regardless of which column is being considered.
     ///
     /// See [`Self::min_values`] for when to return `None` and null values.
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
     ///
     /// [`UInt64Array`]: arrow::array::UInt64Array
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef>;
+    fn row_counts(&self) -> Option<ArrayRef>;
 
     /// Returns [`BooleanArray`] where each row represents information known
     /// about specific literal `values` in a column.
@@ -121,6 +123,7 @@ pub trait PruningStatistics {
     /// container, return `None` (the default).
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn contained(
         &self,
         column: &Column,
@@ -264,7 +267,7 @@ impl PruningStatistics for PartitionPruningStatistics {
         None
     }
 
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         None
     }
 
@@ -397,11 +400,7 @@ impl PruningStatistics for PrunableStatistics {
         }
     }
 
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        // If the column does not exist in the schema, return None
-        if self.schema.index_of(column.name()).is_err() {
-            return None;
-        }
+    fn row_counts(&self) -> Option<ArrayRef> {
         if self
             .statistics
             .iter()
@@ -501,9 +500,9 @@ impl PruningStatistics for CompositePruningStatistics {
         None
     }
 
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         for stats in &self.statistics {
-            if let Some(array) = stats.row_counts(column) {
+            if let Some(array) = stats.row_counts() {
                 return Some(array);
             }
         }
@@ -526,6 +525,7 @@ impl PruningStatistics for CompositePruningStatistics {
 
 #[cfg(test)]
 #[expect(deprecated)]
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
 mod tests {
     use crate::{
         ColumnStatistics,
@@ -564,9 +564,9 @@ mod tests {
 
         // Partition values don't know anything about nulls or row counts
         assert!(partition_stats.null_counts(&column_a).is_none());
-        assert!(partition_stats.row_counts(&column_a).is_none());
+        assert!(partition_stats.row_counts().is_none());
         assert!(partition_stats.null_counts(&column_b).is_none());
-        assert!(partition_stats.row_counts(&column_b).is_none());
+        assert!(partition_stats.row_counts().is_none());
 
         // Min/max values are the same as the partition values
         let min_values_a =
@@ -707,9 +707,9 @@ mod tests {
 
         // Partition values don't know anything about nulls or row counts
         assert!(partition_stats.null_counts(&column_a).is_none());
-        assert!(partition_stats.row_counts(&column_a).is_none());
+        assert!(partition_stats.row_counts().is_none());
         assert!(partition_stats.null_counts(&column_b).is_none());
-        assert!(partition_stats.row_counts(&column_b).is_none());
+        assert!(partition_stats.row_counts().is_none());
 
         // Min/max values are all missing
         assert!(partition_stats.min_values(&column_a).is_none());
@@ -812,13 +812,13 @@ mod tests {
         assert_eq!(null_counts_b, expected_null_counts_b);
 
         // Row counts are the same as the statistics
-        let row_counts_a = as_uint64_array(&pruning_stats.row_counts(&column_a).unwrap())
+        let row_counts_a = as_uint64_array(&pruning_stats.row_counts().unwrap())
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
         let expected_row_counts_a = vec![Some(100), Some(200)];
         assert_eq!(row_counts_a, expected_row_counts_a);
-        let row_counts_b = as_uint64_array(&pruning_stats.row_counts(&column_b).unwrap())
+        let row_counts_b = as_uint64_array(&pruning_stats.row_counts().unwrap())
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
@@ -843,7 +843,7 @@ mod tests {
         // This is debatable, personally I think `row_count` should not take a `Column` as an argument
         // at all since all columns should have the same number of rows.
         // But for now we just document the current behavior in this test.
-        let row_counts_c = as_uint64_array(&pruning_stats.row_counts(&column_c).unwrap())
+        let row_counts_c = as_uint64_array(&pruning_stats.row_counts().unwrap())
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
@@ -851,12 +851,13 @@ mod tests {
         assert_eq!(row_counts_c, expected_row_counts_c);
         assert!(pruning_stats.contained(&column_c, &values).is_none());
 
-        // Test with a column that doesn't exist
+        // Test with a column that doesn't exist — column-specific stats
+        // return None, but row_counts is container-level and still available
         let column_d = Column::new_unqualified("d");
         assert!(pruning_stats.min_values(&column_d).is_none());
         assert!(pruning_stats.max_values(&column_d).is_none());
         assert!(pruning_stats.null_counts(&column_d).is_none());
-        assert!(pruning_stats.row_counts(&column_d).is_none());
+        assert!(pruning_stats.row_counts().is_some());
         assert!(pruning_stats.contained(&column_d, &values).is_none());
     }
 
@@ -884,8 +885,8 @@ mod tests {
         assert!(pruning_stats.null_counts(&column_b).is_none());
 
         // Row counts are all missing
-        assert!(pruning_stats.row_counts(&column_a).is_none());
-        assert!(pruning_stats.row_counts(&column_b).is_none());
+        assert!(pruning_stats.row_counts().is_none());
+        assert!(pruning_stats.row_counts().is_none());
 
         // Contained values are all empty
         let values = HashSet::from([ScalarValue::from(1i32)]);
@@ -1025,13 +1026,11 @@ mod tests {
         let expected_null_counts_col_x = vec![Some(0), Some(10)];
         assert_eq!(null_counts_col_x, expected_null_counts_col_x);
 
-        // Test row counts - only available from file statistics
-        assert!(composite_stats.row_counts(&part_a).is_none());
-        let row_counts_col_x =
-            as_uint64_array(&composite_stats.row_counts(&col_x).unwrap())
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>();
+        // Test row counts — container-level, available from file statistics
+        let row_counts_col_x = as_uint64_array(&composite_stats.row_counts().unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_row_counts = vec![Some(100), Some(200)];
         assert_eq!(row_counts_col_x, expected_row_counts);
 
@@ -1044,12 +1043,13 @@ mod tests {
         // File statistics don't implement contained
         assert!(composite_stats.contained(&col_x, &values).is_none());
 
-        // Non-existent column should return None for everything
+        // Non-existent column should return None for column-specific stats,
+        // but row_counts is container-level and still available
         let non_existent = Column::new_unqualified("non_existent");
         assert!(composite_stats.min_values(&non_existent).is_none());
         assert!(composite_stats.max_values(&non_existent).is_none());
         assert!(composite_stats.null_counts(&non_existent).is_none());
-        assert!(composite_stats.row_counts(&non_existent).is_none());
+        assert!(composite_stats.row_counts().is_some());
         assert!(composite_stats.contained(&non_existent, &values).is_none());
 
         // Verify num_containers matches
@@ -1153,7 +1153,7 @@ mod tests {
         let expected_null_counts = vec![Some(0), Some(5)];
         assert_eq!(null_counts, expected_null_counts);
 
-        let row_counts = as_uint64_array(&composite_stats.row_counts(&col_a).unwrap())
+        let row_counts = as_uint64_array(&composite_stats.row_counts().unwrap())
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
@@ -1193,11 +1193,10 @@ mod tests {
         let expected_null_counts = vec![Some(10), Some(20)];
         assert_eq!(null_counts, expected_null_counts);
 
-        let row_counts =
-            as_uint64_array(&composite_stats_reversed.row_counts(&col_a).unwrap())
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>();
+        let row_counts = as_uint64_array(&composite_stats_reversed.row_counts().unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_row_counts = vec![Some(1000), Some(2000)];
         assert_eq!(row_counts, expected_row_counts);
     }
