@@ -929,7 +929,7 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
             StatisticsType::Min => statistics.min_values(&column),
             StatisticsType::Max => statistics.max_values(&column),
             StatisticsType::NullCount => statistics.null_counts(&column),
-            StatisticsType::RowCount => statistics.row_counts(&column),
+            StatisticsType::RowCount => statistics.row_counts(),
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
@@ -2300,11 +2300,10 @@ mod tests {
                 .unwrap_or(None)
         }
 
-        fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        fn row_counts(&self) -> Option<ArrayRef> {
             self.stats
-                .get(column)
-                .map(|container_stats| container_stats.row_counts())
-                .unwrap_or(None)
+                .values()
+                .find_map(|container_stats| container_stats.row_counts())
         }
 
         fn contained(
@@ -2342,7 +2341,7 @@ mod tests {
             None
         }
 
-        fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        fn row_counts(&self) -> Option<ArrayRef> {
             None
         }
 
