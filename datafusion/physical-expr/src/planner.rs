@@ -289,17 +289,12 @@ pub fn create_physical_expr(
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
         Expr::Cast(Cast { expr, field }) => {
-            let expr = create_physical_expr(expr, input_dfschema, execution_props)?;
-
-            // Reuse the standard CAST validation path, but preserve the logical
-            // target field instead of lowering to a type-only physical cast.
-            expressions::cast(Arc::clone(&expr), input_schema, field.data_type().clone())?;
-
-            Ok(Arc::new(expressions::CastExpr::new_with_target_field(
-                expr,
+            expressions::cast_with_target_field(
+                create_physical_expr(expr, input_dfschema, execution_props)?,
+                input_schema,
                 Arc::clone(field),
                 None,
-            )))
+            )
         }
         Expr::TryCast(TryCast { expr, field }) => {
             if !field.metadata().is_empty() {
@@ -493,6 +488,27 @@ mod tests {
         assert_eq!(cast.target_field(), &target_field);
         assert_eq!(physical.return_field(&schema)?, target_field);
         assert!(physical.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_lowering_preserves_standard_cast_semantics() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let cast_expr = Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int64));
+
+        let physical =
+            create_physical_expr(&cast_expr, &df_schema, &ExecutionProps::new())?;
+        let cast = physical
+            .as_any()
+            .downcast_ref::<expressions::CastExpr>()
+            .expect("planner should lower ordinary CAST to CastExpr");
+
+        assert_eq!(cast.cast_type(), &DataType::Int64);
+        assert_eq!(physical.return_field(&schema)?.name(), "a");
+        assert_eq!(physical.return_field(&schema)?.data_type(), &DataType::Int64);
+        assert!(!physical.nullable(&schema)?);
 
         Ok(())
     }

@@ -201,6 +201,12 @@ impl CastExpr {
     }
 }
 
+fn is_default_target_field(target_field: &FieldRef) -> bool {
+    target_field.name().is_empty()
+        && target_field.is_nullable()
+        && target_field.metadata().is_empty()
+}
+
 pub(crate) fn is_order_preserving_cast_family(
     source_type: &DataType,
     target_type: &DataType,
@@ -316,22 +322,56 @@ pub fn cast_with_options(
     cast_type: DataType,
     cast_options: Option<CastOptions<'static>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    cast_with_target_field(
+        expr,
+        input_schema,
+        cast_type.into_nullable_field_ref(),
+        cast_options,
+    )
+}
+
+/// Return a PhysicalExpression representing `expr` casted to `target_field`,
+/// preserving any explicit field semantics such as name, nullability, and
+/// metadata.
+pub fn cast_with_target_field(
+    expr: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+    target_field: FieldRef,
+    cast_options: Option<CastOptions<'static>>,
+) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
-    if expr_type == cast_type {
-        Ok(Arc::clone(&expr))
-    } else if requires_nested_struct_cast(&expr_type, &cast_type) {
-        if can_cast_named_struct_types(&expr_type, &cast_type) {
+    let cast_type = target_field.data_type();
+    if expr_type == *cast_type {
+        if is_default_target_field(&target_field) {
+            return Ok(Arc::clone(&expr));
+        }
+
+        Ok(Arc::new(CastExpr::new_with_target_field(
+            expr,
+            target_field,
+            cast_options,
+        )))
+    } else if requires_nested_struct_cast(&expr_type, cast_type) {
+        if can_cast_named_struct_types(&expr_type, cast_type) {
             // Allow casts involving structs (including nested inside Lists, Dictionaries,
             // etc.) that pass name-based compatibility validation. This validation is
             // applied at planning time (now) to fail fast, rather than deferring errors
             // to execution time. The name-based casting logic will be executed at runtime
             // via ColumnarValue::cast_to.
-            Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
+            Ok(Arc::new(CastExpr::new_with_target_field(
+                expr,
+                target_field,
+                cast_options,
+            )))
         } else {
             not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
         }
-    } else if can_cast_types(&expr_type, &cast_type) {
-        Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
+    } else if can_cast_types(&expr_type, cast_type) {
+        Ok(Arc::new(CastExpr::new_with_target_field(
+            expr,
+            target_field,
+            cast_options,
+        )))
     } else {
         not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
     }
