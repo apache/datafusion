@@ -448,6 +448,13 @@ mod tests {
         create_physical_expr(expr, &df_schema, &ExecutionProps::new())
     }
 
+    fn as_planner_cast(physical: &Arc<dyn PhysicalExpr>) -> &expressions::CastExpr {
+        physical
+            .as_any()
+            .downcast_ref::<expressions::CastExpr>()
+            .expect("planner should lower logical CAST to CastExpr")
+    }
+
     #[test]
     fn test_create_physical_expr_scalar_input_output() -> Result<()> {
         let expr = col("letter").eq(lit("A"));
@@ -487,10 +494,7 @@ mod tests {
         ));
 
         let physical = lower_cast_expr(&cast_expr, &schema)?;
-        let cast = physical
-            .as_any()
-            .downcast_ref::<expressions::CastExpr>()
-            .expect("planner should lower logical CAST to CastExpr");
+        let cast = as_planner_cast(&physical);
 
         assert_eq!(cast.target_field(), &target_field);
         assert_eq!(physical.return_field(&schema)?, target_field);
@@ -505,10 +509,7 @@ mod tests {
         let cast_expr = Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int64));
 
         let physical = lower_cast_expr(&cast_expr, &schema)?;
-        let cast = physical
-            .as_any()
-            .downcast_ref::<expressions::CastExpr>()
-            .expect("planner should lower ordinary CAST to CastExpr");
+        let cast = as_planner_cast(&physical);
         let returned_field = physical.return_field(&schema)?;
 
         assert_eq!(cast.cast_type(), &DataType::Int64);
@@ -533,10 +534,7 @@ mod tests {
         ));
 
         let physical = lower_cast_expr(&cast_expr, &schema)?;
-        let cast = physical
-            .as_any()
-            .downcast_ref::<expressions::CastExpr>()
-            .expect("same-type casts should not be elided when the target field carries semantics");
+        let cast = as_planner_cast(&physical);
 
         assert_eq!(cast.target_field(), &target_field);
         assert_eq!(physical.return_field(&schema)?, target_field);

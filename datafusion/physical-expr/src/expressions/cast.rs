@@ -327,6 +327,11 @@ pub fn cast_with_options(
 /// Return a PhysicalExpression representing `expr` casted to `target_field`,
 /// preserving any explicit field semantics such as name, nullability, and
 /// metadata.
+///
+/// If the input expression already has the same data type, this helper still
+/// preserves an explicit `target_field` by constructing a field-aware
+/// [`CastExpr`]. Only the default synthesized field created by the legacy
+/// type-only API is elided back to the original child expression.
 pub fn cast_with_target_field(
     expr: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
