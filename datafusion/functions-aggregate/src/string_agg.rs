@@ -24,7 +24,8 @@ use std::sync::Arc;
 use crate::array_agg::ArrayAgg;
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayRef, AsArray, BooleanArray, LargeStringArray,
+    Array, ArrayAccessor, ArrayRef, AsArray, BooleanArray, GenericStringArray,
+    LargeStringArray, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -333,6 +334,73 @@ struct StringAggGroupsAccumulator {
     num_groups: usize,
 }
 
+enum StringInputArray<'a> {
+    Utf8(&'a GenericStringArray<i32>),
+    LargeUtf8(&'a GenericStringArray<i64>),
+    Utf8View(&'a StringViewArray),
+}
+
+impl<'a> StringInputArray<'a> {
+    fn try_new(array: &'a ArrayRef) -> Result<Self> {
+        match array.data_type() {
+            DataType::Utf8 => Ok(Self::Utf8(array.as_string::<i32>())),
+            DataType::LargeUtf8 => Ok(Self::LargeUtf8(array.as_string::<i64>())),
+            DataType::Utf8View => Ok(Self::Utf8View(array.as_string_view())),
+            other => internal_err!("string_agg unexpected data type: {other}"),
+        }
+    }
+
+    fn append_rows(&self, group_indices: &[usize]) -> Vec<(u32, u32)> {
+        match self {
+            Self::Utf8(array) => {
+                StringAggGroupsAccumulator::append_rows_typed(*array, group_indices)
+            }
+            Self::LargeUtf8(array) => {
+                StringAggGroupsAccumulator::append_rows_typed(*array, group_indices)
+            }
+            Self::Utf8View(array) => {
+                StringAggGroupsAccumulator::append_rows_typed(*array, group_indices)
+            }
+        }
+    }
+
+    fn append_batch_values(
+        &self,
+        values: &mut [Option<String>],
+        entries: &[(u32, u32)],
+        delimiter: &str,
+        emit_groups: usize,
+    ) {
+        match self {
+            Self::Utf8(array) => StringAggGroupsAccumulator::append_batch_values_typed(
+                values,
+                entries,
+                *array,
+                delimiter,
+                emit_groups,
+            ),
+            Self::LargeUtf8(array) => {
+                StringAggGroupsAccumulator::append_batch_values_typed(
+                    values,
+                    entries,
+                    *array,
+                    delimiter,
+                    emit_groups,
+                )
+            }
+            Self::Utf8View(array) => {
+                StringAggGroupsAccumulator::append_batch_values_typed(
+                    values,
+                    entries,
+                    *array,
+                    delimiter,
+                    emit_groups,
+                )
+            }
+        }
+    }
+}
+
 impl StringAggGroupsAccumulator {
     fn new(delimiter: String) -> Self {
         Self {
@@ -383,11 +451,13 @@ impl StringAggGroupsAccumulator {
         self.num_groups -= emit_groups as usize;
     }
 
-    fn append_rows<'a>(
-        iter: impl Iterator<Item = Option<&'a str>>,
-        group_indices: &[usize],
-    ) -> Vec<(u32, u32)> {
-        iter.zip(group_indices.iter())
+    fn append_rows_typed<'a, A>(array: A, group_indices: &[usize]) -> Vec<(u32, u32)>
+    where
+        A: StringArrayType<'a>,
+    {
+        array
+            .iter()
+            .zip(group_indices.iter())
             .enumerate()
             .filter_map(|(row_idx, (opt_value, &group_idx))| {
                 opt_value.map(|_| (group_idx as u32, row_idx as u32))
@@ -395,7 +465,7 @@ impl StringAggGroupsAccumulator {
             .collect()
     }
 
-    fn append_value(
+    fn append_group_value(
         values: &mut [Option<String>],
         group_idx: usize,
         value: &str,
@@ -427,7 +497,7 @@ impl StringAggGroupsAccumulator {
 
             let row_idx = row_idx as usize;
             debug_assert!(!array.is_null(row_idx));
-            Self::append_value(values, group_idx, array.value(row_idx), delimiter);
+            Self::append_group_value(values, group_idx, array.value(row_idx), delimiter);
         }
     }
 
@@ -438,31 +508,12 @@ impl StringAggGroupsAccumulator {
         delimiter: &str,
         emit_groups: usize,
     ) -> Result<()> {
-        match array.data_type() {
-            DataType::Utf8 => Self::append_batch_values_typed(
-                values,
-                entries,
-                array.as_string::<i32>(),
-                delimiter,
-                emit_groups,
-            ),
-            DataType::LargeUtf8 => Self::append_batch_values_typed(
-                values,
-                entries,
-                array.as_string::<i64>(),
-                delimiter,
-                emit_groups,
-            ),
-            DataType::Utf8View => Self::append_batch_values_typed(
-                values,
-                entries,
-                array.as_string_view(),
-                delimiter,
-                emit_groups,
-            ),
-            other => return internal_err!("string_agg unexpected data type: {other}"),
-        }
-
+        StringInputArray::try_new(array)?.append_batch_values(
+            values,
+            entries,
+            delimiter,
+            emit_groups,
+        );
         Ok(())
     }
 }
@@ -477,19 +528,7 @@ impl GroupsAccumulator for StringAggGroupsAccumulator {
     ) -> Result<()> {
         self.num_groups = self.num_groups.max(total_num_groups);
         let array = apply_filter_as_nulls(&values[0], opt_filter)?;
-
-        let entries = match array.data_type() {
-            DataType::Utf8 => {
-                Self::append_rows(array.as_string::<i32>().iter(), group_indices)
-            }
-            DataType::LargeUtf8 => {
-                Self::append_rows(array.as_string::<i64>().iter(), group_indices)
-            }
-            DataType::Utf8View => {
-                Self::append_rows(array.as_string_view().iter(), group_indices)
-            }
-            other => return internal_err!("string_agg unexpected data type: {other}"),
-        };
+        let entries = StringInputArray::try_new(&array)?.append_rows(group_indices);
 
         if !entries.is_empty() {
             self.batches.push(array);
