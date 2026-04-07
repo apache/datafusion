@@ -33,9 +33,9 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
+use datafusion_expr::logical_plan::Projection;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
-use datafusion_expr::logical_plan::Projection;
 use datafusion_expr::{
     BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
     in_subquery, lit, not, not_exists, not_in_subquery,
@@ -2228,8 +2228,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    col("orders.o_custkey")
-                        .eq(out_ref_col(DataType::UInt32, "test.a")),
+                    col("orders.o_custkey").eq(out_ref_col(DataType::UInt32, "test.a")),
                 )?
                 .project(vec![lit(1)])?
                 .build()?,
@@ -2320,9 +2319,11 @@ mod tests {
                 .build()?,
         );
 
-        let case_expr =
-            when(in_subquery(col("customer.c_custkey"), orders), lit("active"))
-                .otherwise(lit("inactive"))?;
+        let case_expr = when(
+            in_subquery(col("customer.c_custkey"), orders),
+            lit("active"),
+        )
+        .otherwise(lit("inactive"))?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .project(vec![col("customer.c_custkey"), case_expr])?
@@ -2412,8 +2413,8 @@ mod tests {
                 .build()?,
         );
 
-        let case_expr = when(in_subquery(col("c"), sq), lit("yes"))
-            .otherwise(lit("no"))?;
+        let case_expr =
+            when(in_subquery(col("c"), sq), lit("yes")).otherwise(lit("no"))?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), case_expr])?
