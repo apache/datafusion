@@ -151,14 +151,8 @@ impl CastExpr {
         &self.cast_options
     }
 
-    fn is_default_target_field(&self) -> bool {
-        self.target_field.name().is_empty()
-            && self.target_field.is_nullable()
-            && self.target_field.metadata().is_empty()
-    }
-
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        if self.is_default_target_field() {
+        if is_default_target_field(&self.target_field) {
             self.expr.return_field(input_schema).map(|field| {
                 Arc::new(
                     field
@@ -345,36 +339,28 @@ pub fn cast_with_target_field(
         if is_default_target_field(&target_field) {
             return Ok(Arc::clone(&expr));
         }
-
-        Ok(Arc::new(CastExpr::new_with_target_field(
-            expr,
-            target_field,
-            cast_options,
-        )))
-    } else if requires_nested_struct_cast(&expr_type, cast_type) {
-        if can_cast_named_struct_types(&expr_type, cast_type) {
-            // Allow casts involving structs (including nested inside Lists, Dictionaries,
-            // etc.) that pass name-based compatibility validation. This validation is
-            // applied at planning time (now) to fail fast, rather than deferring errors
-            // to execution time. The name-based casting logic will be executed at runtime
-            // via ColumnarValue::cast_to.
-            Ok(Arc::new(CastExpr::new_with_target_field(
-                expr,
-                target_field,
-                cast_options,
-            )))
-        } else {
-            not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
-        }
-    } else if can_cast_types(&expr_type, cast_type) {
-        Ok(Arc::new(CastExpr::new_with_target_field(
-            expr,
-            target_field,
-            cast_options,
-        )))
-    } else {
-        not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
     }
+
+    let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
+        // Allow casts involving structs (including nested inside Lists, Dictionaries,
+        // etc.) that pass name-based compatibility validation. This validation is
+        // applied at planning time (now) to fail fast, rather than deferring errors
+        // to execution time. The name-based casting logic will be executed at runtime
+        // via ColumnarValue::cast_to.
+        can_cast_named_struct_types(&expr_type, cast_type)
+    } else {
+        can_cast_types(&expr_type, cast_type)
+    };
+
+    if !can_build_cast {
+        return not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}");
+    }
+
+    Ok(Arc::new(CastExpr::new_with_target_field(
+        expr,
+        target_field,
+        cast_options,
+    )))
 }
 
 /// Return a PhysicalExpression representing `expr` casted to

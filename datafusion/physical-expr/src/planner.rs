@@ -439,6 +439,15 @@ mod tests {
 
     use super::*;
 
+    fn test_cast_schema() -> Schema {
+        Schema::new(vec![Field::new("a", DataType::Int32, false)])
+    }
+
+    fn lower_cast_expr(expr: &Expr, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        create_physical_expr(expr, &df_schema, &ExecutionProps::new())
+    }
+
     #[test]
     fn test_create_physical_expr_scalar_input_output() -> Result<()> {
         let expr = col("letter").eq(lit("A"));
@@ -466,8 +475,7 @@ mod tests {
 
     #[test]
     fn test_cast_lowering_preserves_target_field_metadata() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let df_schema = DFSchema::try_from(schema.clone())?;
+        let schema = test_cast_schema();
         let target_field = Arc::new(
             Field::new("cast_target", DataType::Int64, true).with_metadata(
                 [("target_meta".to_string(), "1".to_string())].into(),
@@ -478,8 +486,7 @@ mod tests {
             Arc::clone(&target_field),
         ));
 
-        let physical =
-            create_physical_expr(&cast_expr, &df_schema, &ExecutionProps::new())?;
+        let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = physical
             .as_any()
             .downcast_ref::<expressions::CastExpr>()
@@ -494,20 +501,19 @@ mod tests {
 
     #[test]
     fn test_cast_lowering_preserves_standard_cast_semantics() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let df_schema = DFSchema::try_from(schema.clone())?;
+        let schema = test_cast_schema();
         let cast_expr = Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int64));
 
-        let physical =
-            create_physical_expr(&cast_expr, &df_schema, &ExecutionProps::new())?;
+        let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = physical
             .as_any()
             .downcast_ref::<expressions::CastExpr>()
             .expect("planner should lower ordinary CAST to CastExpr");
+        let returned_field = physical.return_field(&schema)?;
 
         assert_eq!(cast.cast_type(), &DataType::Int64);
-        assert_eq!(physical.return_field(&schema)?.name(), "a");
-        assert_eq!(physical.return_field(&schema)?.data_type(), &DataType::Int64);
+        assert_eq!(returned_field.name(), "a");
+        assert_eq!(returned_field.data_type(), &DataType::Int64);
         assert!(!physical.nullable(&schema)?);
 
         Ok(())
@@ -515,8 +521,7 @@ mod tests {
 
     #[test]
     fn test_cast_lowering_preserves_same_type_field_semantics() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let df_schema = DFSchema::try_from(schema.clone())?;
+        let schema = test_cast_schema();
         let target_field = Arc::new(
             Field::new("same_type_cast", DataType::Int32, true).with_metadata(
                 [("target_meta".to_string(), "same-type".to_string())].into(),
@@ -527,8 +532,7 @@ mod tests {
             Arc::clone(&target_field),
         ));
 
-        let physical =
-            create_physical_expr(&cast_expr, &df_schema, &ExecutionProps::new())?;
+        let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = physical
             .as_any()
             .downcast_ref::<expressions::CastExpr>()
