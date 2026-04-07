@@ -24,8 +24,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use log::warn;
-use std::any::Any;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -143,7 +141,7 @@ impl BatchBuilder {
                     .iter()
                     .map(|(_, batch)| batch.column(column_idx).as_ref())
                     .collect();
-                recover_offset_overflow_from_panic(|| interleave(&arrays, indices))
+                interleave(&arrays, indices).map_err(Into::into)
             })
             .collect::<Result<Vec<_>>>()
     }
@@ -243,31 +241,9 @@ fn is_offset_overflow(e: &DataFusionError) -> bool {
     )
 }
 
+#[cfg(test)]
 fn offset_overflow_error() -> DataFusionError {
     DataFusionError::ArrowError(Box::new(ArrowError::OffsetOverflowError(0)), None)
-}
-
-fn recover_offset_overflow_from_panic<T, F>(f: F) -> Result<T>
-where
-    F: FnOnce() -> std::result::Result<T, ArrowError>,
-{
-    // Arrow's interleave can panic on i32 offset overflow with
-    // `.expect("overflow")` / `.expect("offset overflow")`.
-    // Catch only those specific panics so the caller can retry
-    // with fewer rows while unrelated defects still unwind.
-    //
-    // TODO: remove once arrow-rs#9549 lands — interleave will return
-    // OffsetOverflowError directly instead of panicking.
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(result) => Ok(result?),
-        Err(panic_payload) => {
-            if is_arrow_offset_overflow_panic(panic_payload.as_ref()) {
-                Err(offset_overflow_error())
-            } else {
-                std::panic::resume_unwind(panic_payload);
-            }
-        }
-    }
 }
 
 fn retry_interleave<T, F>(
@@ -295,26 +271,9 @@ where
     }
 }
 
-fn panic_message(payload: &(dyn Any + Send)) -> Option<&str> {
-    if let Some(msg) = payload.downcast_ref::<&str>() {
-        return Some(msg);
-    }
-    if let Some(msg) = payload.downcast_ref::<String>() {
-        return Some(msg.as_str());
-    }
-    None
-}
-
-/// Returns true if a caught panic payload matches the Arrow offset overflows
-/// raised by interleave's offset builders.
-fn is_arrow_offset_overflow_panic(payload: &(dyn Any + Send)) -> bool {
-    matches!(panic_message(payload), Some("overflow" | "offset overflow"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::error::ArrowError;
 
     #[test]
     fn test_retry_interleave_halves_rows_until_success() {
@@ -336,43 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn test_recover_offset_overflow_from_panic() {
-        let error = recover_offset_overflow_from_panic(
-            || -> std::result::Result<(), ArrowError> { panic!("offset overflow") },
-        )
-        .unwrap_err();
-
-        assert!(is_offset_overflow(&error));
-    }
-
-    #[test]
-    fn test_recover_offset_overflow_from_panic_rethrows_unrelated_panics() {
-        let panic_payload = catch_unwind(AssertUnwindSafe(|| {
-            let _ = recover_offset_overflow_from_panic(
-                || -> std::result::Result<(), ArrowError> { panic!("capacity overflow") },
-            );
-        }));
-
-        assert!(panic_payload.is_err());
-    }
-
-    #[test]
-    fn test_is_arrow_offset_overflow_panic() {
-        let overflow = Box::new("overflow") as Box<dyn Any + Send>;
-        assert!(is_arrow_offset_overflow_panic(overflow.as_ref()));
-
-        let offset_overflow =
-            Box::new(String::from("offset overflow")) as Box<dyn Any + Send>;
-        assert!(is_arrow_offset_overflow_panic(offset_overflow.as_ref()));
-
-        let capacity_overflow = Box::new("capacity overflow") as Box<dyn Any + Send>;
-        assert!(!is_arrow_offset_overflow_panic(capacity_overflow.as_ref()));
-
-        let arithmetic_overflow =
-            Box::new(String::from("attempt to multiply with overflow"))
-                as Box<dyn Any + Send>;
-        assert!(!is_arrow_offset_overflow_panic(
-            arithmetic_overflow.as_ref()
-        ));
+    fn test_is_offset_overflow_matches_arrow_error() {
+        assert!(is_offset_overflow(&offset_overflow_error()));
     }
 }
