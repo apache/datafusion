@@ -141,10 +141,6 @@ macro_rules! min_max_generic {
     }};
 }
 
-macro_rules! min_max_dictionary {
-    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{ min_max_generic!($VALUE, $DELTA, $OP) }};
-}
-
 // min/max of two scalar values of the same type
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
@@ -417,32 +413,20 @@ macro_rules! min_max {
                 min_max_generic!(lhs, rhs, $OP)
             }
 
-            (
-                ScalarValue::Dictionary(key_type, lhs_inner),
-                ScalarValue::Dictionary(_, rhs_inner),
-            ) => {
-                wrap_dictionary_scalar(
-                    key_type.as_ref(),
-                    min_max_dictionary!(
-                    lhs_inner.as_ref(),
-                    rhs_inner.as_ref(),
-                    $OP
-                    ),
-                )
-            }
+            (lhs, rhs)
+                if matches!(lhs, ScalarValue::Dictionary(_, _))
+                    || matches!(rhs, ScalarValue::Dictionary(_, _)) =>
+            {
+                let (lhs, lhs_key_type) = dictionary_scalar_parts(lhs);
+                let (rhs, rhs_key_type) = dictionary_scalar_parts(rhs);
+                let result = min_max_generic!(lhs, rhs, $OP);
 
-            (
-                ScalarValue::Dictionary(_, lhs_inner),
-                rhs,
-            ) => {
-                min_max_dictionary!(lhs_inner.as_ref(), rhs, $OP)
-            }
-
-            (
-                lhs,
-                ScalarValue::Dictionary(_, rhs_inner),
-            ) => {
-                min_max_dictionary!(lhs, rhs_inner.as_ref(), $OP)
+                match lhs_key_type.zip(rhs_key_type) {
+                    Some((key_type, _)) => {
+                        ScalarValue::Dictionary(Box::new(key_type.clone()), Box::new(result))
+                    }
+                    None => result,
+                }
             }
 
             e => {
@@ -456,25 +440,50 @@ macro_rules! min_max {
 }
 
 fn scalar_batch_extreme(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
-    let mut extreme: Option<ScalarValue> = None;
-
-    for i in 0..values.len() {
-        let current = ScalarValue::try_from_array(values, i)?;
-        if current.is_null() {
-            continue;
+    let mut index = 0;
+    let mut extreme = loop {
+        if index == values.len() {
+            return ScalarValue::try_from(values.data_type());
         }
 
-        match &extreme {
-            Some(existing) if existing.try_cmp(&current)? != ordering => {}
-            _ => extreme = Some(current),
+        let current = ScalarValue::try_from_array(values, index)?;
+        index += 1;
+
+        if !current.is_null() {
+            break current;
+        }
+    };
+
+    while index < values.len() {
+        let current = ScalarValue::try_from_array(values, index)?;
+        index += 1;
+
+        if !current.is_null() && extreme.try_cmp(&current)? == ordering {
+            extreme = current;
         }
     }
 
-    extreme.map_or_else(|| ScalarValue::try_from(values.data_type()), Ok)
+    Ok(extreme)
 }
 
-fn wrap_dictionary_scalar(key_type: &DataType, value: ScalarValue) -> ScalarValue {
-    ScalarValue::Dictionary(Box::new(key_type.clone()), Box::new(value))
+fn dictionary_scalar_parts(value: &ScalarValue) -> (&ScalarValue, Option<&DataType>) {
+    match value {
+        ScalarValue::Dictionary(key_type, inner) => {
+            (inner.as_ref(), Some(key_type.as_ref()))
+        }
+        other => (other, None),
+    }
+}
+
+fn is_row_wise_batch_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Struct(_)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Dictionary(_, _)
+    )
 }
 
 /// An accumulator to compute the maximum value
@@ -814,20 +823,11 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
-        DataType::Struct(_) => min_max_batch_generic(values, Ordering::Greater)?,
-        DataType::List(_) => min_max_batch_generic(values, Ordering::Greater)?,
-        DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Greater)?,
-        DataType::FixedSizeList(_, _) => {
-            min_max_batch_generic(values, Ordering::Greater)?
+        data_type if is_row_wise_batch_type(data_type) => {
+            scalar_batch_extreme(values, Ordering::Greater)?
         }
-        DataType::Dictionary(_, _) => scalar_batch_extreme(values, Ordering::Greater)?,
         _ => min_max_batch!(values, min),
     })
-}
-
-/// Generic min/max implementation for complex types
-fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
-    scalar_batch_extreme(array, ordering)
 }
 
 /// dynamically-typed max(array) -> ScalarValue
@@ -875,11 +875,9 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
             let value = value.map(|e| e.to_vec());
             ScalarValue::FixedSizeBinary(*size, value)
         }
-        DataType::Struct(_) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::FixedSizeList(_, _) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::Dictionary(_, _) => scalar_batch_extreme(values, Ordering::Less)?,
+        data_type if is_row_wise_batch_type(data_type) => {
+            scalar_batch_extreme(values, Ordering::Less)?
+        }
         _ => min_max_batch!(values, max),
     })
 }

@@ -1355,10 +1355,8 @@ mod tests {
 
     #[test]
     fn test_min_max_dictionary_ignores_unreferenced_values() -> Result<()> {
-        let dict_array_ref = string_dictionary_batch(
-            &["a", "z", "zz_unused"],
-            &[Some(1), Some(1), None],
-        );
+        let dict_array_ref =
+            string_dictionary_batch(&["a", "z", "zz_unused"], &[Some(1), Some(1), None]);
         let dict_type = dict_array_ref.data_type().clone();
 
         assert_dictionary_min_max(&dict_type, &[dict_array_ref], "z", "z")
