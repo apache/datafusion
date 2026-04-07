@@ -18,9 +18,7 @@
 mod data_utils;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use data_utils::{
-    Utf8PayloadProfile, create_table_provider, create_table_provider_with_payload,
-};
+use data_utils::{Utf8PayloadProfile, create_table_provider_with_payload};
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use parking_lot::Mutex;
@@ -54,26 +52,20 @@ fn create_context_with_payload(
     utf8_payload_profile: Utf8PayloadProfile,
 ) -> Result<Arc<Mutex<SessionContext>>> {
     let ctx = SessionContext::new();
-    let provider = if matches!(utf8_payload_profile, Utf8PayloadProfile::Small) {
-        create_table_provider(partitions_len, array_len, batch_size)?
-    } else {
-        create_table_provider_with_payload(
-            partitions_len,
-            array_len,
-            batch_size,
-            utf8_payload_profile,
-        )?
-    };
+    let provider = create_table_provider_with_payload(
+        partitions_len,
+        array_len,
+        batch_size,
+        utf8_payload_profile,
+    )?;
     ctx.register_table("t", provider)?;
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
-fn payload_label(profile: Utf8PayloadProfile) -> &'static str {
-    match profile {
-        Utf8PayloadProfile::Small => "small_3b",
-        Utf8PayloadProfile::Medium => "medium_64b",
-        Utf8PayloadProfile::Large => "large_1024b",
-    }
+fn string_agg_sql(group_by_column: &str) -> String {
+    format!(
+        "SELECT {group_by_column}, string_agg(utf8, ',') FROM t GROUP BY {group_by_column}"
+    )
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -335,14 +327,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     // - medium_64b makes copy costs measurable without overwhelming the query
     // - large_1024b stresses both CPU and memory behavior
     let string_agg_profiles = [
-        Utf8PayloadProfile::Small,
-        Utf8PayloadProfile::Medium,
-        Utf8PayloadProfile::Large,
+        (Utf8PayloadProfile::Small, "small_3b"),
+        (Utf8PayloadProfile::Medium, "medium_64b"),
+        (Utf8PayloadProfile::Large, "large_1024b"),
     ]
     .into_iter()
-    .map(|profile| {
+    .map(|(profile, label)| {
         (
-            payload_label(profile),
+            label,
             create_context_with_payload(partitions_len, array_len, batch_size, profile)
                 .unwrap(),
         )
@@ -350,25 +342,16 @@ fn criterion_benchmark(c: &mut Criterion) {
     .collect::<Vec<_>>();
 
     let string_agg_queries = [
-        (
-            "few_groups",
-            "SELECT u64_narrow, string_agg(utf8, ',') FROM t GROUP BY u64_narrow",
-        ),
-        (
-            "mid_groups",
-            "SELECT u64_mid, string_agg(utf8, ',') FROM t GROUP BY u64_mid",
-        ),
-        (
-            "many_groups",
-            "SELECT u64_wide, string_agg(utf8, ',') FROM t GROUP BY u64_wide",
-        ),
+        ("few_groups", string_agg_sql("u64_narrow")),
+        ("mid_groups", string_agg_sql("u64_mid")),
+        ("many_groups", string_agg_sql("u64_wide")),
     ];
 
     let mut string_agg_group = c.benchmark_group("string_agg_payloads");
-    for (query_name, sql) in string_agg_queries {
+    for (query_name, sql) in &string_agg_queries {
         for (payload_name, payload_ctx) in &string_agg_profiles {
             string_agg_group
-                .bench_function(BenchmarkId::new(query_name, payload_name), |b| {
+                .bench_function(BenchmarkId::new(*query_name, *payload_name), |b| {
                     b.iter(|| query(payload_ctx.clone(), &rt, sql))
                 });
         }

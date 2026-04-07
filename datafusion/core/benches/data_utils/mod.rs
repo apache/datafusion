@@ -130,11 +130,10 @@ fn create_record_batch(
     rng: &mut StdRng,
     batch_size: usize,
     batch_index: usize,
-    utf8_payload_profile: Utf8PayloadProfile,
+    payloads: &[String; 4],
 ) -> RecordBatch {
     // Randomly choose from 4 distinct key values; a higher number increases sparseness.
     let key_suffixes = [0, 1, 2, 3];
-    let payloads = utf8_payload_profile.payloads();
     let keys = StringArray::from_iter_values((0..batch_size).map(|_| {
         let suffix = *key_suffixes.choose(rng).unwrap();
         payloads[suffix].as_str()
@@ -193,6 +192,7 @@ pub fn create_record_batches(
     let mut rng = StdRng::seed_from_u64(42);
     let mut partitions = Vec::with_capacity(partitions_len);
     let batches_per_partition = array_len / batch_size / partitions_len;
+    let payloads = utf8_payload_profile.payloads();
 
     for _ in 0..partitions_len {
         let mut batches = Vec::with_capacity(batches_per_partition);
@@ -202,7 +202,7 @@ pub fn create_record_batches(
                 &mut rng,
                 batch_size,
                 batch_index,
-                utf8_payload_profile,
+                &payloads,
             ));
         }
         partitions.push(batches);
@@ -212,30 +212,21 @@ pub fn create_record_batches(
 
 impl Utf8PayloadProfile {
     fn payloads(self) -> [String; 4] {
-        match self {
-            Self::Small => [
-                "hi0".to_string(),
-                "hi1".to_string(),
-                "hi2".to_string(),
-                "hi3".to_string(),
-            ],
-            Self::Medium => std::array::from_fn(|idx| payload_string("mid", idx, 64)),
-            Self::Large => std::array::from_fn(|idx| payload_string("large", idx, 1024)),
-        }
+        std::array::from_fn(|idx| match self {
+            Self::Small => format!("hi{idx}"),
+            Self::Medium => payload_string("mid", idx, 64),
+            Self::Large => payload_string("large", idx, 1024),
+        })
     }
 }
 
 fn payload_string(prefix: &str, suffix: usize, target_len: usize) -> String {
     let mut value = format!("{prefix}{suffix}_");
     value.extend(std::iter::repeat_n(
-        ascii_fill(suffix),
+        (b'a' + suffix as u8) as char,
         target_len - value.len(),
     ));
     value
-}
-
-fn ascii_fill(suffix: usize) -> char {
-    (b'a' + suffix as u8) as char
 }
 
 /// An enum that wraps either a regular StringBuilder or a GenericByteViewBuilder
