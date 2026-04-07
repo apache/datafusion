@@ -288,14 +288,12 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast(Cast { expr, field }) => {
-            expressions::cast_with_target_field(
-                create_physical_expr(expr, input_dfschema, execution_props)?,
-                input_schema,
-                Arc::clone(field),
-                None,
-            )
-        }
+        Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
+            create_physical_expr(expr, input_dfschema, execution_props)?,
+            input_schema,
+            Arc::clone(field),
+            None,
+        ),
         Expr::TryCast(TryCast { expr, field }) => {
             if !field.metadata().is_empty() {
                 let (_, src_field) = expr.to_field(input_dfschema)?;
@@ -484,9 +482,8 @@ mod tests {
     fn test_cast_lowering_preserves_target_field_metadata() -> Result<()> {
         let schema = test_cast_schema();
         let target_field = Arc::new(
-            Field::new("cast_target", DataType::Int64, true).with_metadata(
-                [("target_meta".to_string(), "1".to_string())].into(),
-            ),
+            Field::new("cast_target", DataType::Int64, true)
+                .with_metadata([("target_meta".to_string(), "1".to_string())].into()),
         );
         let cast_expr = Expr::Cast(Cast::new_from_field(
             Box::new(col("a")),
