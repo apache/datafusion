@@ -142,30 +142,34 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 let mut cur_input = Arc::unwrap_or_clone(projection.input);
                 let mut new_exprs = Vec::with_capacity(projection.expr.len());
 
+                // Rewrite each expression in turn. Check per-expression whether
+                // decorrelation succeeded, and bail out early on the first failure
+                // (same all-or-nothing semantics as ScalarSubqueryToJoin).
                 for expr in &projection.expr {
-                    if has_subquery(expr) {
-                        let (plan, rewritten) =
-                            rewrite_inner_subqueries(cur_input, expr.clone(), config)?;
-                        cur_input = plan;
-                        new_exprs.push(rewritten);
-                    } else {
+                    if !has_subquery(expr) {
                         new_exprs.push(expr.clone());
+                        continue;
                     }
+                    let (plan, rewritten) =
+                        rewrite_inner_subqueries(cur_input, expr.clone(), config)?;
+                    if has_subquery(&rewritten) {
+                        // Decorrelation failed for this expression — bail out for
+                        // the whole projection and return the original plan.
+                        let original = Projection::try_new_with_schema(
+                            projection.expr,
+                            original_input,
+                            projection.schema,
+                        )?;
+                        return Ok(Transformed::no(LogicalPlan::Projection(original)));
+                    }
+                    cur_input = plan;
+                    new_exprs.push(rewritten);
                 }
 
-                // If any expression still contains a subquery after rewriting,
-                // decorrelation failed — bail out and return the original plan
-                // unchanged (same pattern as ScalarSubqueryToJoin).
-                if new_exprs.iter().any(has_subquery) {
-                    let original = Projection::try_new_with_schema(
-                        projection.expr,
-                        original_input,
-                        projection.schema,
-                    )?;
-                    return Ok(Transformed::no(LogicalPlan::Projection(original)));
-                }
-
-                // Preserve original column names via aliases where the rewrite changed them
+                // Optimization: preserve original column names via aliases where
+                // the rewrite changed them. Not required for correctness — the
+                // rewritten plan is still valid without aliases — but keeps the
+                // output column names stable for downstream consumers.
                 let proj_exprs: Vec<Expr> = projection
                     .expr
                     .iter()
@@ -2430,6 +2434,63 @@ mod tests {
               Projection: sq.c [c:UInt32]
                 Filter: outer_ref(test.a) = sq.a [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "#
+        )
+    }
+
+    /// When a projection contains one decorrelatable subquery and one that
+    /// cannot be decorrelated, the whole projection should bail out and leave
+    /// both subqueries in place — neither should be partially rewritten.
+    #[test]
+    fn projection_mixed_decorrelatable_and_non_bails_out() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Decorrelatable subquery: simple correlated IN with no LIMIT
+        let sq_ok = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_ok")?)
+                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq_ok.a")))?
+                .project(vec![col("sq_ok.c")])?
+                .build()?,
+        );
+
+        // Non-decorrelatable subquery: LIMIT prevents decorrelation
+        let sq_bad = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_bad")?)
+                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq_bad.a")))?
+                .project(vec![col("sq_bad.c")])?
+                .limit(0, Some(1))?
+                .build()?,
+        );
+
+        let case_ok =
+            when(in_subquery(col("c"), sq_ok), lit("ok")).otherwise(lit("not_ok"))?;
+        let case_bad =
+            when(in_subquery(col("c"), sq_bad), lit("bad")).otherwise(lit("not_bad"))?;
+
+        // case_ok is listed before case_bad so it would decorrelate first
+        // if we processed each expression independently. The per-expression
+        // bail-out must detect case_bad's failure and discard case_ok's
+        // rewrite too.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), case_ok, case_bad])?
+            .build()?;
+
+        // Both subqueries remain — bail-out is all-or-nothing.
+        // The decorrelatable one is NOT rewritten because its sibling can't be.
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Projection: test.a, CASE WHEN test.c IN (<subquery>) THEN Utf8("ok") ELSE Utf8("not_ok") END, CASE WHEN test.c IN (<subquery>) THEN Utf8("bad") ELSE Utf8("not_bad") END [a:UInt32, CASE WHEN IN THEN Utf8("ok") ELSE Utf8("not_ok") END:Utf8, CASE WHEN IN THEN Utf8("bad") ELSE Utf8("not_bad") END:Utf8]
+          Subquery: [c:UInt32]
+            Projection: sq_ok.c [c:UInt32]
+              Filter: outer_ref(test.a) = sq_ok.a [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: sq_ok [a:UInt32, b:UInt32, c:UInt32]
+          Subquery: [c:UInt32]
+            Limit: skip=0, fetch=1 [c:UInt32]
+              Projection: sq_bad.c [c:UInt32]
+                Filter: outer_ref(test.a) = sq_bad.a [a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: sq_bad [a:UInt32, b:UInt32, c:UInt32]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "#
         )
