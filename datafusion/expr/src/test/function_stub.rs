@@ -19,8 +19,6 @@
 //!
 //! These are used to avoid a dependence on `datafusion-functions-aggregate` which live in a different crate
 
-use std::any::Any;
-
 use arrow::datatypes::{
     DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
     DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -113,10 +111,6 @@ impl Default for Sum {
 }
 
 impl AggregateUDFImpl for Sum {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "sum"
     }
@@ -245,10 +239,6 @@ impl Count {
 }
 
 impl AggregateUDFImpl for Count {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "COUNT"
     }
@@ -332,10 +322,6 @@ impl Min {
 }
 
 impl AggregateUDFImpl for Min {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "min"
     }
@@ -414,10 +400,6 @@ impl Max {
 }
 
 impl AggregateUDFImpl for Max {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "max"
     }
@@ -476,10 +458,6 @@ impl Default for Avg {
 }
 
 impl AggregateUDFImpl for Avg {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "avg"
     }

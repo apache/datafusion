@@ -1785,6 +1785,12 @@ pub struct AnalyzeExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, tag = "4")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// Optional metric category filter.
+    /// Empty means "plan only". Absent (has_metric_categories=false) means "all".
+    #[prost(bool, tag = "5")]
+    pub has_metric_categories: bool,
+    #[prost(string, repeated, tag = "6")]
+    pub metric_categories: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CrossJoinExecNode {

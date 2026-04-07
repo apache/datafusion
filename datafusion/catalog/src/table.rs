@@ -23,8 +23,8 @@ use std::sync::Arc;
 use crate::session::Session;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::Result;
 use datafusion_common::{Constraints, Statistics, not_impl_err};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
 
 use datafusion_expr::dml::InsertOp;
@@ -507,10 +507,49 @@ pub trait TableProviderFactory: Debug + Sync + Send {
     ) -> Result<Arc<dyn TableProvider>>;
 }
 
+/// Describes arguments provided to the table function call.
+pub struct TableFunctionArgs<'e, 's> {
+    /// Call arguments.
+    exprs: &'e [Expr],
+    /// Session within which the function is called.
+    session: &'s dyn Session,
+}
+
+impl<'e, 's> TableFunctionArgs<'e, 's> {
+    /// Make a new [`TableFunctionArgs`].
+    pub fn new(exprs: &'e [Expr], session: &'s dyn Session) -> Self {
+        Self { exprs, session }
+    }
+
+    /// Get expressions passed as the called function arguments.
+    pub fn exprs(&self) -> &'e [Expr] {
+        self.exprs
+    }
+
+    /// Get a session where the table function is called.
+    pub fn session(&self) -> &'s dyn Session {
+        self.session
+    }
+}
+
 /// A trait for table function implementations
 pub trait TableFunctionImpl: Debug + Sync + Send + Any {
     /// Create a table provider
-    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
+    #[deprecated(
+        since = "53.0.0",
+        note = "Implement `TableFunctionImpl::call_with_args` instead"
+    )]
+    fn call(&self, _exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        internal_err!(
+            "TableFunctionImpl::call is not implemented. Implement TableFunctionImpl::call_with_args instead."
+        )
+    }
+
+    /// Create a table provider
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        #[expect(deprecated)]
+        self.call(args.exprs)
+    }
 }
 
 /// A table that uses a function to generate data
@@ -539,7 +578,20 @@ impl TableFunction {
     }
 
     /// Get the function implementation and generate a table
+    #[deprecated(
+        since = "53.0.0",
+        note = "Use `TableFunction::create_table_provider_with_args` instead"
+    )]
     pub fn create_table_provider(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        #[expect(deprecated)]
         self.fun.call(args)
+    }
+
+    /// Get the function implementation and generate a table
+    pub fn create_table_provider_with_args(
+        &self,
+        args: TableFunctionArgs,
+    ) -> Result<Arc<dyn TableProvider>> {
+        self.fun.call_with_args(args)
     }
 }
