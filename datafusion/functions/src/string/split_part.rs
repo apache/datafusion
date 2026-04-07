@@ -599,7 +599,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
+    use arrow::array::{Array, AsArray, StringArray, StringViewArray};
     use arrow::datatypes::DataType::Utf8;
 
     use datafusion_common::ScalarValue;
@@ -792,6 +792,33 @@ mod tests {
             Utf8,
             StringArray
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_split_part_stringview_sliced() -> Result<()> {
+        use super::split_part_scalar_view;
+
+        let strings: StringViewArray = vec![
+            Some("skip_this.value"),
+            Some("this_is_a_long_prefix.suffix"),
+            Some("short.val"),
+            Some("another_long_result.rest"),
+            None,
+        ]
+        .into_iter()
+        .collect();
+
+        // Slice off the first element to get a non-zero offset array.
+        let sliced = strings.slice(1, 4);
+        let result = split_part_scalar_view(&sliced, ".", 1)?;
+        let result = result.as_string_view();
+        assert_eq!(result.len(), 4);
+        assert_eq!(result.value(0), "this_is_a_long_prefix");
+        assert_eq!(result.value(1), "short");
+        assert_eq!(result.value(2), "another_long_result");
+        assert!(result.is_null(3));
 
         Ok(())
     }
