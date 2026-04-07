@@ -6885,5 +6885,17 @@ async fn test_grouping_with_alias() -> Result<()> {
     ];
     assert_batches_eq!(expected, &results);
 
+    // Also verify that nested aliases (e.g. .alias("x").alias("g")) work correctly
+    let df = create_test_table("test")
+        .await?
+        .aggregate(
+            vec![col("a")],
+            vec![grouping(col("a")).alias("x").alias("g")],
+        )?
+        .sort(vec![Sort::new(col("a"), true, false)])?;
+
+    let results = df.collect().await?;
+    assert_batches_eq!(expected, &results);
+
     Ok(())
 }

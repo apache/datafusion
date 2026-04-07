@@ -110,25 +110,19 @@ fn replace_grouping_exprs(
                     column.name,
                 )));
             }
-            Expr::Alias(Alias {
-                expr: inner_expr,
-                relation,
-                name,
-                ..
-            }) if is_grouping_function(&expr) => {
-                if let Expr::AggregateFunction(function) = inner_expr.as_ref() {
-                    let grouping_expr = grouping_function_on_id(
-                        function,
-                        &group_expr_to_bitmap_index,
-                        is_grouping_set,
-                    )?;
-                    // Preserve the user-provided alias
-                    projection_exprs.push(Expr::Alias(Alias::new(
-                        grouping_expr,
-                        relation.clone(),
-                        name.clone(),
-                    )));
-                }
+            Expr::Alias(Alias { relation, name, .. }) if is_grouping_function(&expr) => {
+                let function = unwrap_alias_to_grouping_function(&expr)?;
+                let grouping_expr = grouping_function_on_id(
+                    function,
+                    &group_expr_to_bitmap_index,
+                    is_grouping_set,
+                )?;
+                // Preserve the outermost user-provided alias
+                projection_exprs.push(Expr::Alias(Alias::new(
+                    grouping_expr,
+                    relation.clone(),
+                    name.clone(),
+                )));
             }
             _ => {
                 projection_exprs.push(Expr::Column(column));
@@ -166,6 +160,17 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     })?;
 
     Ok(transformed_plan)
+}
+
+/// Recursively unwrap `Expr::Alias` nodes to reach the inner `AggregateFunction`.
+/// Returns an error if the innermost expression is not an `AggregateFunction`,
+/// which should not happen if `is_grouping_function` returned true.
+fn unwrap_alias_to_grouping_function(expr: &Expr) -> Result<&AggregateFunction> {
+    match expr {
+        Expr::AggregateFunction(function) => Ok(function),
+        Expr::Alias(Alias { expr, .. }) => unwrap_alias_to_grouping_function(expr),
+        _ => plan_err!("Expected grouping aggregate function inside alias, got {expr}"),
+    }
 }
 
 fn is_grouping_function(expr: &Expr) -> bool {
