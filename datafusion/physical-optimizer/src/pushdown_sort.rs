@@ -65,20 +65,6 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::sync::Arc;
 
-/// Per-partition buffer capacity (in bytes) inserted between SPM and
-/// DataSourceExec when sort elimination removes the buffering SortExec.
-///
-/// SortExec buffers all input data in memory (potentially GB per partition)
-/// before outputting sorted results. When we eliminate SortExec, SPM reads
-/// directly from I/O-bound sources. BufferExec compensates with bounded
-/// buffering, allowing I/O to pipeline with merge computation.
-///
-/// This is strictly less memory than the SortExec it replaces, and only
-/// inserted when PushdownSort eliminates a SortExec — no impact on other
-/// query plans. BufferExec also integrates with MemoryPool, so it respects
-/// the global memory limit and won't cause OOM.
-const BUFFER_CAPACITY_AFTER_SORT_ELIMINATION: usize = 64 * 1024 * 1024; // 64 MB
-
 /// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources.
 ///
 /// See module-level documentation for details.
@@ -102,6 +88,8 @@ impl PhysicalOptimizerRule for PushdownSort {
             return Ok(plan);
         }
 
+        let buffer_capacity = config.execution.sort_pushdown_buffer_capacity;
+
         // Use transform_down to find and optimize all SortExec nodes (including nested ones)
         // Also handles SPM → SortExec pattern to insert BufferExec when sort is eliminated
         plan.transform_down(|plan: Arc<dyn ExecutionPlan>| {
@@ -124,10 +112,8 @@ impl PhysicalOptimizerRule for PushdownSort {
                         // Insert BufferExec to replace SortExec's buffering role.
                         // SortExec buffered all data in memory; BufferExec provides
                         // bounded buffering so SPM doesn't stall on I/O.
-                        let buffered: Arc<dyn ExecutionPlan> = Arc::new(BufferExec::new(
-                            inner,
-                            BUFFER_CAPACITY_AFTER_SORT_ELIMINATION,
-                        ));
+                        let buffered: Arc<dyn ExecutionPlan> =
+                            Arc::new(BufferExec::new(inner, buffer_capacity));
                         let new_spm =
                             SortPreservingMergeExec::new(spm.expr().clone(), buffered)
                                 .with_fetch(spm.fetch());
