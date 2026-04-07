@@ -41,6 +41,7 @@ use std::sync::Arc;
 /// large profiles keep the same low cardinality but scale each value's byte
 /// width so string aggregation can expose the cost of copying larger payloads.
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub enum Utf8PayloadProfile {
     /// 3-byte baseline values such as `hi0`.
     Small,
