@@ -274,21 +274,19 @@ fn lpad_scalar_unicode<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
 
     for maybe_string in string_array.iter() {
         match maybe_string {
-            Some(string) => {
-                match char_count_or_boundary(string, target_len) {
-                    StringCharLen::ByteOffset(offset) => {
-                        builder.append_value(&string[..offset]);
-                    }
-                    StringCharLen::CharCount(char_count) => {
-                        if !fill_chars.is_empty() {
-                            let pad_chars = target_len - char_count;
-                            let pad_bytes = char_byte_offsets[pad_chars];
-                            builder.write_str(&padding_buf[..pad_bytes])?;
-                        }
-                        builder.append_value(string);
-                    }
+            Some(string) => match char_count_or_boundary(string, target_len) {
+                StringCharLen::ByteOffset(offset) => {
+                    builder.append_value(&string[..offset]);
                 }
-            }
+                StringCharLen::CharCount(char_count) => {
+                    if !fill_chars.is_empty() {
+                        let pad_chars = target_len - char_count;
+                        let pad_bytes = char_byte_offsets[pad_chars];
+                        builder.write_str(&padding_buf[..pad_bytes])?;
+                    }
+                    builder.append_value(string);
+                }
+            },
             None => builder.append_null(),
         }
     }
