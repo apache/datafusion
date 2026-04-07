@@ -462,7 +462,7 @@ impl PruningStatistics for ParquetMetadataIndex {
     }
 
     /// return the row counts for each file
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         Some(self.row_counts_ref().clone())
     }
 
