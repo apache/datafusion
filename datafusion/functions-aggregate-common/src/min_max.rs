@@ -455,10 +455,7 @@ macro_rules! min_max {
     }};
 }
 
-fn dictionary_batch_extreme(
-    values: &ArrayRef,
-    ordering: Ordering,
-) -> Result<ScalarValue> {
+fn scalar_batch_extreme(values: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
     let mut extreme: Option<ScalarValue> = None;
 
     for i in 0..values.len() {
@@ -823,32 +820,14 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::FixedSizeList(_, _) => {
             min_max_batch_generic(values, Ordering::Greater)?
         }
-        DataType::Dictionary(_, _) => {
-            dictionary_batch_extreme(values, Ordering::Greater)?
-        }
+        DataType::Dictionary(_, _) => scalar_batch_extreme(values, Ordering::Greater)?,
         _ => min_max_batch!(values, min),
     })
 }
 
 /// Generic min/max implementation for complex types
 fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
-    let mut non_null_indices = (0..array.len()).filter(|&i| !array.is_null(i));
-    let Some(first_idx) = non_null_indices.next() else {
-        return ScalarValue::try_from(array.data_type());
-    };
-
-    let mut extreme = ScalarValue::try_from_array(array, first_idx)?;
-    for i in non_null_indices {
-        let current = ScalarValue::try_from_array(array, i)?;
-        if current.is_null() {
-            continue;
-        }
-        if extreme.is_null() || extreme.try_cmp(&current)? == ordering {
-            extreme = current;
-        }
-    }
-
-    Ok(extreme)
+    scalar_batch_extreme(array, ordering)
 }
 
 /// dynamically-typed max(array) -> ScalarValue
@@ -900,7 +879,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::FixedSizeList(_, _) => min_max_batch_generic(values, Ordering::Less)?,
-        DataType::Dictionary(_, _) => dictionary_batch_extreme(values, Ordering::Less)?,
+        DataType::Dictionary(_, _) => scalar_batch_extreme(values, Ordering::Less)?,
         _ => min_max_batch!(values, max),
     })
 }

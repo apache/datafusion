@@ -1288,6 +1288,13 @@ mod tests {
         ) as ArrayRef
     }
 
+    fn float_dictionary_batch(values: &[f32], keys: &[Option<i32>]) -> ArrayRef {
+        let values = Arc::new(Float32Array::from(values.to_vec())) as ArrayRef;
+        Arc::new(
+            DictionaryArray::try_new(Int32Array::from(keys.to_vec()), values).unwrap(),
+        ) as ArrayRef
+    }
+
     fn evaluate_dictionary_accumulator(
         mut acc: impl Accumulator,
         batches: &[ArrayRef],
@@ -1376,5 +1383,36 @@ mod tests {
         let batch2 = string_dictionary_batch(&["a", "d"], &[Some(0), Some(1)]);
 
         assert_dictionary_min_max(&dict_type, &[batch1, batch2], "a", "d")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_float_with_nans() -> Result<()> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float32));
+        let batch1 = float_dictionary_batch(&[0.0, f32::NAN], &[Some(0), Some(1)]);
+        let batch2 = float_dictionary_batch(&[f32::NEG_INFINITY], &[Some(0)]);
+
+        let min_result = evaluate_dictionary_accumulator(
+            MinAccumulator::try_new(&dict_type)?,
+            &[Arc::clone(&batch1), Arc::clone(&batch2)],
+        )?;
+        assert_eq!(
+            min_result,
+            dict_scalar(
+                DataType::Int32,
+                ScalarValue::Float32(Some(f32::NEG_INFINITY)),
+            )
+        );
+
+        let max_result = evaluate_dictionary_accumulator(
+            MaxAccumulator::try_new(&dict_type)?,
+            &[batch1, batch2],
+        )?;
+        assert_eq!(
+            max_result,
+            dict_scalar(DataType::Int32, ScalarValue::Float32(Some(f32::NAN)))
+        );
+
+        Ok(())
     }
 }
