@@ -257,6 +257,7 @@ where
     loop {
         match interleave(rows_to_emit) {
             Ok(value) => return Ok((rows_to_emit, value)),
+            // Only offset overflow is recoverable by emitting fewer rows.
             Err(e) if is_offset_overflow(&e) => {
                 rows_to_emit /= 2;
                 if rows_to_emit == 0 {
@@ -297,5 +298,19 @@ mod tests {
     #[test]
     fn test_is_offset_overflow_matches_arrow_error() {
         assert!(is_offset_overflow(&offset_overflow_error()));
+    }
+
+    #[test]
+    fn test_retry_interleave_does_not_retry_non_offset_errors() {
+        let mut attempts = Vec::new();
+
+        let error = retry_interleave(4, 4, |rows_to_emit| {
+            attempts.push(rows_to_emit);
+            Err::<(), _>(DataFusionError::Execution("boom".into()))
+        })
+        .unwrap_err();
+
+        assert_eq!(attempts, vec![4]);
+        assert!(matches!(error, DataFusionError::Execution(msg) if msg == "boom"));
     }
 }
