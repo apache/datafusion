@@ -1158,7 +1158,12 @@ impl AggregateExec {
                 child_statistics.num_rows
             } else {
                 let grouping_set_num = self.group_by.groups.len();
-                child_statistics.num_rows.map(|x| x * grouping_set_num)
+                let mut num_rows =
+                    child_statistics.num_rows.map(|x| x * grouping_set_num);
+                if let Some(limit) = limit {
+                    num_rows = num_rows.map(|n| n.min(limit));
+                }
+                num_rows
             }
         } else {
             match (ndv, limit) {
