@@ -736,6 +736,31 @@ mod tests {
     }
 
     #[test]
+    fn test_left_join_complex_on_right_empty_null_pad() -> Result<()> {
+        let left =
+            LogicalPlanBuilder::from(test_table_scan_with_name("left")?).build()?;
+        let right_empty = LogicalPlanBuilder::from(test_table_scan_with_name("right")?)
+            .filter(lit(false))?
+            .build()?;
+
+        // Complex ON condition: left.a = right.a AND left.b > right.b
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right_empty,
+                JoinType::Left,
+                (
+                    vec![Column::from_name("a".to_string())],
+                    vec![Column::from_name("a".to_string())],
+                ),
+                Some(col("left.b").gt(col("right.b"))),
+            )?
+            .build()?;
+
+        let expected = "Projection: left.a, left.b, left.c, CAST(NULL AS UInt32) AS a, CAST(NULL AS UInt32) AS b, CAST(NULL AS UInt32) AS c\n  TableScan: left";
+        assert_together_optimized_plan(plan, expected, true)
+    }
+
+    #[test]
     fn test_empty_with_non_empty() -> Result<()> {
         let table_scan = test_table_scan()?;
 

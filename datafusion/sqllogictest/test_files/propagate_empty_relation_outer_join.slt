@@ -124,6 +124,24 @@ select * from t1 left join (select * from t2 where false) r on t1.a = r.x where 
 3 c 30 NULL NULL NULL
 
 ###
+### LEFT JOIN with complex ON condition and empty right
+###
+
+query TT
+explain select * from t1 left join (select * from t2 where false) r on t1.a = r.x and t1.c > r.z;
+----
+logical_plan
+01)Projection: t1.a, t1.b, t1.c, Int32(NULL) AS x, Utf8View(NULL) AS y, Float64(NULL) AS z
+02)--TableScan: t1 projection=[a, b, c]
+
+query ITRITR rowsort
+select * from t1 left join (select * from t2 where false) r on t1.a = r.x and t1.c > r.z;
+----
+1 a 10 NULL NULL NULL
+2 b 20 NULL NULL NULL
+3 c 30 NULL NULL NULL
+
+###
 ### Cleanup
 ###
 
