@@ -621,8 +621,14 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // Use memory-limited mode when:
         // 1. Right side has single partition (so we can spill and re-scan)
         // 2. Disk manager supports temp files
+        // 3. Join type does not require tracking right-side matched state
+        //    across multiple left chunks. RIGHT/FULL/RIGHT SEMI/RIGHT ANTI/
+        //    RIGHT MARK joins need a global right bitmap that spans all left
+        //    chunks — not yet implemented (Phase 3).
+        let join_type_supports_multi_pass = !need_produce_right_in_final(self.join_type);
         let use_memory_limited = right_partition_count == 1
-            && context.runtime_env().disk_manager.tmp_files_enabled();
+            && context.runtime_env().disk_manager.tmp_files_enabled()
+            && join_type_supports_multi_pass;
 
         if use_memory_limited {
             let left_stream = self.left.execute(0, Arc::clone(&context))?;
