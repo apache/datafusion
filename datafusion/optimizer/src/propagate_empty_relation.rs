@@ -22,9 +22,8 @@ use std::sync::Arc;
 use datafusion_common::JoinType;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, plan_err};
-use datafusion_expr::expr::Cast;
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{EmptyRelation, Expr, Projection, Union};
+use datafusion_expr::{EmptyRelation, Expr, Projection, Union, cast, lit};
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -301,11 +300,8 @@ fn build_null_padded_projection(
             };
 
             if on_empty_side {
-                Expr::Cast(Cast::new(
-                    Box::new(Expr::Literal(ScalarValue::Null, None)),
-                    field.data_type().clone(),
-                ))
-                .alias_qualified(qualifier.cloned(), field.name())
+                cast(lit(ScalarValue::Null), field.data_type().clone())
+                    .alias_qualified(qualifier.cloned(), field.name())
             } else {
                 Expr::Column(Column::new(qualifier.cloned(), field.name()))
             }
