@@ -557,6 +557,19 @@ config_namespace! {
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
 
+        /// Maximum buffer capacity (in bytes) per partition for BufferExec
+        /// inserted during sort pushdown optimization.
+        ///
+        /// When PushdownSort eliminates a SortExec under SortPreservingMergeExec,
+        /// a BufferExec is inserted to replace SortExec's buffering role. This
+        /// prevents I/O stalls by allowing the scan to run ahead of the merge.
+        ///
+        /// This uses strictly less memory than the SortExec it replaces (which
+        /// buffers the entire partition). The buffer respects the global memory
+        /// pool limit. Setting this to a large value is safe — actual memory
+        /// usage is bounded by partition size and global memory limits.
+        pub sort_pushdown_buffer_capacity: usize, default = 1024 * 1024 * 1024
+
         /// Maximum size in bytes for individual spill files before rotating to a new file.
         ///
         /// When operators spill data to disk (e.g., RepartitionExec), they write

@@ -59,7 +59,7 @@ query TT
 EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
 ----
 physical_plan
-01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(10), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(10), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0) Distinct=Exact(1) ScanBytes=Inexact(40))]]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
 
@@ -84,7 +84,7 @@ query TT
 EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
 ----
 physical_plan
-01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(10), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(10), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0) Distinct=Exact(1) ScanBytes=Inexact(40))]]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
 
@@ -109,13 +109,82 @@ query TT
 EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
 ----
 physical_plan
-01)FilterExec: column1@0 = 1, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)))]]
+01)FilterExec: column1@0 = 1, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Distinct=Exact(1))]]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
 
 # cleanup
 statement ok
 DROP TABLE test_table;
+
+######
+# Equality filter NDV=Exact(1) for different numeric types
+######
+
+statement ok
+set datafusion.execution.collect_statistics = true;
+
+query I
+COPY (
+    SELECT
+        arrow_cast(v, 'Int8') AS i8,
+        arrow_cast(v, 'Int64') AS i64,
+        arrow_cast(v + 0.5, 'Float32') AS f32,
+        arrow_cast(v + 0.5, 'Float64') AS f64
+    FROM (VALUES (1), (2), (3), (4), (5)) AS t(v)
+)
+TO 'test_files/scratch/parquet_statistics/typed_table.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE typed_table (
+    i8 TINYINT,
+    i64 BIGINT,
+    f32 FLOAT,
+    f64 DOUBLE
+) STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/typed_table.parquet';
+
+# Int8 equality
+query TT
+EXPLAIN SELECT i8 FROM typed_table WHERE i8 = 2;
+----
+physical_plan
+01)FilterExec: i8@0 = 2, statistics=[Rows=Inexact(1), Bytes=Inexact(1), [(Col[0]: Min=Exact(Int8(2)) Max=Exact(Int8(2)) Null=Inexact(0) Distinct=Exact(1) ScanBytes=Inexact(5))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(5), Bytes=Inexact(5), [(Col[0]: Min=Inexact(Int8(1)) Max=Inexact(Int8(5)) Null=Inexact(0) ScanBytes=Inexact(5))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/typed_table.parquet]]}, projection=[i8], file_type=parquet, predicate=i8@0 = 2, pruning_predicate=i8_null_count@2 != row_count@3 AND i8_min@0 <= 2 AND 2 <= i8_max@1, required_guarantees=[i8 in (2)], statistics=[Rows=Inexact(5), Bytes=Inexact(5), [(Col[0]: Min=Inexact(Int8(1)) Max=Inexact(Int8(5)) Null=Inexact(0) ScanBytes=Inexact(5))]]
+
+# Int64 equality
+query TT
+EXPLAIN SELECT i64 FROM typed_table WHERE i64 = 2;
+----
+physical_plan
+01)FilterExec: i64@0 = 2, statistics=[Rows=Inexact(1), Bytes=Inexact(8), [(Col[0]: Min=Exact(Int64(2)) Max=Exact(Int64(2)) Null=Inexact(0) Distinct=Exact(1) ScanBytes=Inexact(40))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(5)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/typed_table.parquet]]}, projection=[i64], file_type=parquet, predicate=i64@1 = 2, pruning_predicate=i64_null_count@2 != row_count@3 AND i64_min@0 <= 2 AND 2 <= i64_max@1, required_guarantees=[i64 in (2)], statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(5)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+
+# Float32 equality
+query TT
+EXPLAIN SELECT f32 FROM typed_table WHERE f32 = 2.5;
+----
+physical_plan
+01)FilterExec: CAST(f32@0 AS Float64) = 2.5, statistics=[Rows=Inexact(1), Bytes=Inexact(1), [(Col[0]: Min=Exact(Float32(2.5)) Max=Exact(Float32(2.5)) Null=Inexact(0) Distinct=Exact(1) ScanBytes=Inexact(20))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(5), Bytes=Inexact(20), [(Col[0]: Min=Inexact(Float32(1.5)) Max=Inexact(Float32(5.5)) Null=Inexact(0) ScanBytes=Inexact(20))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/typed_table.parquet]]}, projection=[f32], file_type=parquet, predicate=CAST(f32@2 AS Float64) = 2.5, pruning_predicate=f32_null_count@2 != row_count@3 AND CAST(f32_min@0 AS Float64) <= 2.5 AND 2.5 <= CAST(f32_max@1 AS Float64), required_guarantees=[], statistics=[Rows=Inexact(5), Bytes=Inexact(20), [(Col[0]: Min=Inexact(Float32(1.5)) Max=Inexact(Float32(5.5)) Null=Inexact(0) ScanBytes=Inexact(20))]]
+
+# Reversed operand order: literal = column (Float64)
+query TT
+EXPLAIN SELECT f64 FROM typed_table WHERE 2.5 = f64;
+----
+physical_plan
+01)FilterExec: f64@0 = 2.5, statistics=[Rows=Inexact(1), Bytes=Inexact(1), [(Col[0]: Min=Exact(Float64(2.5)) Max=Exact(Float64(2.5)) Null=Inexact(0) Distinct=Exact(1) ScanBytes=Inexact(40))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Float64(1.5)) Max=Inexact(Float64(5.5)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/typed_table.parquet]]}, projection=[f64], file_type=parquet, predicate=f64@3 = 2.5, pruning_predicate=f64_null_count@2 != row_count@3 AND f64_min@0 <= 2.5 AND 2.5 <= f64_max@1, required_guarantees=[f64 in (2.5)], statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Float64(1.5)) Max=Inexact(Float64(5.5)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+
+statement ok
+DROP TABLE typed_table;
 
 # Config reset
 statement ok
