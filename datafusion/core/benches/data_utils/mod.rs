@@ -41,7 +41,6 @@ use std::sync::Arc;
 /// large profiles keep the same low cardinality but scale each value's byte
 /// width so string aggregation can expose the cost of copying larger payloads.
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
 pub enum Utf8PayloadProfile {
     /// 3-byte baseline values such as `hi0`.
     Small,
@@ -79,6 +78,7 @@ pub fn create_table_provider_with_payload(
     batch_size: usize,
     utf8_payload_profile: Utf8PayloadProfile,
 ) -> Result<Arc<MemTable>> {
+    let _ = Utf8PayloadProfile::all();
     let schema = Arc::new(create_schema());
     let partitions = create_record_batches(
         &schema,
@@ -212,6 +212,10 @@ pub fn create_record_batches(
 }
 
 impl Utf8PayloadProfile {
+    fn all() -> [Self; 3] {
+        [Self::Small, Self::Medium, Self::Large]
+    }
+
     fn payloads(self) -> [String; 4] {
         std::array::from_fn(|idx| match self {
             Self::Small => format!("hi{idx}"),
