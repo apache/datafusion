@@ -78,14 +78,37 @@ impl LeftRightSlicer for RightSlicer {
     }
 }
 
-/// Returns the byte offset of the `n`th codepoint in `string`, or
-/// `string.len()` if the string has fewer than `n` codepoints.
+/// Returns the byte offset of the `n`th codepoint in `string`,
+/// or `string.len()` if the string has fewer than `n` codepoints.
 #[inline]
 pub(crate) fn byte_offset_of_char(string: &str, n: usize) -> usize {
     string
         .char_indices()
         .nth(n)
         .map_or(string.len(), |(i, _)| i)
+}
+
+/// Measures the character length of `string` in a single pass, returning
+/// early with the truncation byte offset if the string exceeds `n` chars.
+#[inline]
+pub(crate) fn measure_char_count(string: &str, n: usize) -> StringCharLen {
+    let mut count = 0;
+    for (byte_idx, _) in string.char_indices() {
+        if count == n {
+            return StringCharLen::TruncateAt(byte_idx);
+        }
+        count += 1;
+    }
+    StringCharLen::CharCount(count)
+}
+
+/// Result of [`measure_char_count`].
+pub(crate) enum StringCharLen {
+    /// The string has more than `n` chars; contains the byte offset at the
+    /// `n`-th character boundary (suitable for slicing `&string[..offset]`).
+    TruncateAt(usize),
+    /// The string has `n` or fewer chars; contains the exact character count.
+    CharCount(usize),
 }
 
 /// Calculate the byte length of the substring of `n` chars from string `string`

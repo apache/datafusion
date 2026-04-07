@@ -177,7 +177,9 @@ impl ScalarUDFImpl for LPadFunc {
     }
 }
 
-use super::common::{byte_offset_of_char, try_as_scalar_i64, try_as_scalar_str};
+use super::common::{
+    StringCharLen, measure_char_count, try_as_scalar_i64, try_as_scalar_str,
+};
 
 /// Optimized lpad for constant target_len and fill arguments.
 fn lpad_scalar_args<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
@@ -273,18 +275,18 @@ fn lpad_scalar_unicode<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
     for maybe_string in string_array.iter() {
         match maybe_string {
             Some(string) => {
-                let char_count = string.chars().count();
-
-                if target_len < char_count {
-                    builder
-                        .append_value(&string[..byte_offset_of_char(string, target_len)]);
-                } else if fill_chars.is_empty() {
-                    builder.append_value(string);
-                } else {
-                    let pad_chars = target_len - char_count;
-                    let pad_bytes = char_byte_offsets[pad_chars];
-                    builder.write_str(&padding_buf[..pad_bytes])?;
-                    builder.append_value(string);
+                match measure_char_count(string, target_len) {
+                    StringCharLen::TruncateAt(offset) => {
+                        builder.append_value(&string[..offset]);
+                    }
+                    StringCharLen::CharCount(char_count) => {
+                        if !fill_chars.is_empty() {
+                            let pad_chars = target_len - char_count;
+                            let pad_bytes = char_byte_offsets[pad_chars];
+                            builder.write_str(&padding_buf[..pad_bytes])?;
+                        }
+                        builder.append_value(string);
+                    }
                 }
             }
             None => builder.append_null(),
@@ -422,24 +424,24 @@ where
                         builder.append_value(string);
                     }
                 } else {
-                    let char_count = string.chars().count();
-
                     fill_chars_buf.clear();
                     fill_chars_buf.extend(fill.chars());
 
-                    if target_len < char_count {
-                        builder.append_value(
-                            &string[..byte_offset_of_char(string, target_len)],
-                        );
-                    } else if fill_chars_buf.is_empty() {
-                        builder.append_value(string);
-                    } else {
-                        for l in 0..target_len - char_count {
-                            let c =
-                                *fill_chars_buf.get(l % fill_chars_buf.len()).unwrap();
-                            builder.write_char(c)?;
+                    match measure_char_count(string, target_len) {
+                        StringCharLen::TruncateAt(offset) => {
+                            builder.append_value(&string[..offset]);
                         }
-                        builder.append_value(string);
+                        StringCharLen::CharCount(char_count) => {
+                            if !fill_chars_buf.is_empty() {
+                                for l in 0..target_len - char_count {
+                                    let c = *fill_chars_buf
+                                        .get(l % fill_chars_buf.len())
+                                        .unwrap();
+                                    builder.write_char(c)?;
+                                }
+                            }
+                            builder.append_value(string);
+                        }
                     }
                 }
             } else {
@@ -482,17 +484,16 @@ where
                         builder.append_value(string);
                     }
                 } else {
-                    let char_count = string.chars().count();
-
-                    if target_len < char_count {
-                        builder.append_value(
-                            &string[..byte_offset_of_char(string, target_len)],
-                        );
-                    } else {
-                        for _ in 0..(target_len - char_count) {
-                            builder.write_str(" ")?;
+                    match measure_char_count(string, target_len) {
+                        StringCharLen::TruncateAt(offset) => {
+                            builder.append_value(&string[..offset]);
                         }
-                        builder.append_value(string);
+                        StringCharLen::CharCount(char_count) => {
+                            for _ in 0..(target_len - char_count) {
+                                builder.write_str(" ")?;
+                            }
+                            builder.append_value(string);
+                        }
                     }
                 }
             } else {
