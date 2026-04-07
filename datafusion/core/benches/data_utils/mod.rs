@@ -35,6 +35,23 @@ use rand_distr::{Normal, Pareto};
 use std::fmt::Write;
 use std::sync::Arc;
 
+/// Payload profile for the benchmark `utf8` column.
+///
+/// The small profile preserves the existing `hi0`..`hi3` baseline. Medium and
+/// large profiles keep the same low cardinality but scale each value's byte
+/// width so string aggregation can expose the cost of copying larger payloads.
+#[derive(Clone, Copy, Debug)]
+pub enum Utf8PayloadProfile {
+    /// 3-byte baseline values such as `hi0`.
+    Small,
+    /// 64-byte payloads that are large enough to make copying noticeable
+    /// without dominating the benchmark with allocator churn.
+    Medium,
+    /// 1024-byte payloads that amplify both CPU and memory pressure in
+    /// grouped `string_agg` workloads.
+    Large,
+}
+
 /// create an in-memory table given the partition len, array len, and batch size,
 /// and the result table will be of array_len in total, and then partitioned, and batched.
 #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
@@ -44,9 +61,31 @@ pub fn create_table_provider(
     array_len: usize,
     batch_size: usize,
 ) -> Result<Arc<MemTable>> {
+    create_table_provider_with_payload(
+        partitions_len,
+        array_len,
+        batch_size,
+        Utf8PayloadProfile::Small,
+    )
+}
+
+/// Create an in-memory table with a configurable `utf8` payload size.
+#[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
+#[allow(dead_code)]
+pub fn create_table_provider_with_payload(
+    partitions_len: usize,
+    array_len: usize,
+    batch_size: usize,
+    utf8_payload_profile: Utf8PayloadProfile,
+) -> Result<Arc<MemTable>> {
     let schema = Arc::new(create_schema());
-    let partitions =
-        create_record_batches(&schema, array_len, partitions_len, batch_size);
+    let partitions = create_record_batches(
+        &schema,
+        array_len,
+        partitions_len,
+        batch_size,
+        utf8_payload_profile,
+    );
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     MemTable::try_new(schema, partitions).map(Arc::new)
 }
@@ -91,12 +130,15 @@ fn create_record_batch(
     rng: &mut StdRng,
     batch_size: usize,
     batch_index: usize,
+    utf8_payload_profile: Utf8PayloadProfile,
 ) -> RecordBatch {
     // Randomly choose from 4 distinct key values; a higher number increases sparseness.
     let key_suffixes = [0, 1, 2, 3];
-    let keys = StringArray::from_iter_values(
-        (0..batch_size).map(|_| format!("hi{}", key_suffixes.choose(rng).unwrap())),
-    );
+    let payloads = utf8_payload_profile.payloads();
+    let keys = StringArray::from_iter_values((0..batch_size).map(|_| {
+        let suffix = *key_suffixes.choose(rng).unwrap();
+        payloads[suffix].as_str()
+    }));
 
     let values = create_data(rng, batch_size, 0.5);
 
@@ -146,6 +188,7 @@ pub fn create_record_batches(
     array_len: usize,
     partitions_len: usize,
     batch_size: usize,
+    utf8_payload_profile: Utf8PayloadProfile,
 ) -> Vec<Vec<RecordBatch>> {
     let mut rng = StdRng::seed_from_u64(42);
     let mut partitions = Vec::with_capacity(partitions_len);
@@ -159,11 +202,40 @@ pub fn create_record_batches(
                 &mut rng,
                 batch_size,
                 batch_index,
+                utf8_payload_profile,
             ));
         }
         partitions.push(batches);
     }
     partitions
+}
+
+impl Utf8PayloadProfile {
+    fn payloads(self) -> [String; 4] {
+        match self {
+            Self::Small => [
+                "hi0".to_string(),
+                "hi1".to_string(),
+                "hi2".to_string(),
+                "hi3".to_string(),
+            ],
+            Self::Medium => std::array::from_fn(|idx| payload_string("mid", idx, 64)),
+            Self::Large => std::array::from_fn(|idx| payload_string("large", idx, 1024)),
+        }
+    }
+}
+
+fn payload_string(prefix: &str, suffix: usize, target_len: usize) -> String {
+    let mut value = format!("{prefix}{suffix}_");
+    value.extend(std::iter::repeat_n(
+        ascii_fill(suffix),
+        target_len - value.len(),
+    ));
+    value
+}
+
+fn ascii_fill(suffix: usize) -> char {
+    (b'a' + suffix as u8) as char
 }
 
 /// An enum that wraps either a regular StringBuilder or a GenericByteViewBuilder
