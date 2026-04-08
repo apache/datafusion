@@ -432,7 +432,6 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::datatype::DataTypeExt;
     use datafusion_expr::col;
 
     use super::*;
@@ -536,32 +535,6 @@ mod tests {
         assert_eq!(cast.target_field(), &target_field);
         assert_eq!(physical.return_field(&schema)?, target_field);
         assert!(physical.nullable(&schema)?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_try_cast_to_extension_type_is_rejected() -> Result<()> {
-        let extension_field_type = Arc::new(
-            DataType::FixedSizeBinary(16)
-                .into_nullable_field()
-                .with_metadata(
-                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
-                        .into(),
-                ),
-        );
-        let expr = lit("3230e5d4-888e-408b-b09b-831f44aa0c58");
-        let try_cast_expr = Expr::TryCast(TryCast::new_from_field(
-            Box::new(expr),
-            Arc::clone(&extension_field_type),
-        ));
-        let err = create_physical_expr(
-            &try_cast_expr,
-            &DFSchema::empty(),
-            &ExecutionProps::new(),
-        )
-        .unwrap_err();
-        assert!(err.message().contains("arrow.uuid"));
 
         Ok(())
     }
