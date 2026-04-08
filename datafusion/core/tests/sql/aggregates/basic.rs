@@ -112,13 +112,16 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
     +---------+-----------+
     ");
 
-    let dataframe = ctx.sql(sql).await?;
-    let physical_plan = dataframe.create_physical_plan().await?;
+    let physical_plan = ctx.sql(sql).await?.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
 
-    assert_contains!(&formatted, "UnnestExec");
-    assert_contains!(&formatted, "BoundedWindowAggExec");
-    assert_contains!(&formatted, "aggr=[array_agg(ranked.val) ORDER BY [");
+    for needle in [
+        "UnnestExec",
+        "BoundedWindowAggExec",
+        "aggr=[array_agg(ranked.val) ORDER BY [",
+    ] {
+        assert_contains!(&formatted, needle);
+    }
 
     Ok(())
 }
