@@ -764,10 +764,8 @@ fn array_has_any_with_scalar_general(
         }
     }
 
-    let output: ArrayRef = Arc::new(BooleanArray::new(
-        result.finish(),
-        col_nulls.cloned(),
-    ));
+    let output: ArrayRef =
+        Arc::new(BooleanArray::new(result.finish(), col_nulls.cloned()));
 
     if is_scalar_output {
         Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
