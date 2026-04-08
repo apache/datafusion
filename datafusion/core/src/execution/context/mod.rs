@@ -1765,7 +1765,9 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?.with_definition(sql_definition);
+        let table = ListingTable::try_new(config)?.with_definition(sql_definition).with_cache(
+            self.runtime_env().cache_manager.get_file_statistic_cache()
+        );
         self.register_table(table_ref, Arc::new(table))?;
         Ok(())
     }
