@@ -17,8 +17,8 @@
 
 mod data_utils;
 
-use criterion::{Criterion, criterion_group, criterion_main};
-use data_utils::create_table_provider;
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use data_utils::{Utf8PayloadProfile, create_table_provider_with_payload};
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use parking_lot::Mutex;
@@ -37,10 +37,35 @@ fn create_context(
     array_len: usize,
     batch_size: usize,
 ) -> Result<Arc<Mutex<SessionContext>>> {
+    create_context_with_payload(
+        partitions_len,
+        array_len,
+        batch_size,
+        Utf8PayloadProfile::Small,
+    )
+}
+
+fn create_context_with_payload(
+    partitions_len: usize,
+    array_len: usize,
+    batch_size: usize,
+    utf8_payload_profile: Utf8PayloadProfile,
+) -> Result<Arc<Mutex<SessionContext>>> {
     let ctx = SessionContext::new();
-    let provider = create_table_provider(partitions_len, array_len, batch_size)?;
+    let provider = create_table_provider_with_payload(
+        partitions_len,
+        array_len,
+        batch_size,
+        utf8_payload_profile,
+    )?;
     ctx.register_table("t", provider)?;
     Ok(Arc::new(Mutex::new(ctx)))
+}
+
+fn string_agg_sql(group_by_column: &str) -> String {
+    format!(
+        "SELECT {group_by_column}, string_agg(utf8, ',') FROM t GROUP BY {group_by_column}"
+    )
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -296,38 +321,42 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("string_agg_query_group_by_few_groups", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT u64_narrow, string_agg(utf8, ',') \
-                 FROM t GROUP BY u64_narrow",
-            )
-        })
-    });
+    // These payload sizes keep the original 4-value cardinality while changing
+    // only the bytes copied into grouped `string_agg` state:
+    // - small_3b preserves the existing `hi0`..`hi3` baseline
+    // - medium_64b makes copy costs measurable without overwhelming the query
+    // - large_1024b stresses both CPU and memory behavior
+    let string_agg_profiles = [
+        (Utf8PayloadProfile::Small, "small_3b"),
+        (Utf8PayloadProfile::Medium, "medium_64b"),
+        (Utf8PayloadProfile::Large, "large_1024b"),
+    ]
+    .into_iter()
+    .map(|(profile, label)| {
+        (
+            label,
+            create_context_with_payload(partitions_len, array_len, batch_size, profile)
+                .unwrap(),
+        )
+    })
+    .collect::<Vec<_>>();
 
-    c.bench_function("string_agg_query_group_by_mid_groups", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT u64_mid, string_agg(utf8, ',') \
-                 FROM t GROUP BY u64_mid",
-            )
-        })
-    });
+    let string_agg_queries = [
+        ("few_groups", string_agg_sql("u64_narrow")),
+        ("mid_groups", string_agg_sql("u64_mid")),
+        ("many_groups", string_agg_sql("u64_wide")),
+    ];
 
-    c.bench_function("string_agg_query_group_by_many_groups", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT u64_wide, string_agg(utf8, ',') \
-                 FROM t GROUP BY u64_wide",
-            )
-        })
-    });
+    let mut string_agg_group = c.benchmark_group("string_agg_payloads");
+    for (query_name, sql) in &string_agg_queries {
+        for (payload_name, payload_ctx) in &string_agg_profiles {
+            string_agg_group
+                .bench_function(BenchmarkId::new(*query_name, *payload_name), |b| {
+                    b.iter(|| query(payload_ctx.clone(), &rt, sql))
+                });
+        }
+    }
+    string_agg_group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);
