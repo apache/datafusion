@@ -45,9 +45,7 @@ fn make_list_array(
     let values: Vec<i64> = (0..total).map(|_| rng.random_range(0..1000i64)).collect();
     let values_array = Arc::new(Int64Array::from(values)) as ArrayRef;
 
-    let offsets: Vec<i32> = (0..=num_rows)
-        .map(|i| (i * list_size) as i32)
-        .collect();
+    let offsets: Vec<i32> = (0..=num_rows).map(|i| (i * list_size) as i32).collect();
 
     let nulls = if null_density > 0.0 {
         let valid: Vec<bool> = (0..num_rows)
@@ -58,12 +56,15 @@ fn make_list_array(
         None
     };
 
-    Arc::new(ListArray::try_new(
-        Arc::new(Field::new_list_field(DataType::Int64, true)),
-        OffsetBuffer::new(offsets.into()),
-        values_array,
-        nulls,
-    ).unwrap())
+    Arc::new(
+        ListArray::try_new(
+            Arc::new(Field::new_list_field(DataType::Int64, true)),
+            OffsetBuffer::new(offsets.into()),
+            values_array,
+            nulls,
+        )
+        .unwrap(),
+    )
 }
 
 fn bench_arrays_zip(c: &mut Criterion, name: &str, null_density: f64) {
@@ -79,7 +80,11 @@ fn bench_arrays_zip(c: &mut Criterion, name: &str, null_density: f64) {
         ColumnarValue::Array(Arc::clone(&arr3)),
     ];
     let return_type = udf
-        .return_type(&[arr1.data_type().clone(), arr2.data_type().clone(), arr3.data_type().clone()])
+        .return_type(&[
+            arr1.data_type().clone(),
+            arr2.data_type().clone(),
+            arr3.data_type().clone(),
+        ])
         .unwrap();
     let return_field = Arc::new(Field::new("f", return_type, true));
     let arg_fields: Vec<_> = (0..3)
