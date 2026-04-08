@@ -325,27 +325,26 @@ impl FilterExec {
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
 
-        let (selectivity, mut column_statistics) =
-            if !check_support(predicate, schema) {
-                (
-                    default_selectivity as f64 / 100.0,
-                    input_stats.to_inexact().column_statistics,
-                )
-            } else {
-                let input_analysis_ctx = AnalysisContext::try_from_statistics(
+        let (selectivity, mut column_statistics) = if !check_support(predicate, schema) {
+            (
+                default_selectivity as f64 / 100.0,
+                input_stats.to_inexact().column_statistics,
+            )
+        } else {
+            let input_analysis_ctx = AnalysisContext::try_from_statistics(
+                schema,
+                &input_stats.column_statistics,
+            )?;
+            let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
+            (
+                analysis_ctx.selectivity.unwrap_or(1.0),
+                collect_new_statistics(
                     schema,
                     &input_stats.column_statistics,
-                )?;
-                let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
-                (
-                    analysis_ctx.selectivity.unwrap_or(1.0),
-                    collect_new_statistics(
-                        schema,
-                        &input_stats.column_statistics,
-                        analysis_ctx.boundaries,
-                    ),
-                )
-            };
+                    analysis_ctx.boundaries,
+                ),
+            )
+        };
 
         // Estimate (inexact) selectivity of predicate
         let num_rows = num_rows.with_estimated_selectivity(selectivity);
