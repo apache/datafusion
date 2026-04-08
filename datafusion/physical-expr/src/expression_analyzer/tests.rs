@@ -23,18 +23,21 @@ use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
 use datafusion_expr::Operator;
 use std::sync::Arc;
 
-fn make_stats_with_ndv(num_rows: usize, ndv: usize) -> Statistics {
+fn make_stats_with_ndvs(num_rows: usize, ndvs: &[usize]) -> Statistics {
     Statistics {
         num_rows: Precision::Exact(num_rows),
         total_byte_size: Precision::Absent,
-        column_statistics: vec![ColumnStatistics {
-            null_count: Precision::Exact(0),
-            max_value: Precision::Absent,
-            min_value: Precision::Absent,
-            sum_value: Precision::Absent,
-            distinct_count: Precision::Exact(ndv),
-            byte_size: Precision::Absent,
-        }],
+        column_statistics: ndvs
+            .iter()
+            .map(|&ndv| ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Exact(ndv),
+                byte_size: Precision::Absent,
+            })
+            .collect(),
     }
 }
 
@@ -42,7 +45,7 @@ fn make_stats_with_ndv(num_rows: usize, ndv: usize) -> Statistics {
 
 #[test]
 fn test_column_ndv() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let registry = ExpressionAnalyzerRegistry::new();
     assert_eq!(registry.get_distinct_count(&col, &stats), Some(100));
@@ -50,7 +53,7 @@ fn test_column_ndv() {
 
 #[test]
 fn test_literal_ndv() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let lit =
         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
     let registry = ExpressionAnalyzerRegistry::new();
@@ -59,7 +62,7 @@ fn test_literal_ndv() {
 
 #[test]
 fn test_arithmetic_ndv() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let lit =
         Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
@@ -91,7 +94,7 @@ fn test_arithmetic_ndv() {
 
 #[test]
 fn test_equality_selectivity() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let lit =
         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
@@ -104,7 +107,7 @@ fn test_equality_selectivity() {
 
 #[test]
 fn test_equality_selectivity_column_on_right() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let lit =
         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
@@ -117,7 +120,7 @@ fn test_equality_selectivity_column_on_right() {
 
 #[test]
 fn test_and_selectivity() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let lit1 =
         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
@@ -137,7 +140,7 @@ fn test_and_selectivity() {
 
 #[test]
 fn test_or_selectivity() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let lit1 =
         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
@@ -157,7 +160,7 @@ fn test_or_selectivity() {
 
 #[test]
 fn test_not_selectivity() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let lit =
         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
@@ -172,7 +175,7 @@ fn test_not_selectivity() {
 
 #[test]
 fn test_equality_selectivity_expression_eq_literal() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let one =
         Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
@@ -191,7 +194,7 @@ fn test_equality_selectivity_expression_eq_literal() {
 
 #[test]
 fn test_inequality_selectivity_expression_neq_literal() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let one =
         Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
@@ -206,6 +209,55 @@ fn test_inequality_selectivity_expression_neq_literal() {
     let sel = registry.get_selectivity(&neq, &stats).unwrap();
     // NDV(a + 1) = 100, selectivity = 1 - 1/100 = 0.99
     assert!((sel - 0.99).abs() < 0.001);
+}
+
+// Tests for resolve_ndv symmetry (column-vs-column and column-vs-expression)
+
+#[test]
+fn test_equality_selectivity_column_eq_column_symmetric() {
+    // a = b and b = a must give the same selectivity regardless of operand order
+    let stats = make_stats_with_ndvs(1000, &[50, 200]);
+    let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+    let col_b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+
+    let registry = ExpressionAnalyzerRegistry::new();
+
+    let eq_ab = Arc::new(BinaryExpr::new(
+        Arc::clone(&col_a),
+        Operator::Eq,
+        Arc::clone(&col_b),
+    )) as Arc<dyn PhysicalExpr>;
+    let eq_ba = Arc::new(BinaryExpr::new(
+        Arc::clone(&col_b),
+        Operator::Eq,
+        Arc::clone(&col_a),
+    )) as Arc<dyn PhysicalExpr>;
+
+    let sel_ab = registry.get_selectivity(&eq_ab, &stats).unwrap();
+    let sel_ba = registry.get_selectivity(&eq_ba, &stats).unwrap();
+
+    assert_eq!(sel_ab, sel_ba);
+}
+
+#[test]
+fn test_equality_selectivity_column_eq_expression_uses_max_ndv() {
+    // col = (expr) should use max(ndv(col), ndv(expr)), not just ndv(col)
+    // Here col has ndv=10 and expr=(b+1) has ndv=200 from column b
+    let stats = make_stats_with_ndvs(1000, &[10, 200]);
+    let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+    let col_b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+    let one =
+        Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn PhysicalExpr>;
+    let b_plus_1 =
+        Arc::new(BinaryExpr::new(col_b, Operator::Plus, one)) as Arc<dyn PhysicalExpr>;
+
+    let eq =
+        Arc::new(BinaryExpr::new(col_a, Operator::Eq, b_plus_1)) as Arc<dyn PhysicalExpr>;
+
+    let registry = ExpressionAnalyzerRegistry::new();
+    let sel = registry.get_selectivity(&eq, &stats).unwrap();
+    // max(ndv(a)=10, ndv(b+1)=200) = 200, so selectivity = 1/200
+    assert_eq!(sel, 1.0 / 200.0);
 }
 
 // Min/max tests
@@ -235,7 +287,7 @@ fn test_column_min_max() {
 
 #[test]
 fn test_literal_min_max() {
-    let stats = make_stats_with_ndv(100, 10);
+    let stats = make_stats_with_ndvs(100, &[10]);
     let lit =
         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
     let registry = ExpressionAnalyzerRegistry::new();
@@ -271,7 +323,7 @@ fn test_column_null_fraction() {
 
 #[test]
 fn test_literal_null_fraction() {
-    let stats = make_stats_with_ndv(100, 10);
+    let stats = make_stats_with_ndvs(100, &[10]);
     let registry = ExpressionAnalyzerRegistry::new();
 
     let lit =
@@ -301,7 +353,7 @@ impl ExpressionAnalyzer for FixedSelectivityAnalyzer {
 
 #[test]
 fn test_custom_analyzer_overrides_default() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let lit =
         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
@@ -336,7 +388,7 @@ impl ExpressionAnalyzer for ColumnAOnlyAnalyzer {
 
 #[test]
 fn test_custom_analyzer_delegates_to_default() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     let col_b = Arc::new(Column::new("b", 0)) as Arc<dyn PhysicalExpr>;
     let lit =
@@ -359,7 +411,7 @@ fn test_custom_analyzer_delegates_to_default() {
 
 #[test]
 fn test_with_analyzers_and_default() {
-    let stats = make_stats_with_ndv(1000, 100);
+    let stats = make_stats_with_ndvs(1000, &[100]);
     let col = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
 
     let registry =

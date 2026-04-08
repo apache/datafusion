@@ -52,25 +52,20 @@ impl DefaultExpressionAnalyzer {
             .and_then(|idx| input_stats.column_statistics.get(idx))
     }
 
-    /// Resolve NDV for a binary expression: try direct column stats first,
-    /// then fall back to the registry for arbitrary expressions
+    /// Resolve NDV for a binary predicate by taking the max of both sides.
+    ///
+    /// Using max is symmetric (order-independent) and handles column-vs-column,
+    /// column-vs-expression, and expression-vs-expression uniformly through the
+    /// registry chain
     fn resolve_ndv(
         left: &Arc<dyn PhysicalExpr>,
         right: &Arc<dyn PhysicalExpr>,
         input_stats: &Statistics,
         registry: &ExpressionAnalyzerRegistry,
     ) -> Option<usize> {
-        Self::get_column_stats(left, input_stats)
-            .or_else(|| Self::get_column_stats(right, input_stats))
-            .and_then(|s| s.distinct_count.get_value())
-            .filter(|&&ndv| ndv > 0)
-            .copied()
-            .or_else(|| {
-                let l = registry.get_distinct_count(left, input_stats);
-                let r = registry.get_distinct_count(right, input_stats);
-                l.max(r)
-            })
-            .filter(|&n| n > 0)
+        let l = registry.get_distinct_count(left, input_stats);
+        let r = registry.get_distinct_count(right, input_stats);
+        l.max(r).filter(|&n| n > 0)
     }
 
     /// Recursive selectivity estimation through the registry chain
