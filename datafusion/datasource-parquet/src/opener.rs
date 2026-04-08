@@ -427,7 +427,8 @@ impl ParquetOpenState {
 
 /// Adapter for a [`MorselPlanner`] to the [`FileOpener`] API
 ///
-/// Implements state machine described in [`ParquetOpenState`]
+/// Compatibility adapter that drives a morsel planner through the
+/// [`FileOpener`] API.
 struct ParquetOpenFuture {
     planner: Option<Box<dyn MorselPlanner>>,
     pending_io: Option<PendingMorselPlanner>,
@@ -452,29 +453,31 @@ impl Future for ParquetOpenFuture {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            // If waiting on IO, poll
+            // If planner I/O completed, resume with the returned planner.
             if let Some(io_future) = self.pending_io.as_mut() {
                 let maybe_planner = ready!(io_future.poll_unpin(cx));
-                // future has resolved. Clear pending io before processing the
-                // result to ensure that if the future returns an error, we
-                // don't end up in a state where both are set and accidentally
-                // ignore the error on the next poll
+                // Clear `pending_io` before handling the result so an error
+                // cannot leave both continuation paths populated.
                 self.pending_io = None;
                 self.planner = Some(maybe_planner?);
             }
 
-            // have a morsel ready to go, return that
+            // If a stream morsel is ready, return it.
             if let Some(morsel) = self.ready_morsels.pop_front() {
                 return Poll::Ready(Ok(morsel.into_stream()));
             }
 
+            // This shim must always own either a planner, a pending planner
+            // future, or a ready morsel. Reaching this branch means the
+            // continuation was lost.
             let Some(planner) = self.planner.take() else {
-                // any path that leave planner as non
                 return Poll::Ready(internal_err!(
                     "ParquetOpenFuture polled after completion"
                 ));
             };
 
+            // Planner completed without producing a stream morsel.
+            // (e.g. all row groups were pruned)
             let Some(mut plan) = planner.plan()? else {
                 return Poll::Ready(Ok(futures::stream::empty().boxed()));
             };
@@ -520,7 +523,7 @@ impl Morsel for ParquetStreamMorsel {
     }
 }
 
-/// Planner for opening a single parquet file via the morsel APIs.
+/// Per-file planner that owns the current [`ParquetOpenState`].
 struct ParquetMorselPlanner {
     /// Ready to perform CPU-only planning work.
     state: ParquetOpenState,

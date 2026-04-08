@@ -53,12 +53,10 @@ pub trait Morsel: Send + Debug {
 pub trait Morselizer: Send + Sync + Debug {
     /// Return the initial [`MorselPlanner`] for this file.
     ///
-    /// "Morselzing" a file may involve CPU work, such as parsing parquet
+    /// Morselizing a file may involve CPU work, such as parsing parquet
     /// metadata and evaluating pruning predicates. It should NOT do any I/O
-    /// work, such as reading from the file. If I/O is required, it should
-    /// return a future that the caller can poll to drive the I/O work to
-    /// completion, and once the future is complete, the caller can call
-    /// `plan_file` again for a different file.
+    /// work, such as reading from the file. Any needed I/O should be done using
+    /// [`MorselPlan::with_pending_planner`].
     fn plan_file(&self, file: PartitionedFile) -> Result<Box<dyn MorselPlanner>>;
 }
 
@@ -84,9 +82,9 @@ pub trait MorselPlanner: Send + Debug {
     /// parquet metadata and evaluating pruning predicates.
     ///
     /// It should NOT do any I/O work, such as reading from the file. If I/O is
-    /// required, the returned [`MorselPlan`] should contain a future that the
-    /// caller polls to drive the I/O work to completion. Once the future is
-    /// complete, the caller can call `plan` again to get the next morsels.
+    /// required, the returned [`MorselPlan`] should contain a pending planner
+    /// future that the caller polls to drive the I/O work to completion. Once
+    /// that future resolves, it yields a planner ready for work.
     ///
     /// Note this function is **not async** to make it explicitly clear that if
     /// I/O is required, it should be done in the returned `io_future`.
@@ -118,11 +116,11 @@ pub struct MorselPlan {
     morsels: Vec<Box<dyn Morsel>>,
     /// Planners that are ready for CPU work.
     ready_planners: Vec<Box<dyn MorselPlanner>>,
-    /// A future that is doing IO that will resolve to MorselPlanner
+    /// A future with planner I/O that resolves to a CPU ready planner.
     ///
     /// DataFusion will poll this future occasionally to drive the I/O work to
-    /// completion. Once the future resolves, DataFusion will call `plan` again
-    /// to get the next morsels.
+    /// completion. Once it resolves, planning continues with the returned
+    /// planner.
     pending_planner: Option<PendingMorselPlanner>,
 }
 
@@ -144,7 +142,7 @@ impl MorselPlan {
         self
     }
 
-    /// Set the pending future for planning
+    /// Set the pending planner for an I/O phase.
     pub fn with_pending_planner<F>(mut self, io_future: F) -> Self
     where
         F: Future<Output = Result<Box<dyn MorselPlanner>>> + Send + 'static,
@@ -153,7 +151,7 @@ impl MorselPlan {
         self
     }
 
-    /// Set the pending future for planning
+    /// Set the pending planner  for an I/O phase.
     pub fn set_pending_planner<F>(&mut self, io_future: F)
     where
         F: Future<Output = Result<Box<dyn MorselPlanner>>> + Send + 'static,
@@ -188,14 +186,18 @@ pub struct PendingMorselPlanner {
 }
 
 impl PendingMorselPlanner {
-    /// Create a new pending morselization I/O future
+    /// Create a new pending planner future.
     ///
     /// Example
     /// ```
-    /// # use datafusion_datasource::morsel::PendingMorselPlanner;
+    /// # use datafusion_common::DataFusionError;
+    /// # use datafusion_datasource::morsel::{MorselPlanner, PendingMorselPlanner};
     /// let work = async move {
-    ///   // Do I/O work here
-    ///   # unimplemented!()
+    ///  let planner: Box<dyn MorselPlanner> = {
+    ///   // Do I/O work here, then return the next planner to run.
+    ///  # unimplemented!();
+    ///   };
+    ///   Ok(planner) as Result<_, DataFusionError>;
     /// };
     /// let pending_io = PendingMorselPlanner::new(work);
     /// ```
@@ -214,7 +216,7 @@ impl PendingMorselPlanner {
     }
 }
 
-/// wraps the inner future
+/// Forwards polling to the underlying future.
 impl Future for PendingMorselPlanner {
     type Output = Result<Box<dyn MorselPlanner>>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
