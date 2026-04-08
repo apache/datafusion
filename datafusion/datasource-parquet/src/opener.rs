@@ -583,8 +583,7 @@ impl ParquetMorselPlanner {
             // Ignore if receiver has been dropped (e.g. due to plan cancel)
             let _ = output_for_future.send(Ok(next_state));
             Ok(())
-        }
-        .boxed();
+        };
         *self = ParquetMorselPlanner::Waiting(output);
         MorselPlan::new().with_io_future(io_future)
     }

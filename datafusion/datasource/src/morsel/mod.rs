@@ -26,6 +26,7 @@
 use crate::PartitionedFile;
 use arrow::array::RecordBatch;
 use datafusion_common::Result;
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use std::fmt::Debug;
@@ -51,9 +52,24 @@ pub struct PendingMorselizationIO {
 }
 
 impl PendingMorselizationIO {
-    /// Create a new pending morselization I/O future.
-    pub fn new(future: BoxFuture<'static, Result<()>>) -> Self {
-        Self { future }
+    /// Create a new pending morselization I/O future
+    ///
+    /// Example
+    /// ```
+    /// # use datafusion_datasource::morsel::PendingMorselizationIO;
+    /// let work = async move {
+    ///   // Do I/O work here
+    ///   Ok(())
+    /// };
+    /// let pending_io = PendingMorselizationIO::new(work);
+    /// ```
+    pub fn new<F>(future: F) -> Self
+    where
+        F: Future<Output = Result<()>> + Send + 'static,
+    {
+        Self {
+            future: future.boxed(),
+        }
     }
 
     /// Consume this wrapper and return the underlying future.
@@ -170,7 +186,10 @@ impl MorselPlan {
     }
 
     /// Set the pending I/O future.
-    pub fn with_io_future(mut self, io_future: BoxFuture<'static, Result<()>>) -> Self {
+    pub fn with_io_future<F>(mut self, io_future: F) -> Self
+    where
+        F: Future<Output = Result<()>> + Send + 'static,
+    {
         self.io_future = Some(PendingMorselizationIO::new(io_future));
         self
     }
@@ -191,7 +210,10 @@ impl MorselPlan {
     }
 
     /// Set the pending I/O future.
-    pub fn set_io_future(&mut self, io_future: BoxFuture<'static, Result<()>>) {
+    pub fn set_io_future<F>(&mut self, io_future: F)
+    where
+        F: Future<Output = Result<()>> + Send + 'static,
+    {
         self.io_future = Some(PendingMorselizationIO::new(io_future));
     }
 
