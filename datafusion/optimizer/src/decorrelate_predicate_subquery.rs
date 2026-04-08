@@ -33,7 +33,6 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
-use datafusion_expr::logical_plan::Projection;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
@@ -131,45 +130,40 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 Ok(Transformed::yes(cur_input))
             }
             LogicalPlan::Projection(projection) => {
-                // Skip if no predicate subqueries in any projection expression
+                // Optimization: skip if no predicate subqueries in any projection expression
                 if !projection.expr.iter().any(has_subquery) {
                     return Ok(Transformed::no(LogicalPlan::Projection(projection)));
                 }
 
-                // Keep an Arc clone of the original input so we can reconstruct
-                // the Projection if decorrelation fails for any expression.
-                let original_input = Arc::clone(&projection.input);
-                let mut cur_input = Arc::unwrap_or_clone(projection.input);
-                let mut new_exprs = Vec::with_capacity(projection.expr.len());
+                // Clone projection.expr up front so we can iterate without
+                // holding a borrow on `projection`, which lets us move it
+                // directly on bail-out (mirrors ScalarSubqueryToJoin).
+                let projection_exprs = projection.expr.clone();
+                let mut cur_input = projection.input.as_ref().clone();
+                let mut new_exprs = Vec::with_capacity(projection_exprs.len());
 
                 // Rewrite each expression in turn. Check per-expression whether
                 // decorrelation succeeded, and bail out early on the first failure
                 // (same all-or-nothing semantics as ScalarSubqueryToJoin).
-                for expr in &projection.expr {
-                    if !has_subquery(expr) {
-                        new_exprs.push(expr.clone());
+                for expr in projection_exprs {
+                    if !has_subquery(&expr) {
+                        new_exprs.push(expr);
                         continue;
                     }
                     let (plan, rewritten) =
-                        rewrite_inner_subqueries(cur_input, expr.clone(), config)?;
+                        rewrite_inner_subqueries(cur_input, expr, config)?;
                     if has_subquery(&rewritten) {
-                        // Decorrelation failed for this expression — bail out for
-                        // the whole projection and return the original plan.
-                        let original = Projection::try_new_with_schema(
-                            projection.expr,
-                            original_input,
-                            projection.schema,
-                        )?;
-                        return Ok(Transformed::no(LogicalPlan::Projection(original)));
+                        // Decorrelation failed for this expression — bail out
+                        // for the whole projection.
+                        return Ok(Transformed::no(LogicalPlan::Projection(projection)));
                     }
                     cur_input = plan;
                     new_exprs.push(rewritten);
                 }
 
-                // Optimization: preserve original column names via aliases where
-                // the rewrite changed them. Not required for correctness — the
-                // rewritten plan is still valid without aliases — but keeps the
-                // output column names stable for downstream consumers.
+                // Preserve original column names via aliases where the rewrite
+                // changed them — keeps output column names stable for
+                // downstream consumers.
                 let proj_exprs: Vec<Expr> = projection
                     .expr
                     .iter()
