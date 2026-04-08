@@ -135,6 +135,11 @@ required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
+name = "lcm"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "nanvl"
 required-features = ["math_expressions"]
 
