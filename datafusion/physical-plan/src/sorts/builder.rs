@@ -141,6 +141,8 @@ impl BatchBuilder {
                     .iter()
                     .map(|(_, batch)| batch.column(column_idx).as_ref())
                     .collect();
+                // Arrow 58.1.0+ returns OffsetOverflowError directly from
+                // interleave, allowing retry_interleave to shrink the batch.
                 interleave(&arrays, indices).map_err(Into::into)
             })
             .collect::<Result<Vec<_>>>()
@@ -275,6 +277,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Array, ArrayDataBuilder, Int32Array, ListArray};
+    use arrow::buffer::Buffer;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_execution::memory_pool::{
+        MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
+
+    fn overflow_list_batch() -> RecordBatch {
+        let values_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        // SAFETY: This intentionally constructs an invalid child length so
+        // Arrow's interleave hits offset overflow before touching child data.
+        let list = ListArray::from(unsafe {
+            ArrayDataBuilder::new(DataType::List(Arc::clone(&values_field)))
+                .len(1)
+                .add_buffer(Buffer::from_slice_ref([0_i32, i32::MAX]))
+                .add_child_data(Int32Array::from(Vec::<i32>::new()).to_data())
+                .build_unchecked()
+        });
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "list_col",
+            DataType::List(values_field),
+            true,
+        )]));
+        RecordBatch::try_new(schema, vec![Arc::new(list)]).unwrap()
+    }
 
     #[test]
     fn test_retry_interleave_halves_rows_until_success() {
@@ -312,5 +339,21 @@ mod tests {
 
         assert_eq!(attempts, vec![4]);
         assert!(matches!(error, DataFusionError::Execution(msg) if msg == "boom"));
+    }
+
+    #[test]
+    fn test_try_interleave_columns_surfaces_arrow_offset_overflow() {
+        let batch = overflow_list_batch();
+        let schema = batch.schema();
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        let mut builder = BatchBuilder::new(schema, 1, 2, reservation);
+        builder.push_batch(0, batch).unwrap();
+
+        let error = builder
+            .try_interleave_columns(&[(0, 0), (0, 0)])
+            .unwrap_err();
+
+        assert!(is_offset_overflow(&error));
     }
 }
