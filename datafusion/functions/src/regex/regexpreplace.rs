@@ -505,7 +505,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
                     if let Some(val) = val {
                         if short_re.captures_read(&mut locs, val).is_some() {
                             let match_end = locs.get(0).unwrap().1;
-                            if memchr(b'\n', val[match_end..].as_bytes()).is_none() {
+                            if memchr(b'\n', &val.as_bytes()[match_end..]).is_none() {
                                 if let Some((start, end)) = locs.get(1) {
                                     vals.append_slice(&val.as_bytes()[start..end]);
                                 }
@@ -550,7 +550,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
                     if let Some(val) = val {
                         if short_re.captures_read(&mut locs, val).is_some() {
                             let match_end = locs.get(0).unwrap().1;
-                            if memchr(b'\n', val[match_end..].as_bytes()).is_none() {
+                            if memchr(b'\n', &val.as_bytes()[match_end..]).is_none() {
                                 if let Some((start, end)) = locs.get(1) {
                                     builder.append_value(&val[start..end]);
                                 } else {
