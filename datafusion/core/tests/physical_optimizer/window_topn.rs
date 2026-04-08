@@ -20,16 +20,17 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::Operator;
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_functions_window::row_number::row_number_udwf;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, col, lit};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::window_topn::WindowTopN;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::window_topn::WindowTopN;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -37,7 +38,6 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_udwf_window_expr};
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode};
-use datafusion_expr::Operator;
 use insta::assert_snapshot;
 
 fn schema() -> Arc<Schema> {
@@ -68,18 +68,17 @@ fn build_window_topn_plan(
     op: Operator,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let s = schema();
-    let input: Arc<dyn ExecutionPlan> =
-        Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+    let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
 
     // Sort by pk ASC, val ASC
     let ordering = LexOrdering::new(vec![
         PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
         PhysicalSortExpr::new_default(col("val", &s)?).asc(),
-    ]).unwrap();
+    ])
+    .unwrap();
 
-    let sort: Arc<dyn ExecutionPlan> = Arc::new(
-        SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
-    );
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering.clone(), input).with_preserve_partitioning(true));
 
     // ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val)
     let partition_by = vec![col("pk", &s)?];
@@ -123,17 +122,15 @@ fn build_window_topn_plan(
 /// Build a plan with no partition-by: ROW_NUMBER() OVER (ORDER BY val)
 fn build_window_topn_no_partition(limit_value: i64) -> Result<Arc<dyn ExecutionPlan>> {
     let s = schema();
-    let input: Arc<dyn ExecutionPlan> =
-        Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+    let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
 
     // Sort by val ASC only (no partition key)
-    let ordering = LexOrdering::new(vec![
-        PhysicalSortExpr::new_default(col("val", &s)?).asc(),
-    ]).unwrap();
+    let ordering =
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()])
+            .unwrap();
 
-    let sort: Arc<dyn ExecutionPlan> = Arc::new(
-        SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
-    );
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering.clone(), input).with_preserve_partitioning(true));
 
     // ROW_NUMBER() OVER (ORDER BY val) — no partition by
     let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
@@ -146,7 +143,7 @@ fn build_window_topn_no_partition(limit_value: i64) -> Result<Arc<dyn ExecutionP
             "row_number".to_string(),
             false,
         )?,
-        &[],       // empty partition_by
+        &[], // empty partition_by
         &order_by,
         Arc::new(WindowFrame::new_bounds(
             WindowFrameUnits::Rows,
@@ -174,17 +171,16 @@ fn build_window_topn_no_partition(limit_value: i64) -> Result<Arc<dyn ExecutionP
 /// Build a plan where filter is on a data column (not window output)
 fn build_non_window_filter_plan() -> Result<Arc<dyn ExecutionPlan>> {
     let s = schema();
-    let input: Arc<dyn ExecutionPlan> =
-        Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+    let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
 
     let ordering = LexOrdering::new(vec![
         PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
         PhysicalSortExpr::new_default(col("val", &s)?).asc(),
-    ]).unwrap();
+    ])
+    .unwrap();
 
-    let sort: Arc<dyn ExecutionPlan> = Arc::new(
-        SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
-    );
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering.clone(), input).with_preserve_partitioning(true));
 
     let partition_by = vec![col("pk", &s)?];
     let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
@@ -257,7 +253,8 @@ fn flipped_3_gteq_rn() -> Result<()> {
         let ordering = LexOrdering::new(vec![
             PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
             PhysicalSortExpr::new_default(col("val", &s)?).asc(),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let sort: Arc<dyn ExecutionPlan> = Arc::new(
             SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
@@ -292,7 +289,8 @@ fn flipped_3_gteq_rn() -> Result<()> {
 
         // Flipped: 3 >= rn  (Literal GtEq Column)
         let rn_col = Arc::new(Column::new("row_number", 2));
-        let limit_lit = lit(ScalarValue::UInt64(Some(3)));        let predicate = Arc::new(BinaryExpr::new(limit_lit, Operator::GtEq, rn_col));
+        let limit_lit = lit(ScalarValue::UInt64(Some(3)));
+        let predicate = Arc::new(BinaryExpr::new(limit_lit, Operator::GtEq, rn_col));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, window)?);
         filter
@@ -313,7 +311,10 @@ fn non_window_column_filter_no_change() -> Result<()> {
     let before = plan_str(plan.as_ref());
     let optimized = optimize(plan)?;
     let after = plan_str(optimized.as_ref());
-    assert_eq!(before, after, "Plan should not change when filter is on data column");
+    assert_eq!(
+        before, after,
+        "Plan should not change when filter is on data column"
+    );
     Ok(())
 }
 
@@ -323,7 +324,10 @@ fn config_disabled_no_change() -> Result<()> {
     let before = plan_str(plan.as_ref());
     let optimized = optimize_disabled(plan)?;
     let after = plan_str(optimized.as_ref());
-    assert_eq!(before, after, "Plan should not change when config is disabled");
+    assert_eq!(
+        before, after,
+        "Plan should not change when config is disabled"
+    );
     Ok(())
 }
 
@@ -345,17 +349,16 @@ fn no_partition_by_no_change() -> Result<()> {
 #[test]
 fn with_projection_between() -> Result<()> {
     let s = schema();
-    let input: Arc<dyn ExecutionPlan> =
-        Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+    let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
 
     let ordering = LexOrdering::new(vec![
         PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
         PhysicalSortExpr::new_default(col("val", &s)?).asc(),
-    ]).unwrap();
+    ])
+    .unwrap();
 
-    let sort: Arc<dyn ExecutionPlan> = Arc::new(
-        SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
-    );
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering.clone(), input).with_preserve_partitioning(true));
 
     let partition_by = vec![col("pk", &s)?];
     let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];

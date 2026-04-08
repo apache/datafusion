@@ -232,7 +232,6 @@ impl PartitionedTopKExec {
     /// The output is sorted by `sort_exprs` (partition keys then order keys),
     /// uses the same partitioning as the input, emits all output at once
     /// (`EmissionType::Final`), and is bounded.
-
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
@@ -360,9 +359,9 @@ impl ExecutionPlan for PartitionedTopKExec {
                 runtime,
                 metrics_set,
             )
-                .await
+            .await
         })
-            .try_flatten();
+        .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.input.schema(),
@@ -406,6 +405,7 @@ fn create_noop_dynamic_filter() -> Arc<RwLock<TopKDynamicFilters>> {
 ///
 /// - Time: O(N log K) where N = total rows, K = fetch
 /// - Memory: O(K × P × row_size) where P = number of distinct partitions
+#[expect(clippy::too_many_arguments)]
 async fn do_partitioned_topk(
     mut input: SendableRecordBatchStream,
     schema: SchemaRef,

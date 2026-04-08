@@ -30,25 +30,25 @@
 //! with `BoundedWindowAggExec → PartitionedTopKExec(fetch=K)`, removing both
 //! the `FilterExec` and `SortExec`.
 //!
-//! See [`PartitionedTopKExec`](datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec)
+//! See [`PartitionedTopKExec`]
 //! for details on the replacement operator.
 
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
-use arrow::datatypes::DataType;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
-use datafusion_physical_plan::{ExecutionPlan};
 
 /// Physical optimizer rule that converts per-partition `ROW_NUMBER` top-K
 /// queries into a more efficient plan using [`PartitionedTopKExec`].
@@ -106,9 +106,7 @@ impl WindowTopN {
     /// `FilterExec → [ProjectionExec] → BoundedWindowAggExec → SortExec`
     /// pattern and can be rewritten, or `None` if the node should be
     /// left unchanged.
-    fn try_transform(
-        plan: &Arc<dyn ExecutionPlan>,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
+    fn try_transform(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
         // Step 1: Match FilterExec at the top
         let filter = plan.downcast_ref::<FilterExec>()?;
 
@@ -159,7 +157,7 @@ impl WindowTopN {
             partition_prefix_len,
             limit_n,
         )
-            .ok()?;
+        .ok()?;
 
         // Step 8: Rebuild window with new child
         let new_window = Arc::clone(&child_as_arc(window_exec))
@@ -203,7 +201,7 @@ impl PhysicalOptimizerRule for WindowTopN {
                 },
             )
         })
-            .data()
+        .data()
     }
 
     fn name(&self) -> &str {
@@ -250,9 +248,9 @@ fn extract_window_limit(
         right.as_any().downcast_ref::<Literal>(),
     ) {
         let n = scalar_to_usize(lit_val.value())?;
-        return match op {
-            &Operator::LtEq => Some((col.index(), n)),
-            &Operator::Lt => Some((col.index(), n - 1)),
+        return match *op {
+            Operator::LtEq => Some((col.index(), n)),
+            Operator::Lt => Some((col.index(), n - 1)),
             _ => None,
         };
     }
@@ -263,9 +261,9 @@ fn extract_window_limit(
         right.as_any().downcast_ref::<Column>(),
     ) {
         let n = scalar_to_usize(lit_val.value())?;
-        return match op {
-            &Operator::GtEq => Some((col.index(), n)),
-            &Operator::Gt => Some((col.index(), n - 1)),
+        return match *op {
+            Operator::GtEq => Some((col.index(), n)),
+            Operator::Gt => Some((col.index(), n - 1)),
             _ => None,
         };
     }
@@ -293,9 +291,7 @@ fn scalar_to_usize(value: &ScalarValue) -> Option<usize> {
 /// Downcasts through `StandardWindowExpr` → `WindowUDFExpr` and checks
 /// that the UDF name is `"row_number"`. Returns `false` for all other
 /// window functions (e.g., `RANK`, `DENSE_RANK`, `SUM`).
-fn is_row_number(
-    expr: &Arc<dyn datafusion_physical_expr::window::WindowExpr>,
-) -> bool {
+fn is_row_number(expr: &Arc<dyn datafusion_physical_expr::window::WindowExpr>) -> bool {
     let Some(swe) = expr.as_any().downcast_ref::<StandardWindowExpr>() else {
         return false;
     };
