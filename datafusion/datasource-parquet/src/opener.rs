@@ -459,6 +459,11 @@ impl Future for ParquetOpenFuture {
                 // Clear `pending_io` before handling the result so an error
                 // cannot leave both continuation paths populated.
                 self.pending_io = None;
+                if self.planner.is_some() {
+                    return Poll::Ready(internal_err!(
+                        "ParquetOpenFuture does not support concurrent planners"
+                    ));
+                }
                 self.planner = Some(maybe_planner?);
             }
 
