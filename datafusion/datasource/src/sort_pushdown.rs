@@ -19,7 +19,7 @@
 //!
 //! This module contains the statistics-based file sorting, non-overlapping
 //! validation, and NULL handling logic used by
-//! [`FileScanConfig::try_pushdown_sort`](crate::file_scan_config::FileScanConfig).
+//! [`FileScanConfig::try_pushdown_sort`](crate::file_scan_config::FileScanConfig::try_pushdown_sort).
 //!
 //! Extracted from `file_scan_config.rs` to keep that module focused on
 //! core configuration and data-source plumbing.
@@ -380,6 +380,7 @@ pub(crate) fn any_file_has_nulls_in_sort_columns(
     false
 }
 
+/// Get the indices of columns in a projection if the projection is a simple
 /// list of columns.
 /// If there are any expressions other than columns, returns None.
 pub(crate) fn ordered_column_indices_from_projection(
@@ -450,7 +451,7 @@ pub(crate) fn validate_orderings(
         .collect()
 }
 
-/// The various listing tables does not attempt to read all files
+/// The various listing tables do not attempt to read all files
 /// concurrently, instead they will read files in sequence within a
 /// partition.  This is an important property as it allows plans to
 /// run against 1000s of files and not try to open them all
