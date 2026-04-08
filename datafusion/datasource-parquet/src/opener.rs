@@ -520,20 +520,17 @@ impl Morsel for ParquetStreamMorsel {
     }
 }
 
-/// Stateful planner for opening a single parquet file via the morsel APIs.
-enum ParquetMorselPlanner {
+/// Planner for opening a single parquet file via the morsel APIs.
+struct ParquetMorselPlanner {
     /// Ready to perform CPU-only planning work.
-    Ready(ParquetOpenState),
+    state: ParquetOpenState,
 }
 
 impl fmt::Debug for ParquetMorselPlanner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ready(state) => f
-                .debug_tuple("ParquetMorselPlanner::Ready")
-                .field(state)
-                .finish(),
-        }
+        f.debug_tuple("ParquetMorselPlanner::Ready")
+            .field(&self.state)
+            .finish()
     }
 }
 
@@ -549,7 +546,7 @@ impl ParquetMorselPlanner {
         let state = ParquetOpenState::Start {
             prepared: Box::new(prepared),
         };
-        Ok(Self::Ready(state))
+        Ok(Self { state })
     }
 
     /// Schedule an I/O future that resolves to the next planner to run.
@@ -567,7 +564,7 @@ impl ParquetMorselPlanner {
     {
         let io_future = async move {
             let next_state = future.await?;
-            Ok(Box::new(ParquetMorselPlanner::Ready(next_state)) as _)
+            Ok(Box::new(ParquetMorselPlanner { state: next_state }) as _)
         };
         MorselPlan::new().with_pending_planner(io_future)
     }
@@ -575,15 +572,11 @@ impl ParquetMorselPlanner {
 
 impl MorselPlanner for ParquetMorselPlanner {
     fn plan(self: Box<Self>) -> Result<Option<MorselPlan>> {
-        let state = match *self {
-            ParquetMorselPlanner::Ready(state) => state,
-        };
-
-        if let ParquetOpenState::Done = state {
+        if let ParquetOpenState::Done = self.state {
             return Ok(None);
         }
 
-        let state = state.transition()?;
+        let state = self.state.transition()?;
 
         match state {
             #[cfg(feature = "parquet_encryption")]
@@ -617,11 +610,10 @@ impl MorselPlanner for ParquetMorselPlanner {
                 Ok(Some(MorselPlan::new().with_morsels(morsels)))
             }
             ParquetOpenState::Done => Ok(None),
-            cpu_state => {
-                Ok(Some(MorselPlan::new().with_planners(vec![Box::new(
-                    ParquetMorselPlanner::Ready(cpu_state),
-                )])))
-            }
+            cpu_state => Ok(Some(
+                MorselPlan::new()
+                    .with_planners(vec![Box::new(Self { state: cpu_state })]),
+            )),
         }
     }
 }
