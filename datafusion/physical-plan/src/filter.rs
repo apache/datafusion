@@ -347,6 +347,7 @@ impl FilterExec {
                 )
             };
 
+        // Estimate (inexact) selectivity of predicate
         let num_rows = num_rows.with_estimated_selectivity(selectivity);
         let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
@@ -2418,6 +2419,22 @@ mod tests {
                     )),
                 )),
                 vec![Precision::Exact(1), Precision::Exact(1)],
+            ),
+            (
+                "numeric equality with min/max bounds (interval analysis path)",
+                vec![Field::new("a", DataType::Int32, false)],
+                vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                    distinct_count: Precision::Inexact(80),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                )),
+                vec![Precision::Exact(1)],
             ),
             (
                 "timestamp equality",
