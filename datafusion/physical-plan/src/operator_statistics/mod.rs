@@ -19,7 +19,7 @@
 //!
 //! This module provides an extensible mechanism for computing statistics
 //! on [`ExecutionPlan`] nodes, following the chain of responsibility pattern
-//! similar to [`RelationPlanner`] for SQL parsing.
+//! similar to `RelationPlanner` for SQL parsing.
 //!
 //! # Overview
 //!
