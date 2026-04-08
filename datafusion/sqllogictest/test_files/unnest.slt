@@ -996,6 +996,68 @@ physical_plan
 09)----------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 10)------------------LazyMemoryExec: partitions=1, batch_generators=[range: start=1, end=5, batch_size=8192]
 
+# The unordered case above is not sufficient coverage for issue 20788:
+# adding ORDER BY to array_agg exercises the order-sensitive accumulator path
+# rather than the compact GroupsAccumulator fast path used by unordered array_agg.
+query TT
+EXPLAIN WITH indexed AS (
+    SELECT
+        ROW_NUMBER() OVER () AS row_idx,
+        vals
+    FROM (VALUES ([3, 1, 2]), ([5, 4])) AS t(vals)
+),
+unnested AS (
+    SELECT
+        row_idx,
+        unnest(vals) AS val
+    FROM indexed
+),
+ranked AS (
+    SELECT
+        row_idx,
+        ROW_NUMBER() OVER (PARTITION BY row_idx ORDER BY val) AS val_idx,
+        val
+    FROM unnested
+)
+SELECT
+    row_idx,
+    array_agg(val ORDER BY val_idx) AS vals
+FROM ranked
+GROUP BY row_idx
+ORDER BY row_idx;
+----
+logical_plan
+01)Sort: ranked.row_idx ASC NULLS LAST
+02)--Projection: ranked.row_idx, array_agg(ranked.val) ORDER BY [ranked.val_idx ASC NULLS LAST] AS vals
+03)----Aggregate: groupBy=[[ranked.row_idx]], aggr=[[array_agg(ranked.val) ORDER BY [ranked.val_idx ASC NULLS LAST]]]
+04)------SubqueryAlias: ranked
+05)--------Projection: unnested.row_idx, row_number() PARTITION BY [unnested.row_idx] ORDER BY [unnested.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS val_idx, unnested.val
+06)----------WindowAggr: windowExpr=[[row_number() PARTITION BY [unnested.row_idx] ORDER BY [unnested.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+07)------------SubqueryAlias: unnested
+08)--------------Projection: indexed.row_idx, __unnest_placeholder(indexed.vals,depth=1) AS UNNEST(indexed.vals) AS val
+09)----------------Unnest: lists[__unnest_placeholder(indexed.vals)|depth=1] structs[]
+10)------------------Projection: indexed.row_idx, indexed.vals AS __unnest_placeholder(indexed.vals)
+11)--------------------SubqueryAlias: indexed
+12)----------------------Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS row_idx, t.vals
+13)------------------------WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+14)--------------------------SubqueryAlias: t
+15)----------------------------Projection: column1 AS vals
+16)------------------------------Values: (List([3, 1, 2]) AS make_array(Int64(3),Int64(1),Int64(2))), (List([5, 4]) AS make_array(Int64(5),Int64(4)))
+physical_plan
+01)SortPreservingMergeExec: [row_idx@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[row_idx@0 as row_idx, array_agg(ranked.val) ORDER BY [ranked.val_idx ASC NULLS LAST]@1 as vals]
+03)----AggregateExec: mode=SinglePartitioned, gby=[row_idx@0 as row_idx], aggr=[array_agg(ranked.val) ORDER BY [ranked.val_idx ASC NULLS LAST]], ordering_mode=Sorted
+04)------ProjectionExec: expr=[row_idx@0 as row_idx, row_number() PARTITION BY [unnested.row_idx] ORDER BY [unnested.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as val_idx, val@1 as val]
+05)--------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [unnested.row_idx] ORDER BY [unnested.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [unnested.row_idx] ORDER BY [unnested.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+06)----------SortExec: expr=[row_idx@0 ASC NULLS LAST, val@1 ASC NULLS LAST], preserve_partitioning=[true]
+07)------------RepartitionExec: partitioning=Hash([row_idx@0], 4), input_partitions=1, maintains_sort_order=true
+08)--------------ProjectionExec: expr=[row_idx@0 as row_idx, __unnest_placeholder(indexed.vals,depth=1)@1 as val]
+09)----------------UnnestExec
+10)------------------ProjectionExec: expr=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as row_idx, vals@0 as __unnest_placeholder(indexed.vals)]
+11)--------------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+12)----------------------ProjectionExec: expr=[column1@0 as vals]
+13)------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Unnest array where data is already ordered by column2 (100, 200, 300, 400)
 statement ok
 COPY (

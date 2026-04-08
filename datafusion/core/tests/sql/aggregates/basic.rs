@@ -118,11 +118,7 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
 
     assert_contains!(&formatted, "UnnestExec");
     assert_contains!(&formatted, "BoundedWindowAggExec");
-    assert_contains!(&formatted, "array_agg(");
-    assert_contains!(
-        &formatted,
-        "ORDER BY [ranked.val_idx ASC NULLS LAST]"
-    );
+    assert_contains!(&formatted, "aggr=[array_agg(ranked.val) ORDER BY [");
 
     Ok(())
 }
