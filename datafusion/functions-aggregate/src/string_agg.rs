@@ -18,7 +18,7 @@
 //! [`StringAgg`] accumulator for the `string_agg` function
 
 use std::hash::Hash;
-use std::mem::size_of_val;
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use crate::array_agg::ArrayAgg;
@@ -326,6 +326,10 @@ fn filter_index<T: Clone>(values: &[T], index: usize) -> Vec<T> {
 struct StringAggGroupsAccumulator {
     /// The delimiter placed between concatenated values.
     delimiter: String,
+    /// Materialized string state for groups that use the eager fast path.
+    values: Vec<Option<String>>,
+    /// Running total of bytes stored in `values`.
+    total_data_bytes: usize,
     /// Source arrays retained from input batches or merged state batches.
     batches: Vec<ArrayRef>,
     /// Per-batch `(group_idx, row_idx)` pairs for non-null rows.
@@ -341,6 +345,14 @@ enum StringInputArray<'a> {
 }
 
 impl<'a> StringInputArray<'a> {
+    fn sample_non_null_len(&self) -> Option<usize> {
+        match self {
+            Self::Utf8(array) => array.iter().flatten().next().map(str::len),
+            Self::LargeUtf8(array) => array.iter().flatten().next().map(str::len),
+            Self::Utf8View(array) => array.iter().flatten().next().map(str::len),
+        }
+    }
+
     fn try_new(array: &'a ArrayRef) -> Result<Self> {
         match array.data_type() {
             DataType::Utf8 => Ok(Self::Utf8(array.as_string::<i32>())),
@@ -361,6 +373,34 @@ impl<'a> StringInputArray<'a> {
             Self::Utf8View(array) => {
                 StringAggGroupsAccumulator::append_rows_typed(array, group_indices)
             }
+        }
+    }
+
+    fn append_materialized(
+        &self,
+        values: &mut [Option<String>],
+        group_indices: &[usize],
+        delimiter: &str,
+    ) -> usize {
+        match self {
+            Self::Utf8(array) => StringAggGroupsAccumulator::append_batch_typed(
+                values,
+                array.iter(),
+                group_indices,
+                delimiter,
+            ),
+            Self::LargeUtf8(array) => StringAggGroupsAccumulator::append_batch_typed(
+                values,
+                array.iter(),
+                group_indices,
+                delimiter,
+            ),
+            Self::Utf8View(array) => StringAggGroupsAccumulator::append_batch_typed(
+                values,
+                array.iter(),
+                group_indices,
+                delimiter,
+            ),
         }
     }
 
@@ -402,9 +442,14 @@ impl<'a> StringInputArray<'a> {
 }
 
 impl StringAggGroupsAccumulator {
+    const DEFER_GROUP_THRESHOLD: usize = 32;
+    const DEFER_PAYLOAD_LEN_THRESHOLD: usize = 32;
+
     fn new(delimiter: String) -> Self {
         Self {
             delimiter,
+            values: Vec::new(),
+            total_data_bytes: 0,
             batches: Vec::new(),
             batch_entries: Vec::new(),
             num_groups: 0,
@@ -414,6 +459,8 @@ impl StringAggGroupsAccumulator {
     fn clear_state(&mut self) {
         // `size()` measures Vec capacity rather than len, so allocate new
         // buffers instead of using `clear()`.
+        self.values = Vec::new();
+        self.total_data_bytes = 0;
         self.batches = Vec::new();
         self.batch_entries = Vec::new();
         self.num_groups = 0;
@@ -448,7 +495,6 @@ impl StringAggGroupsAccumulator {
 
         self.batches = retained_batches;
         self.batch_entries = retained_entries;
-        self.num_groups -= emit_groups as usize;
     }
 
     fn append_rows_typed<'a, A>(array: &A, group_indices: &[usize]) -> Vec<(u32, u32)>
@@ -470,14 +516,38 @@ impl StringAggGroupsAccumulator {
         group_idx: usize,
         value: &str,
         delimiter: &str,
-    ) {
+    ) -> usize {
         match &mut values[group_idx] {
             Some(existing) => {
+                let added = delimiter.len() + value.len();
+                existing.reserve(added);
                 existing.push_str(delimiter);
                 existing.push_str(value);
+                added
             }
-            slot @ None => *slot = Some(value.to_string()),
+            slot @ None => {
+                *slot = Some(value.to_string());
+                value.len()
+            }
         }
+    }
+
+    fn append_batch_typed<'a, I>(
+        values: &mut [Option<String>],
+        iter: I,
+        group_indices: &[usize],
+        delimiter: &str,
+    ) -> usize
+    where
+        I: Iterator<Item = Option<&'a str>>,
+    {
+        iter.zip(group_indices.iter())
+            .filter_map(|(opt_value, &group_idx)| {
+                opt_value.map(|value| {
+                    Self::append_group_value(values, group_idx, value, delimiter)
+                })
+            })
+            .sum()
     }
 
     fn append_batch_values_typed<'a, A>(
@@ -497,7 +567,12 @@ impl StringAggGroupsAccumulator {
 
             let row_idx = row_idx as usize;
             debug_assert!(!array.is_null(row_idx));
-            Self::append_group_value(values, group_idx, array.value(row_idx), delimiter);
+            let _ = Self::append_group_value(
+                values,
+                group_idx,
+                array.value(row_idx),
+                delimiter,
+            );
         }
     }
 
@@ -516,6 +591,17 @@ impl StringAggGroupsAccumulator {
         );
         Ok(())
     }
+
+    fn should_defer(
+        &self,
+        input: &StringInputArray<'_>,
+        total_num_groups: usize,
+    ) -> bool {
+        total_num_groups >= Self::DEFER_GROUP_THRESHOLD
+            && input
+                .sample_non_null_len()
+                .is_some_and(|len| len >= Self::DEFER_PAYLOAD_LEN_THRESHOLD)
+    }
 }
 
 impl GroupsAccumulator for StringAggGroupsAccumulator {
@@ -527,24 +613,35 @@ impl GroupsAccumulator for StringAggGroupsAccumulator {
         total_num_groups: usize,
     ) -> Result<()> {
         self.num_groups = self.num_groups.max(total_num_groups);
+        self.values.resize(total_num_groups, None);
         let array = apply_filter_as_nulls(&values[0], opt_filter)?;
-        let entries = StringInputArray::try_new(&array)?.append_rows(group_indices);
+        let input = StringInputArray::try_new(&array)?;
 
-        if !entries.is_empty() {
-            self.batches.push(array);
-            self.batch_entries.push(entries);
+        if self.should_defer(&input, total_num_groups) {
+            let entries = input.append_rows(group_indices);
+            if !entries.is_empty() {
+                self.batches.push(array);
+                self.batch_entries.push(entries);
+            }
+        } else {
+            self.total_data_bytes += input.append_materialized(
+                &mut self.values,
+                group_indices,
+                &self.delimiter,
+            );
         }
 
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let emit_groups = match emit_to {
-            EmitTo::All => self.num_groups,
-            EmitTo::First(n) => n,
-        };
-
-        let mut to_emit = vec![None; emit_groups];
+        let mut to_emit = emit_to.take_needed(&mut self.values);
+        let emit_groups = to_emit.len();
+        let emitted_bytes: usize = to_emit
+            .iter()
+            .filter_map(|opt| opt.as_ref().map(|s| s.len()))
+            .sum();
+        self.total_data_bytes -= emitted_bytes;
 
         for (batch, entries) in self.batches.iter().zip(&self.batch_entries) {
             Self::append_batch_values(
@@ -558,7 +655,10 @@ impl GroupsAccumulator for StringAggGroupsAccumulator {
 
         match emit_to {
             EmitTo::All => self.clear_state(),
-            EmitTo::First(_) => self.retain_after_emit(emit_groups),
+            EmitTo::First(_) => {
+                self.retain_after_emit(emit_groups);
+                self.num_groups = self.values.len();
+            }
         }
 
         Ok(Arc::new(LargeStringArray::from(to_emit)))
@@ -598,10 +698,13 @@ impl GroupsAccumulator for StringAggGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.batches
-            .iter()
-            .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
-            .sum::<usize>()
+        self.total_data_bytes
+            + self.values.capacity() * size_of::<Option<String>>()
+            + self
+                .batches
+                .iter()
+                .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
+                .sum::<usize>()
             + self.batches.capacity() * size_of::<ArrayRef>()
             + self
                 .batch_entries
@@ -1118,6 +1221,37 @@ mod tests {
                 Some("e".to_string()),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn groups_mixed_eager_and_deferred_batches() -> Result<()> {
+        let mut acc = make_groups_acc(",");
+
+        let eager_values: ArrayRef =
+            Arc::new(LargeStringArray::from(vec!["a", "b", "c", "d"]));
+        acc.update_batch(&[eager_values], &[0, 1, 0, 1], None, 40)?;
+
+        let deferred_values: ArrayRef = Arc::new(LargeStringArray::from(vec![
+            "large0_abcdefghijklmnopqrstuvwxyzabcdef",
+            "large1_bcdefghijklmnopqrstuvwxyzabcdefg",
+            "large2_cdefghijklmnopqrstuvwxyzabcdefgh",
+        ]));
+        acc.update_batch(&[deferred_values], &[0, 1, 39], None, 40)?;
+
+        let result = evaluate_groups(&mut acc, EmitTo::First(2));
+        assert_eq!(
+            result,
+            vec![
+                Some("a,c,large0_abcdefghijklmnopqrstuvwxyzabcdef".to_string()),
+                Some("b,d,large1_bcdefghijklmnopqrstuvwxyzabcdefg".to_string()),
+            ]
+        );
+
+        let remaining = evaluate_groups(&mut acc, EmitTo::All);
+        let mut expected = vec![None; 38];
+        expected[37] = Some("large2_cdefghijklmnopqrstuvwxyzabcdefgh".to_string());
+        assert_eq!(remaining, expected);
         Ok(())
     }
 }
