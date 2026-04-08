@@ -70,6 +70,64 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
 }
 
 #[tokio::test]
+async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(4),
+    );
+    let sql = r#"
+        WITH indexed AS (
+            SELECT
+                ROW_NUMBER() OVER () AS row_idx,
+                vals
+            FROM (VALUES ([3, 1, 2]), ([5, 4])) AS t(vals)
+        ),
+        unnested AS (
+            SELECT
+                row_idx,
+                unnest(vals) AS val
+            FROM indexed
+        ),
+        ranked AS (
+            SELECT
+                row_idx,
+                ROW_NUMBER() OVER (PARTITION BY row_idx ORDER BY val) AS val_idx,
+                val
+            FROM unnested
+        )
+        SELECT
+            row_idx,
+            array_agg(val ORDER BY val_idx) AS vals
+        FROM ranked
+        GROUP BY row_idx
+        ORDER BY row_idx
+    "#;
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +---------+-----------+
+    | row_idx | vals      |
+    +---------+-----------+
+    | 1       | [1, 2, 3] |
+    | 2       | [4, 5]    |
+    +---------+-----------+
+    ");
+
+    let dataframe = ctx.sql(sql).await?;
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+
+    assert_contains!(&formatted, "UnnestExec");
+    assert_contains!(&formatted, "BoundedWindowAggExec");
+    assert_contains!(&formatted, "array_agg(");
+    assert_contains!(
+        &formatted,
+        "ORDER BY [ranked.val_idx ASC NULLS LAST]"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn count_partitioned() -> Result<()> {
     let results =
         execute_with_partition("SELECT count(c1), count(c2) FROM test", 4).await?;
