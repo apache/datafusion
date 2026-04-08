@@ -38,9 +38,7 @@ fn random_time_string(rng: &mut ThreadRng) -> String {
 }
 
 fn time_strings(rng: &mut ThreadRng) -> StringArray {
-    let strings: Vec<String> = (0..100_000)
-        .map(|_| random_time_string(rng))
-        .collect();
+    let strings: Vec<String> = (0..100_000).map(|_| random_time_string(rng)).collect();
     StringArray::from(strings)
 }
 
@@ -84,11 +82,7 @@ fn bench_to_time(c: &mut Criterion, name: &str, array: ArrayRef) {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut rng = rand::rng();
-    bench_to_time(
-        c,
-        "to_time_no_nulls_100k",
-        Arc::new(time_strings(&mut rng)),
-    );
+    bench_to_time(c, "to_time_no_nulls_100k", Arc::new(time_strings(&mut rng)));
     bench_to_time(
         c,
         "to_time_10pct_nulls_100k",
