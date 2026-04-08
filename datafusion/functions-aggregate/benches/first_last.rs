@@ -19,9 +19,9 @@ use arrow::array::{ArrayRef, BooleanArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
+use datafusion_common::instant::Instant;
 use std::hint::black_box;
 use std::sync::Arc;
-use std::time::Instant;
 
 use datafusion_expr::{
     AggregateUDFImpl, EmitTo, GroupsAccumulator, function::AccumulatorArgs,
@@ -114,6 +114,96 @@ fn evaluate_bench(
     });
 }
 
+#[expect(clippy::needless_pass_by_value)]
+fn update_bench(
+    c: &mut Criterion,
+    is_first: bool,
+    name: &str,
+    values: ArrayRef,
+    ord: ArrayRef,
+    opt_filter: Option<&BooleanArray>,
+    num_groups: usize,
+) {
+    let n = values.len();
+    let group_indices: Vec<usize> = (0..n).map(|i| i % num_groups).collect();
+
+    c.bench_function(name, |b| {
+        b.iter_custom(|iters| {
+            // Every `update_bench` call mutates the accumulator, so prebuild `iters` accumulators
+            let mut accumulators: Vec<Box<dyn GroupsAccumulator>> = (0..iters)
+                .map(|_| prepare_groups_accumulator(is_first))
+                .collect();
+
+            let start = Instant::now();
+            for accumulator in &mut accumulators {
+                #[expect(clippy::unit_arg)]
+                black_box(
+                    accumulator
+                        .update_batch(
+                            &[Arc::clone(&values), Arc::clone(&ord)],
+                            &group_indices,
+                            opt_filter,
+                            num_groups,
+                        )
+                        .unwrap(),
+                );
+            }
+            start.elapsed()
+        })
+    });
+}
+
+#[expect(clippy::needless_pass_by_value)]
+fn merge_bench(
+    c: &mut Criterion,
+    is_first: bool,
+    name: &str,
+    values: ArrayRef,
+    ord: ArrayRef,
+    opt_filter: Option<&BooleanArray>,
+    num_groups: usize,
+) {
+    let n = values.len();
+    let group_indices: Vec<usize> = (0..n).map(|i| i % num_groups).collect();
+    let is_set: ArrayRef = Arc::new(BooleanArray::from(vec![true; n]));
+
+    c.bench_function(name, |b| {
+        b.iter_custom(|iters| {
+            // Every `merge_batch` call mutates the accumulator, so prebuild `iters` accumulators
+            let mut accumulators: Vec<Box<dyn GroupsAccumulator>> = (0..iters)
+                .map(|_| {
+                    let mut accumulator = prepare_groups_accumulator(is_first);
+                    accumulator
+                        .update_batch(
+                            &[Arc::clone(&values), Arc::clone(&ord)],
+                            &group_indices,
+                            opt_filter,
+                            num_groups,
+                        )
+                        .unwrap();
+                    accumulator
+                })
+                .collect();
+
+            let start = Instant::now();
+            for accumulator in &mut accumulators {
+                #[expect(clippy::unit_arg)]
+                black_box(
+                    accumulator
+                        .merge_batch(
+                            &[Arc::clone(&values), Arc::clone(&ord), Arc::clone(&is_set)],
+                            &group_indices,
+                            opt_filter,
+                            num_groups,
+                        )
+                        .unwrap(),
+                );
+            }
+            start.elapsed()
+        })
+    });
+}
+
 fn first_last_benchmark(c: &mut Criterion) {
     const N: usize = 65536;
     const NUM_GROUPS: usize = 1024;
@@ -156,6 +246,29 @@ fn first_last_benchmark(c: &mut Criterion) {
                     EmitTo::All,
                     &format!(
                         "{fn_name} evaluate_bench nulls={pct}%, filter={with_filter}, all"
+                    ),
+                    values.clone(),
+                    ord.clone(),
+                    opt_filter,
+                    NUM_GROUPS,
+                );
+
+                update_bench(
+                    c,
+                    is_first,
+                    &format!(
+                        "{fn_name} update_bench nulls={pct}%, filter={with_filter}, first(2)"
+                    ),
+                    values.clone(),
+                    ord.clone(),
+                    opt_filter,
+                    NUM_GROUPS,
+                );
+                merge_bench(
+                    c,
+                    is_first,
+                    &format!(
+                        "{fn_name} merge_bench nulls={pct}%, filter={with_filter}, first(2)"
                     ),
                     values.clone(),
                     ord.clone(),
