@@ -101,7 +101,7 @@ pub trait MorselPlanner: Send + Debug {
     /// # Output Ordering
     ///
     /// See the comments on [`MorselPlan`] for the logical output order.
-    fn plan(&mut self) -> Result<Option<MorselPlan>>;
+    fn plan(self: Box<Self>) -> Result<Option<MorselPlan>>;
 }
 
 /// Return result of [`MorselPlanner::plan`].
