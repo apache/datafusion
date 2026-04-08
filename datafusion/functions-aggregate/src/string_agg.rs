@@ -344,13 +344,21 @@ enum StringInputArray<'a> {
     Utf8View(&'a StringViewArray),
 }
 
+macro_rules! dispatch_string_input_array {
+    ($self:expr, $array:ident => $expr:expr) => {
+        match $self {
+            Self::Utf8($array) => $expr,
+            Self::LargeUtf8($array) => $expr,
+            Self::Utf8View($array) => $expr,
+        }
+    };
+}
+
 impl<'a> StringInputArray<'a> {
     fn sample_non_null_len(&self) -> Option<usize> {
-        match self {
-            Self::Utf8(array) => array.iter().flatten().next().map(str::len),
-            Self::LargeUtf8(array) => array.iter().flatten().next().map(str::len),
-            Self::Utf8View(array) => array.iter().flatten().next().map(str::len),
-        }
+        dispatch_string_input_array!(self, array => {
+            array.iter().flatten().next().map(str::len)
+        })
     }
 
     fn try_new(array: &'a ArrayRef) -> Result<Self> {
@@ -363,17 +371,9 @@ impl<'a> StringInputArray<'a> {
     }
 
     fn append_rows(&self, group_indices: &[usize]) -> Vec<(u32, u32)> {
-        match self {
-            Self::Utf8(array) => {
-                StringAggGroupsAccumulator::append_rows_typed(array, group_indices)
-            }
-            Self::LargeUtf8(array) => {
-                StringAggGroupsAccumulator::append_rows_typed(array, group_indices)
-            }
-            Self::Utf8View(array) => {
-                StringAggGroupsAccumulator::append_rows_typed(array, group_indices)
-            }
-        }
+        dispatch_string_input_array!(self, array => {
+            StringAggGroupsAccumulator::append_rows_typed(array, group_indices)
+        })
     }
 
     fn append_materialized(
@@ -382,26 +382,14 @@ impl<'a> StringInputArray<'a> {
         group_indices: &[usize],
         delimiter: &str,
     ) -> usize {
-        match self {
-            Self::Utf8(array) => StringAggGroupsAccumulator::append_batch_typed(
+        dispatch_string_input_array!(self, array => {
+            StringAggGroupsAccumulator::append_batch_typed(
                 values,
                 array.iter(),
                 group_indices,
                 delimiter,
-            ),
-            Self::LargeUtf8(array) => StringAggGroupsAccumulator::append_batch_typed(
-                values,
-                array.iter(),
-                group_indices,
-                delimiter,
-            ),
-            Self::Utf8View(array) => StringAggGroupsAccumulator::append_batch_typed(
-                values,
-                array.iter(),
-                group_indices,
-                delimiter,
-            ),
-        }
+            )
+        })
     }
 
     fn append_batch_values(
@@ -411,33 +399,15 @@ impl<'a> StringInputArray<'a> {
         delimiter: &str,
         emit_groups: usize,
     ) {
-        match self {
-            Self::Utf8(array) => StringAggGroupsAccumulator::append_batch_values_typed(
+        dispatch_string_input_array!(self, array => {
+            StringAggGroupsAccumulator::append_batch_values_typed(
                 values,
                 entries,
                 array,
                 delimiter,
                 emit_groups,
-            ),
-            Self::LargeUtf8(array) => {
-                StringAggGroupsAccumulator::append_batch_values_typed(
-                    values,
-                    entries,
-                    array,
-                    delimiter,
-                    emit_groups,
-                )
-            }
-            Self::Utf8View(array) => {
-                StringAggGroupsAccumulator::append_batch_values_typed(
-                    values,
-                    entries,
-                    array,
-                    delimiter,
-                    emit_groups,
-                )
-            }
-        }
+            )
+        })
     }
 }
 
