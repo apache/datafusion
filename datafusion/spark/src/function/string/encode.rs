@@ -549,9 +549,6 @@ mod tests {
 
     /// Simple hex encoding for test assertions.
     fn hex_encode(bytes: &[u8]) -> String {
-        bytes
-            .iter()
-            .map(|b| format!("{b:02X}"))
-            .collect::<String>()
+        bytes.iter().map(|b| format!("{b:02X}")).collect::<String>()
     }
 }
