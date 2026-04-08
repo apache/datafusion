@@ -23,13 +23,14 @@
 //! It is inspired by the paper [Morsel-Driven Parallelism: A NUMA-Aware Query
 //! Evaluation Framework for the Many-Core Age](https://db.in.tum.de/~leis/papers/morsels.pdf).
 
-use std::fmt::Debug;
-
 use crate::PartitionedFile;
 use arrow::array::RecordBatch;
 use datafusion_common::Result;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
+use std::fmt::Debug;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 /// A Morsel of work ready to resolve to a stream of [`RecordBatch`]es.
 ///
@@ -39,8 +40,35 @@ use futures::stream::BoxStream;
 pub trait Morsel: Send + Debug {
     /// Consume this morsel and produce a stream of [`RecordBatch`]es for processing.
     ///
-    /// This should not do any I/O work, such as reading from the file.
+    /// Note: This may do CPU work to decode already-loaded data, but should not
+    /// do any I/O work such as reading from the file.
     fn into_stream(self: Box<Self>) -> BoxStream<'static, Result<RecordBatch>>;
+}
+
+/// Wrapper for I/O that must complete before planning can continue.
+pub struct PendingMorselizationIO {
+    future: BoxFuture<'static, Result<()>>,
+}
+
+impl PendingMorselizationIO {
+    /// Create a new pending morselization I/O future.
+    pub fn new(future: BoxFuture<'static, Result<()>>) -> Self {
+        Self { future }
+    }
+
+    /// Consume this wrapper and return the underlying future.
+    pub fn into_future(self) -> BoxFuture<'static, Result<()>> {
+        self.future
+    }
+}
+
+/// PendingMorselizationIO wraps the inner future
+impl Future for PendingMorselizationIO {
+    type Output = Result<()>;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // forward request to inner
+        self.future.as_mut().poll(cx)
+    }
 }
 
 /// A Morselizer takes a single [`PartitionedFile`] and creates the initial planner
@@ -120,7 +148,7 @@ pub struct MorselPlan {
     /// DataFusion will poll this future occasionally to drive the I/O work to
     /// completion. Once the future resolves, DataFusion will call `plan` again
     /// to get the next morsels.
-    io_future: Option<BoxFuture<'static, Result<()>>>,
+    io_future: Option<PendingMorselizationIO>,
 }
 
 impl MorselPlan {
@@ -143,7 +171,7 @@ impl MorselPlan {
 
     /// Set the pending I/O future.
     pub fn with_io_future(mut self, io_future: BoxFuture<'static, Result<()>>) -> Self {
-        self.io_future = Some(io_future);
+        self.io_future = Some(PendingMorselizationIO::new(io_future));
         self
     }
 
@@ -158,13 +186,13 @@ impl MorselPlan {
     }
 
     /// Take the pending I/O future, if any.
-    pub fn take_io_future(&mut self) -> Option<BoxFuture<'static, Result<()>>> {
+    pub fn take_io_future(&mut self) -> Option<PendingMorselizationIO> {
         self.io_future.take()
     }
 
     /// Set the pending I/O future.
     pub fn set_io_future(&mut self, io_future: BoxFuture<'static, Result<()>>) {
-        self.io_future = Some(io_future);
+        self.io_future = Some(PendingMorselizationIO::new(io_future));
     }
 
     /// Returns `true` if this plan contains an I/O future.

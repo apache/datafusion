@@ -29,7 +29,9 @@ use arrow::datatypes::DataType;
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::internal_err;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
+use datafusion_datasource::morsel::{
+    Morsel, MorselPlan, MorselPlanner, Morselizer, PendingMorselizationIO,
+};
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
@@ -39,8 +41,6 @@ use std::future::Future;
 use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, TryRecvError};
 use std::task::{Context, Poll};
 
 use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
@@ -65,6 +65,7 @@ use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
+use futures::channel::oneshot;
 use futures::{
     FutureExt, Stream, StreamExt, future::BoxFuture, ready, stream::BoxStream,
 };
@@ -431,7 +432,7 @@ impl ParquetOpenState {
 /// Implements state machine described in [`ParquetOpenState`]
 struct ParquetOpenFuture {
     planner: Box<dyn MorselPlanner>,
-    pending_io: Option<BoxFuture<'static, Result<()>>>,
+    pending_io: Option<PendingMorselizationIO>,
     ready_morsels: VecDeque<Box<dyn Morsel>>,
 }
 
@@ -521,7 +522,7 @@ enum ParquetMorselPlanner {
     ///
     /// Doing so is a protocol violation and transitions the planner to
     /// [`ParquetMorselPlanner::Errored`].
-    Waiting(Receiver<Result<ParquetOpenState>>),
+    Waiting(oneshot::Receiver<Result<ParquetOpenState>>),
     /// Actively planning (this state should be replaced by end of the call to plan)
     Planning,
     /// An earlier planning attempt returned an error.
@@ -576,12 +577,11 @@ impl ParquetMorselPlanner {
     where
         F: Future<Output = Result<ParquetOpenState>> + Send + 'static,
     {
-        let (output_for_future, output) = mpsc::channel();
+        let (output_for_future, output) = oneshot::channel();
         let io_future = async move {
             let next_state = future.await?;
-            output_for_future.send(Ok(next_state)).map_err(|e| {
-                DataFusionError::Execution(format!("failed to send planner output: {e}"))
-            })?;
+            // Ignore if receiver has been dropped (e.g. due to plan cancel)
+            let _ = output_for_future.send(Ok(next_state));
             Ok(())
         }
         .boxed();
@@ -596,21 +596,19 @@ impl MorselPlanner for ParquetMorselPlanner {
             let planner = mem::replace(self, ParquetMorselPlanner::Planning);
             let state = match planner {
                 ParquetMorselPlanner::Ready(state) => state,
-                ParquetMorselPlanner::Waiting(output) => {
+                ParquetMorselPlanner::Waiting(mut output) => {
                     output
                         .try_recv()
-                        .map_err(|e| {
-                            // IO wasn't done
+                        .map_err(|_: oneshot::Canceled| {
                             *self = ParquetMorselPlanner::Errored;
-                            match e {
-                                TryRecvError::Empty => internal_datafusion_err!(
-                                    "planner polled before I/O completed"
-                                ),
-                                TryRecvError::Disconnected => internal_datafusion_err!(
-                                    "planner polled after I/O disconnected"
-                                ),
-                            }
+                            internal_datafusion_err!(
+                                "planner polled after I/O disconnected"
+                            )
                         })?
+                        .unwrap_or_else(|| {
+                            *self = ParquetMorselPlanner::Errored;
+                            internal_err!("planner polled before I/O completed")
+                        })
                         .inspect_err(|_| {
                             // IO completed successfully, but the IO was an error
                             *self = ParquetMorselPlanner::Errored;
