@@ -97,6 +97,7 @@ thread_local! {
 ///     Ok(hashes.len())
 /// })?;
 /// ```
+#[inline(always)]
 pub fn with_hashes<I, T, F, R>(
     arrays: I,
     random_state: &RandomState,
@@ -112,6 +113,7 @@ where
 
 /// Creates hashes for the given arrays using a thread-local buffer and a custom hash builder,
 /// then calls the provided callback with an immutable reference to the computed hashes.
+#[inline(always)]
 pub fn with_hashes_with_hasher<I, T, F, R, S>(
     arrays: I,
     hash_builder: &S,
@@ -126,6 +128,7 @@ where
     with_hashes_impl(arrays, &CustomHashStrategy { hash_builder }, callback)
 }
 
+#[inline(always)]
 fn with_hashes_impl<I, T, F, R, H>(arrays: I, hash_strategy: &H, callback: F) -> Result<R>
 where
     I: IntoIterator<Item = T>,
@@ -240,27 +243,31 @@ fn seeded_state(seed: u64) -> foldhash::fast::SeedableRandomState {
     )
 }
 
-#[cfg_attr(feature = "force_hash_collisions", allow(dead_code))]
 trait HashStrategy {
+    #[cfg_attr(feature = "force_hash_collisions", expect(dead_code))]
     fn hash_null(&self) -> u64;
+    #[cfg_attr(feature = "force_hash_collisions", expect(dead_code))]
     fn hash_one<T: HashValue + ?Sized>(&self, value: &T) -> u64;
+    #[cfg_attr(feature = "force_hash_collisions", expect(dead_code))]
     fn rehash<T: HashValue + ?Sized>(&self, value: &T, existing_hash: u64) -> u64;
 }
 
-#[cfg_attr(feature = "force_hash_collisions", allow(dead_code))]
 struct DefaultHashStrategy<'a> {
     random_state: &'a RandomState,
 }
 
 impl HashStrategy for DefaultHashStrategy<'_> {
+    #[inline(always)]
     fn hash_null(&self) -> u64 {
         self.random_state.hash_one(1)
     }
 
+    #[inline(always)]
     fn hash_one<T: HashValue + ?Sized>(&self, value: &T) -> u64 {
         value.hash_one(self.random_state)
     }
 
+    #[inline(always)]
     fn rehash<T: HashValue + ?Sized>(&self, value: &T, existing_hash: u64) -> u64 {
         #[cfg(not(feature = "force_hash_collisions"))]
         {
@@ -275,20 +282,22 @@ impl HashStrategy for DefaultHashStrategy<'_> {
     }
 }
 
-#[cfg_attr(feature = "force_hash_collisions", allow(dead_code))]
 struct CustomHashStrategy<'a, S> {
     hash_builder: &'a S,
 }
 
 impl<S: BuildHasher> HashStrategy for CustomHashStrategy<'_, S> {
+    #[inline(always)]
     fn hash_null(&self) -> u64 {
         self.hash_builder.hash_one(1)
     }
 
+    #[inline(always)]
     fn hash_one<T: HashValue + ?Sized>(&self, value: &T) -> u64 {
         value.hash_one(self.hash_builder)
     }
 
+    #[inline(always)]
     fn rehash<T: HashValue + ?Sized>(&self, value: &T, existing_hash: u64) -> u64 {
         combine_hashes(value.hash_one(self.hash_builder), existing_hash)
     }
@@ -1172,6 +1181,7 @@ impl AsDynArray for &ArrayRef {
     }
 }
 
+#[inline(always)]
 fn create_hashes_impl<'a, I, T, H>(
     arrays: I,
     hash_strategy: &H,
@@ -1194,6 +1204,7 @@ where
 ///
 /// The number of rows to hash is determined by `hashes_buffer.len()`.
 /// `hashes_buffer` should be pre-sized appropriately.
+#[inline(always)]
 pub fn create_hashes<'a, I, T>(
     arrays: I,
     random_state: &RandomState,
@@ -1210,6 +1221,7 @@ where
 ///
 /// The number of rows to hash is determined by `hashes_buffer.len()`.
 /// `hashes_buffer` should be pre-sized appropriately.
+#[inline(always)]
 pub fn create_hashes_with_hasher<'a, I, T, S>(
     arrays: I,
     hash_builder: &S,
