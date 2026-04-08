@@ -907,14 +907,13 @@ impl StatisticsProvider for LimitStatisticsProvider {
             return Ok(StatisticsResult::Delegate);
         }
 
-        let (skip, fetch) =
-            if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
-                (0usize, Some(limit.fetch()))
-            } else if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
-                (limit.skip(), limit.fetch())
-            } else {
-                return Ok(StatisticsResult::Delegate);
-            };
+        let (skip, fetch) = if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
+            (0usize, Some(limit.fetch()))
+        } else if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
+            (limit.skip(), limit.fetch())
+        } else {
+            return Ok(StatisticsResult::Delegate);
+        };
 
         let num_rows = match child_stats[0].base.num_rows {
             Precision::Exact(rows) => {
