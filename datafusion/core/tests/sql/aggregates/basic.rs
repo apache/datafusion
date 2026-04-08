@@ -21,19 +21,22 @@ use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
 use insta::assert_snapshot;
 
+#[derive(Clone, Copy)]
 enum ArrayAggOrder {
     OrderedByValIdx,
     Unordered,
 }
 
-fn array_agg_after_unnest_sql(order: ArrayAggOrder) -> String {
-    let array_agg = match order {
-        ArrayAggOrder::OrderedByValIdx => {
-        "array_agg(val ORDER BY val_idx) AS vals"
+impl ArrayAggOrder {
+    fn array_agg_expr(self) -> &'static str {
+        match self {
+            Self::OrderedByValIdx => "array_agg(val ORDER BY val_idx) AS vals",
+            Self::Unordered => "array_agg(val) AS vals",
         }
-        ArrayAggOrder::Unordered => "array_agg(val) AS vals",
-    };
+    }
+}
 
+fn array_agg_after_unnest_sql(order: ArrayAggOrder) -> String {
     format!(
         r#"
         WITH unnested AS (
@@ -63,8 +66,31 @@ fn array_agg_after_unnest_sql(order: ArrayAggOrder) -> String {
         FROM ranked
         GROUP BY row_idx
         ORDER BY row_idx
-    "#
+    "#,
+        array_agg = order.array_agg_expr(),
     )
+}
+
+fn regression_ctx() -> SessionContext {
+    SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4))
+}
+
+fn explain_analyze_sql(sql: &str) -> String {
+    format!("EXPLAIN ANALYZE {sql}")
+}
+
+async fn formatted_physical_plan(ctx: &SessionContext, sql: &str) -> Result<String> {
+    let physical_plan = ctx.sql(sql).await?.create_physical_plan().await?;
+    Ok(displayable(physical_plan.as_ref()).indent(true).to_string())
+}
+
+fn assert_plan_contains(formatted: &str, required: &[&str], forbidden: &[&str]) {
+    for needle in required {
+        assert_contains!(formatted, *needle);
+    }
+    for needle in forbidden {
+        assert_not_contains!(formatted, *needle);
+    }
 }
 
 #[tokio::test]
@@ -117,9 +143,7 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
-    let ctx = SessionContext::new_with_config(
-        SessionConfig::new().with_target_partitions(4),
-    );
+    let ctx = regression_ctx();
     let sql = array_agg_after_unnest_sql(ArrayAggOrder::OrderedByValIdx);
     let unordered_sql = array_agg_after_unnest_sql(ArrayAggOrder::Unordered);
 
@@ -133,36 +157,36 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
     +---------+-----------+
     ");
 
-    let physical_plan = ctx.sql(&sql).await?.create_physical_plan().await?;
-    let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
-    let unordered_physical_plan =
-        ctx.sql(&unordered_sql).await?.create_physical_plan().await?;
-    let unordered_formatted =
-        displayable(unordered_physical_plan.as_ref()).indent(true).to_string();
+    let formatted = formatted_physical_plan(&ctx, &sql).await?;
+    let unordered_formatted = formatted_physical_plan(&ctx, &unordered_sql).await?;
 
-    for needle in [
-        "UnnestExec",
-        "BoundedWindowAggExec",
-        "AggregateExec: mode=SinglePartitioned",
-        "aggr=[array_agg(ranked.val) ORDER BY [",
-        "SortExec: expr=[row_idx@0 ASC NULLS LAST, original_idx@2 ASC NULLS LAST]",
-    ] {
-        assert_contains!(&formatted, needle);
-    }
-    assert_not_contains!(&formatted, "AggregateExec: mode=Partial");
-    assert_not_contains!(&formatted, "AggregateExec: mode=FinalPartitioned");
+    assert_plan_contains(
+        &formatted,
+        &[
+            "UnnestExec",
+            "BoundedWindowAggExec",
+            "AggregateExec: mode=SinglePartitioned",
+            "aggr=[array_agg(ranked.val) ORDER BY [",
+            "SortExec: expr=[row_idx@0 ASC NULLS LAST, original_idx@2 ASC NULLS LAST]",
+        ],
+        &[
+            "AggregateExec: mode=Partial",
+            "AggregateExec: mode=FinalPartitioned",
+        ],
+    );
 
     // The unordered branch can use the compact GroupsAccumulator path, which also
     // means `val_idx` is dead and the optimizer prunes the window entirely.
-    for needle in [
-        "UnnestExec",
-        "AggregateExec: mode=Partial",
-        "AggregateExec: mode=FinalPartitioned",
-        "aggr=[array_agg(ranked.val)]",
-    ] {
-        assert_contains!(&unordered_formatted, needle);
-    }
-    assert_not_contains!(&unordered_formatted, "ORDER BY [ranked.val_idx");
+    assert_plan_contains(
+        &unordered_formatted,
+        &[
+            "UnnestExec",
+            "AggregateExec: mode=Partial",
+            "AggregateExec: mode=FinalPartitioned",
+            "aggr=[array_agg(ranked.val)]",
+        ],
+        &["ORDER BY [ranked.val_idx"],
+    );
 
     Ok(())
 }
@@ -170,16 +194,11 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn ordered_array_agg_after_unnest_explain_analyze_metrics() -> Result<()> {
-    let ctx = SessionContext::new_with_config(
-        SessionConfig::new().with_target_partitions(4),
-    );
-    let sql = format!(
-        "EXPLAIN ANALYZE {}",
-        array_agg_after_unnest_sql(ArrayAggOrder::OrderedByValIdx)
-    );
+    let ctx = regression_ctx();
+    let sql =
+        explain_analyze_sql(&array_agg_after_unnest_sql(ArrayAggOrder::OrderedByValIdx));
     let actual = execute_to_batches(&ctx, &sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual)?
-        .to_string();
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)?.to_string();
 
     assert_metrics!(
         &formatted,
@@ -187,11 +206,7 @@ async fn ordered_array_agg_after_unnest_explain_analyze_metrics() -> Result<()> 
         "metrics=[output_rows=5",
         "output_batches=1"
     );
-    assert_metrics!(
-        &formatted,
-        "BoundedWindowAggExec",
-        "metrics=[output_rows=5"
-    );
+    assert_metrics!(&formatted, "BoundedWindowAggExec", "metrics=[output_rows=5");
     assert_metrics!(
         &formatted,
         "SortExec: expr=[row_idx@0 ASC NULLS LAST, original_idx@2 ASC NULLS LAST]",
