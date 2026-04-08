@@ -21,6 +21,46 @@ use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
 use insta::assert_snapshot;
 
+fn array_agg_after_unnest_sql(order_by_val_idx: bool) -> String {
+    let array_agg = if order_by_val_idx {
+        "array_agg(val ORDER BY val_idx) AS vals"
+    } else {
+        "array_agg(val) AS vals"
+    };
+
+    format!(
+        r#"
+        WITH unnested AS (
+            SELECT
+                row_idx,
+                unnest(vals) AS val,
+                unnest(range(1, arrow_cast(cardinality(vals) + 1, 'Int64'))) AS original_idx
+            FROM (
+                VALUES
+                    (1, [3, 1, 2]),
+                    (2, [5, 4])
+            ) AS t(row_idx, vals)
+        ),
+        ranked AS (
+            SELECT
+                row_idx,
+                ROW_NUMBER() OVER (
+                    PARTITION BY row_idx
+                    ORDER BY original_idx
+                ) AS val_idx,
+                val
+            FROM unnested
+        )
+        SELECT
+            row_idx,
+            {array_agg}
+        FROM ranked
+        GROUP BY row_idx
+        ORDER BY row_idx
+    "#
+    )
+}
+
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
     let ctx = SessionContext::new();
@@ -74,37 +114,10 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
     let ctx = SessionContext::new_with_config(
         SessionConfig::new().with_target_partitions(4),
     );
-    let sql = r#"
-        WITH unnested AS (
-            SELECT
-                row_idx,
-                unnest(vals) AS val,
-                unnest(range(1, arrow_cast(cardinality(vals) + 1, 'Int64'))) AS original_idx
-            FROM (
-                VALUES
-                    (1, [3, 1, 2]),
-                    (2, [5, 4])
-            ) AS t(row_idx, vals)
-        ),
-        ranked AS (
-            SELECT
-                row_idx,
-                ROW_NUMBER() OVER (
-                    PARTITION BY row_idx
-                    ORDER BY original_idx
-                ) AS val_idx,
-                val
-            FROM unnested
-        )
-        SELECT
-            row_idx,
-            array_agg(val ORDER BY val_idx) AS vals
-        FROM ranked
-        GROUP BY row_idx
-        ORDER BY row_idx
-    "#;
+    let sql = array_agg_after_unnest_sql(true);
+    let unordered_sql = array_agg_after_unnest_sql(false);
 
-    let results = execute_to_batches(&ctx, sql).await;
+    let results = execute_to_batches(&ctx, &sql).await;
     assert_snapshot!(batches_to_sort_string(&results), @r"
     +---------+-----------+
     | row_idx | vals      |
@@ -114,17 +127,71 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
     +---------+-----------+
     ");
 
-    let physical_plan = ctx.sql(sql).await?.create_physical_plan().await?;
+    let physical_plan = ctx.sql(&sql).await?.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+    let unordered_physical_plan =
+        ctx.sql(&unordered_sql).await?.create_physical_plan().await?;
+    let unordered_formatted =
+        displayable(unordered_physical_plan.as_ref()).indent(true).to_string();
 
     for needle in [
         "UnnestExec",
         "BoundedWindowAggExec",
+        "AggregateExec: mode=SinglePartitioned",
         "aggr=[array_agg(ranked.val) ORDER BY [",
         "SortExec: expr=[row_idx@0 ASC NULLS LAST, original_idx@2 ASC NULLS LAST]",
     ] {
         assert_contains!(&formatted, needle);
     }
+    assert_not_contains!(&formatted, "AggregateExec: mode=Partial");
+    assert_not_contains!(&formatted, "AggregateExec: mode=FinalPartitioned");
+
+    for needle in [
+        "UnnestExec",
+        "AggregateExec: mode=Partial",
+        "AggregateExec: mode=FinalPartitioned",
+        "aggr=[array_agg(ranked.val)]",
+    ] {
+        assert_contains!(&unordered_formatted, needle);
+    }
+    assert_not_contains!(&unordered_formatted, "ORDER BY [ranked.val_idx");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
+async fn ordered_array_agg_after_unnest_explain_analyze_metrics() -> Result<()> {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(4),
+    );
+    let sql = format!("EXPLAIN ANALYZE {}", array_agg_after_unnest_sql(true));
+    let actual = execute_to_batches(&ctx, &sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)?
+        .to_string();
+
+    assert_metrics!(
+        &formatted,
+        "UnnestExec",
+        "metrics=[output_rows=5",
+        "output_batches=1"
+    );
+    assert_metrics!(
+        &formatted,
+        "BoundedWindowAggExec",
+        "metrics=[output_rows=5"
+    );
+    assert_metrics!(
+        &formatted,
+        "SortExec: expr=[row_idx@0 ASC NULLS LAST, original_idx@2 ASC NULLS LAST]",
+        "metrics=[output_rows=5"
+    );
+    assert_metrics!(
+        &formatted,
+        "AggregateExec: mode=SinglePartitioned, gby=[row_idx@0 as row_idx]",
+        "metrics=[output_rows=2",
+        "peak_mem_used="
+    );
 
     Ok(())
 }
