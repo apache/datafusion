@@ -322,31 +322,23 @@ impl FilterExec {
     ) -> Result<Statistics> {
         let eq_columns = collect_equality_columns(predicate);
 
-        let (num_rows, total_byte_size, mut column_statistics) =
+        let num_rows = input_stats.num_rows;
+        let total_byte_size = input_stats.total_byte_size;
+
+        let (selectivity, mut column_statistics) =
             if !check_support(predicate, schema) {
-                let selectivity = default_selectivity as f64 / 100.0;
-                let stats = input_stats.to_inexact();
                 (
-                    stats.num_rows.with_estimated_selectivity(selectivity),
-                    stats
-                        .total_byte_size
-                        .with_estimated_selectivity(selectivity),
-                    stats.column_statistics,
+                    default_selectivity as f64 / 100.0,
+                    input_stats.to_inexact().column_statistics,
                 )
             } else {
-                let num_rows = input_stats.num_rows;
-                let total_byte_size = input_stats.total_byte_size;
                 let input_analysis_ctx = AnalysisContext::try_from_statistics(
                     schema,
                     &input_stats.column_statistics,
                 )?;
-
                 let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
-
-                let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
                 (
-                    num_rows.with_estimated_selectivity(selectivity),
-                    total_byte_size.with_estimated_selectivity(selectivity),
+                    analysis_ctx.selectivity.unwrap_or(1.0),
                     collect_new_statistics(
                         schema,
                         &input_stats.column_statistics,
@@ -354,6 +346,9 @@ impl FilterExec {
                     ),
                 )
             };
+
+        let num_rows = num_rows.with_estimated_selectivity(selectivity);
+        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
         for idx in &eq_columns {
             if *idx < column_statistics.len()
