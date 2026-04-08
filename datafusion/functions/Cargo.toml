@@ -184,6 +184,16 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "to_local_time"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "to_time"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
 name = "isnan"
 required-features = ["math_expressions"]
 
