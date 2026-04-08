@@ -772,11 +772,21 @@ impl MetadataLoadedParquetOpen {
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
 
         // Build predicates for this specific file
-        let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
+        let pruning_predicate = build_pruning_predicates(
             prepared.predicate.as_ref(),
             &physical_file_schema,
             &prepared.predicate_creation_errors,
         );
+
+        // Only build page pruning predicate if page index is enabled
+        let page_pruning_predicate = if prepared.enable_page_index {
+            prepared.predicate.as_ref().and_then(|predicate| {
+                let p = build_page_pruning_predicate(predicate, &physical_file_schema);
+                (p.filter_number() > 0).then_some(p)
+            })
+        } else {
+            None
+        };
 
         Ok(FiltersPreparedParquetOpen {
             loaded: MetadataLoadedParquetOpen {
@@ -797,10 +807,7 @@ impl FiltersPreparedParquetOpen {
         // metadata load above may not have read the page index structures yet.
         // If we need them for reading and they aren't yet loaded, we need to
         // load them now.
-        if should_enable_page_index(
-            self.loaded.prepared.enable_page_index,
-            &self.page_pruning_predicate,
-        ) {
+        if self.page_pruning_predicate.is_some() {
             self.loaded.reader_metadata = load_page_index(
                 self.loaded.reader_metadata,
                 &mut self.loaded.prepared.async_file_reader,
@@ -1513,20 +1520,11 @@ pub(crate) fn build_pruning_predicates(
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
-) -> (
-    Option<Arc<PruningPredicate>>,
-    Option<Arc<PagePruningAccessPlanFilter>>,
-) {
+) -> Option<Arc<PruningPredicate>> {
     let Some(predicate) = predicate.as_ref() else {
-        return (None, None);
+        return None;
     };
-    let pruning_predicate = build_pruning_predicate(
-        Arc::clone(predicate),
-        file_schema,
-        predicate_creation_errors,
-    );
-    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema);
-    (pruning_predicate, Some(page_pruning_predicate))
+    build_pruning_predicate(Arc::clone(predicate), file_schema, predicate_creation_errors)
 }
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
@@ -1560,17 +1558,6 @@ async fn load_page_index<T: AsyncFileReader>(
     }
 }
 
-fn should_enable_page_index(
-    enable_page_index: bool,
-    page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
-) -> bool {
-    enable_page_index
-        && page_pruning_predicate.is_some()
-        && page_pruning_predicate
-            .as_ref()
-            .map(|p| p.filter_number() > 0)
-            .unwrap_or(false)
-}
 
 #[cfg(test)]
 mod test {
