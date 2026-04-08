@@ -211,7 +211,8 @@ fn grouping_function_on_id(
         DataType::UInt8 => Expr::Literal(ScalarValue::from(value as u8), None),
         DataType::UInt16 => Expr::Literal(ScalarValue::from(value as u16), None),
         DataType::UInt32 => Expr::Literal(ScalarValue::from(value as u32), None),
-        _ => Expr::Literal(ScalarValue::from(value as u64), None),
+        DataType::UInt64 => Expr::Literal(ScalarValue::from(value as u64), None),
+        other => panic!("unexpected __grouping_id type: {other}"),
     };
     let grouping_id_column = Expr::Column(Column::from(Aggregate::INTERNAL_GROUPING_ID));
     if args.len() == group_by_expr.len()
