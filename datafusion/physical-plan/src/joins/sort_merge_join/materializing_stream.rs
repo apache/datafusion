@@ -51,9 +51,7 @@ use arrow::compute::{
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::StreamReader;
 use datafusion_common::cast::as_uint64_array;
-use datafusion_common::{
-    JoinType, NullEquality, Result, exec_err, internal_err,
-};
+use datafusion_common::{JoinType, NullEquality, Result, exec_err, internal_err};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::runtime_env::RuntimeEnv;
