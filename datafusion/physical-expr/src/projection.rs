@@ -201,12 +201,9 @@ impl ProjectionExprs {
 
     /// Set the expression analyzer registry for statistics estimation.
     ///
-    /// The physical planner injects the registry from `SessionState` when
-    /// creating projections. Projections created later by optimizer rules
-    /// do not receive the registry and fall back to
-    /// `DefaultExpressionAnalyzer`. Propagating the registry to all
-    /// operator construction sites requires an operator-level statistics
-    /// registry, which is orthogonal to this work.
+    /// The physical planner injects the registry at plan creation time and
+    /// re-injects it after each physical optimizer rule, so projections
+    /// created by optimizer rules also receive the registry.
     pub fn with_expression_analyzer_registry(
         mut self,
         registry: Arc<ExpressionAnalyzerRegistry>,
@@ -881,6 +878,11 @@ impl Projector {
         registry: Arc<ExpressionAnalyzerRegistry>,
     ) {
         self.projection.expression_analyzer_registry = Some(registry);
+    }
+
+    /// Get the expression analyzer registry, if set
+    pub fn expression_analyzer_registry(&self) -> Option<&ExpressionAnalyzerRegistry> {
+        self.projection.expression_analyzer_registry.as_deref()
     }
 }
 

@@ -2857,7 +2857,7 @@ impl DefaultPhysicalPlanner {
         session_state
             .config_options()
             .optimizer
-            .enable_expression_analyzer
+            .use_expression_analyzer
             .then(|| Arc::clone(session_state.expression_analyzer_registry()))
     }
 
@@ -2941,7 +2941,7 @@ impl DefaultPhysicalPlanner {
                 if session_state
                     .config_options()
                     .optimizer
-                    .enable_expression_analyzer
+                    .use_expression_analyzer
                 {
                     new_proj_exec = new_proj_exec.with_expression_analyzer_registry(
                         Arc::clone(session_state.expression_analyzer_registry()),

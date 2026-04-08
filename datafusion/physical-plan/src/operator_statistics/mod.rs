@@ -549,7 +549,7 @@ impl StatisticsProvider for FilterStatisticsProvider {
             input_stats,
             filter.predicate(),
             filter.default_selectivity(),
-            // TODO: pass filter.expression_analyzer_registry() once #21122 lands
+            filter.expression_analyzer_registry(),
         )?;
 
         // Adjust distinct_count for each column using the selectivity ratio
@@ -600,8 +600,6 @@ impl StatisticsProvider for ProjectionStatisticsProvider {
 
         let input_stats = (*child_stats[0].base).clone();
         let output_schema = proj.schema();
-        // TODO: pass proj.expression_analyzer_registry() once #21122 lands,
-        // so expression-level NDV/min/max feeds into projected column stats.
         let stats = proj
             .projection_expr()
             .project_statistics(input_stats, &output_schema)?;

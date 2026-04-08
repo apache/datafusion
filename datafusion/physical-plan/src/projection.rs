@@ -189,6 +189,14 @@ impl ProjectionExec {
         self
     }
 
+    /// Get the expression analyzer registry, if set
+    pub fn expression_analyzer_registry(
+        &self,
+    ) -> Option<&datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry>
+    {
+        self.projector.expression_analyzer_registry()
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,

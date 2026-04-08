@@ -1131,11 +1131,12 @@ config_namespace! {
         /// So if you disable `enable_topk_dynamic_filter_pushdown`, then enable `enable_dynamic_filter_pushdown`, the `enable_topk_dynamic_filter_pushdown` will be overridden.
         pub enable_dynamic_filter_pushdown: bool, default = true
 
-        /// When set to true, the physical planner will use the ExpressionAnalyzer
+        /// When set to true, the physical planner uses the ExpressionAnalyzer
         /// framework for expression-level statistics estimation (NDV, selectivity,
-        /// min/max, null fraction). When false, existing behavior without
-        /// expression-level statistics support is used.
-        pub enable_expression_analyzer: bool, default = false
+        /// min/max, null fraction). When `use_statistics_registry` is also enabled,
+        /// the registry providers (filters, projections) also use it.
+        /// When false, existing behavior is unchanged.
+        pub use_expression_analyzer: bool, default = false
 
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This

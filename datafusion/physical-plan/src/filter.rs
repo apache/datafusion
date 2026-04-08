@@ -185,13 +185,12 @@ impl FilterExecBuilder {
 
     /// Set the expression analyzer registry for selectivity estimation.
     ///
-    /// Same limitation as [`ProjectionExprs::with_expression_analyzer_registry`]:
-    /// the planner injects this from `SessionState`, but filters created
-    /// by optimizer rules (e.g., filter pushdown into unions) fall back to
-    /// the default selectivity. An operator-level statistics registry is
-    /// needed for full coverage.
-    ///
-    /// [`ProjectionExprs::with_expression_analyzer_registry`]: datafusion_physical_expr::projection::ProjectionExprs::with_expression_analyzer_registry
+    /// The physical planner injects the registry from `SessionState` when
+    /// creating filters. When `use_statistics_registry` is also enabled,
+    /// [`FilterStatisticsProvider`](crate::operator_statistics::FilterStatisticsProvider)
+    /// uses this registry for all filters it handles. Filters created by
+    /// optimizer rules that do not call this method fall back to the
+    /// default selectivity.
     pub fn with_expression_analyzer_registry(
         mut self,
         registry: Arc<
@@ -338,6 +337,13 @@ impl FilterExec {
     /// Projection
     pub fn projection(&self) -> &Option<ProjectionRef> {
         &self.projection
+    }
+
+    /// Expression analyzer registry for selectivity estimation
+    pub fn expression_analyzer_registry(
+        &self,
+    ) -> Option<&datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry> {
+        self.expression_analyzer_registry.as_deref()
     }
 
     /// Calculates `Statistics` for `FilterExec`, by applying selectivity
