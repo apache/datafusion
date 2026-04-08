@@ -26,11 +26,10 @@ use crate::{
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
-use datafusion_common::internal_datafusion_err;
 use datafusion_common::internal_err;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::morsel::{
-    Morsel, MorselPlan, MorselPlanner, Morselizer, PendingMorselizationIO,
+    Morsel, MorselPlan, MorselPlanner, Morselizer, PendingMorselPlanner,
 };
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -65,7 +64,6 @@ use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::channel::oneshot;
 use futures::{
     FutureExt, Stream, StreamExt, future::BoxFuture, ready, stream::BoxStream,
 };
@@ -432,7 +430,7 @@ impl ParquetOpenState {
 /// Implements state machine described in [`ParquetOpenState`]
 struct ParquetOpenFuture {
     planner: Box<dyn MorselPlanner>,
-    pending_io: Option<PendingMorselizationIO>,
+    pending_io: Option<PendingMorselPlanner>,
     ready_morsels: VecDeque<Box<dyn Morsel>>,
 }
 
@@ -456,7 +454,8 @@ impl Future for ParquetOpenFuture {
         loop {
             // If waiting on IO, poll
             if let Some(io_future) = self.pending_io.as_mut() {
-                ready!(io_future.poll_unpin(cx))?;
+                let planner = ready!(io_future.poll_unpin(cx))?;
+                self.planner = planner;
                 self.pending_io = None;
             }
 
@@ -470,7 +469,7 @@ impl Future for ParquetOpenFuture {
                 return Poll::Ready(Ok(futures::stream::empty().boxed()));
             };
 
-            let child_planners = plan.take_planners();
+            let child_planners = plan.take_ready_planners();
             if !child_planners.is_empty() {
                 return Poll::Ready(internal_err!(
                     "Parquet FileOpener adapter does not support child morsel planners"
@@ -479,7 +478,7 @@ impl Future for ParquetOpenFuture {
 
             self.ready_morsels = plan.take_morsels().into();
 
-            if let Some(io_future) = plan.take_io_future() {
+            if let Some(io_future) = plan.take_pending_planner() {
                 self.pending_io = Some(io_future);
             }
         }
@@ -514,15 +513,6 @@ impl Morsel for ParquetStreamMorsel {
 enum ParquetMorselPlanner {
     /// Ready to perform CPU-only planning work.
     Ready(ParquetOpenState),
-    /// Waiting for an I/O future to produce the next planner state.
-    ///
-    /// Callers must not call [`MorselPlanner::plan`] again until the
-    /// corresponding I/O future has completed and its result is ready to
-    /// receive from the channel.
-    ///
-    /// Doing so is a protocol violation and transitions the planner to
-    /// [`ParquetMorselPlanner::Errored`].
-    Waiting(oneshot::Receiver<Result<ParquetOpenState>>),
     /// Actively planning (this state should be replaced by end of the call to plan)
     Planning,
     /// An earlier planning attempt returned an error.
@@ -535,10 +525,6 @@ impl fmt::Debug for ParquetMorselPlanner {
             Self::Ready(state) => f
                 .debug_tuple("ParquetMorselPlanner::Ready")
                 .field(state)
-                .finish(),
-            Self::Waiting(_) => f
-                .debug_tuple("ParquetMorselPlanner::Waiting")
-                .field(&"<pending io>")
                 .finish(),
             Self::Planning => f.debug_tuple("ParquetMorselPlanner::Planning").finish(),
             Self::Errored => f.debug_tuple("ParquetMorselPlanner::Errored").finish(),
@@ -561,31 +547,24 @@ impl ParquetMorselPlanner {
         Ok(Self::Ready(state))
     }
 
-    /// Schedule an I/O future that resolves to the planner's next owned state.
+    /// Schedule an I/O future that resolves to the next planner to run.
     ///
     /// This helper
     ///
-    /// 1. creates a channel to send the next [`ParquetOpenState`] back to the
-    ///    planner once the I/O future completes,
+    /// 1. drives one I/O phase to completion
+    /// 2. wraps the resulting state in a new [`ParquetMorselPlanner`]
+    /// 3. returns a [`MorselPlan`] containing the boxed future for the caller
+    ///    to poll
     ///
-    /// 2. transitions the planner into [`ParquetMorselPlanner::Waiting`]
-    ///
-    /// 3. returns a [`MorselPlan`] containing the boxed I/O future for the
-    ///    caller to poll.
-    ///
-    fn schedule_io<F>(&mut self, future: F) -> MorselPlan
+    fn schedule_io<F>(future: F) -> MorselPlan
     where
         F: Future<Output = Result<ParquetOpenState>> + Send + 'static,
     {
-        let (output_for_future, output) = oneshot::channel();
         let io_future = async move {
             let next_state = future.await?;
-            // Ignore if receiver has been dropped (e.g. due to plan cancel)
-            let _ = output_for_future.send(Ok(next_state));
-            Ok(())
+            Ok(Box::new(ParquetMorselPlanner::Ready(next_state)) as _)
         };
-        *self = ParquetMorselPlanner::Waiting(output);
-        MorselPlan::new().with_io_future(io_future)
+        MorselPlan::new().with_pending_planner(io_future)
     }
 }
 
@@ -595,24 +574,6 @@ impl MorselPlanner for ParquetMorselPlanner {
             let planner = mem::replace(self, ParquetMorselPlanner::Planning);
             let state = match planner {
                 ParquetMorselPlanner::Ready(state) => state,
-                ParquetMorselPlanner::Waiting(mut output) => {
-                    output
-                        .try_recv()
-                        .map_err(|_: oneshot::Canceled| {
-                            *self = ParquetMorselPlanner::Errored;
-                            internal_datafusion_err!(
-                                "planner polled after I/O disconnected"
-                            )
-                        })?
-                        .unwrap_or_else(|| {
-                            *self = ParquetMorselPlanner::Errored;
-                            internal_err!("planner polled before I/O completed")
-                        })
-                        .inspect_err(|_| {
-                            // IO completed successfully, but the IO was an error
-                            *self = ParquetMorselPlanner::Errored;
-                        })?
-                }
                 ParquetMorselPlanner::Planning => {
                     return internal_err!(
                         "ParquetMorselPlanner::plan was re-entered before previous plan completed"
@@ -637,24 +598,24 @@ impl MorselPlanner for ParquetMorselPlanner {
             match state {
                 #[cfg(feature = "parquet_encryption")]
                 ParquetOpenState::LoadEncryption(future) => {
-                    return Ok(Some(self.schedule_io(async move {
+                    return Ok(Some(Self::schedule_io(async move {
                         Ok(ParquetOpenState::PruneFile(future.await?))
                     })));
                 }
                 ParquetOpenState::LoadMetadata(future) => {
-                    return Ok(Some(self.schedule_io(async move {
+                    return Ok(Some(Self::schedule_io(async move {
                         Ok(ParquetOpenState::PrepareFilters(Box::new(future.await?)))
                     })));
                 }
                 ParquetOpenState::LoadPageIndex(future) => {
-                    return Ok(Some(self.schedule_io(async move {
+                    return Ok(Some(Self::schedule_io(async move {
                         Ok(ParquetOpenState::PruneWithStatistics(Box::new(
                             future.await?,
                         )))
                     })));
                 }
                 ParquetOpenState::LoadBloomFilters(future) => {
-                    return Ok(Some(self.schedule_io(async move {
+                    return Ok(Some(Self::schedule_io(async move {
                         Ok(ParquetOpenState::PruneWithBloomFilters(Box::new(
                             future.await?,
                         )))

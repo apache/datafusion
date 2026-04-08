@@ -46,47 +46,6 @@ pub trait Morsel: Send + Debug {
     fn into_stream(self: Box<Self>) -> BoxStream<'static, Result<RecordBatch>>;
 }
 
-/// Wrapper for I/O that must complete before planning can continue.
-pub struct PendingMorselizationIO {
-    future: BoxFuture<'static, Result<()>>,
-}
-
-impl PendingMorselizationIO {
-    /// Create a new pending morselization I/O future
-    ///
-    /// Example
-    /// ```
-    /// # use datafusion_datasource::morsel::PendingMorselizationIO;
-    /// let work = async move {
-    ///   // Do I/O work here
-    ///   Ok(())
-    /// };
-    /// let pending_io = PendingMorselizationIO::new(work);
-    /// ```
-    pub fn new<F>(future: F) -> Self
-    where
-        F: Future<Output = Result<()>> + Send + 'static,
-    {
-        Self {
-            future: future.boxed(),
-        }
-    }
-
-    /// Consume this wrapper and return the underlying future.
-    pub fn into_future(self) -> BoxFuture<'static, Result<()>> {
-        self.future
-    }
-}
-
-/// PendingMorselizationIO wraps the inner future
-impl Future for PendingMorselizationIO {
-    type Output = Result<()>;
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // forward request to inner
-        self.future.as_mut().poll(cx)
-    }
-}
-
 /// A Morselizer takes a single [`PartitionedFile`] and creates the initial planner
 /// for that file.
 ///
@@ -155,16 +114,16 @@ pub trait MorselPlanner: Send + Debug {
 /// 2. Recursively, all morsels produced by the returned `planners`
 #[derive(Default)]
 pub struct MorselPlan {
-    /// Any morsels that are ready for processing.
+    /// Morsels ready for CPU work
     morsels: Vec<Box<dyn Morsel>>,
-    /// Any newly-created planners that are ready for CPU work.
-    planners: Vec<Box<dyn MorselPlanner>>,
-    /// A future that will drive any I/O work to completion.
+    /// Planners that are ready for CPU work.
+    ready_planners: Vec<Box<dyn MorselPlanner>>,
+    /// A future that is doing IO that will resolve to MorselPlanner
     ///
     /// DataFusion will poll this future occasionally to drive the I/O work to
     /// completion. Once the future resolves, DataFusion will call `plan` again
     /// to get the next morsels.
-    io_future: Option<PendingMorselizationIO>,
+    pending_planner: Option<PendingMorselPlanner>,
 }
 
 impl MorselPlan {
@@ -181,17 +140,25 @@ impl MorselPlan {
 
     /// Set the ready child planners.
     pub fn with_planners(mut self, planners: Vec<Box<dyn MorselPlanner>>) -> Self {
-        self.planners = planners;
+        self.ready_planners = planners;
         self
     }
 
-    /// Set the pending I/O future.
-    pub fn with_io_future<F>(mut self, io_future: F) -> Self
+    /// Set the pending future for planning
+    pub fn with_pending_planner<F>(mut self, io_future: F) -> Self
     where
-        F: Future<Output = Result<()>> + Send + 'static,
+        F: Future<Output = Result<Box<dyn MorselPlanner>>> + Send + 'static,
     {
-        self.io_future = Some(PendingMorselizationIO::new(io_future));
+        self.pending_planner = Some(PendingMorselPlanner::new(io_future));
         self
+    }
+
+    /// Set the pending future for planning
+    pub fn set_pending_planner<F>(&mut self, io_future: F)
+    where
+        F: Future<Output = Result<Box<dyn MorselPlanner>>> + Send + 'static,
+    {
+        self.pending_planner = Some(PendingMorselPlanner::new(io_future));
     }
 
     /// Take the ready morsels.
@@ -200,25 +167,58 @@ impl MorselPlan {
     }
 
     /// Take the ready child planners.
-    pub fn take_planners(&mut self) -> Vec<Box<dyn MorselPlanner>> {
-        std::mem::take(&mut self.planners)
+    pub fn take_ready_planners(&mut self) -> Vec<Box<dyn MorselPlanner>> {
+        std::mem::take(&mut self.ready_planners)
     }
 
     /// Take the pending I/O future, if any.
-    pub fn take_io_future(&mut self) -> Option<PendingMorselizationIO> {
-        self.io_future.take()
-    }
-
-    /// Set the pending I/O future.
-    pub fn set_io_future<F>(&mut self, io_future: F)
-    where
-        F: Future<Output = Result<()>> + Send + 'static,
-    {
-        self.io_future = Some(PendingMorselizationIO::new(io_future));
+    pub fn take_pending_planner(&mut self) -> Option<PendingMorselPlanner> {
+        self.pending_planner.take()
     }
 
     /// Returns `true` if this plan contains an I/O future.
     pub fn has_io_future(&self) -> bool {
-        self.io_future.is_some()
+        self.pending_planner.is_some()
+    }
+}
+
+/// Wrapper for I/O that must complete before planning can continue.
+pub struct PendingMorselPlanner {
+    future: BoxFuture<'static, Result<Box<dyn MorselPlanner>>>,
+}
+
+impl PendingMorselPlanner {
+    /// Create a new pending morselization I/O future
+    ///
+    /// Example
+    /// ```
+    /// # use datafusion_datasource::morsel::PendingMorselPlanner;
+    /// let work = async move {
+    ///   // Do I/O work here
+    ///   # unimplemented!()
+    /// };
+    /// let pending_io = PendingMorselPlanner::new(work);
+    /// ```
+    pub fn new<F>(future: F) -> Self
+    where
+        F: Future<Output = Result<Box<dyn MorselPlanner>>> + Send + 'static,
+    {
+        Self {
+            future: future.boxed(),
+        }
+    }
+
+    /// Consume this wrapper and return the underlying future.
+    pub fn into_future(self) -> BoxFuture<'static, Result<Box<dyn MorselPlanner>>> {
+        self.future
+    }
+}
+
+/// wraps the inner future
+impl Future for PendingMorselPlanner {
+    type Output = Result<Box<dyn MorselPlanner>>;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // forward request to inner
+        self.future.as_mut().poll(cx)
     }
 }
