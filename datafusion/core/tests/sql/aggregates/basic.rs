@@ -21,11 +21,17 @@ use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
 use insta::assert_snapshot;
 
-fn array_agg_after_unnest_sql(order_by_val_idx: bool) -> String {
-    let array_agg = if order_by_val_idx {
+enum ArrayAggOrder {
+    OrderedByValIdx,
+    Unordered,
+}
+
+fn array_agg_after_unnest_sql(order: ArrayAggOrder) -> String {
+    let array_agg = match order {
+        ArrayAggOrder::OrderedByValIdx => {
         "array_agg(val ORDER BY val_idx) AS vals"
-    } else {
-        "array_agg(val) AS vals"
+        }
+        ArrayAggOrder::Unordered => "array_agg(val) AS vals",
     };
 
     format!(
@@ -114,8 +120,8 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
     let ctx = SessionContext::new_with_config(
         SessionConfig::new().with_target_partitions(4),
     );
-    let sql = array_agg_after_unnest_sql(true);
-    let unordered_sql = array_agg_after_unnest_sql(false);
+    let sql = array_agg_after_unnest_sql(ArrayAggOrder::OrderedByValIdx);
+    let unordered_sql = array_agg_after_unnest_sql(ArrayAggOrder::Unordered);
 
     let results = execute_to_batches(&ctx, &sql).await;
     assert_snapshot!(batches_to_sort_string(&results), @r"
@@ -146,6 +152,8 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
     assert_not_contains!(&formatted, "AggregateExec: mode=Partial");
     assert_not_contains!(&formatted, "AggregateExec: mode=FinalPartitioned");
 
+    // The unordered branch can use the compact GroupsAccumulator path, which also
+    // means `val_idx` is dead and the optimizer prunes the window entirely.
     for needle in [
         "UnnestExec",
         "AggregateExec: mode=Partial",
@@ -165,7 +173,10 @@ async fn ordered_array_agg_after_unnest_explain_analyze_metrics() -> Result<()> 
     let ctx = SessionContext::new_with_config(
         SessionConfig::new().with_target_partitions(4),
     );
-    let sql = format!("EXPLAIN ANALYZE {}", array_agg_after_unnest_sql(true));
+    let sql = format!(
+        "EXPLAIN ANALYZE {}",
+        array_agg_after_unnest_sql(ArrayAggOrder::OrderedByValIdx)
+    );
     let actual = execute_to_batches(&ctx, &sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual)?
         .to_string();
