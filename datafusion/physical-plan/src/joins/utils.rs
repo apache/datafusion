@@ -3055,14 +3055,14 @@ mod tests {
         )
         .unwrap();
 
-        // left[0]=(1,"a") vs right[0]=(2,"b") → Less (first column)
+        // left[0]=(1,"a") vs right[0]=(2,"b") -> Less (first column)
         assert_eq!(cmp.compare(0, 0), Ordering::Less);
-        // left[1]=(2,"b") vs right[0]=(2,"b") → Equal
+        // left[1]=(2,"b") vs right[0]=(2,"b") -> Equal
         assert_eq!(cmp.compare(1, 0), Ordering::Equal);
         assert!(cmp.is_equal(1, 0));
-        // left[2]=(2,"c") vs right[1]=(2,"d") → Less (second column)
+        // left[2]=(2,"c") vs right[1]=(2,"d") -> Less (second column)
         assert_eq!(cmp.compare(2, 1), Ordering::Less);
-        // left[3]=(3,"d") vs right[0]=(2,"b") → Greater
+        // left[3]=(3,"d") vs right[0]=(2,"b") -> Greater
         assert_eq!(cmp.compare(3, 0), Ordering::Greater);
     }
 
@@ -3085,12 +3085,12 @@ mod tests {
         )
         .unwrap();
 
-        // left[1]=NULL vs right[1]=NULL → Equal (NullEqualsNull)
+        // left[1]=NULL vs right[1]=NULL -> Equal (NullEqualsNull)
         assert_eq!(cmp.compare(1, 1), Ordering::Equal);
         assert!(cmp.is_equal(1, 1));
-        // left[0]=1 vs right[0]=NULL → Greater (nulls_first, non-null > null)
+        // left[0]=1 vs right[0]=NULL -> Greater (nulls_first, non-null > null)
         assert_eq!(cmp.compare(0, 0), Ordering::Greater);
-        // left[3]=2 vs right[3]=2 → Equal
+        // left[3]=2 vs right[3]=2 -> Equal
         assert_eq!(cmp.compare(3, 3), Ordering::Equal);
     }
 
@@ -3113,11 +3113,11 @@ mod tests {
         )
         .unwrap();
 
-        // left[1]=NULL vs right[1]=NULL → Less (NullEqualsNothing)
+        // left[1]=NULL vs right[1]=NULL -> Less (NullEqualsNothing)
         assert_eq!(cmp.compare(1, 1), Ordering::Less);
-        // left[0]=1 vs right[0]=NULL → Greater (nulls_first)
+        // left[0]=1 vs right[0]=NULL -> Greater (nulls_first)
         assert_eq!(cmp.compare(0, 0), Ordering::Greater);
-        // left[3]=2 vs right[3]=2 → Equal
+        // left[3]=2 vs right[3]=2 -> Equal
         assert_eq!(cmp.compare(3, 3), Ordering::Equal);
     }
 
