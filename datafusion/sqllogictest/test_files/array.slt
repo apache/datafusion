@@ -689,10 +689,6 @@ AS
 FROM arrays_distance_table
 ;
 
-# Disable file statistics cache because file statistics have been previously created
-statement ok
-set datafusion.runtime.file_statistics_cache_limit = "0K";
-
 
 # Array literal
 
