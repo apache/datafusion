@@ -19,6 +19,10 @@ use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{Result, test_util::parquet_test_data};
 use insta::assert_snapshot;
+use std::sync::Arc;
+
+use arrow::array::{FixedSizeBinaryArray, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema};
 
 #[tokio::test]
 async fn describe() -> Result<()> {
@@ -78,6 +82,44 @@ async fn describe_boolean_binary() -> Result<()> {
     | median     | null | null |
     +------------+------+------+
     ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn describe_fixed_size_binary() -> Result<()> {
+    let ctx = SessionContext::new();
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "fsb",
+            DataType::FixedSizeBinary(3),
+            true,
+        )])),
+        vec![Arc::new(FixedSizeBinaryArray::from(vec![
+            Some(&[1_u8, 2, 3][..]),
+            None,
+            Some(&[4_u8, 5, 6][..]),
+        ]))],
+    )?;
+    ctx.register_batch("test", batch)?;
+
+    let result = ctx.table("test").await?.describe().await?.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&result),
+        @r"
+    +------------+------+
+    | describe   | fsb  |
+    +------------+------+
+    | count      | 2    |
+    | null_count | 1    |
+    | mean       | null |
+    | std        | null |
+    | min        | null |
+    | max        | null |
+    | median     | null |
+    +------------+------+
+    "
+    );
     Ok(())
 }
 

@@ -1014,6 +1014,16 @@ impl DataFrame {
         //the functions now supported
         let supported_describe_functions =
             vec!["count", "null_count", "mean", "std", "min", "max", "median"];
+        let supports_describe_min_max = |data_type: &DataType| {
+            !matches!(
+                data_type,
+                DataType::Boolean
+                    | DataType::Binary
+                    | DataType::LargeBinary
+                    | DataType::BinaryView
+                    | DataType::FixedSizeBinary(_)
+            )
+        };
 
         let original_schema_fields = self.schema().fields().iter();
 
@@ -1074,9 +1084,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                    })
+                    .filter(|f| supports_describe_min_max(f.data_type()))
                     .map(|f| min(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -1085,9 +1093,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                    })
+                    .filter(|f| supports_describe_min_max(f.data_type()))
                     .map(|f| max(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
