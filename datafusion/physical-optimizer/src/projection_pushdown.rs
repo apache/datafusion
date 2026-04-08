@@ -64,15 +64,13 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let alias_generator = AliasGenerator::new();
         let plan = plan
-            .transform_up(|plan| {
-                match plan.as_any().downcast_ref::<NestedLoopJoinExec>() {
-                    None => Ok(Transformed::no(plan)),
-                    Some(hash_join) => try_push_down_join_filter(
-                        Arc::clone(&plan),
-                        hash_join,
-                        &alias_generator,
-                    ),
-                }
+            .transform_up(|plan| match plan.downcast_ref::<NestedLoopJoinExec>() {
+                None => Ok(Transformed::no(plan)),
+                Some(hash_join) => try_push_down_join_filter(
+                    Arc::clone(&plan),
+                    hash_join,
+                    &alias_generator,
+                ),
             })
             .map(|t| t.data)?;
 

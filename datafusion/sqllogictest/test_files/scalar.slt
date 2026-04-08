@@ -1739,6 +1739,25 @@ SELECT 'a' || 42 || 23.3
 ----
 a4223.3
 
+# concat of binary and text provides a text output
+query T
+select arrow_cast('Café', 'Utf8') || arrow_cast('Foobar', 'Binary');
+----
+CaféFoobar
+
+query T
+select arrow_cast('Café', 'Binary') || arrow_cast('Foobar', 'Utf8');
+----
+CaféFoobar
+
+# Concat of two binaries should cast arguments to text and produce a text output,
+# following common behaviour of PostreSQL. However, Spark is providing binary
+query T
+select arrow_cast('Café', 'Binary') || arrow_cast('Foobar', 'Binary');
+----
+CaféFoobar
+
+
 # test_not_expressions()
 
 query BB

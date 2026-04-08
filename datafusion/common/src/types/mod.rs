@@ -16,11 +16,14 @@
 // under the License.
 
 mod builtin;
+mod canonical_extensions;
+mod extension;
 mod field;
 mod logical;
 mod native;
 
 pub use builtin::*;
+pub use extension::*;
 pub use field::*;
 pub use logical::*;
 pub use native::*;

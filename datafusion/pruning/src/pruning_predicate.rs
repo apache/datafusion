@@ -929,7 +929,7 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
             StatisticsType::Min => statistics.min_values(&column),
             StatisticsType::Max => statistics.max_values(&column),
             StatisticsType::NullCount => statistics.null_counts(&column),
-            StatisticsType::RowCount => statistics.row_counts(&column),
+            StatisticsType::RowCount => statistics.row_counts(),
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
@@ -2158,6 +2158,7 @@ mod tests {
         }
 
         /// Add contained information.
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
         pub fn with_contained(
             mut self,
             values: impl IntoIterator<Item = ScalarValue>,
@@ -2172,6 +2173,7 @@ mod tests {
         }
 
         /// get any contained information for the specified values
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
         fn contained(&self, find_values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
             // find the one with the matching values
             self.contained
@@ -2298,11 +2300,10 @@ mod tests {
                 .unwrap_or(None)
         }
 
-        fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        fn row_counts(&self) -> Option<ArrayRef> {
             self.stats
-                .get(column)
-                .map(|container_stats| container_stats.row_counts())
-                .unwrap_or(None)
+                .values()
+                .find_map(|container_stats| container_stats.row_counts())
         }
 
         fn contained(
@@ -2340,7 +2341,7 @@ mod tests {
             None
         }
 
-        fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        fn row_counts(&self) -> Option<ArrayRef> {
             None
         }
 

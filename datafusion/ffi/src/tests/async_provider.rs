@@ -191,10 +191,6 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         "async test execution plan"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<datafusion_physical_plan::PlanProperties> {
         &self.properties
     }

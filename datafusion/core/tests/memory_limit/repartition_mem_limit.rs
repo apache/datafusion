@@ -74,7 +74,7 @@ async fn test_repartition_memory_limit() {
     let mut metrics = None;
     Arc::clone(&plan)
         .transform_down(|node| {
-            if node.as_any().is::<RepartitionExec>() {
+            if node.is::<RepartitionExec>() {
                 metrics = node.metrics();
             }
             Ok(Transformed::no(node))
