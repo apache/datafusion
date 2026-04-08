@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, BooleanArray};
+use arrow::array::{ArrayRef, BooleanArray, Int64Array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
@@ -127,11 +127,33 @@ fn update_bench(
     let n = values.len();
     let group_indices: Vec<usize> = (0..n).map(|i| i % num_groups).collect();
 
+    // Initialize with worst-case ordering so update_batch forces rows comparison for all groups.
+    let worst_ord: ArrayRef = Arc::new(Int64Array::from(vec![
+        if is_first {
+            i64::MAX
+        } else {
+            i64::MIN
+        };
+        n
+    ]));
+
     c.bench_function(name, |b| {
         b.iter_custom(|iters| {
-            // Every `update_bench` call mutates the accumulator, so prebuild `iters` accumulators
+            // Every `update_batch` call mutates the accumulator, so prebuild `iters` accumulators.
+            // Each is pre-populated with worst_ord so all is_sets=true before the timed call.
             let mut accumulators: Vec<Box<dyn GroupsAccumulator>> = (0..iters)
-                .map(|_| prepare_groups_accumulator(is_first))
+                .map(|_| {
+                    let mut accumulator = prepare_groups_accumulator(is_first);
+                    accumulator
+                        .update_batch(
+                            &[Arc::clone(&values), Arc::clone(&worst_ord)],
+                            &group_indices,
+                            None, // no filter: ensure all groups are initialised
+                            num_groups,
+                        )
+                        .unwrap();
+                    accumulator
+                })
                 .collect();
 
             let start = Instant::now();
@@ -167,6 +189,16 @@ fn merge_bench(
     let group_indices: Vec<usize> = (0..n).map(|i| i % num_groups).collect();
     let is_set: ArrayRef = Arc::new(BooleanArray::from(vec![true; n]));
 
+    // Initialize with worst-case ordering so update_batch forces rows comparison for all groups.
+    let worst_ord: ArrayRef = Arc::new(Int64Array::from(vec![
+        if is_first {
+            i64::MAX
+        } else {
+            i64::MIN
+        };
+        n
+    ]));
+
     c.bench_function(name, |b| {
         b.iter_custom(|iters| {
             // Every `merge_batch` call mutates the accumulator, so prebuild `iters` accumulators
@@ -175,7 +207,7 @@ fn merge_bench(
                     let mut accumulator = prepare_groups_accumulator(is_first);
                     accumulator
                         .update_batch(
-                            &[Arc::clone(&values), Arc::clone(&ord)],
+                            &[Arc::clone(&values), Arc::clone(&worst_ord)],
                             &group_indices,
                             opt_filter,
                             num_groups,
