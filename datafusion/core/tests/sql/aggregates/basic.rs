@@ -79,17 +79,27 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
             SELECT
                 row_idx,
                 unnest(vals) AS val,
-                unnest(range(1, arrow_cast(cardinality(vals) + 1, 'Int64'))) AS val_idx
+                unnest(range(1, arrow_cast(cardinality(vals) + 1, 'Int64'))) AS original_idx
             FROM (
                 VALUES
                     (1, [3, 1, 2]),
                     (2, [5, 4])
             ) AS t(row_idx, vals)
+        ),
+        ranked AS (
+            SELECT
+                row_idx,
+                ROW_NUMBER() OVER (
+                    PARTITION BY row_idx
+                    ORDER BY original_idx
+                ) AS val_idx,
+                val
+            FROM unnested
         )
         SELECT
             row_idx,
             array_agg(val ORDER BY val_idx) AS vals
-        FROM unnested
+        FROM ranked
         GROUP BY row_idx
         ORDER BY row_idx
     "#;
@@ -109,8 +119,9 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
 
     for needle in [
         "UnnestExec",
-        "aggr=[array_agg(unnested.val) ORDER BY [",
-        "range(Int64(1),arrow_cast(cardinality(t.vals) + Int64(1),Utf8(\"Int64\")))",
+        "BoundedWindowAggExec",
+        "aggr=[array_agg(ranked.val) ORDER BY [",
+        "SortExec: expr=[row_idx@0 ASC NULLS LAST, original_idx@2 ASC NULLS LAST]",
     ] {
         assert_contains!(&formatted, needle);
     }
