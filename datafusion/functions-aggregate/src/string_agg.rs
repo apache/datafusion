@@ -353,13 +353,13 @@ impl<'a> StringInputArray<'a> {
     fn append_rows(&self, group_indices: &[usize]) -> Vec<(u32, u32)> {
         match self {
             Self::Utf8(array) => {
-                StringAggGroupsAccumulator::append_rows_typed(*array, group_indices)
+                StringAggGroupsAccumulator::append_rows_typed(array, group_indices)
             }
             Self::LargeUtf8(array) => {
-                StringAggGroupsAccumulator::append_rows_typed(*array, group_indices)
+                StringAggGroupsAccumulator::append_rows_typed(array, group_indices)
             }
             Self::Utf8View(array) => {
-                StringAggGroupsAccumulator::append_rows_typed(*array, group_indices)
+                StringAggGroupsAccumulator::append_rows_typed(array, group_indices)
             }
         }
     }
@@ -375,7 +375,7 @@ impl<'a> StringInputArray<'a> {
             Self::Utf8(array) => StringAggGroupsAccumulator::append_batch_values_typed(
                 values,
                 entries,
-                *array,
+                array,
                 delimiter,
                 emit_groups,
             ),
@@ -383,7 +383,7 @@ impl<'a> StringInputArray<'a> {
                 StringAggGroupsAccumulator::append_batch_values_typed(
                     values,
                     entries,
-                    *array,
+                    array,
                     delimiter,
                     emit_groups,
                 )
@@ -392,7 +392,7 @@ impl<'a> StringInputArray<'a> {
                 StringAggGroupsAccumulator::append_batch_values_typed(
                     values,
                     entries,
-                    *array,
+                    array,
                     delimiter,
                     emit_groups,
                 )
@@ -451,7 +451,7 @@ impl StringAggGroupsAccumulator {
         self.num_groups -= emit_groups as usize;
     }
 
-    fn append_rows_typed<'a, A>(array: A, group_indices: &[usize]) -> Vec<(u32, u32)>
+    fn append_rows_typed<'a, A>(array: &A, group_indices: &[usize]) -> Vec<(u32, u32)>
     where
         A: StringArrayType<'a>,
     {
@@ -483,7 +483,7 @@ impl StringAggGroupsAccumulator {
     fn append_batch_values_typed<'a, A>(
         values: &mut [Option<String>],
         entries: &[(u32, u32)],
-        array: A,
+        array: &A,
         delimiter: &str,
         emit_groups: usize,
     ) where
