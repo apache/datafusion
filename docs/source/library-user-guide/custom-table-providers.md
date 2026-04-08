@@ -28,9 +28,8 @@ understand to design a table provider and where planning and execution work shou
 For details on how table constraints such as primary keys or unique
 constraints are handled, see [Table Constraint Enforcement](table-constraints.md).
 
-This content is based on the blog post
-[Writing Custom Table Providers in Apache DataFusion](https://datafusion.apache.org/blog/2026/03/31/writing-table-providers/)
-by [Tim Saucer](https://github.com/timsaucer).
+The majority of this content was originally posted in the blog
+[Writing Custom Table Providers in Apache DataFusion](https://datafusion.apache.org/blog/2026/03/31/writing-table-providers/).
 
 ## The Three Layers
 
