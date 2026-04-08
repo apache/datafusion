@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
 
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, function::AccumulatorArgs,
+    AggregateUDFImpl, EmitTo, GroupsAccumulator, function::AccumulatorArgs,
 };
 use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -70,86 +70,6 @@ fn prepare_groups_accumulator(is_first: bool) -> Box<dyn GroupsAccumulator> {
             .create_groups_accumulator(accumulator_args)
             .unwrap()
     }
-}
-
-fn prepare_accumulator(is_first: bool) -> Box<dyn Accumulator> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("value", DataType::Int64, true),
-        Field::new("ord", DataType::Int64, true),
-    ]));
-
-    let order_expr = col("ord", &schema).unwrap();
-    let sort_expr = PhysicalSortExpr {
-        expr: order_expr,
-        options: SortOptions::default(),
-    };
-
-    let value_field: Arc<Field> = Field::new("value", DataType::Int64, true).into();
-    let accumulator_args = AccumulatorArgs {
-        return_field: Arc::clone(&value_field),
-        schema: &schema,
-        expr_fields: &[value_field],
-        ignore_nulls: false,
-        order_bys: std::slice::from_ref(&sort_expr),
-        is_reversed: false,
-        name: if is_first {
-            "FIRST_VALUE(value ORDER BY ord)"
-        } else {
-            "LAST_VALUE(value ORDER BY ord)"
-        },
-        is_distinct: false,
-        exprs: &[col("value", &schema).unwrap()],
-    };
-
-    if is_first {
-        FirstValue::new().accumulator(accumulator_args).unwrap()
-    } else {
-        LastValue::new().accumulator(accumulator_args).unwrap()
-    }
-}
-
-#[expect(clippy::needless_pass_by_value)]
-fn convert_to_state_bench(
-    c: &mut Criterion,
-    is_first: bool,
-    name: &str,
-    values: ArrayRef,
-    opt_filter: Option<&BooleanArray>,
-) {
-    c.bench_function(name, |b| {
-        b.iter(|| {
-            let accumulator = prepare_groups_accumulator(is_first);
-            black_box(
-                accumulator
-                    .convert_to_state(std::slice::from_ref(&values), opt_filter)
-                    .unwrap(),
-            )
-        })
-    });
-}
-
-#[expect(clippy::needless_pass_by_value)]
-fn evaluate_accumulator_bench(
-    c: &mut Criterion,
-    is_first: bool,
-    name: &str,
-    values: ArrayRef,
-    ord: ArrayRef,
-) {
-    c.bench_function(name, |b| {
-        b.iter_batched(
-            || {
-                // setup, not timed
-                let mut accumulator = prepare_accumulator(is_first);
-                accumulator
-                    .update_batch(&[Arc::clone(&values), Arc::clone(&ord)])
-                    .unwrap();
-                accumulator
-            },
-            |mut accumulator| black_box(accumulator.evaluate().unwrap()),
-            criterion::BatchSize::SmallInput,
-        )
-    });
 }
 
 #[expect(clippy::needless_pass_by_value)]
@@ -208,27 +128,10 @@ fn first_last_benchmark(c: &mut Criterion) {
             let ord = Arc::new(create_primitive_array::<Int64Type>(N, null_density))
                 as ArrayRef;
 
-            evaluate_accumulator_bench(
-                c,
-                is_first,
-                &format!("{fn_name} evaluate_accumulator_bench nulls={pct}%"),
-                values.clone(),
-                ord.clone(),
-            );
-
             for with_filter in [false, true] {
                 let filter = create_boolean_array(N, 0.0, 0.5);
                 let opt_filter = if with_filter { Some(&filter) } else { None };
 
-                convert_to_state_bench(
-                    c,
-                    is_first,
-                    &format!(
-                        "{fn_name} convert_to_state nulls={pct}%, filter={with_filter}"
-                    ),
-                    values.clone(),
-                    opt_filter,
-                );
                 evaluate_bench(
                     c,
                     is_first,
