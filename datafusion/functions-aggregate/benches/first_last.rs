@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::hint::black_box;
-use std::sync::Arc;
-
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
+use std::hint::black_box;
+use std::sync::Arc;
+use std::time::Instant;
 
 use datafusion_expr::{
     AggregateUDFImpl, EmitTo, GroupsAccumulator, function::AccumulatorArgs,
@@ -88,23 +88,29 @@ fn evaluate_bench(
     let group_indices: Vec<usize> = (0..n).map(|i| i % num_groups).collect();
 
     c.bench_function(name, |b| {
-        b.iter_batched(
-            || {
-                // setup, not timed
-                let mut accumulator = prepare_groups_accumulator(is_first);
-                accumulator
-                    .update_batch(
-                        &[Arc::clone(&values), Arc::clone(&ord)],
-                        &group_indices,
-                        opt_filter,
-                        num_groups,
-                    )
-                    .unwrap();
-                accumulator
-            },
-            |mut accumulator| black_box(accumulator.evaluate(emit_to).unwrap()),
-            criterion::BatchSize::SmallInput,
-        )
+        b.iter_custom(|iters| {
+            // Every `evaluate` call mutates the accumulator, so prebuild `iters` accumulators
+            let mut accumulators: Vec<Box<dyn GroupsAccumulator>> = (0..iters)
+                .map(|_| {
+                    let mut accumulator = prepare_groups_accumulator(is_first);
+                    accumulator
+                        .update_batch(
+                            &[Arc::clone(&values), Arc::clone(&ord)],
+                            &group_indices,
+                            opt_filter,
+                            num_groups,
+                        )
+                        .unwrap();
+                    accumulator
+                })
+                .collect();
+
+            let start = Instant::now();
+            for accumulator in &mut accumulators {
+                black_box(accumulator.evaluate(emit_to).unwrap());
+            }
+            start.elapsed()
+        })
     });
 }
 
