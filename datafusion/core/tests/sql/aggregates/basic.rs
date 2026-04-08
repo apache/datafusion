@@ -75,29 +75,21 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
         SessionConfig::new().with_target_partitions(4),
     );
     let sql = r#"
-        WITH indexed AS (
-            SELECT
-                ROW_NUMBER() OVER () AS row_idx,
-                vals
-            FROM (VALUES ([3, 1, 2]), ([5, 4])) AS t(vals)
-        ),
-        unnested AS (
+        WITH unnested AS (
             SELECT
                 row_idx,
-                unnest(vals) AS val
-            FROM indexed
-        ),
-        ranked AS (
-            SELECT
-                row_idx,
-                ROW_NUMBER() OVER (PARTITION BY row_idx ORDER BY val) AS val_idx,
-                val
-            FROM unnested
+                unnest(vals) AS val,
+                unnest(range(1, arrow_cast(cardinality(vals) + 1, 'Int64'))) AS val_idx
+            FROM (
+                VALUES
+                    (1, [3, 1, 2]),
+                    (2, [5, 4])
+            ) AS t(row_idx, vals)
         )
         SELECT
             row_idx,
             array_agg(val ORDER BY val_idx) AS vals
-        FROM ranked
+        FROM unnested
         GROUP BY row_idx
         ORDER BY row_idx
     "#;
@@ -107,8 +99,8 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
     +---------+-----------+
     | row_idx | vals      |
     +---------+-----------+
-    | 1       | [1, 2, 3] |
-    | 2       | [4, 5]    |
+    | 1       | [3, 1, 2] |
+    | 2       | [5, 4]    |
     +---------+-----------+
     ");
 
@@ -117,8 +109,8 @@ async fn ordered_array_agg_after_unnest_regression() -> Result<()> {
 
     for needle in [
         "UnnestExec",
-        "BoundedWindowAggExec",
-        "aggr=[array_agg(ranked.val) ORDER BY [",
+        "aggr=[array_agg(unnested.val) ORDER BY [",
+        "range(Int64(1),arrow_cast(cardinality(t.vals) + Int64(1),Utf8(\"Int64\")))",
     ] {
         assert_contains!(&formatted, needle);
     }
