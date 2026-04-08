@@ -1826,12 +1826,21 @@ fn eq_dyn_null(
 /// Pre-built comparator for join key columns that eliminates per-row type
 /// dispatch. Wraps `arrow_ord::ord::DynComparator` closures built once per
 /// batch pair, used for all row comparisons within those batches.
+///
+/// Null handling is baked into the closures at construction time:
+/// - `NullEqualsNull`: `make_comparator` returns `Equal` for both-null, which
+///   is the desired behavior. Closures are used as-is.
+/// - `NullEqualsNothing`: columns where both sides contain nulls get a wrapper
+///   that returns `Less` for both-null. Columns where one side has no nulls
+///   skip the wrapper since both-null is impossible.
+///
+/// Because `NullEqualsNothing` wraps comparators to return `Less` for
+/// both-null, `is_equal` will return `false` for both-null rows when that
+/// mode is active. Callers needing both-null == equal semantics (e.g.,
+/// buffered head/tail equality in SMJ) should construct with
+/// `NullEqualsNull`.
 pub struct JoinKeyComparator {
     comparators: Vec<DynComparator>,
-    /// Only populated when null_equality == NullEqualsNothing
-    left_nulls: Vec<Option<NullBuffer>>,
-    right_nulls: Vec<Option<NullBuffer>>,
-    null_equality: NullEquality,
 }
 
 impl JoinKeyComparator {
@@ -1847,66 +1856,50 @@ impl JoinKeyComparator {
             .iter()
             .zip(right_arrays.iter())
             .zip(sort_options.iter())
-            .map(|((l, r), opts)| Ok(make_comparator(l.as_ref(), r.as_ref(), *opts)?))
+            .map(|((l, r), opts)| {
+                let inner = make_comparator(l.as_ref(), r.as_ref(), *opts)?;
+                if null_equality == NullEquality::NullEqualsNothing {
+                    let ln = l.logical_nulls().filter(|n| n.null_count() > 0);
+                    let rn = r.logical_nulls().filter(|n| n.null_count() > 0);
+                    match (ln, rn) {
+                        // Both sides have nulls — wrap to override both-null.
+                        (Some(ln), Some(rn)) => Ok(Box::new(move |i, j| {
+                            if ln.is_null(i) && rn.is_null(j) {
+                                Ordering::Less
+                            } else {
+                                inner(i, j)
+                            }
+                        })
+                            as DynComparator),
+                        // One side has no nulls — both-null impossible, no wrap.
+                        _ => Ok(inner),
+                    }
+                } else {
+                    Ok(inner)
+                }
+            })
             .collect::<Result<Vec<_>>>()?;
 
-        let (left_nulls, right_nulls) =
-            if null_equality == NullEquality::NullEqualsNothing {
-                let ln = left_arrays
-                    .iter()
-                    .map(|a| a.logical_nulls().filter(|n| n.null_count() > 0))
-                    .collect();
-                let rn = right_arrays
-                    .iter()
-                    .map(|a| a.logical_nulls().filter(|n| n.null_count() > 0))
-                    .collect();
-                (ln, rn)
-            } else {
-                (vec![], vec![])
-            };
-
-        Ok(Self {
-            comparators,
-            left_nulls,
-            right_nulls,
-            null_equality,
-        })
+        Ok(Self { comparators })
     }
 
     /// Compare row `left` (in the left arrays) with row `right` (in the right
     /// arrays). Returns the lexicographic ordering across all key columns.
     #[inline]
     pub fn compare(&self, left: usize, right: usize) -> Ordering {
-        if self.null_equality == NullEquality::NullEqualsNothing {
-            for (idx, cmp_fn) in self.comparators.iter().enumerate() {
-                // Override both-null: make_comparator returns Equal but
-                // NullEqualsNothing semantics require Less.
-                if let (Some(ln), Some(rn)) =
-                    (&self.left_nulls[idx], &self.right_nulls[idx])
-                    && ln.is_null(left)
-                    && rn.is_null(right)
-                {
-                    return Ordering::Less;
-                }
-                let ord = cmp_fn(left, right);
-                if ord != Ordering::Equal {
-                    return ord;
-                }
-            }
-        } else {
-            for cmp_fn in &self.comparators {
-                let ord = cmp_fn(left, right);
-                if ord != Ordering::Equal {
-                    return ord;
-                }
+        for cmp_fn in &self.comparators {
+            let ord = cmp_fn(left, right);
+            if ord != Ordering::Equal {
+                return ord;
             }
         }
         Ordering::Equal
     }
 
     /// Check equality of row `left` (in the left arrays) with row `right`
-    /// (in the right arrays). Both-null is treated as equal regardless of
-    /// `null_equality` — this matches `is_join_arrays_equal` semantics.
+    /// (in the right arrays). Both-null is treated as equal when constructed
+    /// with `NullEqualsNull`. With `NullEqualsNothing`, both-null returns
+    /// `false` because the override is baked into the comparators.
     #[inline]
     pub fn is_equal(&self, left: usize, right: usize) -> bool {
         for cmp_fn in &self.comparators {
@@ -3126,9 +3119,6 @@ mod tests {
         assert_eq!(cmp.compare(0, 0), Ordering::Greater);
         // left[3]=2 vs right[3]=2 → Equal
         assert_eq!(cmp.compare(3, 3), Ordering::Equal);
-
-        // is_equal always treats both-null as equal
-        assert!(cmp.is_equal(1, 1));
     }
 
     #[test]
