@@ -935,7 +935,10 @@ mod test {
             num_rows: Precision::Exact(0),
             total_byte_size: Precision::Absent,
             column_statistics: vec![
-                ColumnStatistics::new_unknown(),
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(0),
+                    ..ColumnStatistics::new_unknown()
+                },
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],

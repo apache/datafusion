@@ -5005,6 +5005,71 @@ fn test_using_join_wildcard_schema() {
 }
 
 #[test]
+fn test_using_join_wildcard_schema_semi_anti() {
+    let s_columns = &["s.x1", "s.x2", "s.x3"];
+    let t_columns = &["t.x1", "t.x2", "t.x3"];
+
+    let sql = "WITH 
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s LEFT SEMI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t RIGHT SEMI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s LEFT ANTI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t RIGHT ANTI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), s_columns);
+
+    // Same as above, but with swapped s and t sides.
+    // Tests the issue fixed with #20990.
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t LEFT SEMI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s RIGHT SEMI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM t LEFT ANTI JOIN s USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+
+    let sql = "WITH
+        s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
+        t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
+        SELECT * FROM s RIGHT ANTI JOIN t USING (x1)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(plan.schema().field_names(), t_columns);
+}
+
+#[test]
 fn test_2_nested_lateral_join_with_the_deepest_join_referencing_the_outer_most_relation()
 {
     let sql = "SELECT * FROM j1 j1_outer, LATERAL (
