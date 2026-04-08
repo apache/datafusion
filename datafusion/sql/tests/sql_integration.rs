@@ -26,7 +26,7 @@ use std::vec;
 
 use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
-use datafusion_common::{DataFusionError, Result, assert_contains};
+use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
     ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, col, logical_plan::LogicalPlan,
@@ -35,7 +35,7 @@ use datafusion_expr::{
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{NullOrdering, ParserOptions, SqlToRel},
+    planner::{NullOrdering, ParserOptions, PlannerContext, SqlToRel},
 };
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
@@ -52,6 +52,7 @@ use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+use sqlparser::parser::Parser;
 
 mod cases;
 mod common;
@@ -252,6 +253,25 @@ fn within_group_rejected_for_non_ordered_set_udaf() {
         err,
         "WITHIN GROUP is only supported for ordered-set aggregate functions"
     );
+}
+
+#[test]
+fn typed_literal_without_string_payload_returns_error() {
+    let sql_expr = Parser::new(&GenericDialect {})
+        .try_with_sql("time 17542368000000000")
+        .unwrap()
+        .parse_expr()
+        .unwrap();
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+
+    let err = sql_to_rel
+        .sql_to_expr(sql_expr, &DFSchema::empty(), &mut PlannerContext::new())
+        .expect_err("planning invalid typed literals should return an error");
+
+    assert_contains!(err.to_string(), "Typed literal requires a string payload");
 }
 
 #[test]
