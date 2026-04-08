@@ -269,20 +269,22 @@ where
 {
     let len = string_array.len();
     let nulls = NullBuffer::union(string_array.nulls(), str_list_array.nulls());
-    let mut values = vec![T::Native::default(); len];
+    let zero = T::Native::from_usize(0).unwrap();
 
-    for i in 0..len {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            continue;
-        }
-        let string = string_array.value(i);
-        let str_list = str_list_array.value(i);
-        let position = str_list
-            .split(',')
-            .position(|s| s == string)
-            .map_or(0, |idx| idx + 1);
-        values[i] = T::Native::from_usize(position).unwrap();
-    }
+    let values: Vec<T::Native> = (0..len)
+        .map(|i| {
+            if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                return zero;
+            }
+            let string = string_array.value(i);
+            let str_list = str_list_array.value(i);
+            let position = str_list
+                .split(',')
+                .position(|s| s == string)
+                .map_or(0, |idx| idx + 1);
+            T::Native::from_usize(position).unwrap()
+        })
+        .collect();
 
     Ok(Arc::new(PrimitiveArray::<T>::new(values.into(), nulls)) as ArrayRef)
 }
@@ -295,19 +297,21 @@ where
 {
     let len = str_list_array.len();
     let nulls = str_list_array.nulls().cloned();
-    let mut values = vec![T::Native::default(); len];
+    let zero = T::Native::from_usize(0).unwrap();
 
-    for i in 0..len {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            continue;
-        }
-        let str_list = str_list_array.value(i);
-        let position = str_list
-            .split(',')
-            .position(|s| s == string)
-            .map_or(0, |idx| idx + 1);
-        values[i] = T::Native::from_usize(position).unwrap();
-    }
+    let values: Vec<T::Native> = (0..len)
+        .map(|i| {
+            if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                return zero;
+            }
+            let str_list = str_list_array.value(i);
+            let position = str_list
+                .split(',')
+                .position(|s| s == string)
+                .map_or(0, |idx| idx + 1);
+            T::Native::from_usize(position).unwrap()
+        })
+        .collect();
 
     Ok(Arc::new(PrimitiveArray::<T>::new(values.into(), nulls)) as ArrayRef)
 }
@@ -323,19 +327,21 @@ where
 {
     let len = string_array.len();
     let nulls = string_array.nulls().cloned();
-    let mut values = vec![T::Native::default(); len];
+    let zero = T::Native::from_usize(0).unwrap();
 
-    for i in 0..len {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            continue;
-        }
-        let string = string_array.value(i);
-        let position = str_list
-            .iter()
-            .position(|s| *s == string)
-            .map_or(0, |idx| idx + 1);
-        values[i] = T::Native::from_usize(position).unwrap();
-    }
+    let values: Vec<T::Native> = (0..len)
+        .map(|i| {
+            if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                return zero;
+            }
+            let string = string_array.value(i);
+            let position = str_list
+                .iter()
+                .position(|s| *s == string)
+                .map_or(0, |idx| idx + 1);
+            T::Native::from_usize(position).unwrap()
+        })
+        .collect();
 
     Ok(Arc::new(PrimitiveArray::<T>::new(values.into(), nulls)) as ArrayRef)
 }
