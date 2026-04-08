@@ -50,7 +50,6 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
-use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
@@ -602,13 +601,7 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
         return Ok(None);
     };
 
-    // If the projection indices is the same as the input columns, we don't need to embed the projection to hash join.
-    // Check the projection_index is 0..n-1 and the length of projection_index is the same as the length of execution_plan schema fields.
-    if projection_index.len() == projection_index.last().unwrap() + 1
-        && projection_index.len() == execution_plan.schema().fields().len()
-    {
-        return Ok(None);
-    }
+    let columns_reduced = projection_index.len() < execution_plan.schema().fields().len();
 
     let new_execution_plan =
         Arc::new(execution_plan.with_projection(Some(projection_index.to_vec()))?);
@@ -643,9 +636,16 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
         Arc::clone(&new_execution_plan) as _,
     )?);
     if is_projection_removable(&new_projection) {
+        // Residual is identity — embedding fully absorbed the projection.
         Ok(Some(new_execution_plan))
-    } else {
+    } else if columns_reduced {
+        // Embedding reduced columns even though a residual is still needed
+        // for renames or expressions — worth keeping.
         Ok(Some(new_projection))
+    } else {
+        // No columns eliminated and residual still needed — embedding just
+        // adds an unnecessary column reorder inside the operator.
+        Ok(None)
     }
 }
 
@@ -1074,15 +1074,37 @@ fn try_unifying_projections(
 
 /// Collect all column indices from the given projection expressions.
 fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
-    // Collect indices and remove duplicates.
-    let mut indices = exprs
-        .iter()
-        .flat_map(|proj_expr| collect_columns(&proj_expr.expr))
-        .map(|x| x.index())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    indices.sort();
+    // Collect column indices in a deterministic order that preserves the
+    // projection's column ordering. For simple Column expressions, we use
+    // the column index directly. For complex expressions, we walk the
+    // expression tree to collect column references in traversal order.
+    // This allows the embedded projection to match the desired output
+    // column order, avoiding a residual ProjectionExec.
+    let mut seen = std::collections::HashSet::new();
+    let mut indices = Vec::new();
+    for proj_expr in exprs {
+        if let Some(col) = proj_expr.expr.as_any().downcast_ref::<Column>() {
+            // Simple column reference: preserve projection order.
+            if seen.insert(col.index()) {
+                indices.push(col.index());
+            }
+        } else {
+            // Complex expression: collect all referenced columns in
+            // expression tree traversal order (deterministic) to preserve
+            // the natural ordering of column references.
+            proj_expr
+                .expr
+                .apply(|expr| {
+                    if let Some(col) = expr.as_any().downcast_ref::<Column>()
+                        && seen.insert(col.index())
+                    {
+                        indices.push(col.index());
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+                .expect("closure always returns OK");
+        }
+    }
     indices
 }
 
@@ -1196,7 +1218,8 @@ mod tests {
             expr,
             alias: "b-(1+a)".to_string(),
         }]);
-        assert_eq!(column_indices, vec![1, 7]);
+        // Tree traversal order: b@7 is visited before a@1
+        assert_eq!(column_indices, vec![7, 1]);
         Ok(())
     }
 

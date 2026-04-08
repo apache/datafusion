@@ -1038,6 +1038,45 @@ impl AggregateExec {
         &self.input_order_mode
     }
 
+    /// Estimates output statistics for this aggregate node.
+    ///
+    /// For grouped aggregations with known input row count > 1, the output row
+    /// count is estimated as:
+    ///
+    /// ```text
+    /// ndv        = sum over each grouping set of product(max(NDV_i + nulls_i, 1))
+    /// output_rows = input_rows                       // baseline
+    /// output_rows = min(output_rows, ndv)             // if NDV available
+    /// output_rows = min(output_rows, limit)           // if TopK active
+    /// ```
+    ///
+    /// **Example 1 — single group key:**
+    /// `GROUP BY city` where input_rows = 10,000, NDV(city) = 200
+    /// → output_rows = min(10_000, 200) = 200
+    ///
+    /// **Example 2 — two group keys with TopK:**
+    /// `GROUP BY city, category` where input_rows = 10,000, NDV(city) = 200,
+    /// NDV(category) = 5, limit = 100
+    /// → ndv = 200 × 5 = 1,000
+    /// → output_rows = min(10_000, 1_000) = 1,000
+    /// → output_rows = min(1_000, 100) = 100
+    ///
+    /// When `input_rows` is absent but NDV is available, falls back to:
+    ///
+    /// ```text
+    /// output_rows = min(ndv, limit)   // if both available
+    /// output_rows = ndv               // if only NDV available
+    /// output_rows = limit             // if only limit available
+    /// ```
+    ///
+    /// NDV estimation details (see [`Self::compute_group_ndv`]):
+    /// - For each grouping set, only active (non-NULL) columns contribute
+    /// - Per-column contribution is `max(NDV + null_adj, 1)` where `null_adj`
+    ///   is 1 when nulls are present, 0 otherwise (a null group is a distinct
+    ///   output row; `.max(1)` prevents a zero NDV from zeroing the product)
+    /// - Per-set products are summed across all grouping sets
+    /// - Requires NDV stats for ALL active group-by columns; if any lacks stats,
+    ///   falls back to `input_rows` (or `Absent` if that is also unknown)
     fn statistics_inner(&self, child_statistics: &Statistics) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
@@ -1051,15 +1090,12 @@ impl AggregateExec {
 
             for (idx, (expr, _)) in self.group_by.expr.iter().enumerate() {
                 if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                    column_statistics[idx].max_value = child_statistics.column_statistics
-                        [col.index()]
-                    .max_value
-                    .clone();
-
-                    column_statistics[idx].min_value = child_statistics.column_statistics
-                        [col.index()]
-                    .min_value
-                    .clone();
+                    let child_col_stats =
+                        &child_statistics.column_statistics[col.index()];
+                    column_statistics[idx].max_value = child_col_stats.max_value.clone();
+                    column_statistics[idx].min_value = child_col_stats.min_value.clone();
+                    column_statistics[idx].distinct_count =
+                        child_col_stats.distinct_count;
                 }
             }
 
@@ -1079,22 +1115,7 @@ impl AggregateExec {
                 })
             }
             _ => {
-                // When the input row count is 1, we can adopt that statistic keeping its reliability.
-                // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
-                let num_rows = if let Some(value) = child_statistics.num_rows.get_value()
-                {
-                    if *value > 1 {
-                        child_statistics.num_rows.to_inexact()
-                    } else if *value == 0 {
-                        child_statistics.num_rows
-                    } else {
-                        // num_rows = 1 case
-                        let grouping_set_num = self.group_by.groups.len();
-                        child_statistics.num_rows.map(|x| x * grouping_set_num)
-                    }
-                } else {
-                    Precision::Absent
-                };
+                let num_rows = self.estimate_num_rows(child_statistics);
 
                 let total_byte_size = num_rows
                     .get_value()
@@ -1112,6 +1133,87 @@ impl AggregateExec {
                 })
             }
         }
+    }
+
+    /// Estimates the output row count for grouped aggregations, combining NDV,
+    /// input row count, and TopK limit into a single [`Precision<usize>`].
+    fn estimate_num_rows(&self, child_statistics: &Statistics) -> Precision<usize> {
+        let ndv = if !self.group_by.expr.is_empty() {
+            self.compute_group_ndv(child_statistics)
+        } else {
+            None
+        };
+        let limit = self.limit_options.as_ref().map(|lo| lo.limit);
+
+        if let Some(&value) = child_statistics.num_rows.get_value() {
+            if value > 1 {
+                let mut num_rows = child_statistics.num_rows.to_inexact();
+                if let Some(ndv) = ndv {
+                    num_rows = num_rows.map(|n| n.min(ndv));
+                }
+                if let Some(limit) = limit {
+                    num_rows = num_rows.map(|n| n.min(limit));
+                }
+                num_rows
+            } else if value == 0 {
+                child_statistics.num_rows
+            } else {
+                let grouping_set_num = self.group_by.groups.len();
+                let mut num_rows =
+                    child_statistics.num_rows.map(|x| x * grouping_set_num);
+                if let Some(limit) = limit {
+                    num_rows = num_rows.map(|n| n.min(limit));
+                }
+                num_rows
+            }
+        } else {
+            match (ndv, limit) {
+                (Some(n), Some(l)) => Precision::Inexact(n.min(l)),
+                (Some(n), None) => Precision::Inexact(n),
+                (None, Some(l)) => Precision::Inexact(l),
+                (None, None) => Precision::Absent,
+            }
+        }
+    }
+
+    /// Computes the estimated number of distinct groups across all grouping sets.
+    /// For each grouping set, computes `product(NDV_i + null_adj_i)` for active columns,
+    /// then sums across all sets. Returns `None` if any active column is not a direct
+    /// column reference or lacks `distinct_count` stats. Non-column expressions
+    /// (e.g. `abs(a)`) are not yet supported because expression-level statistics
+    /// propagation is still in progress (see <https://github.com/apache/datafusion/pull/21122>).
+    /// When `null_count` is absent or unknown, null_adjustment defaults to 0.
+    ///
+    /// **Single key:** `GROUP BY a` where NDV(a) = 100, null_count(a) = 5
+    /// → product = max(100 + 1, 1) = 101, total = 101
+    ///
+    /// **Two keys:** `GROUP BY a, b` where NDV(a) = 100, NDV(b) = 50, no nulls
+    /// → product = 100 × 50 = 5,000, total = 5,000
+    ///
+    /// **Grouping sets:** `GROUPING SETS ((a), (b), (a, b))` with NDV(a) = 100, NDV(b) = 50
+    /// → set(a) = 100, set(b) = 50, set(a, b) = 100 × 50 = 5,000
+    /// → total = 100 + 50 + 5,000 = 5,150
+    fn compute_group_ndv(&self, child_statistics: &Statistics) -> Option<usize> {
+        let mut total: usize = 0;
+        for group_mask in &self.group_by.groups {
+            let mut set_product: usize = 1;
+            for (j, (expr, _)) in self.group_by.expr.iter().enumerate() {
+                if group_mask[j] {
+                    continue;
+                }
+                let col = expr.as_any().downcast_ref::<Column>()?;
+                let col_stats = &child_statistics.column_statistics[col.index()];
+                let ndv = *col_stats.distinct_count.get_value()?;
+                let null_adjustment = match col_stats.null_count.get_value() {
+                    Some(&n) if n > 0 => 1usize,
+                    _ => 0,
+                };
+                set_product = set_product
+                    .saturating_mul(ndv.saturating_add(null_adjustment).max(1));
+            }
+            total = total.saturating_add(set_product);
+        }
+        Some(total)
     }
 
     /// Check if dynamic filter is possible for the current plan node.
@@ -2015,7 +2117,9 @@ mod tests {
     use crate::metrics::MetricValue;
     use crate::test::TestMemoryExec;
     use crate::test::assert_is_pending;
-    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
+    use crate::test::exec::{
+        BlockingExec, StatisticsExec, assert_strong_count_converges_to_zero,
+    };
 
     use arrow::array::{
         DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Array, StructArray,
@@ -3720,7 +3824,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_aggregate_statistics_edge_cases() -> Result<()> {
-        use crate::test::exec::StatisticsExec;
         use datafusion_common::ColumnStatistics;
 
         let schema = Arc::new(Schema::new(vec![
@@ -3728,65 +3831,538 @@ mod tests {
             Field::new("b", DataType::Float64, false),
         ]));
 
-        // Test 1: Absent statistics remain absent
-        let input = Arc::new(StatisticsExec::new(
-            Statistics {
-                num_rows: Precision::Exact(100),
-                total_byte_size: Precision::Absent,
-                column_statistics: vec![
-                    ColumnStatistics::new_unknown(),
-                    ColumnStatistics::new_unknown(),
-                ],
-            },
-            (*schema).clone(),
-        )) as Arc<dyn ExecutionPlan>;
-
-        let agg = Arc::new(AggregateExec::try_new(
-            AggregateMode::Final,
+        let absent_byte_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+        let agg = build_test_aggregate(
+            &schema,
+            absent_byte_stats,
             PhysicalGroupBy::default(),
+            None,
+        )?;
+        let stats = agg.partition_statistics(None)?;
+        assert_eq!(stats.total_byte_size, Precision::Absent);
+
+        let zero_row_stats = Statistics {
+            num_rows: Precision::Exact(0),
+            total_byte_size: Precision::Exact(0),
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+        let agg_zero = build_test_aggregate(
+            &schema,
+            zero_row_stats,
+            PhysicalGroupBy::default(),
+            None,
+        )?;
+        let stats_zero = agg_zero.partition_statistics(None)?;
+        assert_eq!(stats_zero.total_byte_size, Precision::Absent);
+
+        Ok(())
+    }
+
+    fn build_test_aggregate(
+        schema: &SchemaRef,
+        stats: Statistics,
+        group_by: PhysicalGroupBy,
+        limit: Option<LimitOptions>,
+    ) -> Result<AggregateExec> {
+        let input = Arc::new(StatisticsExec::new(stats, (**schema).clone()))
+            as Arc<dyn ExecutionPlan>;
+
+        let mut agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
             vec![Arc::new(
-                AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema)?])
-                    .schema(Arc::clone(&schema))
+                AggregateExprBuilder::new(count_udaf(), vec![col("a", schema)?])
+                    .schema(Arc::clone(schema))
                     .alias("COUNT(a)")
                     .build()?,
             )],
             vec![None],
             input,
-            Arc::clone(&schema),
-        )?);
+            Arc::clone(schema),
+        )?;
+
+        if let Some(limit) = limit {
+            agg = agg.with_limit_options(Some(limit));
+        }
+
+        Ok(agg)
+    }
+
+    fn simple_group_by(schema: &SchemaRef, cols: &[&str]) -> PhysicalGroupBy {
+        if cols.is_empty() {
+            PhysicalGroupBy::default()
+        } else {
+            PhysicalGroupBy::new_single(
+                cols.iter()
+                    .map(|name| {
+                        (
+                            col(name, schema).unwrap() as Arc<dyn PhysicalExpr>,
+                            name.to_string(),
+                        )
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    #[test]
+    fn test_aggregate_cardinality_estimation() -> Result<()> {
+        use datafusion_common::ColumnStatistics;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        struct TestCase {
+            name: &'static str,
+            input_rows: Precision<usize>,
+            col_a_stats: ColumnStatistics,
+            col_b_stats: ColumnStatistics,
+            group_by_cols: Vec<&'static str>,
+            limit_options: Option<LimitOptions>,
+            expected_num_rows: Precision<usize>,
+        }
+
+        let cases = vec![
+            // --- NDV-based estimation ---
+            TestCase {
+                name: "single group-by col with NDV tightens estimate",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(500),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: None,
+                expected_num_rows: Precision::Inexact(500),
+            },
+            TestCase {
+                name: "multi-col group-by multiplies NDVs",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(50),
+                    ..ColumnStatistics::new_unknown()
+                },
+                group_by_cols: vec!["a", "b"],
+                limit_options: None,
+                expected_num_rows: Precision::Inexact(5_000),
+            },
+            TestCase {
+                name: "NDV product capped by input rows",
+                input_rows: Precision::Exact(200),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(50),
+                    ..ColumnStatistics::new_unknown()
+                },
+                group_by_cols: vec!["a", "b"],
+                limit_options: None,
+                expected_num_rows: Precision::Inexact(200),
+            },
+            TestCase {
+                name: "null adjustment adds +1 per column",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(99),
+                    null_count: Precision::Exact(10),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: None,
+                // 99 + 1 (null adjustment) = 100
+                expected_num_rows: Precision::Inexact(100),
+            },
+            TestCase {
+                name: "null adjustment on multiple columns",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(99),
+                    null_count: Precision::Exact(5),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(49),
+                    null_count: Precision::Exact(3),
+                    ..ColumnStatistics::new_unknown()
+                },
+                group_by_cols: vec!["a", "b"],
+                limit_options: None,
+                // (99+1) * (49+1) = 100 * 50 = 5000
+                expected_num_rows: Precision::Inexact(5_000),
+            },
+            TestCase {
+                name: "zero null_count means no adjustment",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    null_count: Precision::Exact(0),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: None,
+                expected_num_rows: Precision::Inexact(100),
+            },
+            // --- Bail-out: partial NDV stats (Spark-style) ---
+            TestCase {
+                name: "bail out when one group-by col lacks NDV",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a", "b"],
+                limit_options: None,
+                expected_num_rows: Precision::Inexact(1_000_000),
+            },
+            TestCase {
+                name: "bail out when all group-by cols lack NDV",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics::new_unknown(),
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: None,
+                expected_num_rows: Precision::Inexact(1_000_000),
+            },
+            // --- TopK limit capping ---
+            TestCase {
+                name: "TopK limit caps output rows",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics::new_unknown(),
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: Some(LimitOptions::new(10)),
+                expected_num_rows: Precision::Inexact(10),
+            },
+            TestCase {
+                name: "NDV + TopK limit: min(NDV, limit) when NDV < limit",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(5),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: Some(LimitOptions::new(10)),
+                expected_num_rows: Precision::Inexact(5),
+            },
+            TestCase {
+                name: "NDV + TopK limit: min(NDV, limit) when limit < NDV",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(500),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: Some(LimitOptions::new(10)),
+                expected_num_rows: Precision::Inexact(10),
+            },
+            // --- Absent input rows ---
+            TestCase {
+                name: "absent input rows without limit stays absent",
+                input_rows: Precision::Absent,
+                col_a_stats: ColumnStatistics::new_unknown(),
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: None,
+                expected_num_rows: Precision::Absent,
+            },
+            TestCase {
+                name: "absent input rows with TopK limit gives inexact(limit)",
+                input_rows: Precision::Absent,
+                col_a_stats: ColumnStatistics::new_unknown(),
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: Some(LimitOptions::new(10)),
+                expected_num_rows: Precision::Inexact(10),
+            },
+            // --- No group-by (global aggregation) ---
+            TestCase {
+                name: "no group-by cols (Final mode) returns Exact(1)",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics::new_unknown(),
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec![],
+                limit_options: None,
+                expected_num_rows: Precision::Exact(1),
+            },
+            // --- One input row ---
+            TestCase {
+                name: "one input row returns Exact(1)",
+                input_rows: Precision::Exact(1),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(1),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: None,
+                expected_num_rows: Precision::Exact(1),
+            },
+            // --- Zero input rows ---
+            TestCase {
+                name: "zero input rows returns Exact(0)",
+                input_rows: Precision::Exact(0),
+                col_a_stats: ColumnStatistics::new_unknown(),
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: None,
+                expected_num_rows: Precision::Exact(0),
+            },
+            // --- Inexact NDV stats ---
+            TestCase {
+                name: "inexact NDV still used for estimation",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Inexact(200),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: None,
+                expected_num_rows: Precision::Inexact(200),
+            },
+            TestCase {
+                name: "inexact NDV combined with limit",
+                input_rows: Precision::Exact(1_000_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Inexact(200),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: Some(LimitOptions::new(10)),
+                expected_num_rows: Precision::Inexact(10),
+            },
+            // --- NDV zero column (all-null) ---
+            TestCase {
+                name: "all-null column contributes 1 to the product, not 0",
+                input_rows: Precision::Exact(1_000),
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(0),
+                    null_count: Precision::Exact(1_000),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(50),
+                    ..ColumnStatistics::new_unknown()
+                },
+                group_by_cols: vec!["a", "b"],
+                limit_options: None,
+                // NDV(a)=0 with nulls => max(0+1, 1)=1, NDV(b)=50 => 1*50=50
+                expected_num_rows: Precision::Inexact(50),
+            },
+            // --- Absent num_rows with NDV ---
+            TestCase {
+                name: "absent num_rows falls back to NDV estimate",
+                input_rows: Precision::Absent,
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: None,
+                expected_num_rows: Precision::Inexact(100),
+            },
+            TestCase {
+                name: "absent num_rows with NDV and limit returns min(ndv, limit)",
+                input_rows: Precision::Absent,
+                col_a_stats: ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    ..ColumnStatistics::new_unknown()
+                },
+                col_b_stats: ColumnStatistics::new_unknown(),
+                group_by_cols: vec!["a"],
+                limit_options: Some(LimitOptions::new(10)),
+                expected_num_rows: Precision::Inexact(10),
+            },
+        ];
+
+        for case in cases {
+            let input_stats = Statistics {
+                num_rows: case.input_rows,
+                total_byte_size: Precision::Inexact(1_000_000),
+                column_statistics: vec![
+                    case.col_a_stats.clone(),
+                    case.col_b_stats.clone(),
+                ],
+            };
+
+            let group_by = simple_group_by(&schema, &case.group_by_cols);
+            let agg =
+                build_test_aggregate(&schema, input_stats, group_by, case.limit_options)?;
+
+            let stats = agg.partition_statistics(None)?;
+            assert_eq!(
+                stats.num_rows, case.expected_num_rows,
+                "FAILED: '{}' — expected {:?}, got {:?}",
+                case.name, case.expected_num_rows, stats.num_rows
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_stats_distinct_count_propagation() -> Result<()> {
+        use datafusion_common::ColumnStatistics;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let input_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Inexact(10000),
+            column_statistics: vec![
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    null_count: Precision::Exact(5),
+                    ..ColumnStatistics::new_unknown()
+                },
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+        let agg = build_test_aggregate(
+            &schema,
+            input_stats,
+            simple_group_by(&schema, &["a"]),
+            None,
+        )?;
 
         let stats = agg.partition_statistics(None)?;
-        assert_eq!(stats.total_byte_size, Precision::Absent);
+        assert_eq!(
+            stats.column_statistics[0].distinct_count,
+            Precision::Exact(100),
+            "distinct_count should be propagated from child for group-by columns"
+        );
 
-        // Test 2: Zero rows returns Absent (can't estimate output size from zero input)
-        let input_zero = Arc::new(StatisticsExec::new(
-            Statistics {
-                num_rows: Precision::Exact(0),
-                total_byte_size: Precision::Exact(0),
-                column_statistics: vec![
-                    ColumnStatistics::new_unknown(),
-                    ColumnStatistics::new_unknown(),
-                ],
-            },
-            (*schema).clone(),
-        )) as Arc<dyn ExecutionPlan>;
+        Ok(())
+    }
 
-        let agg_zero = Arc::new(AggregateExec::try_new(
-            AggregateMode::Final,
-            PhysicalGroupBy::default(),
-            vec![Arc::new(
-                AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("COUNT(a)")
-                    .build()?,
-            )],
-            vec![None],
-            input_zero,
-            Arc::clone(&schema),
-        )?);
+    #[test]
+    fn test_aggregate_stats_grouping_sets() -> Result<()> {
+        use datafusion_common::ColumnStatistics;
 
-        let stats_zero = agg_zero.partition_statistics(None)?;
-        assert_eq!(stats_zero.total_byte_size, Precision::Absent);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let input_stats = Statistics {
+            num_rows: Precision::Exact(1_000_000),
+            total_byte_size: Precision::Inexact(1_000_000),
+            column_statistics: vec![
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    ..ColumnStatistics::new_unknown()
+                },
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(50),
+                    ..ColumnStatistics::new_unknown()
+                },
+            ],
+        };
+
+        // CUBE-like grouping set: (a, NULL), (NULL, b), (a, b) — 3 groups
+        let grouping_set = PhysicalGroupBy::new(
+            vec![
+                (col("a", &schema)? as Arc<dyn PhysicalExpr>, "a".to_string()),
+                (col("b", &schema)? as Arc<dyn PhysicalExpr>, "b".to_string()),
+            ],
+            vec![
+                (lit(ScalarValue::Int32(None)), "a".to_string()),
+                (lit(ScalarValue::Int32(None)), "b".to_string()),
+            ],
+            vec![
+                vec![false, true],  // (a, NULL)
+                vec![true, false],  // (NULL, b)
+                vec![false, false], // (a, b)
+            ],
+            true,
+        );
+
+        let agg = build_test_aggregate(&schema, input_stats, grouping_set, None)?;
+
+        let stats = agg.partition_statistics(None)?;
+        // Per-set NDV: (a,NULL)=100, (NULL,b)=50, (a,b)=100*50=5000
+        // Total = 100 + 50 + 5000 = 5150
+        assert_eq!(
+            stats.num_rows,
+            Precision::Inexact(5_150),
+            "grouping sets should sum per-set NDV products"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_stats_non_column_expr_bails_out() -> Result<()> {
+        use datafusion_common::ColumnStatistics;
+        use datafusion_expr::Operator;
+        use datafusion_physical_expr::expressions::BinaryExpr;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let input_stats = Statistics {
+            num_rows: Precision::Exact(1_000_000),
+            total_byte_size: Precision::Inexact(1_000_000),
+            column_statistics: vec![
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    ..ColumnStatistics::new_unknown()
+                },
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(50),
+                    ..ColumnStatistics::new_unknown()
+                },
+            ],
+        };
+
+        // GROUP BY (a + b) — not a direct column reference
+        let expr_a_plus_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            col("a", &schema)?,
+            Operator::Plus,
+            col("b", &schema)?,
+        ));
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(expr_a_plus_b, "a+b".to_string())]);
+        let agg = build_test_aggregate(&schema, input_stats, group_by, None)?;
+
+        let stats = agg.partition_statistics(None)?;
+        assert_eq!(
+            stats.num_rows,
+            Precision::Inexact(1_000_000),
+            "non-column group-by expression should bail out to input_rows"
+        );
 
         Ok(())
     }
