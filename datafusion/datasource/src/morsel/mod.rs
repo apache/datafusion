@@ -17,6 +17,9 @@
 
 //! Structures for Morsel Driven IO.
 //!
+//! NOTE: As of DataFusion 54.0.0, these are experimental APIs that may change
+//! substantially.
+//!
 //! Morsel Driven IO is a technique for parallelizing the reading of large files
 //! by dividing them into smaller "morsels" that are processed independently.
 //!
