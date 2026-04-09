@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef};
-use arrow::compute::{CastOptions, DatePart, cast_with_options, date_part};
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::types::{logical_date, logical_string};
+use datafusion_common::types::logical_date;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
-use datafusion_functions::utils::make_scalar_function;
+use datafusion_functions::datetime::date_part;
 use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -49,9 +49,6 @@ impl SparkQuarter {
                     )]),
                     TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Native(logical_date()),
-                    )]),
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
-                        TypeSignatureClass::Native(logical_string()),
                     )]),
                 ],
                 Volatility::Immutable,
@@ -77,26 +74,22 @@ impl ScalarUDFImpl for SparkQuarter {
         Ok(Arc::new(Field::new(self.name(), DataType::Int32, true)))
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(spark_quarter, vec![])(&args.args)
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        internal_err!("spark quarter should have been simplified to standard date_part")
     }
-}
 
-fn spark_quarter(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [array] = take_function_args("quarter", args)?;
-    match array.data_type() {
-        DataType::Date32 | DataType::Timestamp(_, _) => {
-            let quarter = date_part(array, DatePart::Quarter)?;
-            Ok(quarter)
-        }
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-            let date_array =
-                cast_with_options(array, &DataType::Date32, &CastOptions::default())?;
-            let quarter = date_part(&date_array, DatePart::Quarter)?;
-            Ok(quarter)
-        }
-        data_type => {
-            internal_err!("quarter does not support: {data_type}")
-        }
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &SimplifyContext,
+    ) -> Result<ExprSimplifyResult> {
+        let [date_expr] = take_function_args(self.name(), args)?;
+        let part_expr = Expr::Literal(ScalarValue::new_utf8("quarter"), None);
+
+        let date_part_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+            date_part(),
+            vec![part_expr, date_expr],
+        ));
+        Ok(ExprSimplifyResult::Simplified(date_part_expr))
     }
 }
