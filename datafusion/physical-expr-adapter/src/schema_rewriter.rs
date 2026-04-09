@@ -34,11 +34,10 @@ use datafusion_common::{
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_physical_expr::PhysicalExprSimplifier;
-use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::{
     ScalarFunctionExpr,
-    expressions::{self, Column},
+    expressions::{self, CastExpr, Column},
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
@@ -439,7 +438,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
         // since that's much cheaper to evalaute.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
-        self.create_cast_column_expr(resolved_column, physical_field, logical_field)
+        self.create_cast_expr(resolved_column, physical_field, logical_field)
     }
 
     /// Resolves a logical column to the corresponding physical column and field.
@@ -475,12 +474,12 @@ impl DefaultPhysicalExprAdapterRewriter {
         )))
     }
 
-    /// Validates type compatibility and creates a CastColumnExpr if needed.
+    /// Validates type compatibility and creates a field-aware CastExpr if needed.
     ///
     /// Checks whether the physical field can be cast to the logical field type,
-    /// handling both struct and scalar types. Returns a CastColumnExpr with the
+    /// handling both struct and scalar types. Returns a CastExpr with the
     /// appropriate configuration.
-    fn create_cast_column_expr(
+    fn create_cast_expr(
         &self,
         column: Column,
         physical_field: FieldRef,
@@ -499,9 +498,8 @@ impl DefaultPhysicalExprAdapterRewriter {
                         logical_field.data_type()
                     )))?;
 
-        let cast_expr = Arc::new(CastColumnExpr::new(
+        let cast_expr = Arc::new(CastExpr::new_with_target_field(
             Arc::new(column),
-            physical_field,
             Arc::new(logical_field.clone()),
             None,
         ));
@@ -685,7 +683,7 @@ mod tests {
         let result = adapter.rewrite(column_expr).unwrap();
 
         // Should be wrapped in a cast expression
-        assert!(result.as_any().downcast_ref::<CastColumnExpr>().is_some());
+        assert!(result.as_any().downcast_ref::<CastExpr>().is_some());
     }
 
     #[test]
@@ -704,8 +702,8 @@ mod tests {
         let result = adapter.rewrite(Arc::new(Column::new("a", 0)))?;
         let cast = result
             .as_any()
-            .downcast_ref::<CastColumnExpr>()
-            .expect("Expected CastColumnExpr");
+            .downcast_ref::<CastExpr>()
+            .expect("Expected CastExpr");
 
         assert_eq!(cast.target_field().data_type(), &DataType::Int64);
         assert!(!cast.target_field().is_nullable());
@@ -717,8 +715,13 @@ mod tests {
             Some("1")
         );
 
-        // Ensure the expression reports the logical nullability regardless of input schema
-        assert!(!result.nullable(physical_schema.as_ref())?);
+        // Ensure the expression preserves the logical field nullability/metadata.
+        let return_field = result.return_field(physical_schema.as_ref())?;
+        assert!(!return_field.is_nullable());
+        assert_eq!(
+            return_field.metadata().get("logical_meta").map(String::as_str),
+            Some("1")
+        );
 
         Ok(())
     }
@@ -753,9 +756,8 @@ mod tests {
         println!("Rewritten expression: {result}");
 
         let expected = expressions::BinaryExpr::new(
-            Arc::new(CastColumnExpr::new(
+            Arc::new(CastExpr::new_with_target_field(
                 Arc::new(Column::new("a", 0)),
-                Arc::new(Field::new("a", DataType::Int32, false)),
                 Arc::new(Field::new("a", DataType::Int64, false)),
                 None,
             )),
@@ -841,17 +843,6 @@ mod tests {
 
         let result = adapter.rewrite(column_expr).unwrap();
 
-        let physical_struct_fields: Fields = vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
-        ]
-        .into();
-        let physical_field = Arc::new(Field::new(
-            "data",
-            DataType::Struct(physical_struct_fields),
-            false,
-        ));
-
         let logical_struct_fields: Fields = vec![
             Field::new("id", DataType::Int64, false),
             Field::new("name", DataType::Utf8View, true),
@@ -863,9 +854,8 @@ mod tests {
             false,
         ));
 
-        let expected = Arc::new(CastColumnExpr::new(
+        let expected = Arc::new(CastExpr::new_with_target_field(
             Arc::new(Column::new("data", 0)),
-            physical_field,
             logical_field,
             None,
         )) as Arc<dyn PhysicalExpr>;
@@ -1673,11 +1663,11 @@ mod tests {
 
         let result = adapter.rewrite(column_expr).unwrap();
 
-        // Should be a CastColumnExpr
+        // Should be a CastExpr
         let cast_expr = result
             .as_any()
-            .downcast_ref::<CastColumnExpr>()
-            .expect("Expected CastColumnExpr");
+            .downcast_ref::<CastExpr>()
+            .expect("Expected CastExpr");
 
         // Verify the inner column points to the correct physical index (1)
         let inner_col = cast_expr
@@ -1696,7 +1686,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_cast_column_expr_uses_name_lookup_not_column_index() {
+    fn test_create_cast_expr_uses_name_lookup_not_column_index() {
         // Physical schema has column `a` at index 1; index 0 is an incompatible type.
         let physical_schema = Arc::new(Schema::new(vec![
             Field::new("b", DataType::Binary, true),
@@ -1716,7 +1706,7 @@ mod tests {
         // Deliberately provide the wrong index for column `a`.
         // Regression: this must still resolve against physical field `a` by name.
         let transformed = rewriter
-            .create_cast_column_expr(
+            .create_cast_expr(
                 Column::new("a", 0),
                 Arc::new(physical_schema.field_with_name("a").unwrap().clone()),
                 logical_schema.field_with_name("a").unwrap(),
@@ -1726,11 +1716,16 @@ mod tests {
         let cast_expr = transformed
             .data
             .as_any()
-            .downcast_ref::<CastColumnExpr>()
-            .expect("Expected CastColumnExpr");
+            .downcast_ref::<CastExpr>()
+            .expect("Expected CastExpr");
 
-        assert_eq!(cast_expr.input_field().name(), "a");
-        assert_eq!(cast_expr.input_field().data_type(), &DataType::Int32);
+        let inner_col = cast_expr
+            .expr()
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("Expected inner Column");
+        assert_eq!(inner_col.name(), "a");
+        assert_eq!(inner_col.index(), 0);
         assert_eq!(cast_expr.target_field().data_type(), &DataType::Int64);
     }
 }
