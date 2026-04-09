@@ -24,9 +24,11 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use datafusion_expr::{
-    AggregateUDFImpl, EmitTo, GroupsAccumulator, function::AccumulatorArgs,
+    Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, function::AccumulatorArgs,
 };
-use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
+use datafusion_functions_aggregate::first_last::{
+    FirstValue, LastValue, TrivialFirstValueAccumulator, TrivialLastValueAccumulator,
+};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::col;
 
@@ -69,6 +71,22 @@ fn prepare_groups_accumulator(is_first: bool) -> Box<dyn GroupsAccumulator> {
         LastValue::new()
             .create_groups_accumulator(accumulator_args)
             .unwrap()
+    }
+}
+
+fn create_trivial_accumulator(
+    is_first: bool,
+    ignore_nulls: bool,
+) -> Box<dyn Accumulator> {
+    if is_first {
+        Box::new(
+            TrivialFirstValueAccumulator::try_new(&DataType::Int64, ignore_nulls)
+                .unwrap(),
+        )
+    } else {
+        Box::new(
+            TrivialLastValueAccumulator::try_new(&DataType::Int64, ignore_nulls).unwrap(),
+        )
     }
 }
 
@@ -236,6 +254,30 @@ fn merge_bench(
     });
 }
 
+#[expect(clippy::needless_pass_by_value)]
+fn trivial_update_bench(
+    c: &mut Criterion,
+    is_first: bool,
+    ignore_nulls: bool,
+    name: &str,
+    values: ArrayRef,
+) {
+    c.bench_function(name, |b| {
+        b.iter_custom(|iters| {
+            // The bench is way too fast, so apply 10x factor
+            let mut accumulators: Vec<Box<dyn Accumulator>> = (0..iters * 10)
+                .map(|_| create_trivial_accumulator(is_first, ignore_nulls))
+                .collect();
+            let start = Instant::now();
+            for acc in &mut accumulators {
+                #[expect(clippy::unit_arg)]
+                black_box(acc.update_batch(&[Arc::clone(&values)]).unwrap());
+            }
+            start.elapsed()
+        })
+    });
+}
+
 fn first_last_benchmark(c: &mut Criterion) {
     const N: usize = 65536;
     const NUM_GROUPS: usize = 1024;
@@ -302,6 +344,18 @@ fn first_last_benchmark(c: &mut Criterion) {
                     ord.clone(),
                     opt_filter,
                     NUM_GROUPS,
+                );
+            }
+
+            for ignore_nulls in [false, true] {
+                trivial_update_bench(
+                    c,
+                    is_first,
+                    ignore_nulls,
+                    &format!(
+                        "{fn_name} trivial_update_bench nulls={pct}%, ignore_nulls={ignore_nulls}"
+                    ),
+                    values.clone(),
                 );
             }
         }
