@@ -15,6 +15,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+
 """
 Validate hardcoded expected values in .slt (sqllogictest) test files
 by running the same queries against PySpark and comparing results.
