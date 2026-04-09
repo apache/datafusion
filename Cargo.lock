@@ -2272,7 +2272,6 @@ dependencies = [
  "datafusion-macros",
  "log",
  "serde_json",
- "tokio",
 ]
 
 [[package]]

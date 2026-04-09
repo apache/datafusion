@@ -66,10 +66,7 @@ impl Default for JsonGetStr {
 impl JsonGetStr {
     pub fn new() -> Self {
         Self {
-            signature: Signature::new(
-                TypeSignature::UserDefined,
-                Volatility::Immutable,
-            ),
+            signature: Signature::new(TypeSignature::UserDefined, Volatility::Immutable),
         }
     }
 }
@@ -110,10 +107,14 @@ impl ScalarUDFImpl for JsonGetStr {
         for (i, dt) in arg_types[1..].iter().enumerate() {
             let coerced_type = match dt {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => dt.clone(),
-                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
-                | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-                    dt.clone()
-                }
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64 => dt.clone(),
                 DataType::Null => DataType::Utf8,
                 other => {
                     return plan_err!(
@@ -128,7 +129,6 @@ impl ScalarUDFImpl for JsonGetStr {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-
         let json_arg = &args.args[0];
         let path_args = &args.args[1..];
 
@@ -403,16 +403,17 @@ mod tests {
         let result = invoke_json_get_str(json, vec![key], 1)?;
         match result {
             ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {}
-            other => panic!("expected null Utf8 scalar (non-string JSON value), got {other:?}"),
+            other => {
+                panic!("expected null Utf8 scalar (non-string JSON value), got {other:?}")
+            }
         }
         Ok(())
     }
 
     #[test]
     fn test_invalid_json_returns_null() -> Result<()> {
-        let json = ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-            "not valid json".to_string(),
-        )));
+        let json =
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("not valid json".to_string())));
         let key = ColumnarValue::Scalar(ScalarValue::Utf8(Some("a".to_string())));
 
         let result = invoke_json_get_str(json, vec![key], 1)?;

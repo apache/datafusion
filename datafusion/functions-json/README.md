@@ -27,8 +27,8 @@ community crate.
 
 ## Functions
 
-| Function | Description |
-|----------|-------------|
+| Function                        | Description                                                 |
+| ------------------------------- | ----------------------------------------------------------- |
 | `json_get_str(json, key1, ...)` | Extract a string value from a JSON string at the given path |
 
 ## Usage
