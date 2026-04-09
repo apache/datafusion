@@ -424,16 +424,40 @@
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-53-0-0">
 <h2>DataFusion 53.0.0<a class="headerlink" href="#datafusion-53-0-0" title="Link to this heading">#</a></h2>
-<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code> has not been released yet. The information provided
-*in this section pertains to features and changes that have already been merged
-*to the main branch and are awaiting release in this version. See <a class="reference external" href="https://github.com/apache/datafusion/issues/19692">#19692</a> for
-*more details.</p>
 <section id="upgrade-arrow-parquet-to-58-0-0-and-object-store-to-0-13-0">
 <h3>Upgrade arrow/parquet to 58.0.0 and object_store to 0.13.0<a class="headerlink" href="#upgrade-arrow-parquet-to-58-0-0-and-object-store-to-0-13-0" title="Link to this heading">#</a></h3>
 <p>DataFusion 53.0.0 uses <code class="docutils literal notranslate"><span class="pre">arrow</span></code> and <code class="docutils literal notranslate"><span class="pre">parquet</span></code> 58.0.0, and <code class="docutils literal notranslate"><span class="pre">object_store</span></code> 0.13.0.
 This may require updates to your Cargo.toml if you have direct dependencies on
 these crates.</p>
 <p>See the <a class="reference external" href="https://github.com/apache/arrow-rs/releases/tag/58.0.0">Arrow 58.0.0 release notes</a> and the <a class="reference external" href="https://github.com/apache/arrow-rs-object-store/blob/v0.13.0/CHANGELOG.md">object_store 0.13.0 upgrade guide</a> for details on breaking changes in those versions.</p>
+</section>
+<section id="executionplan-statistics-removed">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::statistics</span></code> removed<a class="headerlink" href="#executionplan-statistics-removed" title="Link to this heading">#</a></h3>
+<p>The deprecated <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::statistics()</span></code> method has been removed. If you
+implement custom <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>s, remove that method from your impl and
+implement <code class="docutils literal notranslate"><span class="pre">partition_statistics()</span></code> instead.</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyExec</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Statistics</span><span class="p">::</span><span class="n">new_unknown</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">schema</span><span class="p">()))</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyExec</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">partition_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">_partition</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Statistics</span><span class="p">::</span><span class="n">new_unknown</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">schema</span><span class="p">()))</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>If you do not have partition-specific statistics, return the same value for
+<code class="docutils literal notranslate"><span class="pre">None</span></code> and for any partition index.</p>
 </section>
 <section id="executionplan-properties-now-returns-arc-planproperties">
 <h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties</span></code> now returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code><a class="headerlink" href="#executionplan-properties-now-returns-arc-planproperties" title="Link to this heading">#</a></h3>
@@ -510,6 +534,14 @@ outer relations.</p>
 <span class="n">planner_context</span><span class="p">.</span><span class="n">pop_outer_query_schema</span><span class="p">();</span>
 </pre></div>
 </div>
+</section>
+<section id="hashjoinexec-try-new-adds-null-aware">
+<h3><code class="docutils literal notranslate"><span class="pre">HashJoinExec::try_new</span></code> adds <code class="docutils literal notranslate"><span class="pre">null_aware</span></code><a class="headerlink" href="#hashjoinexec-try-new-adds-null-aware" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">HashJoinExec::try_new</span></code> now takes an extra <code class="docutils literal notranslate"><span class="pre">null_aware:</span> <span class="pre">bool</span></code> argument. This
+flag is used for null-aware anti joins, such as plans generated for <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code>
+subqueries.</p>
+<p>Most callers should pass <code class="docutils literal notranslate"><span class="pre">false</span></code>, the previous behavior. Pass <code class="docutils literal notranslate"><span class="pre">true</span></code> only for null-aware
+<code class="docutils literal notranslate"><span class="pre">JoinType::LeftAnti</span></code> joins.</p>
 </section>
 <section id="filesinkconfig-adds-file-output-mode">
 <h3><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code><a class="headerlink" href="#filesinkconfig-adds-file-output-mode" title="Link to this heading">#</a></h3>
@@ -846,8 +878,10 @@ This behavior is consistent with systems like PostgreSQL.</p>
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion 53.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#upgrade-arrow-parquet-to-58-0-0-and-object-store-to-0-13-0">Upgrade arrow/parquet to 58.0.0 and object_store to 0.13.0</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-statistics-removed"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::statistics</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-properties-now-returns-arc-planproperties"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties</span></code> now returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#plannercontext-outer-query-schema-api-now-uses-a-stack"><code class="docutils literal notranslate"><span class="pre">PlannerContext</span></code> outer query schema API now uses a stack</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hashjoinexec-try-new-adds-null-aware"><code class="docutils literal notranslate"><span class="pre">HashJoinExec::try_new</span></code> adds <code class="docutils literal notranslate"><span class="pre">null_aware</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesinkconfig-adds-file-output-mode"><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#struct-casting-now-requires-field-name-overlap">Struct Casting Now Requires Field Name Overlap</a></li>
