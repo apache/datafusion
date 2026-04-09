@@ -5203,6 +5203,41 @@ NULL NULL 1
 statement ok
 drop table t;
 
+# regression: duplicate grouping sets must not be collapsed into one
+statement ok
+create table duplicate_grouping_sets(deptno int, job varchar, sal int, comm int) as values
+(10, 'CLERK', 1300, null),
+(20, 'MANAGER', 3000, null);
+
+query ITIIIII
+select deptno, job, sal, sum(comm), grouping(deptno), grouping(job), grouping(sal)
+from duplicate_grouping_sets
+group by grouping sets ((deptno, job), (deptno, sal), (deptno, job))
+order by deptno, job, sal, grouping(deptno), grouping(job), grouping(sal);
+----
+10 CLERK NULL NULL 0 0 1
+10 CLERK NULL NULL 0 0 1
+10 NULL 1300 NULL 0 1 0
+20 MANAGER NULL NULL 0 0 1
+20 MANAGER NULL NULL 0 0 1
+20 NULL 3000 NULL 0 1 0
+
+query ITII
+select deptno, job, sal, grouping(deptno, job, sal)
+from duplicate_grouping_sets
+group by grouping sets ((deptno, job), (deptno, sal), (deptno, job))
+order by deptno, job, sal, grouping(deptno, job, sal);
+----
+10 CLERK NULL 1
+10 CLERK NULL 1
+10 NULL 1300 2
+20 MANAGER NULL 1
+20 MANAGER NULL 1
+20 NULL 3000 2
+
+statement ok
+drop table duplicate_grouping_sets;
+
 # test multi group by for binary type without nulls
 statement ok
 create table t(a int, b bytea) as values (1, 0xa), (1, 0xa), (2, 0xb), (3, 0xb), (3, 0xb);
