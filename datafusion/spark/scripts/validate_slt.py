@@ -1073,6 +1073,24 @@ def cleanup_tables():
         pass
 
 
+def load_known_failures(filepath: str) -> set[str]:
+    """Load known failure file paths from a text file.
+
+    Each non-blank, non-comment line is a .slt file path relative to the
+    spark test directory (e.g., 'string/format_string.slt').
+    """
+    known = set()
+    if not os.path.isfile(filepath):
+        return known
+    with open(filepath) as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                # Normalize path separators
+                known.add(stripped.replace("\\", "/"))
+    return known
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Validate .slt test files against PySpark"
@@ -1081,6 +1099,7 @@ def main():
     script_dir = Path(__file__).resolve().parent
     repo_root = script_dir.parent.parent.parent
     default_test_dir = repo_root / "datafusion" / "sqllogictest" / "test_files" / "spark"
+    default_known_failures = script_dir / "known-failures.txt"
 
     parser.add_argument(
         "--path",
@@ -1095,7 +1114,20 @@ def main():
     parser.add_argument(
         "--show-skipped", action="store_true", help="Show skipped query details"
     )
+    parser.add_argument(
+        "--known-failures",
+        default=str(default_known_failures),
+        help="Path to known-failures.txt file (use --known-failures=none to disable)",
+    )
     args = parser.parse_args()
+
+    # Load known failures
+    if args.known_failures.lower() == "none":
+        known_failures = set()
+    else:
+        known_failures = load_known_failures(args.known_failures)
+        if known_failures:
+            print(f"Loaded {len(known_failures)} known failure file(s)")
 
     files = discover_slt_files(args.test_dir, args.path)
     if not files:
@@ -1107,10 +1139,21 @@ def main():
     total_passed = 0
     total_failed = 0
     total_skipped = 0
+    total_known_failures = 0
     failed_files = []
+    known_failure_files = []
 
     for filepath in files:
         rel = os.path.relpath(filepath, args.test_dir)
+        rel_normalized = rel.replace("\\", "/")
+        is_known_failure = rel_normalized in known_failures
+
+        if is_known_failure:
+            print(f"--- {rel} [known failure, skipping] ---\n")
+            total_known_failures += 1
+            known_failure_files.append(rel)
+            continue
+
         print(f"--- {rel} ---")
 
         cleanup_tables()
@@ -1140,17 +1183,25 @@ def main():
         total_failed += file_result.failed
         total_skipped += file_result.skipped
         if file_result.failed > 0:
-            failed_files.append(os.path.relpath(filepath, args.test_dir))
+            failed_files.append(rel)
 
     # Overall summary
     print("=" * 60)
-    print(f"Overall: {total_passed} passed, {total_failed} failed, {total_skipped} skipped")
+    print(
+        f"Overall: {total_passed} passed, {total_failed} failed, "
+        f"{total_skipped} skipped, {total_known_failures} known failures"
+    )
     if failed_files:
-        print(f"\nFailed files:")
+        print(f"\nUnexpected failures:")
         for f in failed_files:
+            print(f"  {f}")
+    if known_failure_files and args.verbose:
+        print(f"\nKnown failures (skipped):")
+        for f in known_failure_files:
             print(f"  {f}")
     print()
 
+    # Exit 0 if no unexpected failures
     sys.exit(1 if total_failed > 0 else 0)
 
 

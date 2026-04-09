@@ -1,0 +1,74 @@
+# Known failures for PySpark SLT validation.
+# Each line is a .slt file path (relative to spark test dir) to skip.
+# Blank lines and lines starting with # are ignored.
+
+# format_string %t specifiers pass microseconds where Java expects milliseconds
+# https://github.com/apache/datafusion/issues/21515
+string/format_string.slt
+
+# format_string %f/%e/%g/%a not supported with Decimal types in Spark
+# format_string %c requires INT not BIGINT in Spark
+# (also covered by #21515)
+
+# substring handles large negative start positions differently from Spark
+# https://github.com/apache/datafusion/issues/21510
+string/substring.slt
+
+# array_repeat incorrectly returns NULL when element is NULL
+# https://github.com/apache/datafusion/issues/21512
+array/array_repeat.slt
+
+# mod/pmod returns NaN instead of NULL for float division by zero
+# https://github.com/apache/datafusion/issues/21514
+math/mod.slt
+
+# String literal escape sequences (\t, \n) not interpreted like Spark
+# https://github.com/apache/datafusion/issues/21516
+string/soundex.slt
+
+# array_contains rejects NULL typed arguments in Spark
+array/array_contains.slt
+
+# Spark's shuffle() only takes 1 argument, not 2 (no seed parameter)
+array/shuffle.slt
+
+# map(array, array) creates single-entry map in Spark, not map_from_arrays
+# Wrong test: uses map() where map_from_arrays() was intended
+collection/size.slt
+
+# date_add/date_sub overflow: Spark errors, DataFusion wraps
+# CAST(date AS INT) not supported in Spark
+datetime/date_add.slt
+datetime/date_sub.slt
+
+# Interval formatting differs between DataFusion and Spark
+datetime/make_dt_interval.slt
+datetime/make_interval.slt
+
+# TIME data type is Spark 4.0 only
+datetime/time_trunc.slt
+
+# json_tuple is a generator function returning multiple columns;
+# cast-to-string loses multi-column structure
+json/json_tuple.slt
+
+# Map key ordering and formatting differences
+map/map_from_arrays.slt
+map/map_from_entries.slt
+
+# str_to_map empty key: (empty) vs empty string in map display
+map/str_to_map.slt
+
+# Float32 precision loss in negative() for float max values
+# Scientific notation in cast translation for float max values
+math/negative.slt
+
+# array literal [x, y] syntax in .slt not fully translatable
+# (some tests use array subscript syntax array[0] which overlaps)
+array/array.slt
+
+# char(0) returns different representation in Spark vs DataFusion
+string/char.slt
+
+# Binary concat with hex literals: output formatting difference
+string/concat.slt
