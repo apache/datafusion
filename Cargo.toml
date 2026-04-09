@@ -162,7 +162,7 @@ glob = "0.3.0"
 half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.16.1" }
 hex = { version = "0.4.3" }
-indexmap = "2.13.0"
+indexmap = "2.13.1"
 insta = { version = "1.47.2", features = ["glob", "filters"] }
 itertools = "0.14"
 itoa = "1.0"
@@ -192,7 +192,7 @@ strum = "0.28.0"
 strum_macros = "0.28.0"
 tempfile = "3"
 testcontainers-modules = { version = "0.15" }
-tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.51", features = ["macros", "rt", "sync"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
 url = "2.5.7"
