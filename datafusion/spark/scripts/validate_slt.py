@@ -420,8 +420,8 @@ def _translate_casts(sql: str) -> str:
             changed = True
             continue
 
-        # 3. Numbers (including negative): -?123::TYPE or 123.45::TYPE
-        m = re.search(r"(?<![.\w])(-?\d+\.?\d*)::(\w+(?:\([^)]*\))?)", result)
+        # 3. Numbers (including negative, scientific notation): -?123::TYPE or 1.23e10::TYPE
+        m = re.search(r"(?<![.\w])(-?\d+\.?\d*(?:[eE][+-]?\d+)?)::(\w+(?:\([^)]*\))?)", result)
         if m:
             cast_type = m.group(2)
             spark_type = _translate_cast_type(cast_type)
@@ -474,6 +474,9 @@ def translate_sql(sql: str) -> tuple[str, Optional[str]]:
         return sql, "uses spark_cast()"
     if "arrow_typeof(" in sql.lower():
         return sql, "uses arrow_typeof()"
+    # bitwise_not is DataFusion's name; Spark uses bitnot() or ~ operator
+    if "bitwise_not(" in sql.lower():
+        return sql, "uses bitwise_not() (DataFusion-specific name)"
 
     # Skip DataFusion config statements
     if re.search(r"set\s+datafusion\.", sql, re.IGNORECASE):
@@ -528,6 +531,8 @@ def format_value(val) -> str:
     """Format a single value to match .slt conventions."""
     if val is None:
         return "NULL"
+    if isinstance(val, str) and val == "":
+        return "(empty)"
     if isinstance(val, bool):
         return "true" if val else "false"
     if isinstance(val, float):
@@ -547,7 +552,13 @@ def format_value(val) -> str:
     if isinstance(val, datetime.date) and not isinstance(val, datetime.datetime):
         return val.strftime("%Y-%m-%d")
     if isinstance(val, datetime.datetime):
-        return str(val)
+        # .slt uses ISO format with T separator, no timezone
+        base = val.strftime("%Y-%m-%dT%H:%M:%S")
+        # Include fractional seconds if non-zero
+        if val.microsecond:
+            frac = f".{val.microsecond:06d}".rstrip("0")
+            return base + frac
+        return base
     # Decimal
     from decimal import Decimal
 
@@ -563,8 +574,14 @@ def format_value(val) -> str:
         return s
     # Arrays/lists
     if isinstance(val, (list, tuple)):
-        inner = ",".join(format_value(v) for v in val)
+        inner = ", ".join(format_value(v) for v in val)
         return f"[{inner}]"
+    # Maps/dicts
+    if isinstance(val, dict):
+        entries = ", ".join(
+            f"{format_value(k)}: {format_value(v)}" for k, v in val.items()
+        )
+        return "{" + entries + "}"
     # Default
     return str(val)
 
