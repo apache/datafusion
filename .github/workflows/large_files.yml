@@ -26,6 +26,67 @@ on:
   merge_group:
 
 jobs:
+
+  check-semver:
+    name: Check semver
+    runs-on: ubuntu-latest
+    outputs:
+      logs: ${{ steps.check_semver.outputs.logs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks
+
+      - name: Run cargo-semver-checks
+        id: check_semver
+        run: |
+          set +e
+          cargo semver-checks --baseline-rev origin/main 2>&1 | tee /tmp/semver-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          OUTPUT=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt)
+          echo "logs<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$OUTPUT" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
+
+  comment-on-pr:
+    name: Comment on pull request
+    runs-on: ubuntu-latest
+    needs: check-semver
+    if: always()
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment
+        if: ${{ needs.check-semver.result != 'success' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-semver-check-error
+          message: |
+            Thank you for opening this pull request!
+
+            Reviewer note: [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported the current version number is not SemVer-compatible with the changes made since the last release.
+
+            Details:
+
+            ```
+            ${{ needs.check-semver.outputs.logs }}
+            ```
+
+      - name: Delete comment
+        if: ${{ needs.check-semver.result == 'success' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-semver-check-error
+          delete: true
+
   check-files:
     runs-on: ubuntu-slim
     steps:
