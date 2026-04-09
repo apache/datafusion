@@ -231,7 +231,7 @@ mod tests {
     };
     use datafusion_execution::cache::CacheAccessor;
     use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-    use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+    use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use glob::Pattern;

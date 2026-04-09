@@ -17,7 +17,7 @@
 
 use crate::cache::CacheAccessor;
 use crate::cache::DefaultListFilesCache;
-use crate::cache::cache_unit::{
+use crate::cache::file_statistics_cache::{
     DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, DefaultFileStatisticsCache,
     DefaultFilesMetadataCache,
 };
