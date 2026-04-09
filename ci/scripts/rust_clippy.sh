@@ -31,6 +31,8 @@ cd "$SCRIPT_DIR/../.." || exit 1
 
 set +e
 
+# Fetch one more commit so HEAD~1 is available (CI uses fetch-depth: 1)
+git fetch --deepen=1 2>/dev/null || true
 BASELINE_REV=$(git rev-parse HEAD~1)
 echo "Baseline revision: $BASELINE_REV"
 
