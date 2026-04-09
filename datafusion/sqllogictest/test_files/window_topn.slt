@@ -30,6 +30,10 @@ CREATE TABLE window_topn_t (id INT, pk INT, val INT) AS VALUES
   (9, 3, 50),
   (10, 3, 75);
 
+# Enable the optimization for all tests
+statement ok
+SET datafusion.optimizer.enable_window_topn = true;
+
 # Test 1: Correct results for top-2 per partition
 query III rowsort
 SELECT id, pk, val FROM (

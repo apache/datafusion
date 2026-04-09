@@ -1091,7 +1091,7 @@ config_namespace! {
         /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
         /// PartitionedTopKExec that maintains per-partition heaps, avoiding
         /// a full sort of the input.
-        pub enable_window_topn: bool, default = true
+        pub enable_window_topn: bool, default = false
 
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the

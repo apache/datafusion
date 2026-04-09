@@ -232,6 +232,7 @@ impl PartitionedTopKExec {
     /// The output is sorted by `sort_exprs` (partition keys then order keys),
     /// uses the same partitioning as the input, emits all output at once
     /// (`EmissionType::Final`), and is bounded.
+
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
@@ -269,8 +270,17 @@ impl DisplayAs for PartitionedTopKExec {
                 )
             }
             DisplayFormatType::TreeRender => {
+                let partition_exprs: Vec<String> = self.expr[..self.partition_prefix_len]
+                    .iter()
+                    .map(|e| format!("{}", e.expr))
+                    .collect();
+                let order_exprs: Vec<String> = self.expr[self.partition_prefix_len..]
+                    .iter()
+                    .map(|e| format!("{e}"))
+                    .collect();
                 writeln!(f, "fetch={}", self.fetch)?;
-                writeln!(f, "{}", self.expr)
+                writeln!(f, "partition=[{}]", partition_exprs.join(", "))?;
+                writeln!(f, "order=[{}]", order_exprs.join(", "))
             }
         }
     }
