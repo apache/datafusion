@@ -128,6 +128,27 @@ from (values ('a'), ('b')) as tbl(col);
 NULL NULL NULL
 NULL NULL NULL
 
+
+# Stripping trailing .*$ must not change match semantics for inputs with
+# newlines when the original pattern does not use the 's' flag.
+query B
+SELECT regexp_replace(concat('http://x/', chr(10), 'rest'), '^https?://([^/]+)/.*$', '\1')
+       = concat('http://x/', chr(10), 'rest');
+----
+true
+
+# Inline multiline mode still allows only the matched prefix to be replaced.
+# The remainder of the string must be preserved.
+query B
+SELECT regexp_replace(
+           concat('http://x/path', chr(10), 'rest'),
+           '^(?m)https?://([^/]+)/.*$',
+           '\1'
+       ) = concat('x', chr(10), 'rest');
+----
+true
+
+
 # Fixture for testing optimizations in regexp_replace
 statement ok
 CREATE TABLE regexp_replace_optimized_cases (
@@ -162,25 +183,12 @@ statement ok
 INSERT INTO regexp_replace_optimized_cases VALUES
     ('bzzz', '^(a)?b.*$', '\1', '');
 
-# Stripping trailing .*$ must not change match semantics for inputs with
-# newlines when the original pattern does not use the 's' flag.
-statement ok
-INSERT INTO regexp_replace_optimized_cases VALUES
-    (concat('http://x/', chr(10), 'rest'), '^https?://([^/]+)/.*$', '\1', concat('http://x/', chr(10), 'rest'));
-
-# Inline multiline mode still allows only the matched prefix to be replaced.
-# The remainder of the string must be preserved.
-statement ok
-INSERT INTO regexp_replace_optimized_cases VALUES
-    (concat('http://x/path', chr(10), 'rest'), '^(?m)https?://([^/]+)/.*$', '\1', concat('x', chr(10), 'rest'));
 
 query TB
 SELECT value, regexp_replace(value, regexp, replacement) = expected
 FROM regexp_replace_optimized_cases
 ORDER BY regexp, value, replacement, expected;
 ----
-http://x/path
-rest true
 bzzz true
 http://test.org/foo/bar true
 https://www.example.com/path/to/page?q=1 true
@@ -189,8 +197,6 @@ http://test.org/foo/bar true
 https://example.com/ true
 https://www.example.com/path/to/page?q=1 true
 not-a-url true
-http://x/
-rest true
 
 query TB
 SELECT value, regexp_replace(
@@ -201,8 +207,6 @@ SELECT value, regexp_replace(
 FROM regexp_replace_optimized_cases
 ORDER BY regexp, value, replacement, expected;
 ----
-http://x/path
-rest true
 bzzz true
 http://test.org/foo/bar true
 https://www.example.com/path/to/page?q=1 true
@@ -211,8 +215,6 @@ http://test.org/foo/bar true
 https://example.com/ true
 https://www.example.com/path/to/page?q=1 true
 not-a-url true
-http://x/
-rest true
 
 query TB
 SELECT value, regexp_replace(
@@ -223,8 +225,6 @@ SELECT value, regexp_replace(
 FROM regexp_replace_optimized_cases
 ORDER BY regexp, value, replacement, expected;
 ----
-http://x/path
-rest true
 bzzz true
 http://test.org/foo/bar true
 https://www.example.com/path/to/page?q=1 true
@@ -233,8 +233,6 @@ http://test.org/foo/bar true
 https://example.com/ true
 https://www.example.com/path/to/page?q=1 true
 not-a-url true
-http://x/
-rest true
 
 query TB
 SELECT value, regexp_replace(
@@ -245,8 +243,6 @@ SELECT value, regexp_replace(
 FROM regexp_replace_optimized_cases
 ORDER BY regexp, value, replacement, expected;
 ----
-http://x/path
-rest true
 bzzz true
 http://test.org/foo/bar true
 https://www.example.com/path/to/page?q=1 true
@@ -255,8 +251,6 @@ http://test.org/foo/bar true
 https://example.com/ true
 https://www.example.com/path/to/page?q=1 true
 not-a-url true
-http://x/
-rest true
 
 # cleanup
 statement ok
