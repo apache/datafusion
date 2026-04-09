@@ -128,7 +128,6 @@ from (values ('a'), ('b')) as tbl(col);
 NULL NULL NULL
 NULL NULL NULL
 
-
 # Stripping trailing .*$ must not change match semantics for inputs with
 # newlines when the original pattern does not use the 's' flag.
 query B
