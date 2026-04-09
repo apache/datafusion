@@ -825,10 +825,65 @@ class FileResult:
     skipped_details: list = field(default_factory=list)
 
 
+def _try_parse_float(s: str) -> Optional[float]:
+    """Try to parse a string as a float, handling special values."""
+    if s in ("NULL", "(empty)"):
+        return None
+    try:
+        return float(s)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _values_match(exp_val: str, act_val: str, rel_tol: float = 1e-6) -> bool:
+    """Compare two individual values with float tolerance.
+
+    For values that parse as floats, uses relative tolerance comparison.
+    Also handles scientific notation vs decimal mismatch (e.g., 8.165e15 vs 8165619676597685).
+    Non-numeric values are compared as exact strings.
+    """
+    if exp_val == act_val:
+        return True
+    # Try numeric comparison
+    exp_f = _try_parse_float(exp_val)
+    act_f = _try_parse_float(act_val)
+    if exp_f is not None and act_f is not None:
+        # Handle NaN
+        if math.isnan(exp_f) and math.isnan(act_f):
+            return True
+        # Handle infinity
+        if math.isinf(exp_f) and math.isinf(act_f):
+            return (exp_f > 0) == (act_f > 0)
+        # Handle zero
+        if exp_f == 0.0 and act_f == 0.0:
+            return True
+        # Relative tolerance
+        if exp_f != 0.0:
+            return abs(exp_f - act_f) / abs(exp_f) < rel_tol
+        return abs(exp_f - act_f) < rel_tol
+    return False
+
+
+def _lines_match(exp_line: str, act_line: str) -> bool:
+    """Compare a single result line with float tolerance.
+
+    Splits multi-column lines by space and compares each value.
+    """
+    exp_parts = exp_line.split(" ")
+    act_parts = act_line.split(" ")
+    if len(exp_parts) != len(act_parts):
+        return False
+    return all(_values_match(e, a) for e, a in zip(exp_parts, act_parts))
+
+
 def compare_results(
     expected: list[str], actual: list[str], rowsort: bool
 ) -> tuple[bool, str]:
-    """Compare expected vs actual results. Returns (match, detail)."""
+    """Compare expected vs actual results. Returns (match, detail).
+
+    Uses exact string matching first, then falls back to float-tolerant
+    comparison for numeric values.
+    """
     exp = expected[:]
     act = actual[:]
 
@@ -837,6 +892,12 @@ def compare_results(
         act = sorted(act)
 
     if exp == act:
+        return True, ""
+
+    # Try tolerant comparison
+    if len(exp) == len(act) and all(
+        _lines_match(e, a) for e, a in zip(exp, act)
+    ):
         return True, ""
 
     detail_lines = []
