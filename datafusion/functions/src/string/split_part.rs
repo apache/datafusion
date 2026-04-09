@@ -17,9 +17,11 @@
 
 use crate::utils::utf8_to_str_type;
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringBuilder, Int64Array, StringArrayType,
-    StringLikeArrayBuilder, StringViewBuilder, new_null_array,
+    Array, ArrayRef, AsArray, ByteView, GenericStringBuilder, Int64Array,
+    StringArrayType, StringLikeArrayBuilder, StringViewArray, StringViewBuilder,
+    make_view, new_null_array,
 };
+use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::as_int64_array;
@@ -279,12 +281,9 @@ fn split_part_scalar(
     }
 
     let result = match string_array.data_type() {
-        DataType::Utf8View => split_part_scalar_impl(
-            string_array.as_string_view(),
-            delimiter,
-            position,
-            StringViewBuilder::with_capacity(string_array.len()),
-        ),
+        DataType::Utf8View => {
+            split_part_scalar_view(string_array.as_string_view(), delimiter, position)
+        }
         DataType::Utf8 => {
             let arr = string_array.as_string::<i32>();
             // Conservative under-estimate for data capacity: split_part output
@@ -425,6 +424,116 @@ fn rsplit_nth_finder<'a>(
     }
 }
 
+/// Zero-copy scalar fast path for `StringViewArray` inputs.
+///
+/// Instead of copying substring bytes into a new buffer, constructs
+/// `StringView` entries that point back into the original array's data
+/// buffers.
+fn split_part_scalar_view(
+    string_view_array: &StringViewArray,
+    delimiter: &str,
+    position: i64,
+) -> Result<ArrayRef> {
+    let len = string_view_array.len();
+    let mut views_buf = Vec::with_capacity(len);
+    let views = string_view_array.views();
+
+    if delimiter.is_empty() {
+        // PostgreSQL: empty delimiter treats input as a single field.
+        let empty_view = make_view(b"", 0, 0);
+        let return_input = position == 1 || position == -1;
+        for i in 0..len {
+            if string_view_array.is_null(i) {
+                views_buf.push(0);
+            } else if return_input {
+                views_buf.push(views[i]);
+            } else {
+                views_buf.push(empty_view);
+            }
+        }
+    } else if position > 0 {
+        let idx: usize = (position - 1).try_into().map_err(|_| {
+            exec_datafusion_err!(
+                "split_part index {position} exceeds maximum supported value"
+            )
+        })?;
+        let finder = memmem::Finder::new(delimiter.as_bytes());
+        split_view_loop(string_view_array, views, &mut views_buf, |s| {
+            split_nth_finder(s, &finder, delimiter.len(), idx)
+        });
+    } else {
+        let idx: usize = (position.unsigned_abs() - 1).try_into().map_err(|_| {
+            exec_datafusion_err!(
+                "split_part index {position} exceeds minimum supported value"
+            )
+        })?;
+        let finder_rev = memmem::FinderRev::new(delimiter.as_bytes());
+        split_view_loop(string_view_array, views, &mut views_buf, |s| {
+            rsplit_nth_finder(s, &finder_rev, delimiter.len(), idx)
+        });
+    }
+
+    let views_buf = ScalarBuffer::from(views_buf);
+
+    // Nulls pass through unchanged, so we can use the input's null array.
+    let nulls = string_view_array.nulls().cloned();
+
+    // Safety: each view is either copied unchanged from the input, or built
+    // by `substr_view` from a substring that is a contiguous sub-range of the
+    // original string value stored in the input's data buffers.
+    unsafe {
+        Ok(Arc::new(StringViewArray::new_unchecked(
+            views_buf,
+            string_view_array.data_buffers().to_vec(),
+            nulls,
+        )) as ArrayRef)
+    }
+}
+
+/// Creates a `StringView` referencing a substring of an existing view's buffer.
+/// For substrings ≤ 12 bytes, creates an inline view instead.
+#[inline]
+fn substr_view(original_view: &u128, substr: &str, start_offset: u32) -> u128 {
+    if substr.len() > 12 {
+        let view = ByteView::from(*original_view);
+        make_view(
+            substr.as_bytes(),
+            view.buffer_index,
+            view.offset + start_offset,
+        )
+    } else {
+        make_view(substr.as_bytes(), 0, 0)
+    }
+}
+
+/// Applies `split_fn` to each non-null string and appends the resulting view to
+/// `views_buf`.
+#[inline(always)]
+fn split_view_loop<F>(
+    string_view_array: &StringViewArray,
+    views: &[u128],
+    views_buf: &mut Vec<u128>,
+    split_fn: F,
+) where
+    F: Fn(&str) -> Option<&str>,
+{
+    let empty_view = make_view(b"", 0, 0);
+    for (i, raw_view) in views.iter().enumerate() {
+        if string_view_array.is_null(i) {
+            views_buf.push(0);
+            continue;
+        }
+        let string = string_view_array.value(i);
+        match split_fn(string) {
+            Some(substr) => {
+                let start_offset = substr.as_ptr() as usize - string.as_ptr() as usize;
+                views_buf.push(substr_view(raw_view, substr, start_offset as u32));
+            }
+            None => views_buf.push(empty_view),
+        }
+    }
+}
+
 fn split_part_impl<'a, StringArrType, DelimiterArrType, B>(
     string_array: &StringArrType,
     delimiter_array: &DelimiterArrType,
@@ -490,7 +599,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
+    use arrow::array::{Array, AsArray, StringArray, StringViewArray};
     use arrow::datatypes::DataType::Utf8;
 
     use datafusion_common::ScalarValue;
@@ -683,6 +792,33 @@ mod tests {
             Utf8,
             StringArray
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_split_part_stringview_sliced() -> Result<()> {
+        use super::split_part_scalar_view;
+
+        let strings: StringViewArray = vec![
+            Some("skip_this.value"),
+            Some("this_is_a_long_prefix.suffix"),
+            Some("short.val"),
+            Some("another_long_result.rest"),
+            None,
+        ]
+        .into_iter()
+        .collect();
+
+        // Slice off the first element to get a non-zero offset array.
+        let sliced = strings.slice(1, 4);
+        let result = split_part_scalar_view(&sliced, ".", 1)?;
+        let result = result.as_string_view();
+        assert_eq!(result.len(), 4);
+        assert_eq!(result.value(0), "this_is_a_long_prefix");
+        assert_eq!(result.value(1), "short");
+        assert_eq!(result.value(2), "another_long_result");
+        assert!(result.is_null(3));
 
         Ok(())
     }

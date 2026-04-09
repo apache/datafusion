@@ -379,6 +379,204 @@ RESET datafusion.execution.batches_size
 statement error DataFusion error: Invalid or Unsupported Configuration: Config field is a scalar usize and does not have nested field "bar"
 RESET datafusion.execution.batch_size.bar
 
+#############################################
+## Test datafusion.format.* configurations ##
+#############################################
+query T
+SELECT name FROM information_schema.df_settings WHERE name LIKE 'datafusion.format.%' ORDER BY name
+----
+datafusion.format.date_format
+datafusion.format.datetime_format
+datafusion.format.duration_format
+datafusion.format.null
+datafusion.format.safe
+datafusion.format.time_format
+datafusion.format.timestamp_format
+datafusion.format.timestamp_tz_format
+datafusion.format.types_info
+
+# date_format: SET / SHOW / RESET / SHOW
+statement ok
+SET datafusion.format.date_format = '%d-%m-%Y'
+
+query TT
+SHOW datafusion.format.date_format
+----
+datafusion.format.date_format %d-%m-%Y
+
+statement ok
+RESET datafusion.format.date_format
+
+query TT
+SHOW datafusion.format.date_format
+----
+datafusion.format.date_format %Y-%m-%d
+
+# datetime_format
+statement ok
+SET datafusion.format.datetime_format = '%Y/%m/%d %H:%M:%S'
+
+query TT
+SHOW datafusion.format.datetime_format
+----
+datafusion.format.datetime_format %Y/%m/%d %H:%M:%S
+
+statement ok
+RESET datafusion.format.datetime_format
+
+query TT
+SHOW datafusion.format.datetime_format
+----
+datafusion.format.datetime_format %Y-%m-%dT%H:%M:%S%.f
+
+# timestamp_format
+statement ok
+SET datafusion.format.timestamp_format = '%FT%H:%M:%S'
+
+query TT
+SHOW datafusion.format.timestamp_format
+----
+datafusion.format.timestamp_format %FT%H:%M:%S
+
+statement ok
+RESET datafusion.format.timestamp_format
+
+query TT
+SHOW datafusion.format.timestamp_format
+----
+datafusion.format.timestamp_format %Y-%m-%dT%H:%M:%S%.f
+
+# timestamp_tz_format (default NULL)
+statement ok
+SET datafusion.format.timestamp_tz_format = '%Y-%m-%d %H:%M:%S %z'
+
+query TT
+SHOW datafusion.format.timestamp_tz_format
+----
+datafusion.format.timestamp_tz_format %Y-%m-%d %H:%M:%S %z
+
+statement ok
+RESET datafusion.format.timestamp_tz_format
+
+query TT
+SHOW datafusion.format.timestamp_tz_format
+----
+datafusion.format.timestamp_tz_format NULL
+
+# time_format
+statement ok
+SET datafusion.format.time_format = '%H-%M-%S'
+
+query TT
+SHOW datafusion.format.time_format
+----
+datafusion.format.time_format %H-%M-%S
+
+statement ok
+RESET datafusion.format.time_format
+
+query TT
+SHOW datafusion.format.time_format
+----
+datafusion.format.time_format %H:%M:%S%.f
+
+# duration_format: values are normalized to lowercase; ISO8601 and pretty are valid
+statement ok
+SET datafusion.format.duration_format = ISO8601
+
+query TT
+SHOW datafusion.format.duration_format
+----
+datafusion.format.duration_format iso8601
+
+statement ok
+SET datafusion.format.duration_format to 'PRETTY'
+
+query TT
+SHOW datafusion.format.duration_format
+----
+datafusion.format.duration_format pretty
+
+statement ok
+RESET datafusion.format.duration_format
+
+query TT
+SHOW datafusion.format.duration_format
+----
+datafusion.format.duration_format pretty
+
+# null display string
+statement ok
+SET datafusion.format.null = 'NuLL'
+
+query TT
+SHOW datafusion.format.null
+----
+datafusion.format.null NuLL
+
+statement ok
+RESET datafusion.format.null
+
+query TT
+SHOW datafusion.format.null
+----
+datafusion.format.null (empty)
+
+# safe
+statement ok
+SET datafusion.format.safe = false
+
+query TT
+SHOW datafusion.format.safe
+----
+datafusion.format.safe false
+
+statement ok
+RESET datafusion.format.safe
+
+query TT
+SHOW datafusion.format.safe
+----
+datafusion.format.safe true
+
+# types_info
+statement ok
+SET datafusion.format.types_info to true
+
+query TT
+SHOW datafusion.format.types_info
+----
+datafusion.format.types_info true
+
+statement ok
+RESET datafusion.format.types_info
+
+query TT
+SHOW datafusion.format.types_info
+----
+datafusion.format.types_info false
+
+# Case-insensitive variable name
+statement ok
+SET datafusion.FORMAT.DATE_FORMAT = '%m/%d/%Y'
+
+query TT
+SHOW datafusion.format.date_format
+----
+datafusion.format.date_format %m/%d/%Y
+
+statement ok
+RESET datafusion.format.date_format
+
+query TT
+SHOW datafusion.format.date_format
+----
+datafusion.format.date_format %Y-%m-%d
+
+# Invalid format option name
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "unknown_option" not found on FormatOptions
+SET datafusion.format.unknown_option = true
+
 ############
 ## Test runtime configuration variables
 ############
