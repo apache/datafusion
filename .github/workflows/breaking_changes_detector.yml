@@ -20,8 +20,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch main branch
-        run: git fetch https://github.com/${{ github.repository }}.git main:refs/remotes/origin/main
+      - name: Fetch base branch
+        run: git fetch https://github.com/${{ github.repository }}.git ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
 
       - name: Determine changed crates
         id: changed_crates
@@ -30,8 +30,8 @@ jobs:
           MEMBERS=$(sed -n '/^members = \[/,/\]/p' Cargo.toml | grep '"' | sed 's/.*"\(.*\)".*/\1/' \
             | grep -v -e '^benchmarks$' -e '^test-utils$' -e '^datafusion/sqllogictest$' -e '^datafusion/doc$')
 
-          # Get changed files compared to main
-          CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+          # Get changed files compared to base
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
 
           # Check which workspace members have changes
           PACKAGES=""
@@ -66,7 +66,7 @@ jobs:
             ARGS="$ARGS --package $pkg"
           done
 
-          cargo semver-checks --baseline-rev origin/main $ARGS 2>&1 | tee /tmp/semver-output.txt
+          cargo semver-checks --baseline-rev origin/${{ github.base_ref }} $ARGS 2>&1 | tee /tmp/semver-output.txt
           EXIT_CODE=${PIPESTATUS[0]}
           OUTPUT=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt)
           echo "logs<<EOF" >> "$GITHUB_OUTPUT"

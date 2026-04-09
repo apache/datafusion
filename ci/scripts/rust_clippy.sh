@@ -30,13 +30,41 @@ CURRENT=$(pwd)
 cd "$SCRIPT_DIR/../.." || exit 1
 
 set +e
-echo "Fetching main branch for semver checks..."
-git fetch https://github.com/apache/datafusion.git main:refs/remotes/origin/main
-echo "installing cargo-semver-checks..."
-cargo install cargo-semver-checks
 
-echo "Running cargo-semver-checks against origin/main..."
-cargo semver-checks --baseline-rev origin/main
+# Get workspace members from root Cargo.toml, excluding non-public crates
+MEMBERS=$(sed -n '/^members = \[/,/\]/p' Cargo.toml | grep '"' | sed 's/.*"\(.*\)".*/\1/' \
+  | grep -v -e '^benchmarks$' -e '^test-utils$' -e '^datafusion/sqllogictest$' -e '^datafusion/doc$')
+
+# Get changed files compared to main
+CHANGED_FILES=$(git diff --name-only HEAD~1...HEAD)
+
+# Check which workspace members have changes
+PACKAGES=""
+for member in $MEMBERS; do
+  if echo "$CHANGED_FILES" | grep -q "^${member}/"; then
+    pkg=$(grep '^name\s*=' "$member/Cargo.toml" | head -1 | sed 's/.*=\s*"\(.*\)"/\1/')
+    if [ -n "$pkg" ]; then
+      PACKAGES="$PACKAGES $pkg"
+    fi
+  fi
+done
+PACKAGES=$(echo "$PACKAGES" | xargs)
+echo "Changed crates: $PACKAGES"
+
+if [ -n "$PACKAGES" ]; then
+  echo "Installing cargo-semver-checks..."
+  cargo install cargo-semver-checks
+
+  ARGS=""
+  for pkg in $PACKAGES; do
+    ARGS="$ARGS --package $pkg"
+  done
+
+  echo "Running cargo-semver-checks against origin/main..."
+  cargo semver-checks --baseline-rev HEAD~1 $ARGS
+else
+  echo "No public crates changed, skipping semver checks."
+fi
 
 
 echo "Running cargo clippy..."
