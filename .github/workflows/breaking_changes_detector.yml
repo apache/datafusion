@@ -14,11 +14,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks
 
       - name: Run cargo-semver-checks
         id: check_semver
-        # Fork https://github.com/obi1kenobi/cargo-semver-checks-action/pull/65
-        uses: orhun/cargo-semver-checks-action@cc19b888f2062f8cc964c1d52f7f29d910becb31
+        run: |
+          set +e
+          cargo semver-checks --baseline-rev origin/main 2>&1 | tee /tmp/semver-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          OUTPUT=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt)
+          echo "logs<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$OUTPUT" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
 
   comment-on-pr:
     name: Comment on pull request
