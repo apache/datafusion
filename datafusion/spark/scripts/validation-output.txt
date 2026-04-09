@@ -1,0 +1,4256 @@
+Found 239 .slt file(s) to validate
+
+--- aggregate/avg.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 42: PASS
+  Line 50: PASS
+  Result: 6 passed
+
+--- aggregate/collect.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 47: PASS
+  Line 57: PASS
+  Line 62: PASS
+  Line 67: PASS
+  Line 72: PASS
+  Line 77: PASS
+  Line 86: PASS
+  Result: 12 passed
+
+--- aggregate/try_sum.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 48: PASS
+  Line 55: PASS
+  Line 60: PASS
+  Line 65: PASS
+  Line 70: PASS
+  Line 85: PASS
+  Line 99: PASS
+  Line 105: PASS
+  Line 110: PASS
+  Line 115: PASS
+  Line 120: PASS
+  Line 126: PASS
+  Line 131: PASS
+  Line 137: PASS
+  Result: 20 passed
+
+--- array/array.slt ---
+  Line 18: PASS
+  Line 24: PASS
+  Line 30: PASS
+  Line 35: PASS
+  Line 41: PASS
+  Line 47: PASS
+  Line 58: PASS
+  Line 64: PASS
+  Line 69: PASS
+  Line 53: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ',': missing ']'.(line 1, pos 20)
+
+== SQL ==
+SELECT array['hello', '', null, 'nULl', 'nULlx', 'aa"bb', 'mm\nn', 'uu,vv', 'yy zz'];
+--------------------^^^
+
+    SQL: SELECT array['hello', '', null, 'nULl', 'nULlx', 'aa"bb', 'mm\nn', 'uu,vv', 'yy zz'];
+  Line 74: skipped (unsupported Arrow type: LargeList(Int64))
+  Line 79: skipped (unsupported Arrow type: LargeList(Int64))
+  Line 84: skipped (unsupported Arrow type: LargeList(Int64))
+  Result: 9 passed, 1 FAILED, 3 skipped
+
+--- array/array_contains.slt ---
+  Line 26: PASS
+  Line 32: PASS
+  Line 38: PASS
+  Line 44: PASS
+  Line 50: PASS
+  Line 68: PASS
+  Line 74: PASS
+  Line 80: PASS
+  Line 86: PASS
+  Line 92: PASS
+  Line 101: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 123: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`test_arrays` cannot be found.
+  Line 131: PASS
+  Line 137: PASS
+  Line 56: PySpark error: [DATATYPE_MISMATCH.NULL_TYPE] Cannot resolve "array_contains(NULL, 1)" due to data type mismatch: Null typed values cannot be used as arguments of `array_contains`.; line 1 pos 7;
+'Project [unresolvedalias(array_contains(null, 1), None)]
++- OneRowRelation
+
+    SQL: SELECT array_contains(NULL, 1);
+  Line 62: PySpark error: [DATATYPE_MISMATCH.NULL_TYPE] Cannot resolve "array_contains(array(1, 2, 3), NULL)" due to data type mismatch: Null typed values cannot be used as arguments of `array_contains`.; line 1 pos 7;
+'Project [unresolvedalias(array_contains(array(1, 2, 3), null), None)]
++- OneRowRelation
+
+    SQL: SELECT array_contains(array(1, 2, 3), NULL);
+  Line 110: skipped (references skipped table)
+  Result: 12 passed, 2 FAILED, 1 skipped
+
+--- array/array_repeat.slt ---
+  Line 19: PASS
+  Line 24: PASS
+  Line 29: PASS
+  Line 34: PASS
+  Line 39: PASS
+  Line 44: PASS
+  Line 49: PASS
+  Line 54: PASS
+  Line 64: PASS
+  Line 69: PASS
+  Line 74: PASS
+  Line 95: PASS
+  Line 59: MISMATCH
+    SQL: SELECT array_repeat(NULL, 2);
+    Translated: SELECT array_repeat(NULL, 2);
+  Expected (1 lines):
+    NULL
+  Actual (1 lines):
+    [NULL, NULL]
+  Line 79: MISMATCH
+    SQL: SELECT array_repeat(column1, column2)
+FROM VALUES
+('123', 2),
+('123', 0),
+('123', -1),
+(NULL, 1),
+('123', NULL);
+    Translated: SELECT array_repeat(col1, col2)
+FROM VALUES
+('123', 2),
+('123', 0),
+('123', -1),
+(NULL, 1),
+('123', NULL);
+  Expected (5 lines):
+    [123, 123]
+    []
+    []
+    NULL
+    NULL
+  Actual (5 lines):
+    [123, 123]
+    []
+    []
+    [NULL]
+    NULL
+  Result: 12 passed, 2 FAILED
+
+--- array/sequence.slt ---
+  Result: 
+
+--- array/shuffle.slt ---
+  Line 31: PASS
+  Line 37: PASS
+  Line 43: PASS
+  Line 55: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 121: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`test_shuffle_list_types` cann
+  Line 124: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`test_shuffle_fixed_size` cann
+  Line 19: PySpark error: [WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `shuffle` requires 1 parameters but the actual number is 2. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.; line 1 pos 7
+    SQL: SELECT shuffle(array(1, 2, 3, 4, 5, NULL), 1);
+  Line 25: PySpark error: [WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `shuffle` requires 1 parameters but the actual number is 2. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.; line 1 pos 7
+    SQL: SELECT shuffle(array('a', 'b', 'c', 'd', 'e', 'f'), 1);
+  Line 90: PySpark error: [WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `shuffle` requires 1 parameters but the actual number is 2. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.; line 1 pos 7
+    SQL: SELECT shuffle(array(CAST('2001-09-28T01:00:00' AS TIMESTAMP), CAST('2001-08-28T01:00:00' AS TIMESTAMP), CAST('2001-07-28T01:00:00' AS TIMESTAMP), CAST('2001-06-28T01:00:00' AS TIMESTAMP), CAST('2001-05-28T01:00:00' AS TIMESTAMP)), 1);
+  Line 95: PySpark error: [WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `shuffle` requires 1 parameters but the actual number is 2. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.; line 1 pos 15
+    SQL: SELECT shuffle(shuffle(array(1, 20, NULL, 3, 100, NULL, 98, 99), 1), 1);
+  Line 100: PySpark error: [WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `shuffle` requires 1 parameters but the actual number is 2. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.; line 1 pos 7
+    SQL: SELECT shuffle(array(' ', NULL, 'abc'), 1);
+  Line 105: PySpark error: [WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `shuffle` requires 1 parameters but the actual number is 2. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.; line 1 pos 7
+    SQL: SELECT shuffle(array(1, 2, 3, 4), CAST('2' AS INT));
+  Line 110: PySpark error: [WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `shuffle` requires 1 parameters but the actual number is 2. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.; line 1 pos 7
+    SQL: SELECT shuffle(array('ab'), NULL);
+  Line 115: PySpark error: [WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `shuffle` requires 1 parameters but the actual number is 2. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.; line 1 pos 15
+    SQL: SELECT shuffle(shuffle(array(3, 3), NULL), NULL);
+  Line 49: skipped (unsupported Arrow type: FixedSizeList(6, Int64))
+  Line 64: skipped (references skipped table)
+  Line 74: skipped (unsupported Arrow type: FixedSizeList(3, Int64))
+  Line 82: skipped (references skipped table)
+  Result: 3 passed, 8 FAILED, 4 skipped
+
+--- array/slice.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 48: PASS (error expected and received)
+  Line 51: PASS (error expected and received)
+  Line 54: PASS (error expected and received)
+  Line 57: PASS
+  Line 67: PASS
+  Line 72: PASS
+  Line 103: PASS
+  Line 108: PASS
+  Line 113: PASS
+  Line 62: skipped (unsupported Arrow type: FixedSizeList(1, Int64))
+  Line 78: skipped (unsupported Arrow type: FixedSizeList(1, Int64))
+  Result: 15 passed, 2 skipped
+
+--- bitmap/bitmap_bit_position.slt ---
+  Line 19: PASS
+  Line 24: PASS
+  Line 29: PASS
+  Line 34: PASS
+  Line 39: PASS
+  Line 44: PASS
+  Line 49: PASS
+  Line 54: PASS
+  Line 59: PASS
+  Line 64: PASS
+  Line 69: PASS
+  Line 74: PASS
+  Line 79: PASS
+  Line 84: PASS
+  Line 89: PASS
+  Line 94: PASS
+  Line 99: PASS
+  Line 104: PASS
+  Line 109: PASS
+  Result: 19 passed
+
+--- bitmap/bitmap_bucket_number.slt ---
+  Line 19: PASS
+  Line 24: PASS
+  Line 29: PASS
+  Line 34: PASS
+  Line 39: PASS
+  Line 44: PASS
+  Line 49: PASS
+  Line 54: PASS
+  Line 59: PASS
+  Line 64: PASS
+  Line 69: PASS
+  Line 74: PASS
+  Line 79: PASS
+  Line 84: PASS
+  Line 89: PASS
+  Line 94: PASS
+  Line 99: PASS
+  Line 104: PASS
+  Line 109: PASS
+  Line 114: PASS
+  Line 119: PASS
+  Result: 21 passed
+
+--- bitmap/bitmap_count.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 41: skipped (unsupported Arrow type: LargeBinary)
+  Line 48: skipped (unsupported Arrow type: BinaryView)
+  Line 55: skipped (unmapped Arrow type: FixedSizeBinary(2))
+  Line 63: skipped (unsupported Arrow type: Dictionary(Int32, Binary))
+  Line 71: skipped (unsupported Arrow type: Dictionary(Int8, Binary))
+  Line 79: skipped (unsupported Arrow type: Dictionary(Int16, Binary))
+  Line 87: skipped (unsupported Arrow type: Dictionary(Int64, Binary))
+  Result: 4 passed, 7 skipped
+
+--- bitwise/bit_count.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 48: PASS
+  Line 53: PASS
+  Line 59: PASS
+  Line 64: PASS
+  Line 69: PASS
+  Line 75: PASS
+  Line 80: PASS
+  Line 85: PASS
+  Line 90: PASS
+  Line 95: PASS
+  Line 100: PASS
+  Line 105: PASS
+  Line 110: PASS
+  Line 115: PASS
+  Line 121: PASS
+  Line 126: PASS
+  Line 131: PASS
+  Line 136: PASS
+  Line 141: PASS
+  Line 146: PASS
+  Line 151: PASS
+  Line 156: PASS
+  Line 162: PASS
+  Line 167: PASS
+  Line 172: PASS
+  Line 178: PASS
+  Line 183: PASS
+  Line 188: PASS
+  Line 193: PASS
+  Line 198: PASS
+  Line 203: PASS
+  Line 209: PASS
+  Line 214: PASS
+  Line 219: PASS
+  Line 224: PASS
+  Line 229: PASS
+  Line 234: PASS
+  Line 239: PASS
+  Result: 42 passed
+
+--- bitwise/bit_get.slt ---
+  Line 26: PASS
+  Line 33: PASS
+  Line 39: PASS
+  Line 44: PASS
+  Line 49: PASS
+  Line 54: PASS
+  Line 67: PASS
+  Line 72: PASS
+  Line 77: PASS
+  Line 82: PASS
+  Line 87: PASS
+  Line 92: PASS
+  Line 97: PASS
+  Line 60: skipped (Spark did not error, DataFusion expects error)
+  Line 63: skipped (Spark did not error, DataFusion expects error)
+  Result: 13 passed, 2 skipped
+
+--- bitwise/bitwise_not.slt ---
+  Line 28: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 33: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 38: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 43: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 48: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 53: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 59: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 64: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 69: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 75: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 80: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 85: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 90: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 95: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 100: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 105: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 110: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 115: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 120: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 125: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 130: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 136: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 141: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 146: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 152: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 157: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 162: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 167: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 172: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 177: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 183: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 188: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 193: skipped (uses bitwise_not() (DataFusion-specific name))
+  Line 198: skipped (uses bitwise_not() (DataFusion-specific name))
+  Result: 34 skipped
+
+--- bitwise/getbit.slt ---
+  Line 26: PASS
+  Line 33: PASS
+  Line 39: PASS
+  Line 44: PASS
+  Line 49: PASS
+  Line 54: PASS
+  Line 67: PASS
+  Line 72: PASS
+  Line 60: skipped (Spark did not error, DataFusion expects error)
+  Line 63: skipped (Spark did not error, DataFusion expects error)
+  Result: 8 passed, 2 skipped
+
+--- bitwise/shiftright.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 44: PASS
+  Line 49: PASS
+  Line 54: PASS
+  Line 60: PASS
+  Line 65: PASS
+  Line 70: PASS
+  Line 76: PASS
+  Line 81: PASS
+  Line 86: PASS
+  Line 92: PASS
+  Line 97: PASS
+  Line 103: PASS
+  Line 108: PASS
+  Line 113: PASS
+  Line 118: PASS
+  Line 124: PASS
+  Line 129: PASS
+  Line 134: PASS
+  Line 139: PASS
+  Line 144: PASS
+  Line 150: skipped (uses arrow_typeof())
+  Line 171: skipped (uses arrow_typeof())
+  Line 186: skipped (uses arrow_typeof())
+  Line 201: skipped (uses arrow_typeof())
+  Line 216: skipped (uses arrow_typeof())
+  Line 227: skipped (uses arrow_typeof())
+  Line 238: skipped (uses arrow_typeof())
+  Line 249: skipped (uses arrow_typeof())
+  Line 254: skipped (uses arrow_typeof())
+  Line 259: skipped (uses arrow_typeof())
+  Result: 23 passed, 10 skipped
+
+--- bitwise/shiftrightunsigned.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 44: PASS
+  Line 49: PASS
+  Line 54: PASS
+  Line 60: PASS
+  Line 65: PASS
+  Line 70: PASS
+  Line 76: PASS
+  Line 81: PASS
+  Line 86: PASS
+  Line 92: PASS
+  Line 97: PASS
+  Line 103: PASS
+  Line 108: PASS
+  Line 113: PASS
+  Line 118: PASS
+  Line 125: PASS
+  Line 130: PASS
+  Line 135: PASS
+  Line 140: PASS
+  Line 145: PASS
+  Line 151: skipped (uses arrow_typeof())
+  Line 172: skipped (uses arrow_typeof())
+  Line 190: skipped (uses arrow_typeof())
+  Line 205: skipped (uses arrow_typeof())
+  Line 216: skipped (uses arrow_typeof())
+  Line 227: skipped (uses arrow_typeof())
+  Line 238: skipped (uses arrow_typeof())
+  Line 243: skipped (uses arrow_typeof())
+  Line 248: skipped (uses arrow_typeof())
+  Result: 23 passed, 9 skipped
+
+--- collection/concat.slt ---
+  Result: 
+
+--- collection/reverse.slt ---
+  Result: 
+
+--- collection/size.slt ---
+  Line 28: PASS
+  Line 34: PASS
+  Line 67: PASS
+  Line 80: PASS
+  Line 99: PASS
+  Line 105: PASS
+  Line 111: PASS
+  Line 117: PASS
+  Line 62: MISMATCH
+    SQL: SELECT size(map(make_array('a', 'b', 'c'), make_array(1, 2, 3)));
+    Translated: SELECT size(map(array('a', 'b', 'c'), array(1, 2, 3)));
+  Expected (1 lines):
+    3
+  Actual (1 lines):
+    1
+  Line 126: MISMATCH
+    SQL: SELECT size(column1) FROM VALUES (map(['a'], [1])), (map(['a','b'], [1,2])), (NULL);
+    Translated: SELECT size(col1) FROM VALUES (map(array('a'), array(1))), (map(array('a','b'), array(1,2))), (NULL);
+  Expected (3 lines):
+    1
+    2
+    -1
+  Actual (3 lines):
+    1
+    1
+    -1
+  Line 40: skipped (unsupported Arrow type: LargeList(Int32))
+  Line 45: skipped (unsupported Arrow type: LargeList(Int64))
+  Line 51: skipped (unsupported Arrow type: FixedSizeList(3, Int32))
+  Line 56: skipped (unsupported Arrow type: FixedSizeList(4, Int32))
+  Line 73: skipped (unsupported Arrow type: List(Int32))
+  Line 86: skipped (unsupported cast type: int[])
+  Line 93: skipped (unsupported Arrow type: List(Utf8))
+  Result: 8 passed, 2 FAILED, 7 skipped
+
+--- conditional/coalesce.slt ---
+  Result: 
+
+--- conditional/if.slt ---
+  Line 27: PASS
+  Line 33: PASS
+  Line 39: PASS
+  Line 44: PASS
+  Line 53: PASS
+  Line 58: PASS
+  Line 64: PASS
+  Line 72: PASS
+  Line 77: PASS
+  Line 85: PASS
+  Line 90: PASS
+  Line 98: PASS
+  Line 103: PASS
+  Line 109: PASS
+  Line 115: PASS
+  Line 121: PASS
+  Line 129: PASS
+  Line 134: PASS
+  Line 140: PASS
+  Line 145: PASS
+  Line 150: PASS (error expected and received)
+  Line 154: PASS (error expected and received)
+  Line 157: PASS
+  Line 163: PASS
+  Result: 24 passed
+
+--- conditional/nullif.slt ---
+  Result: 
+
+--- conditional/nvl2.slt ---
+  Result: 
+
+--- conversion/cast_float_to_timestamp.slt ---
+  Line 140: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 163: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 185: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`float_test` cannot be found. 
+  Line 188: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`float_special` cannot be foun
+  Line 21: skipped (uses spark_cast())
+  Line 26: skipped (uses spark_cast())
+  Line 31: skipped (uses spark_cast())
+  Line 37: skipped (uses spark_cast())
+  Line 42: skipped (uses spark_cast())
+  Line 47: skipped (uses spark_cast())
+  Line 53: skipped (uses spark_cast())
+  Line 58: skipped (uses spark_cast())
+  Line 64: skipped (uses spark_cast())
+  Line 69: skipped (uses spark_cast())
+  Line 74: skipped (uses spark_cast())
+  Line 80: skipped (uses spark_cast())
+  Line 85: skipped (uses spark_cast())
+  Line 91: skipped (uses spark_cast())
+  Line 96: skipped (uses spark_cast())
+  Line 101: skipped (uses spark_cast())
+  Line 107: skipped (uses spark_cast())
+  Line 112: skipped (uses spark_cast())
+  Line 118: skipped (DataFusion config statement)
+  Line 121: skipped (uses spark_cast())
+  Line 126: skipped (uses spark_cast())
+  Line 132: skipped (DataFusion config statement)
+  Line 153: skipped (references skipped table)
+  Line 175: skipped (references skipped table)
+  Line 201: skipped (ANSI mode block)
+  Line 205: skipped (ANSI mode block)
+  Line 209: skipped (ANSI mode block)
+  Line 213: skipped (ANSI mode block)
+  Line 217: skipped (ANSI mode block)
+  Line 223: skipped (DataFusion config statement)
+  Line 227: skipped (DataFusion config statement)
+  Result: 31 skipped
+
+--- conversion/cast_int_to_timestamp.slt ---
+  Line 203: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 253: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`int_test` cannot be found. Ve
+  Line 21: skipped (uses spark_cast())
+  Line 26: skipped (uses spark_cast())
+  Line 31: skipped (uses spark_cast())
+  Line 37: skipped (uses spark_cast())
+  Line 42: skipped (uses spark_cast())
+  Line 48: skipped (uses spark_cast())
+  Line 53: skipped (uses spark_cast())
+  Line 59: skipped (uses spark_cast())
+  Line 64: skipped (uses spark_cast())
+  Line 70: skipped (uses spark_cast())
+  Line 75: skipped (uses spark_cast())
+  Line 80: skipped (uses spark_cast())
+  Line 85: skipped (uses spark_cast())
+  Line 91: skipped (uses spark_cast())
+  Line 97: skipped (uses spark_cast())
+  Line 102: skipped (uses spark_cast())
+  Line 108: skipped (uses spark_cast())
+  Line 113: skipped (uses spark_cast())
+  Line 119: skipped (uses spark_cast())
+  Line 125: skipped (uses spark_cast())
+  Line 129: skipped (uses spark_cast())
+  Line 135: skipped (DataFusion config statement)
+  Line 139: skipped (uses spark_cast())
+  Line 145: skipped (uses spark_cast())
+  Line 151: skipped (DataFusion config statement)
+  Line 155: skipped (uses spark_cast())
+  Line 161: skipped (uses spark_cast())
+  Line 167: skipped (DataFusion config statement)
+  Line 170: skipped (uses spark_cast())
+  Line 175: skipped (uses spark_cast())
+  Line 181: skipped (DataFusion config statement)
+  Line 184: skipped (uses spark_cast())
+  Line 189: skipped (uses spark_cast())
+  Line 195: skipped (DataFusion config statement)
+  Line 217: skipped (references skipped table)
+  Line 226: skipped (DataFusion config statement)
+  Line 229: skipped (references skipped table)
+  Line 238: skipped (DataFusion config statement)
+  Line 241: skipped (references skipped table)
+  Line 250: skipped (DataFusion config statement)
+  Result: 40 skipped
+
+--- csv/schema_of_csv.slt ---
+  Result: 
+
+--- datetime/add_months.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 40: PASS
+  Line 46: PASS
+  Line 51: PASS
+  Line 56: PASS
+  Result: 7 passed
+
+--- datetime/convert_timezone.slt ---
+  Result: 
+
+--- datetime/curdate.slt ---
+  Result: 
+
+--- datetime/current_date.slt ---
+  Result: 
+
+--- datetime/current_timestamp.slt ---
+  Result: 
+
+--- datetime/current_timezone.slt ---
+  Result: 
+
+--- datetime/date_add.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 58: PASS
+  Line 64: PASS
+  Line 70: PASS
+  Line 75: PASS
+  Line 80: PASS
+  Line 48: MISMATCH
+    SQL: SELECT date_add('2016-07-30'::date, 2147483647::int)::int;
+    Translated: SELECT CAST(date_add(CAST('2016-07-30' AS DATE), CAST(2147483647 AS INT)) AS INT);
+  Expected (1 lines):
+    -2147466637
+  Actual (1 lines):
+    NULL
+  Line 53: MISMATCH
+    SQL: SELECT date_add('1969-01-01'::date, 2147483647::int)::int;
+    Translated: SELECT CAST(date_add(CAST('1969-01-01' AS DATE), CAST(2147483647 AS INT)) AS INT);
+  Expected (1 lines):
+    2147483282
+  Actual (1 lines):
+    NULL
+  Result: 9 passed, 2 FAILED
+
+--- datetime/date_diff.slt ---
+  Line 19: PASS
+  Line 24: PASS
+  Line 29: PASS
+  Line 34: PASS
+  Line 40: PASS
+  Line 45: PASS
+  Line 51: PASS
+  Line 56: PASS
+  Line 63: PASS
+  Line 69: PASS
+  Line 75: PASS
+  Line 80: PASS
+  Line 85: PASS
+  Line 91: PASS
+  Line 96: PASS
+  Line 102: PASS
+  Line 107: PASS
+  Line 112: PASS
+  Line 117: PASS
+  Line 134: PASS
+  Line 139: PASS
+  Result: 21 passed
+
+--- datetime/date_format.slt ---
+  Result: 
+
+--- datetime/date_part.slt ---
+  Line 19: PASS
+  Line 24: PASS
+  Line 29: PASS
+  Line 34: PASS
+  Line 39: PASS
+  Line 45: PASS
+  Line 51: PASS
+  Line 56: PASS
+  Line 62: PASS
+  Line 67: PASS
+  Line 72: PASS
+  Line 77: PASS
+  Line 83: PASS
+  Line 88: PASS
+  Line 93: PASS
+  Line 99: PASS
+  Line 104: PASS
+  Line 109: PASS
+  Line 115: PASS
+  Line 120: PASS
+  Line 126: PASS
+  Line 131: PASS
+  Line 137: PASS
+  Line 143: PASS
+  Line 148: PASS
+  Line 153: PASS
+  Line 158: PASS
+  Line 163: PASS
+  Line 169: PASS
+  Line 174: PASS
+  Line 179: PASS
+  Line 184: PASS
+  Line 189: PASS
+  Line 195: PASS
+  Line 200: PASS
+  Line 205: PASS
+  Line 210: PASS
+  Line 215: PASS
+  Line 221: PASS
+  Line 230: PASS (error expected and received)
+  Line 233: PASS
+  Line 246: PASS
+  Line 260: PASS
+  Line 265: PASS
+  Line 226: skipped (Spark did not error, DataFusion expects error)
+  Result: 44 passed, 1 skipped
+
+--- datetime/date_sub.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 53: PASS
+  Line 59: PASS
+  Line 64: PASS
+  Line 70: PASS
+  Line 75: PASS
+  Line 80: PASS
+  Line 48: MISMATCH
+    SQL: SELECT date_sub('1969-01-01'::date, 2147483647::int)::int;
+    Translated: SELECT CAST(date_sub(CAST('1969-01-01' AS DATE), CAST(2147483647 AS INT)) AS INT);
+  Expected (1 lines):
+    2147483284
+  Actual (1 lines):
+    NULL
+  Result: 10 passed, 1 FAILED
+
+--- datetime/date_trunc.slt ---
+  Line 19: PASS
+  Line 24: PASS
+  Line 29: PASS
+  Line 35: PASS
+  Line 41: PASS
+  Line 46: PASS
+  Line 51: PASS
+  Line 57: PASS
+  Line 63: PASS
+  Line 68: PASS
+  Line 74: PASS
+  Line 80: PASS
+  Line 86: PASS
+  Line 92: PASS
+  Line 98: PASS
+  Line 103: PASS
+  Line 117: PASS
+  Line 126: PASS
+  Line 123: skipped (Spark did not error, DataFusion expects error)
+  Line 132: skipped (Spark did not error, DataFusion expects error)
+  Line 138: skipped (unmapped Arrow type: Timestamp(Microsecond, Some("UTC")))
+  Line 143: skipped (unmapped Arrow type: Timestamp(Microsecond, None))
+  Line 148: skipped (DataFusion config statement)
+  Line 153: skipped (unmapped Arrow type: Timestamp(Microsecond, Some("UTC")))
+  Line 158: skipped (unmapped Arrow type: Timestamp(Microsecond, None))
+  Line 163: skipped (DataFusion config statement)
+  Result: 18 passed, 8 skipped
+
+--- datetime/dateadd.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 40: PASS
+  Line 46: PASS
+  Line 51: PASS
+  Line 56: PASS
+  Result: 6 passed
+
+--- datetime/day.slt ---
+  Result: 
+
+--- datetime/dayofmonth.slt ---
+  Result: 
+
+--- datetime/dayofweek.slt ---
+  Result: 
+
+--- datetime/dayofyear.slt ---
+  Result: 
+
+--- datetime/from_utc_timestamp.slt ---
+  Line 19: PASS
+  Line 24: PASS
+  Line 29: PASS
+  Line 67: PASS
+  Line 72: PASS
+  Line 77: PASS
+  Line 147: PASS
+  Line 153: PASS
+  Line 35: MISMATCH
+    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'UTC'::string);
+    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('UTC' AS STRING));
+  Expected (1 lines):
+    2018-03-13T04:18:23
+  Actual (1 lines):
+    2018-03-12T22:18:23
+  Line 40: MISMATCH
+    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string);
+    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('Asia/Seoul' AS STRING));
+  Expected (1 lines):
+    2018-03-13T13:18:23
+  Actual (1 lines):
+    2018-03-13T07:18:23
+  Line 45: MISMATCH
+    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string);
+    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('America/New_York' AS STRING));
+  Expected (1 lines):
+    2018-03-13T00:18:23
+  Actual (1 lines):
+    2018-03-12T18:18:23
+  Line 51: MISMATCH
+    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string);
+    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('UTC' AS STRING));
+  Expected (1 lines):
+    2018-03-13T04:18:23
+  Actual (1 lines):
+    2018-03-12T22:18:23
+  Line 56: MISMATCH
+    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string);
+    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING));
+  Expected (1 lines):
+    2018-03-13T13:18:23
+  Actual (1 lines):
+    2018-03-13T07:18:23
+  Line 61: MISMATCH
+    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string);
+    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('America/New_York' AS STRING));
+  Expected (1 lines):
+    2018-03-13T00:18:23
+  Actual (1 lines):
+    2018-03-12T18:18:23
+  Line 82: MISMATCH
+    SQL: SELECT from_utc_timestamp(column1, column2)
+FROM VALUES
+('2016-08-31'::string, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string),
+('2016-08-31'::string, 'UTC'::string),
+('2018-03-13T06:18:23+02:00'::string, 'UTC'::string),
+('2016-08-31'::string, 'America/New_York'::string),
+('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string),
+(NULL::string, 'Asia/Seoul'::string),
+('2016-08-31'::string, NULL::string);
+    Translated: SELECT from_utc_timestamp(col1, col2)
+FROM VALUES
+(CAST('2016-08-31' AS STRING), CAST('Asia/Seoul' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('Asia/Seoul' AS STRING)),
+(CAST('2016-08-31' AS STRING), CAST('UTC' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('UTC' AS STRING)),
+(CAST('2016-08-31' AS STRING), CAST('America/New_York' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('America/New_York' AS STRING)),
+(CAST(NULL AS STRING), CAST('Asia/Seoul' AS STRING)),
+(CAST('2016-08-31' AS STRING), CAST(NULL AS STRING));
+  Expected (8 lines):
+    2016-08-31T09:00:00
+    2018-03-13T13:18:23
+    2016-08-31T00:00:00
+    2018-03-13T04:18:23
+    2016-08-30T20:00:00
+    2018-03-13T00:18:23
+    NULL
+    NULL
+  Actual (8 lines):
+    2016-08-31T09:00:00
+    2018-03-13T07:18:23
+    2016-08-31T00:00:00
+    2018-03-12T22:18:23
+    2016-08-30T20:00:00
+    2018-03-12T18:18:23
+    NULL
+    NULL
+  Line 103: MISMATCH
+    SQL: SELECT from_utc_timestamp(column1, column2)
+FROM VALUES
+('2016-08-31'::timestamp, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string),
+('2016-08-31'::timestamp, 'UTC'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string),
+('2016-08-31'::timestamp, 'America/New_York'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string),
+(NULL::timestamp, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+00:00'::timestamp, NULL::string);
+    Translated: SELECT from_utc_timestamp(col1, col2)
+FROM VALUES
+(CAST('2016-08-31' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
+(CAST('2016-08-31' AS TIMESTAMP), CAST('UTC' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('UTC' AS STRING)),
+(CAST('2016-08-31' AS TIMESTAMP), CAST('America/New_York' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('America/New_York' AS STRING)),
+(CAST(NULL AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
+(CAST('2018-03-13T06:18:23+00:00' AS TIMESTAMP), CAST(NULL AS STRING));
+  Expected (8 lines):
+    2016-08-31T09:00:00
+    2018-03-13T13:18:23
+    2016-08-31T00:00:00
+    2018-03-13T04:18:23
+    2016-08-30T20:00:00
+    2018-03-13T00:18:23
+    NULL
+    NULL
+  Actual (8 lines):
+    2016-08-31T09:00:00
+    2018-03-13T07:18:23
+    2016-08-31T00:00:00
+    2018-03-12T22:18:23
+    2016-08-30T20:00:00
+    2018-03-12T18:18:23
+    NULL
+    NULL
+  Line 124: skipped (unmapped Arrow type: Timestamp(Microsecond, Some("Asia/Seoul")))
+  Result: 8 passed, 8 FAILED, 1 skipped
+
+--- datetime/hour.slt ---
+  Line 26: PASS
+  Line 32: PASS
+  Line 37: PASS
+  Line 43: PASS
+  Result: 4 passed
+
+--- datetime/last_day.slt ---
+  Line 24: PASS
+  Line 30: PASS
+  Line 35: PASS
+  Line 40: PASS
+  Line 45: PASS
+  Line 50: PASS
+  Line 55: PASS
+  Line 60: PASS
+  Line 65: PASS
+  Line 70: PASS
+  Line 75: PASS
+  Line 80: PASS
+  Line 86: PASS
+  Line 91: PASS
+  Line 97: PASS
+  Line 107: PASS (error expected and received)
+  Line 111: PASS (error expected and received)
+  Line 114: PASS (error expected and received)
+  Line 103: skipped (Spark did not error, DataFusion expects error)
+  Line 117: skipped (Spark did not error, DataFusion expects error)
+  Result: 18 passed, 2 skipped
+
+--- datetime/localtimestamp.slt ---
+  Result: 
+
+--- datetime/make_date.slt ---
+  Result: 
+
+--- datetime/make_dt_interval.slt ---
+  Line 33: PASS
+  Line 46: PASS
+  Line 51: PASS
+  Line 56: PASS
+  Line 61: PASS
+  Line 26: MISMATCH
+    SQL: SELECT make_dt_interval(1::int, 12::int, 30::int, 1.001001::decimal(7,6));
+    Translated: SELECT make_dt_interval(CAST(1 AS INT), CAST(12 AS INT), CAST(30 AS INT), CAST(1.001001 AS decimal(7,6)));
+  Expected (1 lines):
+    1 days 12 hours 30 mins 1.001001 secs
+  Actual (1 lines):
+    1 day, 12:30:01.001001
+  Line 40: MISMATCH
+    SQL: SELECT make_dt_interval(2::int);
+    Translated: SELECT make_dt_interval(CAST(2 AS INT));
+  Expected (1 lines):
+    2 days 0 hours 0 mins 0.000000 secs
+  Actual (1 lines):
+    2 days, 0:00:00
+  Line 67: MISMATCH
+    SQL: SELECT (make_dt_interval()) AS make_dt_interval
+    Translated: SELECT (make_dt_interval()) AS make_dt_interval
+  Expected (1 lines):
+    0 days 0 hours 0 mins 0.000000 secs
+  Actual (1 lines):
+    0:00:00
+  Line 73: MISMATCH
+    SQL: SELECT (make_dt_interval(1)) AS make_dt_interval
+    Translated: SELECT (make_dt_interval(1)) AS make_dt_interval
+  Expected (1 lines):
+    1 days 0 hours 0 mins 0.000000 secs
+  Actual (1 lines):
+    1 day, 0:00:00
+  Line 78: MISMATCH
+    SQL: SELECT (make_dt_interval(1, 1)) AS make_dt_interval
+    Translated: SELECT (make_dt_interval(1, 1)) AS make_dt_interval
+  Expected (1 lines):
+    1 days 1 hours 0 mins 0.000000 secs
+  Actual (1 lines):
+    1 day, 1:00:00
+  Line 83: MISMATCH
+    SQL: SELECT (make_dt_interval(1, 1, 1)) AS make_dt_interval
+    Translated: SELECT (make_dt_interval(1, 1, 1)) AS make_dt_interval
+  Expected (1 lines):
+    1 days 1 hours 1 mins 0.000000 secs
+  Actual (1 lines):
+    1 day, 1:01:00
+  Line 88: MISMATCH
+    SQL: SELECT (make_dt_interval(1, 1, 1, 1)) AS make_dt_interval
+    Translated: SELECT (make_dt_interval(1, 1, 1, 1)) AS make_dt_interval
+  Expected (1 lines):
+    1 days 1 hours 1 mins 1.000000 secs
+  Actual (1 lines):
+    1 day, 1:01:01
+  Line 95: MISMATCH
+    SQL: SELECT (make_dt_interval(0, 0, 0, 0))
+    Translated: SELECT (make_dt_interval(0, 0, 0, 0))
+  Expected (1 lines):
+    0 days 0 hours 0 mins 0.000000 secs
+  Actual (1 lines):
+    0:00:00
+  Line 100: MISMATCH
+    SQL: SELECT (make_dt_interval(-1, 24, 0, 0)) df
+    Translated: SELECT (make_dt_interval(-1, 24, 0, 0)) df
+  Expected (1 lines):
+    0 days 0 hours 0 mins 0.000000 secs
+  Actual (1 lines):
+    0:00:00
+  Line 105: MISMATCH
+    SQL: SELECT (make_dt_interval(1, -24, 0, 0)) dt
+    Translated: SELECT (make_dt_interval(1, -24, 0, 0)) dt
+  Expected (1 lines):
+    0 days 0 hours 0 mins 0.000000 secs
+  Actual (1 lines):
+    0:00:00
+  Line 110: MISMATCH
+    SQL: SELECT (make_dt_interval(0, 0, 0, 0.1))
+    Translated: SELECT (make_dt_interval(0, 0, 0, 0.1))
+  Expected (1 lines):
+    0 days 0 hours 0 mins 0.100000 secs
+  Actual (1 lines):
+    0:00:00.100000
+  Line 119: MISMATCH
+    SQL: SELECT MAKE_DT_INTERVAL(day) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+    Translated: SELECT MAKE_DT_INTERVAL(day) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+  Expected (1 lines):
+    1 days 0 hours 0 mins 0.000000 secs
+  Actual (1 lines):
+    1 day, 0:00:00
+  Line 125: MISMATCH
+    SQL: SELECT MAKE_DT_INTERVAL(day, hour) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+    Translated: SELECT MAKE_DT_INTERVAL(day, hour) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+  Expected (1 lines):
+    1 days 12 hours 0 mins 0.000000 secs
+  Actual (1 lines):
+    1 day, 12:00:00
+  Line 131: MISMATCH
+    SQL: SELECT MAKE_DT_INTERVAL(day, hour, min) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+    Translated: SELECT MAKE_DT_INTERVAL(day, hour, min) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+  Expected (1 lines):
+    1 days 12 hours 30 mins 0.000000 secs
+  Actual (1 lines):
+    1 day, 12:30:00
+  Line 137: MISMATCH
+    SQL: SELECT MAKE_DT_INTERVAL(day, hour, min, sec) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+    Translated: SELECT MAKE_DT_INTERVAL(day, hour, min, sec) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+  Expected (1 lines):
+    1 days 12 hours 30 mins 1.001001 secs
+  Actual (1 lines):
+    1 day, 12:30:01.001001
+  Line 143: MISMATCH
+    SQL: SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001)
+    Translated: SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001)
+  Expected (1 lines):
+    1 days 12 hours 30 mins 1.001001 secs
+  Actual (1 lines):
+    1 day, 12:30:01.001001
+  Line 148: MISMATCH
+    SQL: SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001);
+    Translated: SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001);
+  Expected (1 lines):
+    1 days 12 hours 30 mins 1.001001 secs
+  Actual (1 lines):
+    1 day, 12:30:01.001001
+  Result: 5 passed, 17 FAILED
+
+--- datetime/make_interval.slt ---
+  Line 24: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    SQL: SELECT
+  y, m, w, d, h, mi, s,
+  make_interval(y, m, w, d, h, mi, s) AS interval
+FROM VALUES
+  (NULL,2,   3,   4,   5,   6,   7.5),
+  (1,   NULL,3,   4,   5,   6,   7.5),
+  (1,   2,   NULL,4,   5,   6,   7.5),
+  (1,   2,   3,   NULL,5,   6,   7.5),
+  (1,   2,   3,   4,   NULL,6,   7.5),
+  (1,   2,   3,   4,   5,   NULL,7.5),
+  (1,   2,   3,   4,   5,   6,   CAST(NULL AS DOUBLE)),
+  (1,   1,   1,   1,   1,   1,   1.0)
+AS v(y, m, w, d, h, mi, s);
+  Line 48: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    SQL: SELECT
+  y, m, w, d, h, mi, s,
+  make_interval(y, m, w, d, h, mi, s) AS interval
+FROM VALUES
+  (0,   0,   0,   0,   0,   0,   CAST('NaN' AS DOUBLE))
+AS v(y, m, w, d, h, mi, s);
+  Line 58: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    SQL: SELECT
+  y, m, w, d, h, mi, s,
+  make_interval(y, m, w, d, h, mi, s) AS interval
+FROM VALUES
+  (0,   0,   0,   0,   0,   0,   CAST('Infinity' AS DOUBLE))
+AS v(y, m, w, d, h, mi, s);
+  Line 68: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    SQL: SELECT
+  y, m, w, d, h, mi, s,
+  make_interval(y, m, w, d, h, mi, s) AS interval
+FROM VALUES
+  (0,   0,   0,   0,   0,   0,   CAST('-Infinity' AS DOUBLE))
+AS v(y, m, w, d, h, mi, s);
+  Line 78: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    SQL: SELECT make_interval(2147483647, 1, 0, 0, 0, 0, 0.0);
+  Line 83: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    SQL: SELECT make_interval(0, 0, 2147483647, 1, 0, 0, 0.0);
+  Line 88: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    SQL: SELECT make_interval(0, 0, 0, 0, 2147483647, 1, 0.0);
+  Line 93: PySpark error: [DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve "concat(make_interval(0, 0, 0, 0, 0, 0, 0.0), )" due to data type mismatch: Parameter 1 requires the ("STRING" or "BINARY" or "ARRAY") type, however "make_interval(0, 0, 0, 0, 0, 0, 0.0)" has the type "INTERVAL".; line 1 pos 7;
+'Project [unresolvedalias(concat(make_interval(0, 0, 0, 0, 0, 0, cast(0.0 as decimal(18,6)), false), ), None)]
++- OneRowRelation
+
+    SQL: SELECT make_interval(0, 0, 0, 0, 0, 0, 0.0) || '';
+  Line 98: PySpark error: [DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve "concat(make_interval(0, 0, 0, 0, 0, 0, 0.000000), )" due to data type mismatch: Parameter 1 requires the ("STRING" or "BINARY" or "ARRAY") type, however "make_interval(0, 0, 0, 0, 0, 0, 0.000000)" has the type "INTERVAL".; line 1 pos 7;
+'Project [unresolvedalias(concat(make_interval(0, 0, 0, 0, 0, 0, 0.000000, false), ), None)]
++- OneRowRelation
+
+    SQL: SELECT make_interval() || '';
+  Line 103: MISMATCH
+    SQL: SELECT INTERVAL '1' SECOND AS iv;
+    Translated: SELECT INTERVAL '1' SECOND AS iv;
+  Expected (1 lines):
+    1.000000000 secs
+  Actual (1 lines):
+    0:00:01
+  Result: 10 FAILED
+
+--- datetime/make_timestamp.slt ---
+  Result: 
+
+--- datetime/make_timestamp_ltz.slt ---
+  Result: 
+
+--- datetime/make_timestamp_ntz.slt ---
+  Result: 
+
+--- datetime/make_ym_interval.slt ---
+  Result: 
+
+--- datetime/minute.slt ---
+  Line 26: PASS
+  Line 32: PASS
+  Line 37: PASS
+  Line 43: PASS
+  Result: 4 passed
+
+--- datetime/month.slt ---
+  Result: 
+
+--- datetime/months_between.slt ---
+  Result: 
+
+--- datetime/next_day.slt ---
+  Line 24: PASS
+  Line 29: PASS
+  Line 34: PASS
+  Line 39: PASS (error expected and received)
+  Line 42: PASS (error expected and received)
+  Line 45: PASS (error expected and received)
+  Line 48: PASS (error expected and received)
+  Line 51: PASS (error expected and received)
+  Line 57: PASS
+  Line 62: PASS
+  Line 70: PASS
+  Line 54: skipped (Spark did not error, DataFusion expects error)
+  Line 67: skipped (Spark did not error, DataFusion expects error)
+  Result: 11 passed, 2 skipped
+
+--- datetime/now.slt ---
+  Result: 
+
+--- datetime/quarter.slt ---
+  Result: 
+
+--- datetime/second.slt ---
+  Line 26: PASS
+  Line 32: PASS
+  Line 37: PASS
+  Line 43: PASS
+  Result: 4 passed
+
+--- datetime/time_trunc.slt ---
+  Line 63: PASS (error expected and received)
+  Line 72: PASS (error expected and received)
+  Line 19: PySpark error: 
+[UNSUPPORTED_DATATYPE] Unsupported data type "TIME".(line 1, pos 52)
+
+== SQL ==
+SELECT time_trunc('HOUR', CAST('09:32:05.123456' AS TIME));
+----------------------------------------------------^^^
+
+    SQL: SELECT time_trunc('HOUR', CAST('09:32:05.123456' AS TIME));
+  Line 25: PySpark error: 
+[UNSUPPORTED_DATATYPE] Unsupported data type "TIME".(line 1, pos 54)
+
+== SQL ==
+SELECT time_trunc('MINUTE', CAST('09:32:05.123456' AS TIME));
+------------------------------------------------------^^^
+
+    SQL: SELECT time_trunc('MINUTE', CAST('09:32:05.123456' AS TIME));
+  Line 31: PySpark error: 
+[UNSUPPORTED_DATATYPE] Unsupported data type "TIME".(line 1, pos 54)
+
+== SQL ==
+SELECT time_trunc('SECOND', CAST('09:32:05.123456' AS TIME));
+------------------------------------------------------^^^
+
+    SQL: SELECT time_trunc('SECOND', CAST('09:32:05.123456' AS TIME));
+  Line 37: PySpark error: 
+[UNSUPPORTED_DATATYPE] Unsupported data type "TIME".(line 1, pos 59)
+
+== SQL ==
+SELECT time_trunc('MILLISECOND', CAST('09:32:05.123456' AS TIME));
+-----------------------------------------------------------^^^
+
+    SQL: SELECT time_trunc('MILLISECOND', CAST('09:32:05.123456' AS TIME));
+  Line 43: PySpark error: 
+[UNSUPPORTED_DATATYPE] Unsupported data type "TIME".(line 1, pos 59)
+
+== SQL ==
+SELECT time_trunc('MICROSECOND', CAST('09:32:05.123456' AS TIME));
+-----------------------------------------------------------^^^
+
+    SQL: SELECT time_trunc('MICROSECOND', CAST('09:32:05.123456' AS TIME));
+  Line 48: PySpark error: 
+[UNSUPPORTED_DATATYPE] Unsupported data type "TIME".(line 3, pos 27)
+
+== SQL ==
+SELECT time_trunc('HOUR', col1)
+FROM VALUES
+(CAST('09:32:05.123456' AS TIME)),
+---------------------------^^^
+(CAST('22:45:30.654321' AS TIME)),
+(CAST('14:20:10.000001' AS TIME)),
+(CAST(NULL AS TIME));
+
+    SQL: SELECT time_trunc('HOUR', col1)
+FROM VALUES
+(CAST('09:32:05.123456' AS TIME)),
+(CAST('22:45:30.654321' AS TIME)),
+(CAST('14:20:10.000001' AS TIME)),
+(CAST(NULL AS TIME));
+  Line 66: PySpark error: 
+[UNSUPPORTED_DATATYPE] Unsupported data type "TIME".(line 1, pos 39)
+
+== SQL ==
+SELECT time_trunc('HOUR', CAST(NULL AS TIME));
+---------------------------------------^^^
+
+    SQL: SELECT time_trunc('HOUR', CAST(NULL AS TIME));
+  Result: 2 passed, 7 FAILED
+
+--- datetime/timestamp_micros.slt ---
+  Result: 
+
+--- datetime/timestamp_millis.slt ---
+  Result: 
+
+--- datetime/timestamp_seconds.slt ---
+  Result: 
+
+--- datetime/to_date.slt ---
+  Result: 
+
+--- datetime/to_timestamp.slt ---
+  Result: 
+
+--- datetime/to_timestamp_ltz.slt ---
+  Result: 
+
+--- datetime/to_timestamp_ntz.slt ---
+  Result: 
+
+--- datetime/to_unix_timestamp.slt ---
+  Result: 
+
+--- datetime/to_utc_timestamp.slt ---
+  Line 20: PASS
+  Line 25: PASS
+  Line 30: PASS
+  Line 68: PASS
+  Line 73: PASS
+  Line 78: PASS
+  Line 148: PASS
+  Line 154: PASS
+  Line 36: MISMATCH
+    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'UTC'::string);
+    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('UTC' AS STRING));
+  Expected (1 lines):
+    2018-03-13T04:18:23
+  Actual (1 lines):
+    2018-03-12T22:18:23
+  Line 41: MISMATCH
+    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string);
+    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('Asia/Seoul' AS STRING));
+  Expected (1 lines):
+    2018-03-12T19:18:23
+  Actual (1 lines):
+    2018-03-12T13:18:23
+  Line 46: MISMATCH
+    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string);
+    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('America/New_York' AS STRING));
+  Expected (1 lines):
+    2018-03-13T08:18:23
+  Actual (1 lines):
+    2018-03-13T02:18:23
+  Line 52: MISMATCH
+    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string);
+    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('UTC' AS STRING));
+  Expected (1 lines):
+    2018-03-13T04:18:23
+  Actual (1 lines):
+    2018-03-12T22:18:23
+  Line 57: MISMATCH
+    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string);
+    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING));
+  Expected (1 lines):
+    2018-03-12T19:18:23
+  Actual (1 lines):
+    2018-03-12T13:18:23
+  Line 62: MISMATCH
+    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string);
+    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('America/New_York' AS STRING));
+  Expected (1 lines):
+    2018-03-13T08:18:23
+  Actual (1 lines):
+    2018-03-13T02:18:23
+  Line 83: MISMATCH
+    SQL: SELECT to_utc_timestamp(column1, column2)
+FROM VALUES
+('2016-08-31'::string, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string),
+('2016-08-31'::string, 'UTC'::string),
+('2018-03-13T06:18:23+02:00'::string, 'UTC'::string),
+('2016-08-31'::string, 'America/New_York'::string),
+('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string),
+(NULL::string, 'Asia/Seoul'::string),
+('2016-08-31'::string, NULL::string);
+    Translated: SELECT to_utc_timestamp(col1, col2)
+FROM VALUES
+(CAST('2016-08-31' AS STRING), CAST('Asia/Seoul' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('Asia/Seoul' AS STRING)),
+(CAST('2016-08-31' AS STRING), CAST('UTC' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('UTC' AS STRING)),
+(CAST('2016-08-31' AS STRING), CAST('America/New_York' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('America/New_York' AS STRING)),
+(CAST(NULL AS STRING), CAST('Asia/Seoul' AS STRING)),
+(CAST('2016-08-31' AS STRING), CAST(NULL AS STRING));
+  Expected (8 lines):
+    2016-08-30T15:00:00
+    2018-03-12T19:18:23
+    2016-08-31T00:00:00
+    2018-03-13T04:18:23
+    2016-08-31T04:00:00
+    2018-03-13T08:18:23
+    NULL
+    NULL
+  Actual (8 lines):
+    2016-08-30T15:00:00
+    2018-03-12T13:18:23
+    2016-08-31T00:00:00
+    2018-03-12T22:18:23
+    2016-08-31T04:00:00
+    2018-03-13T02:18:23
+    NULL
+    NULL
+  Line 104: MISMATCH
+    SQL: SELECT to_utc_timestamp(column1, column2)
+FROM VALUES
+('2016-08-31'::timestamp, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string),
+('2016-08-31'::timestamp, 'UTC'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string),
+('2016-08-31'::timestamp, 'America/New_York'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string),
+(NULL::timestamp, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+00:00'::timestamp, NULL::string);
+    Translated: SELECT to_utc_timestamp(col1, col2)
+FROM VALUES
+(CAST('2016-08-31' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
+(CAST('2016-08-31' AS TIMESTAMP), CAST('UTC' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('UTC' AS STRING)),
+(CAST('2016-08-31' AS TIMESTAMP), CAST('America/New_York' AS STRING)),
+(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('America/New_York' AS STRING)),
+(CAST(NULL AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
+(CAST('2018-03-13T06:18:23+00:00' AS TIMESTAMP), CAST(NULL AS STRING));
+  Expected (8 lines):
+    2016-08-30T15:00:00
+    2018-03-12T19:18:23
+    2016-08-31T00:00:00
+    2018-03-13T04:18:23
+    2016-08-31T04:00:00
+    2018-03-13T08:18:23
+    NULL
+    NULL
+  Actual (8 lines):
+    2016-08-30T15:00:00
+    2018-03-12T13:18:23
+    2016-08-31T00:00:00
+    2018-03-12T22:18:23
+    2016-08-31T04:00:00
+    2018-03-13T02:18:23
+    NULL
+    NULL
+  Line 125: skipped (unmapped Arrow type: Timestamp(Microsecond, Some("Asia/Seoul")))
+  Result: 8 passed, 8 FAILED, 1 skipped
+
+--- datetime/trunc.slt ---
+  Line 19: PASS
+  Line 24: PASS
+  Line 29: PASS
+  Line 35: PASS
+  Line 41: PASS
+  Line 46: PASS
+  Line 51: PASS
+  Line 57: PASS
+  Line 63: PASS
+  Line 68: PASS
+  Line 82: PASS
+  Line 87: skipped (Spark did not error, DataFusion expects error)
+  Line 91: skipped (Spark did not error, DataFusion expects error)
+  Result: 11 passed, 2 skipped
+
+--- datetime/try_to_timestamp.slt ---
+  Result: 
+
+--- datetime/unix.slt ---
+  Line 20: PASS
+  Line 25: PASS
+  Line 31: PASS
+  Line 36: PASS
+  Line 41: PASS (error expected and received)
+  Line 46: PASS
+  Line 51: PASS
+  Line 66: PASS
+  Line 71: PASS (error expected and received)
+  Line 77: PASS
+  Line 82: PASS
+  Line 97: PASS
+  Line 102: PASS (error expected and received)
+  Line 108: PASS
+  Line 113: PASS
+  Line 128: PASS
+  Line 133: PASS (error expected and received)
+  Line 56: skipped (unmapped Arrow type: Timestamp(Microsecond, None))
+  Line 61: skipped (unmapped Arrow type: Timestamp(Second, None))
+  Line 87: skipped (unmapped Arrow type: Timestamp(Microsecond, None))
+  Line 92: skipped (unmapped Arrow type: Timestamp(Second, None))
+  Line 118: skipped (unmapped Arrow type: Timestamp(Microsecond, None))
+  Line 123: skipped (unmapped Arrow type: Timestamp(Second, None))
+  Result: 17 passed, 6 skipped
+
+--- datetime/unix_timestamp.slt ---
+  Result: 
+
+--- datetime/weekday.slt ---
+  Result: 
+
+--- datetime/weekofyear.slt ---
+  Result: 
+
+--- datetime/year.slt ---
+  Result: 
+
+--- hash/crc32.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 44: PASS
+  Line 59: PASS
+  Line 64: PASS
+  Line 49: skipped (unsupported Arrow type: LargeUtf8)
+  Line 54: skipped (unsupported Arrow type: Utf8View)
+  Line 69: skipped (unmapped Arrow type: FixedSizeBinary(5))
+  Line 74: skipped (unsupported Arrow type: LargeBinary)
+  Line 79: skipped (unsupported Arrow type: BinaryView)
+  Line 84: skipped (unsupported Arrow type: Dictionary(Int32, Utf8))
+  Result: 6 passed, 6 skipped
+
+--- hash/md5.slt ---
+  Result: 
+
+--- hash/sha.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 56: PASS
+  Line 44: skipped (unsupported Arrow type: LargeUtf8)
+  Line 50: skipped (unsupported Arrow type: Utf8View)
+  Line 62: skipped (unsupported Arrow type: LargeBinary)
+  Line 68: skipped (unsupported Arrow type: BinaryView)
+  Result: 4 passed, 4 skipped
+
+--- hash/sha1.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 44: PASS
+  Line 59: PASS
+  Line 64: PASS
+  Line 49: skipped (unsupported Arrow type: LargeUtf8)
+  Line 54: skipped (unsupported Arrow type: Utf8View)
+  Line 69: skipped (unmapped Arrow type: FixedSizeBinary(5))
+  Line 74: skipped (unsupported Arrow type: LargeBinary)
+  Line 79: skipped (unsupported Arrow type: BinaryView)
+  Result: 6 passed, 5 skipped
+
+--- hash/sha2.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 48: PASS
+  Line 54: PASS
+  Line 60: PASS
+  Line 70: PASS
+  Line 80: PASS
+  Line 99: PASS
+  Line 119: PASS
+  Line 124: PASS
+  Line 129: PASS
+  Line 86: skipped (unsupported Arrow type: LargeUtf8)
+  Line 92: skipped (unsupported Arrow type: Utf8View)
+  Line 105: skipped (unsupported Arrow type: LargeBinary)
+  Line 111: skipped (unsupported Arrow type: BinaryView)
+  Result: 15 passed, 4 skipped
+
+--- json/get_json_object.slt ---
+  Result: 
+
+--- json/json_object_keys.slt ---
+  Result: 
+
+--- json/json_tuple.slt ---
+  Line 43: PASS
+  Line 55: PASS
+  Line 61: PASS
+  Line 67: PASS
+  Line 79: PASS
+  Line 121: PASS
+  Line 127: PASS
+  Line 25: MISMATCH
+    SQL: SELECT json_tuple('{"f1":"value1","f2":"value2","f3":3,"f5":5.23}'::STRING, 'f1'::STRING, 'f2'::STRING, 'f3'::STRING, 'f4'::STRING, 'f5'::STRING);
+    Translated: SELECT json_tuple(CAST('{"f1":"value1","f2":"value2","f3":3,"f5":5.23}' AS STRING), CAST('f1' AS STRING), CAST('f2' AS STRING), CAST('f3' AS STRING), CAST('f4' AS STRING), CAST('f5' AS STRING));
+  Expected (1 lines):
+    {c0: value1, c1: value2, c2: 3, c3: NULL, c4: 5.23}
+  Actual (1 lines):
+    value1
+  Line 31: MISMATCH
+    SQL: SELECT json_tuple('{"f1":"value12","f3":"value3","f2":2,"f4":4.01}'::STRING, 'f1'::STRING, 'f2'::STRING, 'f3'::STRING, 'f4'::STRING, 'f5'::STRING);
+    Translated: SELECT json_tuple(CAST('{"f1":"value12","f3":"value3","f2":2,"f4":4.01}' AS STRING), CAST('f1' AS STRING), CAST('f2' AS STRING), CAST('f3' AS STRING), CAST('f4' AS STRING), CAST('f5' AS STRING));
+  Expected (1 lines):
+    {c0: value12, c1: 2, c2: value3, c3: 4.01, c4: NULL}
+  Actual (1 lines):
+    value12
+  Line 37: MISMATCH
+    SQL: SELECT json_tuple('{"f1":"value13","f4":"value44","f3":"value33","f2":2,"f5":5.01}'::STRING, 'f1'::STRING, 'f2'::STRING, 'f3'::STRING, 'f4'::STRING, 'f5'::STRING);
+    Translated: SELECT json_tuple(CAST('{"f1":"value13","f4":"value44","f3":"value33","f2":2,"f5":5.01}' AS STRING), CAST('f1' AS STRING), CAST('f2' AS STRING), CAST('f3' AS STRING), CAST('f4' AS STRING), CAST('f5' AS STRING));
+  Expected (1 lines):
+    {c0: value13, c1: 2, c2: value33, c3: value44, c4: 5.01}
+  Actual (1 lines):
+    value13
+  Line 49: MISMATCH
+    SQL: SELECT json_tuple('{"f1":"","f5":null}'::STRING, 'f1'::STRING, 'f2'::STRING, 'f3'::STRING, 'f4'::STRING, 'f5'::STRING);
+    Translated: SELECT json_tuple(CAST('{"f1":"","f5":null}' AS STRING), CAST('f1' AS STRING), CAST('f2' AS STRING), CAST('f3' AS STRING), CAST('f4' AS STRING), CAST('f5' AS STRING));
+  Expected (1 lines):
+    {c0: , c1: NULL, c2: NULL, c3: NULL, c4: NULL}
+  Actual (1 lines):
+    (empty)
+  Line 73: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near 'f1'.(line 1, pos 45)
+
+== SQL ==
+SELECT json_tuple(CAST('\' AS STRING), CAST('f1' AS STRING));
+---------------------------------------------^^^
+
+    SQL: SELECT json_tuple(CAST('\' AS STRING), CAST('f1' AS STRING));
+  Line 85: MISMATCH
+    SQL: SELECT json_tuple('{}'::STRING, 'a'::STRING);
+    Translated: SELECT json_tuple(CAST('{}' AS STRING), CAST('a' AS STRING));
+  Expected (1 lines):
+    {c0: NULL}
+  Actual (1 lines):
+    NULL
+  Line 91: MISMATCH
+    SQL: SELECT json_tuple(col, 'f1'::STRING, 'f2'::STRING) FROM (VALUES
+    ('{"f1":"a","f2":"b"}'::STRING),
+    (NULL::STRING),
+    ('{"f1":"c"}'::STRING),
+    ('invalid'::STRING)
+) AS t(col);
+    Translated: SELECT json_tuple(col, CAST('f1' AS STRING), CAST('f2' AS STRING)) FROM (VALUES
+    (CAST('{"f1":"a","f2":"b"}' AS STRING)),
+    (CAST(NULL AS STRING)),
+    (CAST('{"f1":"c"}' AS STRING)),
+    (CAST('invalid' AS STRING))
+) AS t(col);
+  Expected (4 lines):
+    {c0: a, c1: b}
+    NULL
+    {c0: c, c1: NULL}
+    NULL
+  Actual (4 lines):
+    a
+    NULL
+    c
+    NULL
+  Line 105: MISMATCH
+    SQL: SELECT json_tuple(col1, col2, col3, col4) FROM (VALUES
+    ('{"f1":1,"f2":2}'::STRING, 'f1'::STRING, NULL::STRING, 'f2'::STRING)
+) AS t(col1, col2, col3, col4);
+    Translated: SELECT json_tuple(col1, col2, col3, col4) FROM (VALUES
+    (CAST('{"f1":1,"f2":2}' AS STRING), CAST('f1' AS STRING), CAST(NULL AS STRING), CAST('f2' AS STRING))
+) AS t(col1, col2, col3, col4);
+  Expected (1 lines):
+    {c0: 1, c1: NULL, c2: 2}
+  Actual (1 lines):
+    1
+  Line 113: MISMATCH
+    SQL: SELECT json_tuple(col1, col2, col3, col4) FROM (VALUES
+    ('{"f1":1,"f2":2}'::STRING, 'f1'::STRING, NULL::STRING, 'f1'::STRING)
+) AS t(col1, col2, col3, col4);
+    Translated: SELECT json_tuple(col1, col2, col3, col4) FROM (VALUES
+    (CAST('{"f1":1,"f2":2}' AS STRING), CAST('f1' AS STRING), CAST(NULL AS STRING), CAST('f1' AS STRING))
+) AS t(col1, col2, col3, col4);
+  Expected (1 lines):
+    {c0: 1, c1: NULL, c2: 1}
+  Actual (1 lines):
+    1
+  Line 133: MISMATCH
+    SQL: SELECT json_tuple('{"Name":"Alice","name":"bob","NAME":"Charlie"}'::STRING, 'Name'::STRING, 'name'::STRING, 'NAME'::STRING);
+    Translated: SELECT json_tuple(CAST('{"Name":"Alice","name":"bob","NAME":"Charlie"}' AS STRING), CAST('Name' AS STRING), CAST('name' AS STRING), CAST('NAME' AS STRING));
+  Expected (1 lines):
+    {c0: Alice, c1: bob, c2: Charlie}
+  Actual (1 lines):
+    Alice
+  Line 139: MISMATCH
+    SQL: SELECT json_tuple('{"姓名":"小明","城市":"台北"}'::STRING, '姓名'::STRING, '城市'::STRING);
+    Translated: SELECT json_tuple(CAST('{"姓名":"小明","城市":"台北"}' AS STRING), CAST('姓名' AS STRING), CAST('城市' AS STRING));
+  Expected (1 lines):
+    {c0: 小明, c1: 台北}
+  Actual (1 lines):
+    小明
+  Line 145: MISMATCH
+    SQL: SELECT json_tuple('{"имя":"Иван","город":"Москва"}'::STRING, 'имя'::STRING, 'город'::STRING);
+    Translated: SELECT json_tuple(CAST('{"имя":"Иван","город":"Москва"}' AS STRING), CAST('имя' AS STRING), CAST('город' AS STRING));
+  Expected (1 lines):
+    {c0: Иван, c1: Москва}
+  Actual (1 lines):
+    Иван
+  Line 151: skipped (uses arrow_typeof())
+  Result: 7 passed, 12 FAILED, 1 skipped
+
+--- map/map_from_arrays.slt ---
+  Line 29: PASS
+  Line 34: PASS
+  Line 40: PASS
+  Line 45: PASS
+  Line 50: PASS
+  Line 56: PASS (error expected and received)
+  Line 59: PASS (error expected and received)
+  Line 62: PASS (error expected and received)
+  Line 65: PASS (error expected and received)
+  Line 19: MISMATCH
+    SQL: SELECT map_from_arrays(array(1.0, 3.0), array('2', '4'));
+    Translated: SELECT map_from_arrays(array(1.0, 3.0), array('2', '4'));
+  Expected (1 lines):
+    {1.0: 2, 3.0: 4}
+  Actual (1 lines):
+    {1: 2, 3: 4}
+  Line 24: MISMATCH
+    SQL: SELECT map_from_arrays(array(2, 5), array('a', 'b'));
+    Translated: SELECT map_from_arrays(array(2, 5), array('a', 'b'));
+  Expected (1 lines):
+    {2: a, 5: b}
+  Actual (1 lines):
+    {5: b, 2: a}
+  Line 74: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 5, pos 12)
+
+== SQL ==
+select map_from_arrays(a, b)
+from values 
+    (array[1], array['a']), 
+    (NULL, NULL),
+    (array[1,2,3], NULL),
+------------^^^
+    (NULL, array['b', 'c']), 
+    (array[4, 5], array['d', 'e']), 
+    (array[], array[]),
+    (array[6, 7, 8], array['f', 'g', 'h']) 
+as tab(a, b);
+
+    SQL: select map_from_arrays(a, b)
+from values 
+    (array[1], array['a']), 
+    (NULL, NULL),
+    (array[1,2,3], NULL),
+    (NULL, array['b', 'c']), 
+    (array[4, 5], array['d', 'e']), 
+    (array[], array[]),
+    (array[6, 7, 8], array['f', 'g', 'h']) 
+as tab(a, b);
+  Line 95: PySpark error: unhashable type: 'list'
+    SQL: SELECT map_from_arrays(array(array('a', 'b'), array('c', 'd')), array(struct(1, 2, 3), struct(4, 5, 6)));
+  Line 101: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ',': missing ']'.(line 3, pos 26)
+
+== SQL ==
+SELECT
+    map_from_arrays(
+        array['outer_key1', 'outer_key2'],
+--------------------------^^^
+        array[
+            -- value for outer_key1: a map itself
+            map_from_arrays(
+                array['inner_a', 'inner_b'],
+                array[1, 2]
+            ),
+            -- value for outer_key2: another map
+            map_from_arrays(
+                array['inner_x', 'inner_y', 'inner_z'],
+                array[10, 20, 30]
+            )
+        ]
+    ) AS nested_map;
+
+    SQL: SELECT
+    map_from_arrays(
+        array['outer_key1', 'outer_key2'],
+        array[
+            -- value for outer_key1: a map itself
+            map_from_arrays(
+                array['inner_a', 'inner_b'],
+                array[1, 2]
+            ),
+            -- value for outer_key2: another map
+            map_from_arrays(
+                array['inner_x', 'inner_y', 'inner_z'],
+                array[10, 20, 30]
+            )
+        ]
+    ) AS nested_map;
+  Line 122: PySpark error: [DUPLICATED_MAP_KEY] Duplicate map key true was found, please check the input data. If you want to remove the duplicated keys, you can set "spark.sql.mapKeyDedupPolicy" to "LAST_WIN" so that the key inserted at last takes precedence.
+    SQL: SELECT map_from_arrays(array(true, false, true), array('a', NULL, 'b'));
+  Line 128: skipped (unsupported Arrow type: LargeList(Int32))
+  Line 133: skipped (unsupported Arrow type: FixedSizeList(3, Utf8))
+  Result: 9 passed, 6 FAILED, 2 skipped
+
+--- map/map_from_entries.slt ---
+  Line 51: PASS (error expected and received)
+  Line 55: PASS (error expected and received)
+  Line 58: PASS (error expected and received)
+  Line 19: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 1, pos 44)
+
+== SQL ==
+SELECT map_from_entries(array[struct(1, 'a'), struct(2, 'b')]);
+--------------------------------------------^^^
+
+    SQL: SELECT map_from_entries(array[struct(1, 'a'), struct(2, 'b')]);
+  Line 24: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 1, pos 61)
+
+== SQL ==
+SELECT map_from_entries(array[struct(1, cast(null as string)), struct(2, 'b')]);
+-------------------------------------------------------------^^^
+
+    SQL: SELECT map_from_entries(array[struct(1, cast(null as string)), struct(2, 'b')]);
+  Line 29: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 3, pos 25)
+
+== SQL ==
+SELECT map_from_entries(data) 
+from values 
+    (array[struct(1, 'a'), struct(2, 'b')]), 
+-------------------------^^^
+    (array[struct(3, 'c')]) 
+as tab(data);
+
+    SQL: SELECT map_from_entries(data) 
+from values 
+    (array[struct(1, 'a'), struct(2, 'b')]), 
+    (array[struct(3, 'c')]) 
+as tab(data);
+  Line 40: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ']'.(line 3, pos 16)
+
+== SQL ==
+SELECT map_from_entries(data) 
+from values 
+    (cast(array[] as array<struct<int, string>>)), 
+----------------^^^
+    (cast(NULL as array<struct<int, string>>)) 
+as tab(data);
+
+    SQL: SELECT map_from_entries(data) 
+from values 
+    (cast(array[] as array<struct<int, string>>)), 
+    (cast(NULL as array<struct<int, string>>)) 
+as tab(data);
+  Line 63: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 5, pos 36)
+
+== SQL ==
+SELECT map_from_entries(data)
+from values
+    (
+        array[
+            struct(1 as a, 'a' as b), 
+------------------------------------^^^
+            cast(NULL as struct<a int, b string>), 
+            cast(NULL as struct<a int, b string>)
+        ]
+    ),
+    (NULL),
+    (
+        array[
+            struct(2 as a, 'b' as b), 
+            struct(3 as a, 'c' as b)
+        ]
+    ),
+    (
+        array[
+            struct(4 as a, 'd' as b),
+            cast(NULL as struct<a int, b string>),
+            struct(5 as a, 'e' as b),
+            struct(6 as a, 'f' as b)
+        ]
+    )
+as tab(data);
+
+    SQL: SELECT map_from_entries(data)
+from values
+    (
+        array[
+            struct(1 as a, 'a' as b), 
+            cast(NULL as struct<a int, b string>), 
+            cast(NULL as struct<a int, b string>)
+        ]
+    ),
+    (NULL),
+    (
+        array[
+            struct(2 as a, 'b' as b), 
+            struct(3 as a, 'c' as b)
+        ]
+    ),
+    (
+        array[
+            struct(4 as a, 'd' as b),
+            cast(NULL as struct<a int, b string>),
+            struct(5 as a, 'e' as b),
+            struct(6 as a, 'f' as b)
+        ]
+    )
+as tab(data);
+  Line 96: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 5, pos 32)
+
+== SQL ==
+SELECT map_from_entries(data) 
+from values 
+    (NULL), 
+    (array[
+        struct(1 as a, 'b' as b), 
+--------------------------------^^^
+        struct(2 as a, cast(NULL as string) as b), 
+        struct(3 as a, 'd' as b)
+    ]), 
+    (array[]),
+    (NULL) 
+as tab(data);
+
+    SQL: SELECT map_from_entries(data) 
+from values 
+    (NULL), 
+    (array[
+        struct(1 as a, 'b' as b), 
+        struct(2 as a, cast(NULL as string) as b), 
+        struct(3 as a, 'd' as b)
+    ]), 
+    (array[]),
+    (NULL) 
+as tab(data);
+  Line 115: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 2, pos 44)
+
+== SQL ==
+SELECT map_from_entries(array[
+    struct(array('a', 'b'), struct(1, 2, 3)), 
+--------------------------------------------^^^
+    struct(array('c', 'd'), struct(4, 5, 6))
+]);
+
+    SQL: SELECT map_from_entries(array[
+    struct(array('a', 'b'), struct(1, 2, 3)), 
+    struct(array('c', 'd'), struct(4, 5, 6))
+]);
+  Line 124: PySpark error: 
+[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 9, pos 44)
+
+== SQL ==
+SELECT
+    map_from_entries(
+        array[
+            struct(
+                'outer_key1', 
+                -- value for outer_key1: a map itself
+                map_from_entries(
+                    array[
+                        struct('inner_a', 1), 
+--------------------------------------------^^^
+                        struct('inner_b', 2)
+                    ]
+                )
+            ),
+            struct(
+                'outer_key2',
+                -- value for outer_key2: another map
+                map_from_entries(
+                    array[
+                        struct('inner_x', 10), 
+                        struct('inner_y', 20), 
+                        struct('inner_z', 30)
+                    ]
+                )
+            )
+        ]
+    ) AS nested_map;
+
+    SQL: SELECT
+    map_from_entries(
+        array[
+            struct(
+                'outer_key1', 
+                -- value for outer_key1: a map itself
+                map_from_entries(
+                    array[
+                        struct('inner_a', 1), 
+                        struct('inner_b', 2)
+                    ]
+                )
+            ),
+            struct(
+                'outer_key2',
+                -- value for outer_key2: another map
+                map_from_entries(
+                    array[
+                        struct('inner_x', 10), 
+                        struct('inner_y', 20), 
+                        struct('inner_z', 30)
+                    ]
+                )
+            )
+        ]
+    ) AS nested_map;
+  Line 155: PySpark error: [DUPLICATED_MAP_KEY] Duplicate map key true was found, please check the input data. If you want to remove the duplicated keys, you can set "spark.sql.mapKeyDedupPolicy" to "LAST_WIN" so that the key inserted at last takes precedence.
+    SQL: SELECT map_from_entries(array(
+    struct(true, 'a'), 
+    struct(false, 'b'), 
+    struct(true, 'c'),
+    struct(false, cast(NULL as string)), 
+    struct(true, 'd')
+));
+  Result: 3 passed, 9 FAILED
+
+--- map/str_to_map.slt ---
+  Line 25: PASS
+  Line 31: PASS
+  Line 37: PASS
+  Line 49: PASS
+  Line 55: PASS
+  Line 61: PASS
+  Line 68: PASS (error expected and received)
+  Line 75: PASS
+  Line 81: PASS
+  Line 87: PASS
+  Line 93: PASS
+  Line 101: PASS
+  Line 109: PASS
+  Line 43: MISMATCH
+    SQL: SELECT str_to_map('', ',', '=');
+    Translated: SELECT str_to_map('', ',', '=');
+  Expected (1 lines):
+    {: NULL}
+  Actual (1 lines):
+    {(empty): NULL}
+  Result: 13 passed, 1 FAILED
+
+--- math/abs.slt ---
+  Line 29: PASS
+  Line 36: PASS
+  Line 61: PASS
+  Line 67: PASS
+  Line 73: PASS
+  Line 78: PASS
+  Line 97: PASS
+  Line 104: PASS
+  Line 111: PASS
+  Line 118: PASS
+  Line 145: PASS
+  Line 163: PASS
+  Line 180: PASS
+  Line 187: PASS
+  Line 42: skipped (ANSI mode block)
+  Line 45: skipped (ANSI mode block)
+  Line 48: skipped (ANSI mode block)
+  Line 51: skipped (ANSI mode block)
+  Line 54: skipped (ANSI mode block)
+  Line 57: skipped (DataFusion config statement)
+  Line 84: skipped (Decimal precision 40 exceeds Spark max of 38)
+  Line 89: skipped (Decimal precision 76 exceeds Spark max of 38)
+  Line 126: skipped (ANSI mode block)
+  Line 129: skipped (ANSI mode block)
+  Line 132: skipped (ANSI mode block)
+  Line 135: skipped (ANSI mode block)
+  Line 138: skipped (ANSI mode block)
+  Line 141: skipped (DataFusion config statement)
+  Line 195: skipped (Decimal precision 40 exceeds Spark max of 38)
+  Line 202: skipped (Decimal precision 76 exceeds Spark max of 38)
+  Result: 14 passed, 16 skipped
+
+--- math/acos.slt ---
+  Result: 
+
+--- math/acosh.slt ---
+  Result: 
+
+--- math/asin.slt ---
+  Result: 
+
+--- math/asinh.slt ---
+  Result: 
+
+--- math/atan.slt ---
+  Result: 
+
+--- math/atan2.slt ---
+  Result: 
+
+--- math/atanh.slt ---
+  Result: 
+
+--- math/bin.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 48: PASS
+  Line 53: PASS
+  Line 58: PASS
+  Line 63: PASS
+  Line 68: PASS
+  Line 73: PASS
+  Result: 12 passed
+
+--- math/bround.slt ---
+  Result: 
+
+--- math/cbrt.slt ---
+  Result: 
+
+--- math/ceil.slt ---
+  Result: 
+
+--- math/ceiling.slt ---
+  Result: 
+
+--- math/conv.slt ---
+  Result: 
+
+--- math/cos.slt ---
+  Result: 
+
+--- math/cosh.slt ---
+  Result: 
+
+--- math/cot.slt ---
+  Result: 
+
+--- math/csc.slt ---
+  Line 40: PASS
+  Line 27: MISMATCH
+    SQL: SELECT csc(1::INT);
+    Translated: SELECT csc(CAST(1 AS INT));
+  Expected (1 lines):
+    1.188395105778121
+  Actual (1 lines):
+    1.1883951057781212
+  Line 32: MISMATCH
+    SQL: SELECT csc(a) FROM (VALUES (0::INT), (1::INT), (-1::INT), (null)) AS t(a);
+    Translated: SELECT csc(a) FROM (VALUES (CAST(0 AS INT)), (CAST(1 AS INT)), (CAST(-1 AS INT)), (null)) AS t(a);
+  Expected (4 lines):
+    Infinity
+    1.188395105778121
+    -1.188395105778121
+    NULL
+  Actual (4 lines):
+    Infinity
+    1.1883951057781212
+    -1.1883951057781212
+    NULL
+  Result: 1 passed, 2 FAILED
+
+--- math/degrees.slt ---
+  Result: 
+
+--- math/e.slt ---
+  Result: 
+
+--- math/exp.slt ---
+  Result: 
+
+--- math/expm1.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 34: PASS
+  Result: 4 passed
+
+--- math/factorial.slt ---
+  Line 26: PASS
+  Line 31: PASS
+  Line 65: skipped (Spark did not error, DataFusion expects error)
+  Result: 2 passed, 1 skipped
+
+--- math/floor.slt ---
+  Result: 
+
+--- math/greatest.slt ---
+  Result: 
+
+--- math/hex.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 35: PASS
+  Line 59: PASS (error expected and received)
+  Line 42: skipped (unsupported Arrow type: Utf8View)
+  Line 45: skipped (references skipped table)
+  Line 52: skipped (unsupported Arrow type: LargeBinary)
+  Line 62: skipped (unsupported Arrow type: LargeBinary)
+  Line 67: skipped (unsupported Arrow type: Dictionary(Int32, Binary))
+  Line 72: skipped (references skipped table)
+  Line 82: skipped (references skipped table)
+  Result: 5 passed, 7 skipped
+
+--- math/hypot.slt ---
+  Result: 
+
+--- math/least.slt ---
+  Result: 
+
+--- math/ln.slt ---
+  Result: 
+
+--- math/log.slt ---
+  Result: 
+
+--- math/log10.slt ---
+  Result: 
+
+--- math/log1p.slt ---
+  Result: 
+
+--- math/log2.slt ---
+  Result: 
+
+--- math/mod.slt ---
+  Line 26: PASS
+  Line 32: PASS
+  Line 37: PASS
+  Line 42: PASS
+  Line 47: PASS
+  Line 52: PASS
+  Line 57: PASS
+  Line 63: PASS
+  Line 68: PASS
+  Line 73: PASS
+  Line 79: PASS
+  Line 84: PASS
+  Line 90: PASS
+  Line 95: PASS
+  Line 100: PASS
+  Line 106: PASS
+  Line 111: PASS
+  Line 116: PASS
+  Line 121: PASS
+  Line 126: PASS
+  Line 131: PASS
+  Line 137: PASS
+  Line 142: PASS
+  Line 148: PASS
+  Line 153: PASS
+  Line 177: PASS
+  Line 182: PASS
+  Line 187: PASS
+  Line 192: PASS
+  Line 197: PASS
+  Line 203: PASS
+  Line 208: PASS
+  Line 214: PASS
+  Line 219: PASS
+  Line 224: PASS
+  Line 229: PASS
+  Line 234: PASS
+  Line 239: PASS
+  Line 244: PASS
+  Line 249: PASS
+  Line 254: PASS
+  Line 260: PASS
+  Line 265: PASS
+  Line 270: PASS
+  Line 158: MISMATCH
+    SQL: SELECT MOD(10.5::float8, 0.0::float8) as mod_div_zero_float;
+    Translated: SELECT MOD(CAST(10.5 AS DOUBLE), CAST(0.0 AS DOUBLE)) as mod_div_zero_float;
+  Expected (1 lines):
+    NaN
+  Actual (1 lines):
+    NULL
+  Line 164: skipped (ANSI mode block)
+  Line 167: skipped (ANSI mode block)
+  Line 170: skipped (ANSI mode block)
+  Line 173: skipped (DataFusion config statement)
+  Result: 44 passed, 1 FAILED, 4 skipped
+
+--- math/negative.slt ---
+  Line 28: PASS
+  Line 34: PASS
+  Line 40: PASS
+  Line 46: PASS
+  Line 52: PASS
+  Line 58: PASS
+  Line 64: PASS
+  Line 76: PASS
+  Line 82: PASS
+  Line 88: PASS
+  Line 94: PASS
+  Line 100: PASS
+  Line 106: PASS
+  Line 112: statement error (non-fatal): 
+Operation not allowed: Schema may not be specified in a Create Table As Select (CTAS) statement.(li
+  Line 123: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`test_negative` cannot be foun
+  Line 127: PASS
+  Line 133: PASS
+  Line 139: PASS
+  Line 146: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 154: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`min_values_int` cannot be fou
+  Line 158: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 166: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`min_values_bigint` cannot be 
+  Line 170: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 178: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`min_values_smallint` cannot b
+  Line 182: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 190: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`min_values_tinyint` cannot be
+  Line 194: PASS
+  Line 200: PASS
+  Line 206: PASS
+  Line 212: PASS
+  Line 218: PASS
+  Line 224: PASS
+  Line 267: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 278: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`interval_test` cannot be foun
+  Line 70: MISMATCH
+    SQL: SELECT negative(3.14::float);
+    Translated: SELECT negative(CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    -3.14
+  Actual (1 lines):
+    -3.140000104904175
+  Line 230: MISMATCH
+    SQL: SELECT negative(3.4028235e38::float);
+    Translated: SELECT negative(CAST(3.4028235e38 AS FLOAT));
+  Expected (1 lines):
+    -340282350000000000000000000000000000000
+  Actual (1 lines):
+    -340282346638528859811704183484516925440
+  Line 236: MISMATCH
+    SQL: SELECT negative(-3.4028235e38::float);
+    Translated: SELECT negative(CAST(-3.4028235e38 AS FLOAT));
+  Expected (1 lines):
+    340282350000000000000000000000000000000
+  Actual (1 lines):
+    340282346638528859811704183484516925440
+  Line 242: MISMATCH
+    SQL: SELECT negative(1.7976931348623157e308::double);
+    Translated: SELECT negative(CAST(1.7976931348623157e308 AS DOUBLE));
+  Expected (1 lines):
+    -179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  Actual (1 lines):
+    -179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368
+  Line 248: MISMATCH
+    SQL: SELECT negative(-1.7976931348623157e308::double);
+    Translated: SELECT negative(CAST(-1.7976931348623157e308 AS DOUBLE));
+  Expected (1 lines):
+    179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  Actual (1 lines):
+    179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368
+  Line 255: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    SQL: SELECT negative(make_interval(1, 2, 3, 4, 5, 6, 7.5));
+  Line 261: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    SQL: SELECT negative(make_interval(-2, -5, -1, -10, -3, -30, -15.25));
+  Line 115: skipped (references skipped table)
+  Line 149: skipped (references skipped table)
+  Line 161: skipped (references skipped table)
+  Line 173: skipped (references skipped table)
+  Line 185: skipped (references skipped table)
+  Line 272: skipped (references skipped table)
+  Line 282: skipped (ANSI mode block)
+  Line 286: skipped (ANSI mode block)
+  Line 289: skipped (ANSI mode block)
+  Line 292: skipped (ANSI mode block)
+  Line 295: skipped (ANSI mode block)
+  Line 299: skipped (ANSI mode block)
+  Line 304: skipped (ANSI mode block)
+  Line 309: skipped (ANSI mode block)
+  Line 314: skipped (ANSI mode block)
+  Line 320: skipped (ANSI mode block)
+  Line 323: skipped (ANSI mode block)
+  Line 326: skipped (ANSI mode block)
+  Line 330: skipped (DataFusion config statement)
+  Result: 22 passed, 7 FAILED, 19 skipped
+
+--- math/pi.slt ---
+  Result: 
+
+--- math/pmod.slt ---
+  Line 25: PASS
+  Line 30: PASS
+  Line 35: PASS
+  Line 41: PASS
+  Line 46: PASS
+  Line 51: PASS
+  Line 56: PASS
+  Line 62: PASS
+  Line 67: PASS
+  Line 72: PASS
+  Line 91: PASS
+  Line 96: PASS
+  Line 101: PASS
+  Line 107: PASS
+  Line 112: PASS
+  Line 117: PASS
+  Line 122: PASS
+  Line 128: PASS
+  Line 133: PASS
+  Line 138: PASS
+  Line 143: PASS
+  Line 148: PASS
+  Line 153: PASS
+  Line 159: PASS
+  Line 164: PASS
+  Line 169: PASS
+  Line 175: PASS
+  Line 185: PASS
+  Line 190: PASS
+  Line 195: PASS
+  Line 200: PASS
+  Line 206: PASS
+  Line 211: PASS
+  Line 216: PASS
+  Line 221: PASS
+  Line 227: PASS
+  Line 232: PASS
+  Line 237: PASS
+  Line 242: PASS
+  Line 247: PASS
+  Line 252: PASS
+  Line 257: PASS
+  Line 263: PASS
+  Line 268: PASS
+  Line 273: PASS
+  Line 278: PASS
+  Line 284: PASS
+  Line 289: PASS
+  Line 294: PASS
+  Line 299: PASS
+  Line 304: PASS
+  Line 309: PASS
+  Line 315: PASS
+  Line 320: PASS
+  Line 325: PASS
+  Line 330: PASS
+  Line 336: PASS
+  Line 341: PASS
+  Line 346: PASS
+  Line 351: PASS
+  Line 180: MISMATCH
+    SQL: SELECT pmod(-7.2::float8, 3.0::float8) as pmod_float_2;
+    Translated: SELECT pmod(CAST(-7.2 AS DOUBLE), CAST(3.0 AS DOUBLE)) as pmod_float_2;
+  Expected (1 lines):
+    1.8
+  Actual (1 lines):
+    1.7999999999999998
+  Line 78: skipped (ANSI mode block)
+  Line 81: skipped (ANSI mode block)
+  Line 84: skipped (ANSI mode block)
+  Line 87: skipped (DataFusion config statement)
+  Result: 60 passed, 1 FAILED, 4 skipped
+
+--- math/positive.slt ---
+  Result: 
+
+--- math/pow.slt ---
+  Result: 
+
+--- math/power.slt ---
+  Result: 
+
+--- math/radians.slt ---
+  Result: 
+
+--- math/rand.slt ---
+  Result: 
+
+--- math/randn.slt ---
+  Result: 
+
+--- math/random.slt ---
+  Result: 
+
+--- math/rint.slt ---
+  Line 26: PASS
+  Line 32: PASS
+  Line 37: PASS
+  Line 43: PASS
+  Line 48: PASS
+  Line 53: PASS
+  Line 58: PASS
+  Line 63: PASS
+  Line 68: PASS
+  Line 73: PASS
+  Line 78: PASS
+  Line 83: PASS
+  Line 88: PASS
+  Line 93: PASS
+  Line 98: PASS
+  Line 103: PASS
+  Line 108: PASS
+  Line 114: PASS
+  Result: 18 passed
+
+--- math/round.slt ---
+  Line 27: PASS
+  Line 32: PASS
+  Line 37: PASS
+  Line 42: PASS
+  Line 47: PASS
+  Line 52: PASS
+  Line 58: PASS
+  Line 63: PASS
+  Line 68: PASS
+  Line 74: PASS
+  Line 79: PASS
+  Line 91: PASS
+  Line 101: PASS
+  Line 106: PASS
+  Line 112: PASS
+  Line 118: PASS
+  Line 123: PASS
+  Line 128: PASS
+  Line 134: PASS
+  Line 139: PASS
+  Line 144: PASS
+  Line 149: PASS
+  Line 154: PASS
+  Line 160: PASS
+  Line 166: PASS
+  Line 176: PASS
+  Line 181: PASS
+  Line 186: PASS
+  Line 191: PASS
+  Line 197: PASS
+  Line 202: PASS
+  Line 208: PASS
+  Line 214: PASS
+  Line 220: PASS
+  Line 226: PASS
+  Line 232: PASS
+  Line 238: PASS
+  Line 248: PASS
+  Line 254: PASS
+  Line 260: PASS
+  Line 266: PASS
+  Line 272: PASS
+  Line 334: PASS
+  Line 339: PASS
+  Line 344: PASS
+  Line 350: PASS
+  Line 356: PASS
+  Line 361: PASS
+  Line 367: PASS
+  Line 373: PASS
+  Line 379: PASS
+  Line 385: PASS
+  Line 419: PASS
+  Line 424: PASS
+  Line 429: PASS
+  Line 435: PASS
+  Line 440: PASS
+  Line 449: statement error (non-fatal): 
+Operation not allowed: Schema may not be specified in a Create Table As Select (CTAS) statement.(li
+  Line 466: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`test_round` cannot be found. 
+  Line 473: PASS
+  Line 484: PASS
+  Line 490: PASS
+  Line 496: PASS
+  Line 502: PASS
+  Line 576: PASS (error expected and received)
+  Line 580: PASS (error expected and received)
+  Line 85: MISMATCH
+    SQL: SELECT round(arrow_cast(2.345, 'Float32'), 2::int);
+    Translated: SELECT round(CAST(2.345 AS FLOAT), CAST(2 AS INT));
+  Expected (1 lines):
+    2.35
+  Actual (1 lines):
+    2.3499999046325684
+  Line 284: skipped (unmapped Arrow type: Decimal32(9, 1))
+  Line 289: skipped (unmapped Arrow type: Decimal32(9, 1))
+  Line 295: skipped (unmapped Arrow type: Decimal32(9, 3))
+  Line 301: skipped (unmapped Arrow type: Decimal32(9, 1))
+  Line 309: skipped (unmapped Arrow type: Decimal64(18, 1))
+  Line 314: skipped (unmapped Arrow type: Decimal64(18, 1))
+  Line 320: skipped (unmapped Arrow type: Decimal64(18, 3))
+  Line 326: skipped (unmapped Arrow type: Decimal64(18, 1))
+  Line 393: skipped (unmapped Arrow type: Decimal256(38, 1))
+  Line 398: skipped (unmapped Arrow type: Decimal256(38, 1))
+  Line 404: skipped (unmapped Arrow type: Decimal256(38, 3))
+  Line 410: skipped (unmapped Arrow type: Decimal256(38, 1))
+  Line 457: skipped (references skipped table)
+  Line 511: skipped (ANSI mode block)
+  Line 515: skipped (ANSI mode block)
+  Line 520: skipped (ANSI mode block)
+  Line 525: skipped (ANSI mode block)
+  Line 531: skipped (ANSI mode block)
+  Line 537: skipped (ANSI mode block)
+  Line 542: skipped (ANSI mode block)
+  Line 548: skipped (ANSI mode block)
+  Line 552: skipped (ANSI mode block)
+  Line 556: skipped (ANSI mode block)
+  Line 560: skipped (ANSI mode block)
+  Line 564: skipped (DataFusion config statement)
+  Line 572: skipped (Spark did not error, DataFusion expects error)
+  Result: 64 passed, 1 FAILED, 26 skipped
+
+--- math/sec.slt ---
+  Line 26: PASS
+  Line 39: PASS
+  Line 31: MISMATCH
+    SQL: SELECT sec(a) FROM (VALUES (0::INT), (1::INT), (-1::INT), (null)) AS t(a);
+    Translated: SELECT sec(a) FROM (VALUES (CAST(0 AS INT)), (CAST(1 AS INT)), (CAST(-1 AS INT)), (null)) AS t(a);
+  Expected (4 lines):
+    1
+    1.850815717680926
+    1.850815717680926
+    NULL
+  Actual (4 lines):
+    1
+    1.8508157176809255
+    1.8508157176809255
+    NULL
+  Result: 2 passed, 1 FAILED
+
+--- math/shiftleft.slt ---
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 44: PASS
+  Line 49: PASS
+  Line 54: PASS
+  Line 60: PASS
+  Line 65: PASS
+  Line 70: PASS
+  Line 76: PASS
+  Line 81: PASS
+  Line 86: PASS
+  Line 92: PASS
+  Line 97: PASS
+  Line 103: PASS
+  Line 108: PASS
+  Line 114: PASS
+  Line 123: PASS
+  Line 128: PASS
+  Line 133: PASS
+  Line 138: PASS
+  Line 143: PASS
+  Line 149: skipped (uses arrow_typeof())
+  Line 170: skipped (uses arrow_typeof())
+  Line 185: skipped (uses arrow_typeof())
+  Line 200: skipped (uses arrow_typeof())
+  Line 211: skipped (uses arrow_typeof())
+  Line 222: skipped (uses arrow_typeof())
+  Line 233: skipped (uses arrow_typeof())
+  Line 238: skipped (uses arrow_typeof())
+  Line 243: skipped (uses arrow_typeof())
+  Result: 22 passed, 9 skipped
+
+--- math/sign.slt ---
+  Result: 
+
+--- math/signum.slt ---
+  Result: 
+
+--- math/sin.slt ---
+  Result: 
+
+--- math/sinh.slt ---
+  Result: 
+
+--- math/sqrt.slt ---
+  Result: 
+
+--- math/tan.slt ---
+  Result: 
+
+--- math/tanh.slt ---
+  Result: 
+
+--- math/try_add.slt ---
+  Result: 
+
+--- math/try_divide.slt ---
+  Result: 
+
+--- math/try_multiply.slt ---
+  Result: 
+
+--- math/try_subtract.slt ---
+  Result: 
+
+--- math/unhex.slt ---
+  Line 24: PASS
+  Line 35: PASS
+  Line 50: PASS
+  Line 56: PASS
+  Line 62: PASS
+  Line 19: MISMATCH
+    SQL: SELECT unhex('537061726B2053514C');
+    Translated: SELECT unhex('537061726B2053514C');
+  Expected (1 lines):
+    537061726b2053514c
+  Actual (1 lines):
+    Spark SQL
+  Line 30: MISMATCH
+    SQL: SELECT unhex('616263');
+    Translated: SELECT unhex('616263');
+  Expected (1 lines):
+    616263
+  Actual (1 lines):
+    abc
+  Line 41: MISMATCH
+    SQL: SELECT unhex(a) FROM VALUES ('1A2B3'), ('1'), ('ABC'), ('123') AS t(a);
+    Translated: SELECT unhex(a) FROM VALUES ('1A2B3'), ('1'), ('ABC'), ('123') AS t(a);
+  Expected (4 lines):
+    01a2b3
+    01
+    0abc
+    0123
+  Actual (4 lines):
+    01a2b3
+    
+    0abc
+    #
+  Line 68: MISMATCH
+    SQL: SELECT unhex(a) FROM VALUES ('4a4B4c'), ('F'), ('A'), ('AbCdEf'), ('123abc'), ('41 42'), ('00'), ('FF') AS t(a);
+    Translated: SELECT unhex(a) FROM VALUES ('4a4B4c'), ('F'), ('A'), ('AbCdEf'), ('123abc'), ('41 42'), ('00'), ('FF') AS t(a);
+  Expected (8 lines):
+    4a4b4c
+    0f
+    0a
+    abcdef
+    123abc
+    NULL
+    00
+    ff
+  Actual (8 lines):
+    JKL
+    
+    
+
+    abcdef
+    123abc
+    NULL
+     
+    ff
+  Line 81: skipped (unsupported Arrow type: LargeUtf8)
+  Line 84: skipped (references skipped table)
+  Line 91: skipped (unsupported Arrow type: Utf8View)
+  Line 94: skipped (references skipped table)
+  Result: 5 passed, 4 FAILED, 4 skipped
+
+--- math/width_bucket.slt ---
+  Line 24: PASS
+  Line 29: PASS
+  Line 34: PASS
+  Line 39: PASS
+  Line 44: PASS
+  Line 49: PASS
+  Line 54: PASS
+  Line 59: PASS
+  Line 65: PASS
+  Line 70: PASS
+  Line 75: PASS
+  Line 81: PASS
+  Line 87: PASS
+  Line 92: PASS
+  Line 97: PASS
+  Line 102: PASS
+  Line 107: PASS
+  Result: 17 passed
+
+--- misc/assert_true.slt ---
+  Result: 
+
+--- misc/current_catalog.slt ---
+  Result: 
+
+--- misc/current_database.slt ---
+  Result: 
+
+--- misc/current_schema.slt ---
+  Result: 
+
+--- misc/current_user.slt ---
+  Result: 
+
+--- misc/equal_null.slt ---
+  Result: 
+
+--- misc/input_file_block_length.slt ---
+  Result: 
+
+--- misc/input_file_block_start.slt ---
+  Result: 
+
+--- misc/input_file_name.slt ---
+  Result: 
+
+--- misc/java_method.slt ---
+  Result: 
+
+--- misc/monotonically_increasing_id.slt ---
+  Result: 
+
+--- misc/reflect.slt ---
+  Result: 
+
+--- misc/spark_partition_id.slt ---
+  Result: 
+
+--- misc/typeof.slt ---
+  Result: 
+
+--- misc/user.slt ---
+  Result: 
+
+--- misc/uuid.slt ---
+  Result: 
+
+--- misc/version.slt ---
+  Result: 
+
+--- predicate/ilike.slt ---
+  Line 26: PASS
+  Line 41: PASS
+  Line 46: PASS
+  Line 51: PASS
+  Line 56: PASS
+  Line 61: PASS
+  Line 66: PASS
+  Line 71: PASS
+  Line 31: skipped (unsupported Arrow type: LargeUtf8)
+  Line 36: skipped (unsupported Arrow type: Utf8View)
+  Result: 8 passed, 2 skipped
+
+--- predicate/isnotnull.slt ---
+  Result: 
+
+--- predicate/isnull.slt ---
+  Result: 
+
+--- predicate/like.slt ---
+  Line 26: PASS
+  Line 41: PASS
+  Line 46: PASS
+  Line 51: PASS
+  Line 56: PASS
+  Line 61: PASS
+  Line 66: PASS
+  Line 71: PASS
+  Line 76: PASS
+  Line 81: PASS
+  Line 31: skipped (unsupported Arrow type: LargeUtf8)
+  Line 36: skipped (unsupported Arrow type: Utf8View)
+  Result: 10 passed, 2 skipped
+
+--- string/ascii.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Result: 6 passed
+
+--- string/base64.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 48: PASS
+  Line 61: PASS (error expected and received)
+  Line 65: PASS
+  Line 70: PASS
+  Line 75: PASS
+  Line 80: PASS
+  Line 85: PASS
+  Line 90: PASS
+  Line 95: PASS
+  Line 108: skipped (Spark did not error, DataFusion expects error)
+  Line 111: skipped (Spark did not error, DataFusion expects error)
+  Line 114: skipped (Spark did not error, DataFusion expects error)
+  Result: 15 passed, 3 skipped
+
+--- string/bit_length.slt ---
+  Result: 
+
+--- string/btrim.slt ---
+  Result: 
+
+--- string/char.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: MISMATCH
+    SQL: SELECT char(a) FROM (VALUES (-1::INT), (0::INT), (65::INT), (321::INT)) AS t(a);
+    Translated: SELECT char(a) FROM (VALUES (CAST(-1 AS INT)), (CAST(0 AS INT)), (CAST(65 AS INT)), (CAST(321 AS INT))) AS t(a);
+  Expected (4 lines):
+    (empty)
+    \0
+    A
+    A
+  Actual (4 lines):
+    (empty)
+     
+    A
+    A
+  Result: 2 passed, 1 FAILED
+
+--- string/char_length.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Result: 3 passed
+
+--- string/character_length.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Result: 3 passed
+
+--- string/chr.slt ---
+  Result: 
+
+--- string/concat.slt ---
+  Line 18: PASS
+  Line 29: PASS
+  Line 34: PASS
+  Line 39: PASS
+  Line 44: PASS
+  Line 50: PASS
+  Line 107: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 111: PASS (error expected and received)
+  Line 118: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`t` cannot be found. Verify th
+  Line 121: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
+  Line 130: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`t` cannot be found. Verify th
+  Line 134: PASS
+  Line 24: skipped (uses arrow_typeof())
+  Line 57: skipped (uses arrow_typeof())
+  Line 63: skipped (uses arrow_typeof())
+  Line 69: skipped (uses arrow_typeof())
+  Line 75: skipped (uses arrow_typeof())
+  Line 81: skipped (uses arrow_typeof())
+  Line 87: skipped (uses arrow_typeof())
+  Line 93: skipped (uses arrow_typeof())
+  Line 101: skipped (Spark did not error, DataFusion expects error)
+  Line 104: skipped (unsupported Arrow type: Utf8View)
+  Line 115: skipped (unsupported Arrow type: Utf8View)
+  Line 125: skipped (references skipped table)
+  Result: 8 passed, 12 skipped
+
+--- string/concat_ws.slt ---
+  Result: 
+
+--- string/contains.slt ---
+  Result: 
+
+--- string/decode.slt ---
+  Result: 
+
+--- string/elt.slt ---
+  Line 26: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 48: PASS
+  Line 53: PASS
+  Line 58: PASS
+  Result: 7 passed
+
+--- string/encode.slt ---
+  Result: 
+
+--- string/endswith.slt ---
+  Result: 
+
+--- string/find_in_set.slt ---
+  Result: 
+
+--- string/format_number.slt ---
+  Result: 
+
+--- string/format_string.slt ---
+  Line 29: PASS
+  Line 45: PASS
+  Line 51: PASS
+  Line 57: PASS
+  Line 67: PASS
+  Line 73: PASS
+  Line 79: PASS
+  Line 85: PASS
+  Line 91: PASS
+  Line 97: PASS
+  Line 103: PASS
+  Line 109: PASS
+  Line 115: PASS
+  Line 159: PASS
+  Line 170: PASS
+  Line 252: PASS
+  Line 258: PASS
+  Line 264: PASS
+  Line 278: PASS
+  Line 284: PASS
+  Line 290: PASS
+  Line 296: PASS
+  Line 302: PASS
+  Line 312: PASS
+  Line 318: PASS
+  Line 324: PASS
+  Line 330: PASS
+  Line 336: PASS
+  Line 342: PASS
+  Line 368: PASS
+  Line 719: PASS
+  Line 749: PASS
+  Line 754: PASS
+  Line 770: PASS
+  Line 776: PASS
+  Line 783: PASS
+  Line 789: PASS
+  Line 819: PASS
+  Line 825: PASS
+  Line 831: PASS
+  Line 837: PASS
+  Line 843: PASS
+  Line 849: PASS
+  Line 855: PASS
+  Line 861: PASS
+  Line 867: PASS
+  Line 873: PASS
+  Line 879: PASS
+  Line 885: PASS
+  Line 891: PASS
+  Line 897: PASS
+  Line 909: PASS
+  Line 915: PASS
+  Line 921: PASS
+  Line 927: PASS
+  Line 999: PASS
+  Line 1005: PASS
+  Line 1011: PASS
+  Line 1017: PASS
+  Line 1023: PASS
+  Line 1029: PASS
+  Line 1035: PASS
+  Line 1041: PASS
+  Line 1047: PASS
+  Line 1059: PASS
+  Line 1065: PASS
+  Line 1110: PASS
+  Line 1116: PASS
+  Line 1122: PASS
+  Line 1135: PASS
+  Line 1141: PASS
+  Line 1147: PASS
+  Line 1153: PASS
+  Line 1159: PASS
+  Line 1169: statement error (non-fatal): 
+Operation not allowed: Schema may not be specified in a Create Table As Select (CTAS) statement.(li
+  Line 1238: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`test_format` cannot be found.
+  Line 1246: PASS
+  Line 1251: PASS
+  Line 1257: PASS
+  Line 1262: PASS
+  Line 1267: PASS
+  Line 1272: PASS
+  Line 1277: PASS
+  Line 1282: PASS
+  Line 1307: PASS
+  Line 1312: PASS
+  Line 1317: PASS
+  Line 1322: PASS
+  Line 1327: PASS
+  Line 1332: PASS
+  Line 1337: PASS
+  Line 1342: PASS
+  Line 1347: PASS
+  Line 1352: PASS
+  Line 1358: PASS
+  Line 1363: PASS
+  Line 1368: PASS
+  Line 1373: PASS
+  Line 1378: PASS
+  Line 1383: PASS
+  Line 1388: PASS
+  Line 1393: PASS
+  Line 1398: PASS
+  Line 1403: PASS
+  Line 1408: PASS
+  Line 1413: PASS
+  Line 1419: PASS
+  Line 1424: PASS
+  Line 1429: PASS
+  Line 1434: PASS
+  Line 1440: PASS
+  Line 1445: PASS
+  Line 1450: PASS
+  Line 1455: PASS
+  Line 1461: PASS
+  Line 1466: PASS
+  Line 1471: PASS
+  Line 1477: PASS
+  Line 1482: PASS
+  Line 1487: PASS
+  Line 1498: PASS
+  Line 1550: PASS
+  Line 1555: PASS
+  Line 1565: PASS
+  Line 1570: PASS
+  Line 1575: PASS
+  Line 1582: PASS
+  Line 1587: PASS
+  Line 1935: PASS
+  Line 1941: PASS
+  Line 1947: PASS
+  Line 1953: PASS
+  Line 1959: PASS
+  Line 1965: PASS
+  Line 1971: PASS
+  Line 1977: PASS
+  Line 1983: PASS
+  Line 1989: PASS
+  Line 1994: PASS
+  Line 2000: PASS
+  Line 2005: PASS
+  Line 2015: PASS
+  Line 2021: PASS
+  Line 2034: PASS
+  Line 2040: PASS
+  Line 2058: PASS
+  Line 2068: PASS
+  Line 2074: PASS
+  Line 2080: PASS
+  Line 2086: PASS
+  Line 2092: PASS
+  Line 2098: PASS
+  Line 2104: PASS
+  Line 2110: PASS
+  Line 2116: PASS
+  Line 2122: PASS
+  Line 2128: PASS
+  Line 2134: PASS
+  Line 2140: PASS
+  Line 2146: PASS
+  Line 2152: PASS
+  Line 2158: PASS
+  Line 2164: PASS
+  Line 2170: PASS
+  Line 2176: PASS
+  Line 2182: PASS
+  Line 2188: PASS
+  Line 2194: PASS
+  Line 2200: PASS
+  Line 2206: PASS
+  Line 2216: PASS
+  Line 2222: PASS
+  Line 2254: PASS
+  Line 2260: PASS
+  Line 2270: PASS
+  Line 2276: PASS
+  Line 2306: PASS
+  Line 2312: PASS
+  Line 125: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Float: %f', 3.14159);
+  Line 130: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Float: %f', 30.0);
+  Line 136: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Precision: %.2f', 3.14159);
+  Line 142: PySpark error: e != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Scientific: %e', 1234.5);
+  Line 148: PySpark error: e != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Scientific: %E', 1234.5);
+  Line 154: PySpark error: g != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Compact: %g', 1234.5);
+  Line 165: PySpark error: g != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Compact: %G', 1234.5);
+  Line 176: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Formatted: %10.2f', 3.14159);
+  Line 182: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Zero: %08.2f', 3.14);
+  Line 188: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Left: %-10.2f|', 3.14);
+  Line 194: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Space: % .2f', 3.14);
+  Line 200: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Space: % .2f', -3.14);
+  Line 206: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Force: %+.2f', 3.14);
+  Line 212: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Force: %+.2f', -3.14);
+  Line 218: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Precision 0: %.0f', 3.14);
+  Line 224: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Precision 0: %.0f', 3.6);
+  Line 230: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Alt form: %#.0f', 3.14);
+  Line 236: PySpark error: e != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Sci: %.0e', 1234.5);
+  Line 242: PySpark error: g != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Compact: %.0g', 1234.5);
+  Line 356: MISMATCH
+    SQL: SELECT format_string('Hour: %tH', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Hour: %tH', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Hour: 14
+  Actual (1 lines):
+    Hour: 01
+  Line 362: MISMATCH
+    SQL: SELECT format_string('Hour: %tI', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Hour: %tI', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Hour: 02
+  Actual (1 lines):
+    Hour: 01
+  Line 374: MISMATCH
+    SQL: SELECT format_string('Second: %tS', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Second: %tS', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Second: 45
+  Actual (1 lines):
+    Second: 00
+  Line 380: MISMATCH
+    SQL: SELECT format_string('AM/PM: %tp', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('AM/PM: %tp', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    AM/PM: pm
+  Actual (1 lines):
+    AM/PM: am
+  Line 386: MISMATCH
+    SQL: SELECT format_string('AM/PM: %Tp', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('AM/PM: %Tp', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    AM/PM: PM
+  Actual (1 lines):
+    AM/PM: AM
+  Line 392: MISMATCH
+    SQL: SELECT format_string('AM/PM: %Tp', TIMESTAMP '2023-12-25 09:30:45');
+    Translated: SELECT format_string('AM/PM: %Tp', TIMESTAMP '2023-12-25 09:30:45');
+  Expected (1 lines):
+    AM/PM: AM
+  Actual (1 lines):
+    AM/PM: PM
+  Line 398: MISMATCH
+    SQL: SELECT format_string('Year: %tY', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Year: %tY', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Year: 2023
+  Actual (1 lines):
+    Year: 55953
+  Line 404: MISMATCH
+    SQL: SELECT format_string('Year: %TY', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Year: %TY', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Year: 2023
+  Actual (1 lines):
+    Year: 55953
+  Line 410: MISMATCH
+    SQL: SELECT format_string('Month: %tm', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Month: %tm', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Month: 12
+  Actual (1 lines):
+    Month: 01
+  Line 416: MISMATCH
+    SQL: SELECT format_string('Day: %td', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Day: %td', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Day: 25
+  Actual (1 lines):
+    Day: 11
+  Line 422: MISMATCH
+    SQL: SELECT format_string('Time: %tR', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Time: %tR', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Time: 14:30
+  Actual (1 lines):
+    Time: 01:30
+  Line 428: MISMATCH
+    SQL: SELECT format_string('Time: %tT', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Time: %tT', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Time: 14:30:45
+  Actual (1 lines):
+    Time: 01:30:00
+  Line 434: MISMATCH
+    SQL: SELECT format_string('Date: %tD', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Date: %tD', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Date: 12/25/23
+  Actual (1 lines):
+    Date: 01/11/53
+  Line 440: MISMATCH
+    SQL: SELECT format_string('ISO Date: %tF', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('ISO Date: %tF', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    ISO Date: 2023-12-25
+  Actual (1 lines):
+    ISO Date: 55953-01-11
+  Line 446: MISMATCH
+    SQL: SELECT format_string('Date: %tc', TIMESTAMP '1969-07-20 16:17:00') LIKE 'Date: Sun Jul 20 16:17:00 % 1969';
+    Translated: SELECT format_string('Date: %tc', TIMESTAMP '1969-07-20 16:17:00') LIKE 'Date: Sun Jul 20 16:17:00 % 1969';
+  Expected (1 lines):
+    true
+  Actual (1 lines):
+    false
+  Line 453: MISMATCH
+    SQL: SELECT format_string('Hour: %tk', TIMESTAMP '2023-12-25 04:30:45');
+    Translated: SELECT format_string('Hour: %tk', TIMESTAMP '2023-12-25 04:30:45');
+  Expected (1 lines):
+    Hour: 4
+  Actual (1 lines):
+    Hour: 9
+  Line 459: MISMATCH
+    SQL: SELECT format_string('Hour: %tl', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Hour: %tl', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Hour: 2
+  Actual (1 lines):
+    Hour: 1
+  Line 465: MISMATCH
+    SQL: SELECT format_string('Milliseconds: %tL', TIMESTAMP '2023-12-25 14:30:45.123');
+    Translated: SELECT format_string('Milliseconds: %tL', TIMESTAMP '2023-12-25 14:30:45.123');
+  Expected (1 lines):
+    Milliseconds: 123
+  Actual (1 lines):
+    Milliseconds: 000
+  Line 471: MISMATCH
+    SQL: SELECT format_string('Nanoseconds: %tN', TIMESTAMP '2023-12-25 14:30:45.123456789');
+    Translated: SELECT format_string('Nanoseconds: %tN', TIMESTAMP '2023-12-25 14:30:45.123456789');
+  Expected (1 lines):
+    Nanoseconds: 123456789
+  Actual (1 lines):
+    Nanoseconds: 456000000
+  Line 477: MISMATCH
+    SQL: SELECT format_string('Timezone: %tz', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Timezone: %tz', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Timezone: +0000
+  Actual (1 lines):
+    Timezone: -0700
+  Line 483: PySpark error: All week-based patterns are unsupported since Spark 3.0, detected: e, Please use the SQL function EXTRACT instead
+    SQL: SELECT format_string('Timezone: %tZ', from_unixtime(1599572549, 'America/New_York'));
+  Line 489: MISMATCH
+    SQL: SELECT format_string('Epoch seconds: %ts', TIMESTAMP '1970-01-01 00:00:01');
+    Translated: SELECT format_string('Epoch seconds: %ts', TIMESTAMP '1970-01-01 00:00:01');
+  Expected (1 lines):
+    Epoch seconds: 1
+  Actual (1 lines):
+    Epoch seconds: 25201000
+  Line 495: MISMATCH
+    SQL: SELECT format_string('Epoch millis: %tQ', TIMESTAMP '1970-01-01 00:00:01');
+    Translated: SELECT format_string('Epoch millis: %tQ', TIMESTAMP '1970-01-01 00:00:01');
+  Expected (1 lines):
+    Epoch millis: 1000
+  Actual (1 lines):
+    Epoch millis: 25201000000
+  Line 501: MISMATCH
+    SQL: SELECT format_string('Month: %tB', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Month: %tB', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Month: December
+  Actual (1 lines):
+    Month: January
+  Line 507: MISMATCH
+    SQL: SELECT format_string('Month: %TB', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Month: %TB', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Month: DECEMBER
+  Actual (1 lines):
+    Month: JANUARY
+  Line 513: MISMATCH
+    SQL: SELECT format_string('Month: %tb', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Month: %tb', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Month: Dec
+  Actual (1 lines):
+    Month: Jan
+  Line 519: MISMATCH
+    SQL: SELECT format_string('Month: %Tb', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Month: %Tb', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Month: DEC
+  Actual (1 lines):
+    Month: JAN
+  Line 525: MISMATCH
+    SQL: SELECT format_string('Month: %th', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Month: %th', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Month: Dec
+  Actual (1 lines):
+    Month: Jan
+  Line 531: MISMATCH
+    SQL: SELECT format_string('Day: %tA', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Day: %tA', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Day: Monday
+  Actual (1 lines):
+    Day: Sunday
+  Line 537: MISMATCH
+    SQL: SELECT format_string('Day: %TA', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Day: %TA', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Day: MONDAY
+  Actual (1 lines):
+    Day: SUNDAY
+  Line 543: MISMATCH
+    SQL: SELECT format_string('Day: %ta', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Day: %ta', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Day: Mon
+  Actual (1 lines):
+    Day: Sun
+  Line 549: MISMATCH
+    SQL: SELECT format_string('Day: %Ta', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Day: %Ta', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Day: MON
+  Actual (1 lines):
+    Day: SUN
+  Line 555: MISMATCH
+    SQL: SELECT format_string('Century: %tC', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Century: %tC', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Century: 20
+  Actual (1 lines):
+    Century: 559
+  Line 561: MISMATCH
+    SQL: SELECT format_string('Year: %ty', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Year: %ty', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Year: 23
+  Actual (1 lines):
+    Year: 53
+  Line 567: MISMATCH
+    SQL: SELECT format_string('Day of year: %tj', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Day of year: %tj', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Day of year: 359
+  Actual (1 lines):
+    Day of year: 011
+  Line 573: MISMATCH
+    SQL: SELECT format_string('Day: %te', TIMESTAMP '2023-12-05 14:30:45');
+    Translated: SELECT format_string('Day: %te', TIMESTAMP '2023-12-05 14:30:45');
+  Expected (1 lines):
+    Day: 5
+  Actual (1 lines):
+    Day: 9
+  Line 579: MISMATCH
+    SQL: SELECT format_string('Time: %tr', TIMESTAMP '2023-12-25 14:30:45');
+    Translated: SELECT format_string('Time: %tr', TIMESTAMP '2023-12-25 14:30:45');
+  Expected (1 lines):
+    Time: 02:30:45 PM
+  Actual (1 lines):
+    Time: 01:30:00 AM
+  Line 604: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Decimal: %f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 610: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Decimal: %.2f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 616: PySpark error: e != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Scientific: %e', CAST(1234.5 AS DECIMAL(10,2)));
+  Line 622: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Padded: %10.2f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 628: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Zero padded: %010.2f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 634: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Left: %-10.2f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 640: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Plus: %+.2f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 646: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Space: % .2f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 652: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Negative: %+.2f', CAST(-123.456 AS DECIMAL(10,3)));
+  Line 658: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Negative: % .2f', CAST(-123.456 AS DECIMAL(10,3)));
+  Line 664: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Width+Plus: %+10.2f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 670: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Zero+Plus: %+010.2f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 676: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Left+Plus: %-+10.2f', CAST(123.456 AS DECIMAL(10,3)));
+  Line 682: PySpark error: e != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Sci Width: %15.2e', CAST(1234.5 AS DECIMAL(10,2)));
+  Line 688: PySpark error: e != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Sci Zero: %015.2e', CAST(1234.5 AS DECIMAL(10,2)));
+  Line 694: PySpark error: e != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Sci Plus: %+.2e', CAST(1234.5 AS DECIMAL(10,2)));
+  Line 700: PySpark error: g != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Compact: %10.2g', CAST(123.456 AS DECIMAL(10,3)));
+  Line 706: PySpark error: g != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Compact+: %+.2g', CAST(123.456 AS DECIMAL(10,3)));
+  Line 725: MISMATCH
+    SQL: SELECT format_string('Line1%nLine2');
+    Translated: SELECT format_string('Line1%nLine2');
+  Expected (3 lines):
+     
+    01)Line1
+    02)Line2
+  Actual (1 lines):
+    Line1
+Line2
+  Line 733: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('String: %s, Integer: %d, Float: %.2f', 'test', 42, 3.14159);
+  Line 739: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Mixed: %10s %5d %.2f', 'hello', 123, 45.678);
+  Line 1287: PySpark error: c != java.lang.Long
+    SQL: SELECT format_string('Char: %c', CAST(65 AS BIGINT));
+  Line 1292: PySpark error: c != java.lang.Long
+    SQL: SELECT format_string('Char: %C', CAST(97 AS BIGINT));
+  Line 1297: PySpark error: c != java.lang.Long
+    SQL: SELECT format_string('Char: %c', CAST(65 AS BIGINT));
+  Line 1302: PySpark error: c != java.lang.Long
+    SQL: SELECT format_string('Char: %C', CAST(97 AS BIGINT));
+  Line 1493: MISMATCH
+    SQL: SELECT format_string('Decimal: %d', arrow_cast(18446744073709551615, 'UInt64'));
+    Translated: SELECT format_string('Decimal: %d', CAST(18446744073709551615 AS BIGINT));
+  Expected (1 lines):
+    Decimal: 18446744073709551615
+  Actual (1 lines):
+    Decimal: -1
+  Line 1504: MISMATCH
+    SQL: SELECT format_string('Float: %f', arrow_cast(3.14, 'Float16'));
+    Translated: SELECT format_string('Float: %f', CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    Float: 3.140625
+  Actual (1 lines):
+    Float: 3.140000
+  Line 1509: MISMATCH
+    SQL: SELECT format_string('Scientific: %e', arrow_cast(3.14, 'Float16'));
+    Translated: SELECT format_string('Scientific: %e', CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    Scientific: 3.140625e+00
+  Actual (1 lines):
+    Scientific: 3.140000e+00
+  Line 1514: MISMATCH
+    SQL: SELECT format_string('Scientific: %E', arrow_cast(3.14, 'Float16'));
+    Translated: SELECT format_string('Scientific: %E', CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    Scientific: 3.140625E+00
+  Actual (1 lines):
+    Scientific: 3.140000E+00
+  Line 1519: MISMATCH
+    SQL: SELECT format_string('Compact: %g', arrow_cast(3.14, 'Float16'));
+    Translated: SELECT format_string('Compact: %g', CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    Compact: 3.14063
+  Actual (1 lines):
+    Compact: 3.14000
+  Line 1524: MISMATCH
+    SQL: SELECT format_string('Compact: %G', arrow_cast(3.14, 'Float16'));
+    Translated: SELECT format_string('Compact: %G', CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    Compact: 3.14063
+  Actual (1 lines):
+    Compact: 3.14000
+  Line 1529: MISMATCH
+    SQL: SELECT format_string('String: %s', arrow_cast(3.14, 'Float16'));
+    Translated: SELECT format_string('String: %s', CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    String: 3.140625
+  Actual (1 lines):
+    String: 3.14
+  Line 1534: MISMATCH
+    SQL: SELECT format_string('String: %S', arrow_cast(3.14, 'Float16'));
+    Translated: SELECT format_string('String: %S', CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    String: 3.140625
+  Actual (1 lines):
+    String: 3.14
+  Line 1539: MISMATCH
+    SQL: SELECT format_string('Hex float: %a', arrow_cast(3.14, 'Float16'));
+    Translated: SELECT format_string('Hex float: %a', CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    Hex float: 0x1.92p1
+  Actual (1 lines):
+    Hex float: 0x1.91eb86p1
+  Line 1544: MISMATCH
+    SQL: SELECT format_string('Hex float: %A', arrow_cast(3.14, 'Float16'));
+    Translated: SELECT format_string('Hex float: %A', CAST(3.14 AS FLOAT));
+  Expected (1 lines):
+    Hex float: 0X1.92P1
+  Actual (1 lines):
+    Hex float: 0X1.91EB86P1
+  Line 1560: MISMATCH
+    SQL: SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Float32'));
+    Translated: SELECT format_string('Compact: %g', CAST(1234.5 AS FLOAT));
+  Expected (1 lines):
+    Compact: 1234.5
+  Actual (1 lines):
+    Compact: 1234.50
+  Line 1767: PySpark error: [DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve "CAST(19716 AS DATE)" due to data type mismatch: cannot cast "INT" to "DATE".; line 1 pos 34;
+'Project [unresolvedalias('format_string(Year: %tY, cast(19716 as date)), None)]
++- OneRowRelation
+
+    SQL: SELECT format_string('Year: %tY', CAST(19716 AS DATE));
+  Line 1772: PySpark error: [DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve "CAST(19716 AS DATE)" due to data type mismatch: cannot cast "INT" to "DATE".; line 1 pos 35;
+'Project [unresolvedalias('format_string(Month: %tB, cast(19716 as date)), None)]
++- OneRowRelation
+
+    SQL: SELECT format_string('Month: %tB', CAST(19716 AS DATE));
+  Line 1777: PySpark error: [DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve "CAST(19716 AS DATE)" due to data type mismatch: cannot cast "INT" to "DATE".; line 1 pos 35;
+'Project [unresolvedalias('format_string(String: %s, cast(19716 as date)), None)]
++- OneRowRelation
+
+    SQL: SELECT format_string('String: %s', CAST(19716 AS DATE));
+  Line 1782: PySpark error: [DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve "CAST(19716 AS DATE)" due to data type mismatch: cannot cast "INT" to "DATE".; line 1 pos 35;
+'Project [unresolvedalias('format_string(String: %S, cast(19716 as date)), None)]
++- OneRowRelation
+
+    SQL: SELECT format_string('String: %S', CAST(19716 AS DATE));
+  Line 1788: PySpark error: [DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve "CAST(19716 AS DATE)" due to data type mismatch: cannot cast "INT" to "DATE".; line 1 pos 34;
+'Project [unresolvedalias('format_string(Year: %tY, cast(19716 as date)), None)]
++- OneRowRelation
+
+    SQL: SELECT format_string('Year: %tY', CAST(19716 AS DATE));
+  Line 1793: PySpark error: [DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve "CAST(19716 AS DATE)" due to data type mismatch: cannot cast "INT" to "DATE".; line 1 pos 35;
+'Project [unresolvedalias('format_string(Month: %tB, cast(19716 as date)), None)]
++- OneRowRelation
+
+    SQL: SELECT format_string('Month: %tB', CAST(19716 AS DATE));
+  Line 1798: PySpark error: [DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve "CAST(19716 AS DATE)" due to data type mismatch: cannot cast "INT" to "DATE".; line 1 pos 35;
+'Project [unresolvedalias('format_string(String: %s, cast(19716 as date)), None)]
++- OneRowRelation
+
+    SQL: SELECT format_string('String: %s', CAST(19716 AS DATE));
+  Line 1803: PySpark error: [DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve "CAST(19716 AS DATE)" due to data type mismatch: cannot cast "INT" to "DATE".; line 1 pos 35;
+'Project [unresolvedalias('format_string(String: %S, cast(19716 as date)), None)]
++- OneRowRelation
+
+    SQL: SELECT format_string('String: %S', CAST(19716 AS DATE));
+  Line 1840: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %a', 15.9375);
+  Line 1846: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %A', 15.9375);
+  Line 1852: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %.10a', 15.9375);
+  Line 1857: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('%a', 12.3456);
+  Line 1863: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %a', 0.0);
+  Line 1869: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %a', -15.9375);
+  Line 1875: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %a', 0.0000152587890625);
+  Line 1881: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %+a', 15.9375);
+  Line 1887: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: % a', 15.9375);
+  Line 1893: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: % a', -15.9375);
+  Line 1899: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: % A', 15.9375);
+  Line 1905: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %20a', 15.9375);
+  Line 1911: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %020a', 15.9375);
+  Line 1917: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %#.5a', 1.0);
+  Line 1923: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %+A', -15.9375);
+  Line 1929: PySpark error: a != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Hex float: %-20a', 15.9375);
+  Line 2046: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Always decimal: %#.0f', 42.0);
+  Line 2052: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Always decimal: %#.0f', 40.0);
+  Line 2232: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Zero precision: %.0f', 3.14159);
+  Line 2238: PySpark error: f != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('High precision: %.10f', 3.14159);
+  Line 2244: PySpark error: e != org.apache.spark.sql.types.Decimal
+    SQL: SELECT format_string('Scientific: %.3e', 1234.56789);
+  Line 34: skipped (unsupported Arrow type: LargeUtf8)
+  Line 39: skipped (unsupported Arrow type: Utf8View)
+  Line 270: skipped (Spark did not error, DataFusion expects error)
+  Line 348: skipped (Spark did not error, DataFusion expects error)
+  Line 584: skipped (Spark did not error, DataFusion expects error)
+  Line 587: skipped (Spark did not error, DataFusion expects error)
+  Line 591: skipped (Spark did not error, DataFusion expects error)
+  Line 594: skipped (Spark did not error, DataFusion expects error)
+  Line 711: skipped (Spark did not error, DataFusion expects error)
+  Line 759: skipped (unsupported Arrow type: LargeUtf8)
+  Line 764: skipped (unsupported Arrow type: Utf8View)
+  Line 795: skipped (unsupported Arrow type: LargeUtf8)
+  Line 801: skipped (unsupported Arrow type: LargeUtf8)
+  Line 807: skipped (unsupported Arrow type: Utf8View)
+  Line 813: skipped (unsupported Arrow type: Utf8View)
+  Line 933: skipped (unmapped Arrow type: Timestamp(ns))
+  Line 939: skipped (unmapped Arrow type: Timestamp(ns))
+  Line 945: skipped (unmapped Arrow type: Time32(Second))
+  Line 951: skipped (unmapped Arrow type: Time32(Millisecond))
+  Line 957: skipped (unmapped Arrow type: Time64(Microsecond))
+  Line 963: skipped (unmapped Arrow type: Time64(Nanosecond))
+  Line 969: skipped (unmapped Arrow type: Timestamp(s))
+  Line 975: skipped (unmapped Arrow type: Timestamp(ms))
+  Line 981: skipped (unmapped Arrow type: Timestamp(µs))
+  Line 987: skipped (unmapped Arrow type: Timestamp(ns))
+  Line 993: skipped (unmapped Arrow type: Decimal128(10, 2))
+  Line 1053: skipped (unmapped Arrow type: Timestamp(ns))
+  Line 1071: skipped (unmapped Arrow type: Decimal128(10, 2))
+  Line 1077: skipped (unmapped Arrow type: Decimal256(20, 3))
+  Line 1088: skipped (Spark did not error, DataFusion expects error)
+  Line 1091: skipped (Spark did not error, DataFusion expects error)
+  Line 1095: skipped (Spark did not error, DataFusion expects error)
+  Line 1099: skipped (Spark did not error, DataFusion expects error)
+  Line 1102: skipped (Spark did not error, DataFusion expects error)
+  Line 1127: skipped (Spark did not error, DataFusion expects error)
+  Line 1175: skipped (references skipped table)
+  Line 1182: skipped (references skipped table)
+  Line 1189: skipped (references skipped table)
+  Line 1196: skipped (references skipped table)
+  Line 1203: skipped (references skipped table)
+  Line 1210: skipped (references skipped table)
+  Line 1217: skipped (references skipped table)
+  Line 1224: skipped (references skipped table)
+  Line 1231: skipped (references skipped table)
+  Line 1593: skipped (unmapped Arrow type: Decimal128(10, 3))
+  Line 1598: skipped (unmapped Arrow type: Decimal128(10, 2))
+  Line 1603: skipped (unmapped Arrow type: Decimal128(10, 2))
+  Line 1608: skipped (unmapped Arrow type: Decimal128(10, 2))
+  Line 1613: skipped (unmapped Arrow type: Decimal128(10, 2))
+  Line 1618: skipped (unmapped Arrow type: Decimal128(10, 3))
+  Line 1623: skipped (unmapped Arrow type: Decimal128(10, 3))
+  Line 1629: skipped (unmapped Arrow type: Decimal256(20, 3))
+  Line 1634: skipped (unmapped Arrow type: Decimal256(20, 2))
+  Line 1639: skipped (unmapped Arrow type: Decimal256(20, 2))
+  Line 1644: skipped (unmapped Arrow type: Decimal256(20, 3))
+  Line 1650: skipped (unmapped Arrow type: Time32(Second))
+  Line 1655: skipped (unmapped Arrow type: Time32(Second))
+  Line 1660: skipped (unmapped Arrow type: Time32(Second))
+  Line 1665: skipped (unmapped Arrow type: Time32(Second))
+  Line 1671: skipped (unmapped Arrow type: Time32(Millisecond))
+  Line 1676: skipped (unmapped Arrow type: Time32(Millisecond))
+  Line 1681: skipped (unmapped Arrow type: Time32(Millisecond))
+  Line 1687: skipped (unmapped Arrow type: Time64(Microsecond))
+  Line 1692: skipped (unmapped Arrow type: Time64(Microsecond))
+  Line 1697: skipped (unmapped Arrow type: Time64(Microsecond))
+  Line 1703: skipped (unmapped Arrow type: Time64(Nanosecond))
+  Line 1708: skipped (unmapped Arrow type: Time64(Nanosecond))
+  Line 1713: skipped (unmapped Arrow type: Time64(Nanosecond))
+  Line 1719: skipped (unmapped Arrow type: Timestamp(s))
+  Line 1724: skipped (unmapped Arrow type: Timestamp(s))
+  Line 1729: skipped (unmapped Arrow type: Timestamp(s))
+  Line 1734: skipped (unmapped Arrow type: Timestamp(s))
+  Line 1740: skipped (unmapped Arrow type: Timestamp(ms))
+  Line 1745: skipped (unmapped Arrow type: Timestamp(ms))
+  Line 1751: skipped (unmapped Arrow type: Timestamp(µs))
+  Line 1756: skipped (unmapped Arrow type: Timestamp(µs))
+  Line 1761: skipped (unmapped Arrow type: Timestamp(ns))
+  Line 1809: skipped (Spark did not error, DataFusion expects error)
+  Line 1818: skipped (Spark did not error, DataFusion expects error)
+  Line 1824: skipped (Spark did not error, DataFusion expects error)
+  Line 1830: skipped (Spark did not error, DataFusion expects error)
+  Line 2026: skipped (Spark did not error, DataFusion expects error)
+  Line 2286: skipped (Spark did not error, DataFusion expects error)
+  Line 2290: skipped (Spark did not error, DataFusion expects error)
+  Line 2294: skipped (Spark did not error, DataFusion expects error)
+  Line 2298: skipped (Spark did not error, DataFusion expects error)
+  Result: 176 passed, 121 FAILED, 86 skipped
+
+--- string/initcap.slt ---
+  Result: 
+
+--- string/instr.slt ---
+  Result: 
+
+--- string/lcase.slt ---
+  Result: 
+
+--- string/left.slt ---
+  Result: 
+
+--- string/len.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Result: 2 passed
+
+--- string/length.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Result: 2 passed
+
+--- string/levenshtein.slt ---
+  Result: 
+
+--- string/locate.slt ---
+  Result: 
+
+--- string/lower.slt ---
+  Result: 
+
+--- string/lpad.slt ---
+  Result: 
+
+--- string/ltrim.slt ---
+  Result: 
+
+--- string/luhn_check.slt ---
+  Line 19: PASS
+  Line 25: PASS
+  Line 31: PASS
+  Line 36: PASS
+  Line 41: PASS
+  Line 46: PASS
+  Line 51: PASS
+  Line 57: PASS
+  Line 63: PASS
+  Line 69: PASS
+  Line 75: PASS
+  Line 80: PASS
+  Line 85: PASS
+  Line 90: PASS
+  Line 95: PASS
+  Line 101: PASS
+  Line 106: PASS
+  Line 111: PASS
+  Line 116: PASS
+  Line 122: PASS
+  Line 128: PASS
+  Line 133: PASS
+  Line 138: PASS
+  Line 144: PASS
+  Line 150: PASS
+  Line 155: PASS
+  Result: 26 passed
+
+--- string/mask.slt ---
+  Result: 
+
+--- string/octet_length.slt ---
+  Result: 
+
+--- string/position.slt ---
+  Result: 
+
+--- string/printf.slt ---
+  Line 27: PASS
+  Result: 1 passed
+
+--- string/repeat.slt ---
+  Result: 
+
+--- string/replace.slt ---
+  Result: 
+
+--- string/right.slt ---
+  Result: 
+
+--- string/rpad.slt ---
+  Result: 
+
+--- string/rtrim.slt ---
+  Result: 
+
+--- string/sentences.slt ---
+  Result: 
+
+--- string/soundex.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 48: PASS
+  Line 53: PASS
+  Line 58: PASS
+  Line 63: PASS
+  Line 68: PASS
+  Line 78: PASS
+  Line 88: PASS
+  Line 93: PASS
+  Line 98: PASS
+  Line 103: PASS
+  Line 108: PASS
+  Line 113: PASS
+  Line 118: PASS
+  Line 123: PASS
+  Line 128: PASS
+  Line 133: PASS
+  Line 138: PASS
+  Line 143: PASS
+  Line 148: PASS
+  Line 153: PASS
+  Line 158: PASS
+  Line 163: PASS
+  Line 168: PASS
+  Line 173: PASS
+  Line 178: PASS
+  Line 183: PASS
+  Line 198: PASS
+  Line 73: MISMATCH
+    SQL: SELECT soundex('#hello');
+    Translated: SELECT soundex('#hello');
+  Expected (0 lines):
+  Actual (1 lines):
+    #hello
+  Line 83: MISMATCH
+    SQL: SELECT soundex('\thello');
+    Translated: SELECT soundex('\thello');
+  Expected (1 lines):
+    \thello
+  Actual (1 lines):
+    	hello
+  Line 188: MISMATCH
+    SQL: SELECT soundex('#');
+    Translated: SELECT soundex('#');
+  Expected (0 lines):
+  Actual (1 lines):
+    #
+  Line 193: MISMATCH
+    SQL: SELECT soundex('\nhello');
+    Translated: SELECT soundex('\nhello');
+  Expected (1 lines):
+    \nhello
+  Actual (1 lines):
+    
+hello
+  Result: 33 passed, 4 FAILED
+
+--- string/space.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Result: 5 passed
+
+--- string/split_part.slt ---
+  Result: 
+
+--- string/startswith.slt ---
+  Result: 
+
+--- string/substring.slt ---
+  Line 19: PASS
+  Line 24: PASS
+  Line 29: PASS
+  Line 35: PASS
+  Line 40: PASS
+  Line 46: PASS
+  Line 52: PASS
+  Line 57: PASS
+  Line 63: PASS
+  Line 68: PASS
+  Line 74: PASS
+  Line 79: PASS
+  Line 85: PASS
+  Line 90: PASS
+  Line 95: PASS
+  Line 100: PASS
+  Line 105: PASS
+  Line 110: PASS
+  Line 156: PASS
+  Line 161: PASS
+  Line 129: MISMATCH
+    SQL: SELECT substring(column1, column2, column3)
+FROM VALUES
+('Spark SQL'::string, -3::int, 2::int),
+('Spark SQL'::string, 3::int, 1::int),
+('Spark SQL'::string, 3::int, 700::int),
+('Spark SQL'::string, 3::int, -1::int),
+('Spark SQL'::string, 3::int, 0::int),
+('Spark SQL'::string, 300::int, 3::int),
+('Spark SQL'::string, -300::int, 3::int),
+(NULL::string, 3::int, 1::int),
+('Spark SQL'::string, NULL::int, 1::int),
+('Spark SQL'::string, 3::int, NULL::int);
+    Translated: SELECT substring(col1, col2, col3)
+FROM VALUES
+(CAST('Spark SQL' AS STRING), CAST(-3 AS INT), CAST(2 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(1 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(700 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(-1 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(0 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(300 AS INT), CAST(3 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(-300 AS INT), CAST(3 AS INT)),
+(CAST(NULL AS STRING), CAST(3 AS INT), CAST(1 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(NULL AS INT), CAST(1 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(NULL AS INT));
+  Expected (10 lines):
+    SQ
+    a
+    ark SQL
+    (empty)
+    (empty)
+    (empty)
+    Spa
+    NULL
+    NULL
+    NULL
+  Actual (10 lines):
+    SQ
+    a
+    ark SQL
+    (empty)
+    (empty)
+    (empty)
+    (empty)
+    NULL
+    NULL
+    NULL
+  Line 180: MISMATCH
+    SQL: SELECT substr(column1, column2, column3)
+FROM VALUES
+('Spark SQL'::string, -3::int, 2::int),
+('Spark SQL'::string, 3::int, 1::int),
+('Spark SQL'::string, 3::int, 700::int),
+('Spark SQL'::string, 3::int, -1::int),
+('Spark SQL'::string, 3::int, 0::int),
+('Spark SQL'::string, 300::int, 3::int),
+('Spark SQL'::string, -300::int, 3::int),
+(NULL::string, 3::int, 1::int),
+('Spark SQL'::string, NULL::int, 1::int),
+('Spark SQL'::string, 3::int, NULL::int);
+    Translated: SELECT substr(col1, col2, col3)
+FROM VALUES
+(CAST('Spark SQL' AS STRING), CAST(-3 AS INT), CAST(2 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(1 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(700 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(-1 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(0 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(300 AS INT), CAST(3 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(-300 AS INT), CAST(3 AS INT)),
+(CAST(NULL AS STRING), CAST(3 AS INT), CAST(1 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(NULL AS INT), CAST(1 AS INT)),
+(CAST('Spark SQL' AS STRING), CAST(3 AS INT), CAST(NULL AS INT));
+  Expected (10 lines):
+    SQ
+    a
+    ark SQL
+    (empty)
+    (empty)
+    (empty)
+    Spa
+    NULL
+    NULL
+    NULL
+  Actual (10 lines):
+    SQ
+    a
+    ark SQL
+    (empty)
+    (empty)
+    (empty)
+    (empty)
+    NULL
+    NULL
+    NULL
+  Result: 20 passed, 2 FAILED
+
+--- string/substring_index.slt ---
+  Result: 
+
+--- string/to_binary.slt ---
+  Result: 
+
+--- string/to_char.slt ---
+  Result: 
+
+--- string/to_number.slt ---
+  Result: 
+
+--- string/to_varchar.slt ---
+  Result: 
+
+--- string/translate.slt ---
+  Result: 
+
+--- string/trim.slt ---
+  Result: 
+
+--- string/try_to_binary.slt ---
+  Result: 
+
+--- string/try_to_number.slt ---
+  Result: 
+
+--- string/ucase.slt ---
+  Result: 
+
+--- string/upper.slt ---
+  Result: 
+
+--- struct/named_struct.slt ---
+  Result: 
+
+--- struct/struct.slt ---
+  Result: 
+
+--- url/parse_url.slt ---
+  Line 18: PASS
+  Line 23: PASS
+  Line 28: PASS
+  Line 33: PASS
+  Line 38: PASS
+  Line 43: PASS
+  Line 48: PASS
+  Line 53: PASS
+  Line 58: PASS
+  Line 63: PASS
+  Line 68: PASS
+  Line 73: PASS
+  Line 78: PASS
+  Line 83: PASS
+  Line 88: PASS
+  Line 93: PASS
+  Line 98: PASS
+  Line 103: PASS
+  Line 108: PASS
+  Line 113: PASS
+  Line 118: PASS
+  Line 123: PASS
+  Line 128: PASS
+  Line 133: PASS
+  Line 138: PASS
+  Line 145: PASS
+  Line 150: PASS
+  Line 155: PASS
+  Line 160: PASS
+  Line 166: PASS
+  Line 171: PASS
+  Line 176: PASS
+  Line 181: PASS
+  Line 186: PASS
+  Line 192: PASS
+  Line 197: PASS
+  Line 202: PASS
+  Line 208: PASS
+  Line 213: PASS
+  Line 218: PASS
+  Line 223: PASS
+  Line 228: PASS
+  Line 233: PASS
+  Line 238: PASS
+  Line 243: PASS
+  Line 248: PASS
+  Line 253: PASS
+  Line 258: PASS
+  Line 263: PASS (error expected and received)
+  Line 271: PASS
+  Line 277: PASS
+  Line 283: PASS
+  Line 289: PASS
+  Line 295: PASS
+  Line 301: PASS
+  Line 307: PASS
+  Line 266: skipped (Spark did not error, DataFusion expects error)
+  Result: 56 passed, 1 skipped
+
+--- url/try_parse_url.slt ---
+  Line 24: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 29: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 34: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 39: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 44: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 49: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 54: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 59: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 64: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 69: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 74: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 79: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 84: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 89: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 96: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 101: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 106: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 111: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 117: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 122: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 127: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 132: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 137: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 143: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 148: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 153: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 159: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 164: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 169: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 174: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 179: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 184: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 189: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 194: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 199: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 204: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 209: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 214: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 221: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 227: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 233: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 239: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 245: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 251: skipped (uses try_parse_url() (Spark 4.0 only))
+  Line 257: skipped (uses try_parse_url() (Spark 4.0 only))
+  Result: 45 skipped
+
+--- url/try_url_decode.slt ---
+  Line 18: skipped (uses try_url_decode() (Spark 4.0 only))
+  Line 24: skipped (uses try_url_decode() (Spark 4.0 only))
+  Line 30: skipped (uses try_url_decode() (Spark 4.0 only))
+  Line 36: skipped (uses try_url_decode() (Spark 4.0 only))
+  Line 42: skipped (uses try_url_decode() (Spark 4.0 only))
+  Line 48: skipped (uses try_url_decode() (Spark 4.0 only))
+  Line 54: skipped (uses try_url_decode() (Spark 4.0 only))
+  Line 60: skipped (uses try_url_decode() (Spark 4.0 only))
+  Line 66: skipped (uses try_url_decode() (Spark 4.0 only))
+  Result: 9 skipped
+
+--- url/url_decode.slt ---
+  Line 18: PASS
+  Line 36: PASS
+  Line 42: PASS
+  Line 48: PASS
+  Line 54: PASS
+  Line 60: PASS
+  Line 66: PASS (error expected and received)
+  Line 24: skipped (unsupported Arrow type: LargeUtf8)
+  Line 30: skipped (unsupported Arrow type: Utf8View)
+  Result: 7 passed, 2 skipped
+
+--- url/url_encode.slt ---
+  Line 18: PASS
+  Line 24: skipped (unsupported Arrow type: LargeUtf8)
+  Line 30: skipped (unsupported Arrow type: Utf8View)
+  Result: 1 passed, 2 skipped
+
+--- xml/xpath.slt ---
+  Result: 
+
+--- xml/xpath_boolean.slt ---
+  Result: 
+
+--- xml/xpath_string.slt ---
+  Result: 
+
+============================================================
+Overall: 1227 passed, 241 failed, 451 skipped
+
+Failed files:
+  array/array.slt
+  array/array_contains.slt
+  array/array_repeat.slt
+  array/shuffle.slt
+  collection/size.slt
+  datetime/date_add.slt
+  datetime/date_sub.slt
+  datetime/from_utc_timestamp.slt
+  datetime/make_dt_interval.slt
+  datetime/make_interval.slt
+  datetime/time_trunc.slt
+  datetime/to_utc_timestamp.slt
+  json/json_tuple.slt
+  map/map_from_arrays.slt
+  map/map_from_entries.slt
+  map/str_to_map.slt
+  math/csc.slt
+  math/mod.slt
+  math/negative.slt
+  math/pmod.slt
+  math/round.slt
+  math/sec.slt
+  math/unhex.slt
+  string/char.slt
+  string/format_string.slt
+  string/soundex.slt
+  string/substring.slt
+

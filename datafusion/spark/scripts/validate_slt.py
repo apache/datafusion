@@ -891,8 +891,8 @@ def process_file(
             if err:
                 result.failed += 1
                 result.errors.append(
-                    f"  Line {record.line_number}: PySpark error: {err[:200]}\n"
-                    f"    SQL: {translated[:200]}"
+                    f"  Line {record.line_number}: PySpark error: {err}\n"
+                    f"    SQL: {translated}"
                 )
                 continue
 
@@ -905,8 +905,8 @@ def process_file(
                 result.failed += 1
                 result.errors.append(
                     f"  Line {record.line_number}: MISMATCH\n"
-                    f"    SQL: {record.sql[:200]}\n"
-                    f"    Translated: {translated[:200]}\n"
+                    f"    SQL: {record.sql}\n"
+                    f"    Translated: {translated}\n"
                     f"{detail}"
                 )
 
