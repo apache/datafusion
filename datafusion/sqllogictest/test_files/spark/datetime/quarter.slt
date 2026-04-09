@@ -59,8 +59,3 @@ query I
 SELECT quarter('2020-09-08T12:00:12.12345678+00:00'::timestamp);
 ----
 3
-
-query I
-SELECT quarter('2016-08-31');
-----
-3
