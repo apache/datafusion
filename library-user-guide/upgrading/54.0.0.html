@@ -756,6 +756,17 @@ the current error surface.</p></li>
 timezone-naive.</p></li>
 </ul>
 </section>
+<section id="lpad-rpad-and-translate-now-operate-on-unicode-codepoints-instead-of-grapheme-clusters">
+<h3><code class="docutils literal notranslate"><span class="pre">lpad</span></code>, <code class="docutils literal notranslate"><span class="pre">rpad</span></code>, and <code class="docutils literal notranslate"><span class="pre">translate</span></code> now operate on Unicode codepoints instead of grapheme clusters<a class="headerlink" href="#lpad-rpad-and-translate-now-operate-on-unicode-codepoints-instead-of-grapheme-clusters" title="Link to this heading">#</a></h3>
+<p>Previously, <code class="docutils literal notranslate"><span class="pre">lpad</span></code>, <code class="docutils literal notranslate"><span class="pre">rpad</span></code>, and <code class="docutils literal notranslate"><span class="pre">translate</span></code> used Unicode grapheme cluster
+segmentation to measure and manipulate strings. They now use Unicode codepoints,
+which is consistent with the SQL standard and most other SQL implementations. It
+also matches the behavior of other string-related functions in DataFusion.</p>
+<p>The difference is only observable for strings containing combining characters
+(e.g., U+0301 COMBINING ACUTE ACCENT) or other multi-codepoint grapheme
+clusters (e.g., ZWJ emoji sequences). For ASCII and most common Unicode text,
+behavior is unchanged.</p>
+</section>
 </section>
 </section>
 
@@ -814,6 +825,7 @@ timezone-naive.</p></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remove-as-any-from-scalarudfimpl-aggregateudfimpl-windowudfimpl-and-executionplan">Remove <code class="docutils literal notranslate"><span class="pre">as_any</span></code> from <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code>, and <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pruningstatistics-row-counts-no-longer-takes-a-column-parameter"><code class="docutils literal notranslate"><span class="pre">PruningStatistics::row_counts</span></code> no longer takes a <code class="docutils literal notranslate"><span class="pre">column</span></code> parameter</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#avro-api-and-timestamp-decoding-changes">Avro API and timestamp decoding changes</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#lpad-rpad-and-translate-now-operate-on-unicode-codepoints-instead-of-grapheme-clusters"><code class="docutils literal notranslate"><span class="pre">lpad</span></code>, <code class="docutils literal notranslate"><span class="pre">rpad</span></code>, and <code class="docutils literal notranslate"><span class="pre">translate</span></code> now operate on Unicode codepoints instead of grapheme clusters</a></li>
 </ul>
 </li>
 </ul>
