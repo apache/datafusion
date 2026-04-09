@@ -312,9 +312,8 @@ impl FilterExec {
     /// Calculates `Statistics` for `FilterExec`, by applying selectivity
     /// (either default, or estimated) to input statistics.
     ///
-    /// Equality predicates (`col = literal`) set NDV=Exact(1) via direct
-    /// pattern matching, covering types where interval analysis cannot
-    /// collapse the interval (strings, timestamps, etc.).
+    /// Equality predicates (`col = literal`) set NDV to `Exact(1)`, or
+    /// `Exact(0)` when the predicate is contradictory (e.g. `a = 1 AND a = 2`).
     fn statistics_helper(
         schema: &SchemaRef,
         input_stats: Statistics,
@@ -790,8 +789,8 @@ impl EmbeddedProjection for FilterExec {
 ///   non-null literals (e.g. `name = 'alice' AND name = 'bob'`), which is
 ///   always unsatisfiable.
 ///
-/// Only recurses through AND (via `split_conjunction`); OR is intentionally
-/// not traversed since `a = 1 OR a = 2` does not pin NDV to 1.
+/// Only AND conjunctions are traversed; OR is intentionally skipped
+/// since `a = 1 OR a = 2` does not pin NDV to 1.
 fn collect_equality_columns(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> (HashMap<usize, ScalarValue>, bool) {
