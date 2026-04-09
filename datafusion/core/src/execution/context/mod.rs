@@ -1185,7 +1185,7 @@ impl SessionContext {
                 builder.with_object_list_cache_ttl(Some(duration))
             }
             "file_statistics_cache_limit" => {
-                let limit = Self::parse_memory_limit(value)?;
+                let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_file_statistics_cache_limit(limit)
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
@@ -1431,7 +1431,8 @@ impl SessionContext {
             schema.deregister_table(&table)?;
             if table_type == TableType::Base
                 && let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache()
-                && let Some(fsc) = self.runtime_env().cache_manager.get_file_statistic_cache()
+                && let Some(fsc) =
+                    self.runtime_env().cache_manager.get_file_statistic_cache()
             {
                 lfc.drop_table_entries(&Some(table_ref.clone()))?;
                 fsc.drop_table_entries(&Some(table_ref.clone()))?;
@@ -1767,9 +1768,9 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?.with_definition(sql_definition).with_cache(
-            self.runtime_env().cache_manager.get_file_statistic_cache()
-        );
+        let table = ListingTable::try_new(config)?
+            .with_definition(sql_definition)
+            .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
         self.register_table(table_ref, Arc::new(table))?;
         Ok(())
     }

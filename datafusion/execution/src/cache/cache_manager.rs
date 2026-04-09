@@ -95,7 +95,9 @@ impl CachedFileMetadata {
 /// 3. If invalid or missing, compute new value and call `put(path, new_value)`
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
-pub trait FileStatisticsCache: CacheAccessor<TableScopedPath, CachedFileMetadata> {
+pub trait FileStatisticsCache:
+    CacheAccessor<TableScopedPath, CachedFileMetadata>
+{
     /// Cache memory limit in bytes.
     fn cache_limit(&self) -> usize;
 
@@ -106,7 +108,6 @@ pub trait FileStatisticsCache: CacheAccessor<TableScopedPath, CachedFileMetadata
     fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry>;
 
     fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> Result<()>;
-
 }
 
 impl DFHeapSize for CachedFileMetadata {

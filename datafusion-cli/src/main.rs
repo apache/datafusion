@@ -443,10 +443,7 @@ mod tests {
     use super::*;
     use datafusion::{
         common::test_util::batches_to_string,
-        execution::cache::{
-            DefaultListFilesCache, cache_manager::CacheManagerConfig,
-            cache_unit::DefaultFileStatisticsCache,
-        },
+        execution::cache::{DefaultListFilesCache, cache_manager::CacheManagerConfig},
         prelude::{ParquetReadOptions, col, lit, split_part},
     };
     use insta::assert_snapshot;

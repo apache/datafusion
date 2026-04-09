@@ -15,18 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cache::{CacheAccessor, TableScopedPath};
 use crate::cache::cache_manager::{
     CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
 };
+use crate::cache::{CacheAccessor, TableScopedPath};
 use object_store::path::Path;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 pub use crate::cache::DefaultFilesMetadataCache;
 use crate::cache::lru_queue::LruQueue;
-use datafusion_common::heap_size::DFHeapSize;
 use datafusion_common::TableReference;
+use datafusion_common::heap_size::DFHeapSize;
 
 /// Default implementation of [`FileStatisticsCache`]
 ///
@@ -175,7 +175,11 @@ impl CacheAccessor<TableScopedPath, CachedFileMetadata> for DefaultFileStatistic
         state.get(key)
     }
 
-    fn put(&self, key: &TableScopedPath, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
+    fn put(
+        &self,
+        key: &TableScopedPath,
+        value: CachedFileMetadata,
+    ) -> Option<CachedFileMetadata> {
         let mut state = self.state.lock().unwrap();
         state.put(key, value)
     }
@@ -238,7 +242,10 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
         entries
     }
 
-    fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> datafusion_common::Result<()> {
+    fn drop_table_entries(
+        &self,
+        table_ref: &Option<TableReference>,
+    ) -> datafusion_common::Result<()> {
         let mut state = self.state.lock().unwrap();
         let mut table_paths = vec![];
         for (path, _) in state.lru_queue.list_entries() {
@@ -294,7 +301,7 @@ mod tests {
             false,
         )]);
 
-        let path = TableScopedPath{
+        let path = TableScopedPath {
             path: meta.location.clone(),
             table: None,
         };
@@ -313,14 +320,14 @@ mod tests {
         // Cache hit
         let result = cache.get(&path);
         assert!(result.is_some());
+
         let cached = result.unwrap();
         assert!(cached.is_valid_for(&meta));
-
 
         // File size changed - validation should fail
         let meta2 = create_test_meta("test", 2048);
 
-        let path_2 = TableScopedPath{
+        let path_2 = TableScopedPath {
             path: meta2.location.clone(),
             table: None,
         };
@@ -340,7 +347,7 @@ mod tests {
         let entries = cache.list_entries();
         assert_eq!(entries.len(), 1);
 
-        let path_3 = TableScopedPath{
+        let path_3 = TableScopedPath {
             path: Path::from("test"),
             table: None,
         };
@@ -442,7 +449,10 @@ mod tests {
     #[test]
     fn test_cache_invalidation_on_file_modification() {
         let cache = DefaultFileStatisticsCache::default();
-        let path = TableScopedPath { table: None, path : Path::from("test.parquet"), };
+        let path = TableScopedPath {
+            path: Path::from("test.parquet"),
+            table: None,
+        };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         let meta_v1 = create_test_meta("test.parquet", 100);
@@ -478,7 +488,10 @@ mod tests {
     #[test]
     fn test_ordering_cache_invalidation_on_file_modification() {
         let cache = DefaultFileStatisticsCache::default();
-        let path = TableScopedPath { path: Path::from("test.parquet"), table: None };
+        let path = TableScopedPath {
+            path: Path::from("test.parquet"),
+            table: None,
+        };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         // Cache with original metadata and ordering
@@ -550,7 +563,10 @@ mod tests {
             None,
         );
 
-        let path_1 = TableScopedPath { path: meta1.location.clone(), table: None };
+        let path_1 = TableScopedPath {
+            path: meta1.location.clone(),
+            table: None,
+        };
 
         cache.put(&path_1, cached_value);
         let meta2 = create_test_meta("test2.parquet", 200);
@@ -560,7 +576,10 @@ mod tests {
             Some(ordering()),
         );
 
-        let path_2 = TableScopedPath { path: meta2.location.clone(), table: None };
+        let path_2 = TableScopedPath {
+            path: meta2.location.clone(),
+            table: None,
+        };
 
         cache.put(&path_2, cached_value);
 
@@ -607,8 +626,16 @@ mod tests {
 
         // create a cache with a limit which fits exactly 2 entries
         let cache = DefaultFileStatisticsCache::new(limit_for_2_entries);
-        let path_1 = TableScopedPath { path: meta_1.location.clone(), table: None };
-        let path_2 = TableScopedPath { path: meta_2.location.clone(), table: None };
+        let path_1 = TableScopedPath {
+            path: meta_1.location.clone(),
+            table: None,
+        };
+
+        let path_2 = TableScopedPath {
+            path: meta_2.location.clone(),
+            table: None,
+        };
+
         cache.put(&path_1, value_1.clone());
         cache.put(&path_2, value_2.clone());
 
@@ -620,8 +647,10 @@ mod tests {
         assert_eq!(result_1.unwrap(), value_1);
         assert_eq!(result_2.unwrap(), value_2);
 
-        let path_3 = TableScopedPath { path: meta_3.location.clone(), table: None };
-
+        let path_3 = TableScopedPath {
+            path: meta_3.location.clone(),
+            table: None,
+        };
 
         // adding the third entry evicts the first entry
         cache.put(&path_3, value_3.clone());
@@ -658,7 +687,10 @@ mod tests {
         // create a cache with a size less than the entry
         let cache = DefaultFileStatisticsCache::new(limit_less_than_the_entry);
 
-        let path_1 = TableScopedPath { path: meta.location.clone(), table: None };
+        let path_1 = TableScopedPath {
+            path: meta.location.clone(),
+            table: None,
+        };
 
         cache.put(&path_1, value);
 
