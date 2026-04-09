@@ -629,9 +629,7 @@ impl GroupsAccumulator for StringAggGroupsAccumulator {
         self.values.resize(total_num_groups, None);
         let array = apply_filter_as_nulls(&values[0], opt_filter)?;
 
-        if self.deferred.is_some() {
-            self.defer_batch(array, group_indices)?;
-        } else if self.should_promote(&array, total_num_groups) {
+        if self.deferred.is_some() || self.should_promote(&array, total_num_groups) {
             self.defer_batch(array, group_indices)?;
         } else {
             self.append_eager_batch(&array, group_indices)?;
