@@ -2659,6 +2659,7 @@ dependencies = [
  "object_store",
  "postgres-types",
  "regex",
+ "serde_json",
  "sqllogictest",
  "sqlparser",
  "tempfile",
