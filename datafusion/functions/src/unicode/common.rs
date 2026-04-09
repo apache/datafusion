@@ -78,6 +78,39 @@ impl LeftRightSlicer for RightSlicer {
     }
 }
 
+/// Returns the byte offset of the `n`th codepoint in `string`,
+/// or `string.len()` if the string has fewer than `n` codepoints.
+#[inline]
+pub(crate) fn byte_offset_of_char(string: &str, n: usize) -> usize {
+    string
+        .char_indices()
+        .nth(n)
+        .map_or(string.len(), |(i, _)| i)
+}
+
+/// If `string` has more than `n` codepoints, returns the byte offset of
+/// the `n`-th codepoint boundary. Otherwise returns the total codepoint count.
+#[inline]
+pub(crate) fn char_count_or_boundary(string: &str, n: usize) -> StringCharLen {
+    let mut count = 0;
+    for (byte_idx, _) in string.char_indices() {
+        if count == n {
+            return StringCharLen::ByteOffset(byte_idx);
+        }
+        count += 1;
+    }
+    StringCharLen::CharCount(count)
+}
+
+/// Result of [`char_count_or_boundary`].
+pub(crate) enum StringCharLen {
+    /// The string has more than `n` codepoints; contains the byte offset
+    /// at the `n`-th codepoint boundary.
+    ByteOffset(usize),
+    /// The string has `n` or fewer codepoints; contains the exact count.
+    CharCount(usize),
+}
+
 /// Calculate the byte length of the substring of `n` chars from string `string`
 #[inline]
 fn left_right_byte_length(string: &str, n: i64) -> usize {
@@ -88,11 +121,9 @@ fn left_right_byte_length(string: &str, n: i64) -> usize {
             .map(|(index, _)| index)
             .unwrap_or(0),
         Ordering::Equal => 0,
-        Ordering::Greater => string
-            .char_indices()
-            .nth(n.unsigned_abs().min(usize::MAX as u64) as usize)
-            .map(|(index, _)| index)
-            .unwrap_or(string.len()),
+        Ordering::Greater => {
+            byte_offset_of_char(string, n.unsigned_abs().min(usize::MAX as u64) as usize)
+        }
     }
 }
 

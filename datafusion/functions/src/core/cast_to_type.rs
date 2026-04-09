@@ -15,15 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ArrowTryCastFunc`]: Implementation of the `arrow_try_cast`
+//! [`CastToTypeFunc`]: Implementation of the `cast_to_type` function
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use arrow::error::ArrowError;
-use datafusion_common::{
-    Result, arrow_datafusion_err, datatype::DataTypeExt, exec_datafusion_err, exec_err,
-    internal_err, types::logical_string, utils::take_function_args,
-};
-
+use datafusion_common::{Result, internal_err, utils::take_function_args};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
@@ -31,53 +26,62 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use super::arrow_cast::data_type_from_type_arg;
-
-/// Like [`arrow_cast`](super::arrow_cast::ArrowCastFunc) but returns NULL on cast failure instead of erroring.
+/// Casts the first argument to the data type of the second argument.
 ///
-/// This is implemented by simplifying `arrow_try_cast(expr, 'Type')` into
-/// `Expr::TryCast` during optimization.
+/// Only the type of the second argument is used; its value is ignored.
+/// This is useful in macros or generic SQL where you need to preserve
+/// or match types dynamically.
+///
+/// For example:
+/// ```sql
+/// select cast_to_type('42', NULL::INTEGER);
+/// ```
 #[user_doc(
     doc_section(label = "Other Functions"),
-    description = "Casts a value to a specific Arrow data type, returning NULL if the cast fails.",
-    syntax_example = "arrow_try_cast(expression, datatype)",
+    description = "Casts the first argument to the data type of the second argument. Only the type of the second argument is used; its value is ignored.",
+    syntax_example = "cast_to_type(expression, reference)",
     sql_example = r#"```sql
-> select arrow_try_cast('123', 'Int64') as a,
-         arrow_try_cast('not_a_number', 'Int64') as b;
+> select cast_to_type('42', NULL::INTEGER) as a;
++----+
+| a  |
++----+
+| 42 |
++----+
 
-+-----+------+
-| a   | b    |
-+-----+------+
-| 123 | NULL |
-+-----+------+
+> select cast_to_type(1 + 2, NULL::DOUBLE) as b;
++-----+
+| b   |
++-----+
+| 3.0 |
++-----+
 ```"#,
     argument(
         name = "expression",
-        description = "Expression to cast. The expression can be a constant, column, or function, and any combination of operators."
+        description = "The expression to cast. It can be a constant, column, or function, and any combination of operators."
     ),
     argument(
-        name = "datatype",
-        description = "[Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]"
+        name = "reference",
+        description = "Reference expression whose data type determines the target cast type. The value is ignored."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ArrowTryCastFunc {
+pub struct CastToTypeFunc {
     signature: Signature,
 }
 
-impl Default for ArrowTryCastFunc {
+impl Default for CastToTypeFunc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ArrowTryCastFunc {
+impl CastToTypeFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
                 vec![
                     Coercion::new_exact(TypeSignatureClass::Any),
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Any),
                 ],
                 Volatility::Immutable,
             ),
@@ -85,9 +89,9 @@ impl ArrowTryCastFunc {
     }
 }
 
-impl ScalarUDFImpl for ArrowTryCastFunc {
+impl ScalarUDFImpl for CastToTypeFunc {
     fn name(&self) -> &str {
-        "arrow_try_cast"
+        "cast_to_type"
     }
 
     fn signature(&self) -> &Signature {
@@ -99,30 +103,19 @@ impl ScalarUDFImpl for ArrowTryCastFunc {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // TryCast can always return NULL (on cast failure), so always nullable
-        let [_, type_arg] = take_function_args(self.name(), args.scalar_arguments)?;
-
-        type_arg
-            .and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
-            .map_or_else(
-                || {
-                    exec_err!(
-                        "{} requires its second argument to be a non-empty constant string",
-                        self.name()
-                    )
-                },
-                |casted_type| match casted_type.parse::<DataType>() {
-                    Ok(data_type) => {
-                        Ok(Field::new(self.name(), data_type, true).into())
-                    }
-                    Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
-                    Err(e) => Err(arrow_datafusion_err!(e)),
-                },
-            )
+        let [source_field, reference_field] =
+            take_function_args(self.name(), args.arg_fields)?;
+        let target_type = reference_field.data_type().clone();
+        // Nullability is inherited only from the first argument (the value
+        // being cast).  The second argument is used solely for its type, so
+        // its own nullability is irrelevant.  The one exception is when the
+        // target type is Null – that type is inherently nullable.
+        let nullable = source_field.is_nullable() || target_type == DataType::Null;
+        Ok(Field::new(self.name(), target_type, nullable).into())
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        internal_err!("arrow_try_cast should have been simplified to try_cast")
+        internal_err!("cast_to_type should have been simplified to cast")
     }
 
     fn simplify(
@@ -131,15 +124,17 @@ impl ScalarUDFImpl for ArrowTryCastFunc {
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [source_arg, type_arg] = take_function_args(self.name(), args)?;
-        let target_type = data_type_from_type_arg(self.name(), &type_arg)?;
-
+        let target_type = info.get_data_type(&type_arg)?;
         let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
+            // the argument's data type is already the correct type
             source_arg
         } else {
-            Expr::TryCast(datafusion_expr::TryCast {
+            let nullable = info.nullable(&source_arg)? || target_type == DataType::Null;
+            // Use an actual cast to get the correct type
+            Expr::Cast(datafusion_expr::Cast {
                 expr: Box::new(source_arg),
-                field: target_type.into_nullable_field_ref(),
+                field: Field::new("", target_type, nullable).into(),
             })
         };
         Ok(ExprSimplifyResult::Simplified(new_expr))
