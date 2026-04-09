@@ -225,7 +225,7 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
         let mut entries = HashMap::<Path, FileStatisticsCacheEntry>::new();
         for entry in self.state.lock().unwrap().lru_queue.list_entries() {
             let path = entry.0.clone();
-            let cached = entry.1.clone();
+            let cached = entry.1;
             entries.insert(
                 path.path,
                 FileStatisticsCacheEntry {
