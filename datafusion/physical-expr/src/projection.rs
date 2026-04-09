@@ -714,6 +714,24 @@ impl ProjectionExprs {
                         byte_size,
                     }
                 }
+            } else if let Some(cast) =
+                expr.as_any().downcast_ref::<crate::expressions::CastExpr>()
+                && let Some(col) = cast.expr.as_any().downcast_ref::<Column>()
+                && cast.cast_type().is_numeric()
+            {
+                // Numeric casts can only merge values (many-to-one), so the
+                // source column's distinct count is an upper bound. Propagate
+                // it as Inexact since the cast may reduce distinct values.
+                let src = std::mem::take(&mut stats.column_statistics[col.index()]);
+                ColumnStatistics {
+                    null_count: src.null_count,
+                    distinct_count: src.distinct_count.to_inexact(),
+                    // min/max/sum not valid after cast
+                    min_value: Precision::Absent,
+                    max_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    byte_size: Precision::Absent,
+                }
             } else {
                 // TODO stats: estimate more statistics from expressions
                 // (expressions should compute their statistics themselves)
@@ -3100,6 +3118,52 @@ pub(crate) mod tests {
         assert_eq!(
             output_stats.column_statistics[1].max_value,
             Precision::Exact(ScalarValue::Int64(Some(21)))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_through_cast() -> Result<()> {
+        let input_stats = get_stats();
+        let input_schema = get_schema();
+
+        // CAST(col0 AS Float64) — col0 has distinct_count=Exact(5)
+        let cast_expr = Arc::new(crate::expressions::CastExpr::new(
+            Arc::new(Column::new("col0", 0)),
+            DataType::Float64,
+            None,
+        ));
+
+        let projection = ProjectionExprs::new(vec![ProjectionExpr {
+            expr: cast_expr,
+            alias: "col0_f64".to_string(),
+        }]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        assert_eq!(output_stats.num_rows, Precision::Exact(5));
+        assert_eq!(output_stats.column_statistics.len(), 1);
+        // Distinct count preserved but made Inexact (cast may reduce it)
+        assert_eq!(
+            output_stats.column_statistics[0].distinct_count,
+            Precision::Inexact(5)
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        // min/max/sum cleared (not valid after cast)
+        assert_eq!(
+            output_stats.column_statistics[0].min_value,
+            Precision::Absent
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].max_value,
+            Precision::Absent
         );
 
         Ok(())
