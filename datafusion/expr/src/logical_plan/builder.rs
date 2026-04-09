@@ -1154,8 +1154,12 @@ impl LogicalPlanBuilder {
             .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+        let join_schema = build_join_schema_with_null_aware(
+            self.plan.schema(),
+            right.schema(),
+            &join_type,
+            null_aware,
+        )?;
 
         // Inner type without join condition is cross join
         if join_type != JoinType::Inner && on.is_empty() && filter.is_none() {
@@ -1652,7 +1656,7 @@ pub fn unique_field_aliases(fields: &Fields) -> Vec<Option<String>> {
         .collect()
 }
 
-fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
+fn mark_field(schema: &DFSchema, nullable: bool) -> (Option<TableReference>, Arc<Field>) {
     let mut table_references = schema
         .iter()
         .filter_map(|(qualifier, _)| qualifier)
@@ -1666,16 +1670,33 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
 
     (
         table_reference,
-        Arc::new(Field::new("mark", DataType::Boolean, false)),
+        Arc::new(Field::new("mark", DataType::Boolean, nullable)),
     )
 }
 
 /// Creates a schema for a join operation.
-/// The fields from the left side are first
+/// The fields from the left side are first.
+///
+/// The `mark` column of a mark join is non-nullable. Use
+/// [`build_join_schema_with_null_aware`] for null-aware mark joins, whose mark
+/// column can be `NULL` (SQL UNKNOWN).
 pub fn build_join_schema(
     left: &DFSchema,
     right: &DFSchema,
     join_type: &JoinType,
+) -> Result<DFSchema> {
+    build_join_schema_with_null_aware(left, right, join_type, false)
+}
+
+/// Like [`build_join_schema`], but makes the `LeftMark`/`RightMark` `mark`
+/// column nullable when `null_aware` is set, so it can represent SQL UNKNOWN
+/// for null-aware `NOT IN` semantics. `null_aware` has no effect on non-mark
+/// join types.
+pub fn build_join_schema_with_null_aware(
+    left: &DFSchema,
+    right: &DFSchema,
+    join_type: &JoinType,
+    null_aware: bool,
 ) -> Result<DFSchema> {
     fn nullify_fields<'a>(
         fields: impl Iterator<Item = (Option<&'a TableReference>, &'a Arc<Field>)>,
@@ -1738,7 +1759,7 @@ pub fn build_join_schema(
         }
         JoinType::LeftMark => left_fields
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-            .chain(once(mark_field(right)))
+            .chain(once(mark_field(right, null_aware)))
             .collect(),
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
@@ -1748,7 +1769,7 @@ pub fn build_join_schema(
         }
         JoinType::RightMark => right_fields
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-            .chain(once(mark_field(left)))
+            .chain(once(mark_field(left, null_aware)))
             .collect(),
     };
     let func_dependencies = left.functional_dependencies().join(
