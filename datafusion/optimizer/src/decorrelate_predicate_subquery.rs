@@ -21,6 +21,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::decorrelate::PullUpCorrelatedExpr;
+use crate::extract_equijoin_predicate::split_eq_and_noneq_join_predicate;
 use crate::optimizer::ApplyOrder;
 use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -448,9 +449,40 @@ fn build_join(
             sub_query_alias.clone()
         };
 
-        // Mark joins don't use null-aware semantics (they use three-valued logic with mark column)
+        let mark_filter_is_hashable_only =
+            if join_type == JoinType::LeftMark && in_predicate_opt.is_some() {
+                let (_, residual_filter) = split_eq_and_noneq_join_predicate(
+                    join_filter.clone(),
+                    left.schema(),
+                    right_projected.schema(),
+                )?;
+                residual_filter.is_none()
+            } else {
+                false
+            };
+
+        // For scalar NOT IN mark joins, propagate null-aware semantics into the
+        // nullable mark column when the predicate can be implemented by hash keys.
+        // Non-equality correlated filters stay on the legacy path because hash join
+        // execution cannot mark UNKNOWN candidates for residual predicates.
+        let null_aware = join_type == JoinType::LeftMark
+            && in_predicate_opt.is_some()
+            && mark_filter_is_hashable_only
+            && join_keys_may_be_null(
+                &join_filter,
+                left.schema(),
+                right_projected.schema(),
+            )?;
+
         let new_plan = LogicalPlanBuilder::from(left.clone())
-            .join_on(right_projected, join_type, Some(join_filter))?
+            .join_detailed_with_options(
+                right_projected,
+                join_type,
+                (Vec::<Column>::new(), Vec::<Column>::new()),
+                Some(join_filter),
+                NullEquality::NullEqualsNothing,
+                null_aware,
+            )?
             .build()?;
 
         debug!(
@@ -569,6 +601,43 @@ mod tests {
                 .project(vec![col("c")])?
                 .build()?,
         ))
+    }
+
+    fn nullable_scalar_mark_scan(name: &str) -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("grp", DataType::Int32, true),
+        ]);
+        table_scan(Some(name), &schema, None)?.build()
+    }
+
+    fn has_null_aware_left_mark_join(plan: &LogicalPlan) -> bool {
+        if let LogicalPlan::Join(join) = plan
+            && join.join_type == JoinType::LeftMark
+        {
+            return join.null_aware;
+        }
+
+        plan.inputs().into_iter().any(has_null_aware_left_mark_join)
+    }
+
+    fn has_non_null_aware_left_mark_join(plan: &LogicalPlan) -> bool {
+        if let LogicalPlan::Join(join) = plan
+            && join.join_type == JoinType::LeftMark
+        {
+            return !join.null_aware;
+        }
+
+        plan.inputs()
+            .into_iter()
+            .any(has_non_null_aware_left_mark_join)
+    }
+
+    fn optimize_with_decorrelate(plan: LogicalPlan) -> Result<LogicalPlan> {
+        let optimizer = crate::Optimizer::with_rules(vec![Arc::new(
+            DecorrelatePredicateSubquery::new(),
+        )]);
+        optimizer.optimize(plan, &crate::OptimizerContext::new(), |_, _| {})
     }
 
     /// Test for several IN subquery expressions
@@ -1199,6 +1268,62 @@ mod tests {
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
+    }
+
+    #[test]
+    fn correlated_not_in_mark_join_is_null_aware_for_hashable_filter() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(
+                    out_ref_col(DataType::Int32, "outer_t.grp").eq(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(col("outer_t.id"), subquery).is_null())?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn correlated_not_in_mark_join_is_not_null_aware_for_residual_filter() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(
+                    out_ref_col(DataType::Int32, "outer_t.grp").lt(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(col("outer_t.id"), subquery).is_null())?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_non_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
     }
 
     #[test]
