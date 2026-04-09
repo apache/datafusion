@@ -439,7 +439,8 @@ impl StringAggGroupsAccumulator {
             }
 
             // Keep the original arrays for this prototype and only renumber
-            // retained groups. SUB_ISSUE_04 will compact mixed batches so
+            // retained groups.
+            // todo: compact mixed batches so
             // partially emitted batches no longer pin their full inputs.
             retained_batches.push(batch);
             retained_entries.push(entries);
