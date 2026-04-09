@@ -54,10 +54,12 @@ macro_rules! group_accumulator_helper {
                     .with_starting_value(!0),
             )),
             BitwiseOperationType::Or => Ok(Box::new(
-                PrimitiveGroupsAccumulator::<$t, _>::new($dt, |x, y| x.bitor_assign(y)),
+                PrimitiveGroupsAccumulator::<$t, _>::new($dt, |x, y| x.bitor_assign(y))
+                    .with_starting_value_as_identity(),
             )),
             BitwiseOperationType::Xor => Ok(Box::new(
-                PrimitiveGroupsAccumulator::<$t, _>::new($dt, |x, y| x.bitxor_assign(y)),
+                PrimitiveGroupsAccumulator::<$t, _>::new($dt, |x, y| x.bitxor_assign(y))
+                    .with_starting_value_as_identity(),
             )),
         }
     };

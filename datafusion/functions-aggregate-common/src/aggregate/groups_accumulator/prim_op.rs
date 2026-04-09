@@ -52,6 +52,12 @@ where
     /// The starting value for new groups
     starting_value: T::Native,
 
+    /// When true, `starting_value` is the identity element for `prim_fn`,
+    /// i.e. `prim_fn(starting_value, x) == x` for all x. This allows
+    /// `convert_to_state` to skip allocating an initial-state array and
+    /// the element-wise arithmetic, returning the input values directly.
+    starting_value_is_identity: bool,
+
     /// Track nulls in the input / filters
     null_state: NullState,
 
@@ -70,6 +76,7 @@ where
             data_type: data_type.clone(),
             null_state: NullState::new(),
             starting_value: T::default_value(),
+            starting_value_is_identity: false,
             prim_fn,
         }
     }
@@ -77,6 +84,12 @@ where
     /// Set the starting values for new groups
     pub fn with_starting_value(mut self, starting_value: T::Native) -> Self {
         self.starting_value = starting_value;
+        self
+    }
+
+    /// Mark that `starting_value` is the identity element
+    pub fn with_starting_value_as_identity(mut self) -> Self {
+        self.starting_value_is_identity = true;
         self
     }
 }
@@ -150,10 +163,6 @@ where
     ) -> Result<Vec<ArrayRef>> {
         let values = values[0].as_primitive::<T>().clone();
 
-        // Initializing state with starting values
-        let initial_state =
-            PrimitiveArray::<T>::from_value(self.starting_value, values.len());
-
         // Recalculating values in case there is filter
         let values = match opt_filter {
             None => values,
@@ -175,6 +184,20 @@ where
             }
         };
 
+        // When starting_value is the identity element for prim_fn
+        // (e.g. 0 for SUM/BIT_OR/BIT_XOR), prim_fn(starting_value, x) == x,
+        // so we can skip allocating the initial_state array and the binary_mut
+        // arithmetic entirely — just return the (filtered) input values.
+        if self.starting_value_is_identity {
+            return Ok(vec![Arc::new(
+                values.with_data_type(self.data_type.clone()),
+            )]);
+        }
+
+        // For non-identity starting values (MIN, MAX, BIT_AND, etc.),
+        // apply the operation against the starting value array.
+        let initial_state =
+            PrimitiveArray::<T>::from_value(self.starting_value, values.len());
         let state_values = compute::binary_mut(initial_state, &values, |mut x, y| {
             (self.prim_fn)(&mut x, y);
             x
