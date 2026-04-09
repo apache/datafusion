@@ -776,10 +776,18 @@ def run_query(sql: str, num_cols: int) -> tuple[Optional[list[str]], Optional[st
         # ambiguous reference errors when column names contain special
         # characters or are duplicated.
         unique_names = [f"_c{i}" for i in range(len(df.columns))]
+        schema_types = [f.dataType.simpleString() for f in df.schema.fields]
         df = df.toDF(*unique_names)
         from pyspark.sql import functions as F
 
-        cast_exprs = [F.col(c).cast("string") for c in unique_names]
+        # Use hex() for binary columns to match .slt convention (which
+        # displays binary as lowercase hex), cast(string) for everything else
+        cast_exprs = []
+        for i, c in enumerate(unique_names):
+            if schema_types[i] == "binary":
+                cast_exprs.append(F.lower(F.hex(F.col(c))).alias(c))
+            else:
+                cast_exprs.append(F.col(c).cast("string").alias(c))
         string_df = df.select(cast_exprs)
         rows = string_df.collect()
         return format_result(rows, num_cols), None
