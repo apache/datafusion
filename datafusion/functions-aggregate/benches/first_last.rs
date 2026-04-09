@@ -288,9 +288,7 @@ fn first_last_benchmark(c: &mut Criterion) {
                 update_bench(
                     c,
                     is_first,
-                    &format!(
-                        "{fn_name} update_bench nulls={pct}%, filter={with_filter}, first(2)"
-                    ),
+                    &format!("{fn_name} update_bench nulls={pct}%, filter={with_filter}"),
                     values.clone(),
                     ord.clone(),
                     opt_filter,
@@ -299,9 +297,7 @@ fn first_last_benchmark(c: &mut Criterion) {
                 merge_bench(
                     c,
                     is_first,
-                    &format!(
-                        "{fn_name} merge_bench nulls={pct}%, filter={with_filter}, first(2)"
-                    ),
+                    &format!("{fn_name} merge_bench nulls={pct}%, filter={with_filter}"),
                     values.clone(),
                     ord.clone(),
                     opt_filter,
