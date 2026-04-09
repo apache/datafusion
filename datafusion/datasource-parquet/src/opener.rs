@@ -1689,6 +1689,12 @@ mod test {
             self
         }
 
+        /// Enable page index.
+        fn with_enable_page_index(mut self, enable: bool) -> Self {
+            self.enable_page_index = enable;
+            self
+        }
+
         /// Set reverse row groups flag.
         fn with_reverse_row_groups(mut self, enable: bool) -> Self {
             self.reverse_row_groups = enable;
@@ -2592,16 +2598,15 @@ mod test {
         let predicate = logical2physical(&col("a").gt(lit(90i32)), &schema);
 
         let make_opener = |enable_page_index| {
-            let mut opener = ParquetOpenerBuilder::new()
+            ParquetOpenerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_predicate(Arc::clone(&predicate))
+                .with_enable_page_index(enable_page_index)
                 // disable pushdown and row-group pruning so the only pruning path is page index
                 .with_pushdown_filters(false)
                 .with_row_group_stats_pruning(false)
-                .build();
-            opener.enable_page_index = enable_page_index;
-            opener
+                .build()
         };
         let (_, rows_with_page_index) = count_batches_and_rows(
             make_opener(true).open(file.clone()).unwrap().await.unwrap(),
