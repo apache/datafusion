@@ -128,6 +128,35 @@ from (values ('a'), ('b')) as tbl(col);
 NULL NULL NULL
 NULL NULL NULL
 
+# Extract domain from URL using anchored pattern with trailing .*
+# This tests that the full URL suffix is replaced, not just the matched prefix
+query T
+SELECT regexp_replace(url, '^https?://(?:www\.)?([^/]+)/.*$', '\1') FROM (VALUES
+    ('https://www.example.com/path/to/page?q=1'),
+    ('http://test.org/foo/bar'),
+    ('https://example.com/'),
+    ('not-a-url')
+) AS t(url);
+----
+example.com
+test.org
+example.com
+not-a-url
+
+# More than one capture group should disable the short-regex fast path.
+# This still uses replacement \1, but captures_len() will be > 2, so the
+# implementation must fall back to the normal regexp_replace path.
+query T
+SELECT regexp_replace(url, '^https?://((www\.)?([^/]+))/.*$', '\1') FROM (VALUES
+    ('https://www.example.com/path/to/page?q=1'),
+    ('http://test.org/foo/bar'),
+    ('not-a-url')
+) AS t(url);
+----
+www.example.com
+test.org
+not-a-url
+
 # If the overall pattern matches but capture group 1 does not participate,
 # regexp_replace(..., '\1') should substitute the empty string, not keep
 # the original input.

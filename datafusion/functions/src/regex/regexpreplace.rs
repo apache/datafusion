@@ -16,6 +16,8 @@
 // under the License.
 
 //! Regex expressions
+use memchr::memchr;
+
 use arrow::array::ArrayDataBuilder;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericStringArray;
@@ -197,6 +199,24 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
     CAPTURE_GROUPS_RE_LOCK
         .replace_all(replacement, "$${$1}")
         .into_owned()
+}
+
+/// For anchored patterns like `^...(capture)....*$` where the replacement
+/// is `\1`, build a shorter regex (stripping trailing `.*$`) and use
+/// `captures_read` with `CaptureLocations` for direct extraction — no
+/// `expand()`, no `String` allocation.
+/// This pattern appears in ClickBench Q28: which uses a regexp like
+/// `^https?://(?:www\.)?([^/]+)/.*$`
+fn try_build_short_extract_regex(pattern: &str, replacement: &str) -> Option<Regex> {
+    if replacement != "${1}" || !pattern.starts_with('^') || !pattern.ends_with(".*$") {
+        return None;
+    }
+    let short = &pattern[..pattern.len() - 3];
+    let re = Regex::new(short).ok()?;
+    if re.captures_len() != 2 {
+        return None;
+    }
+    Some(re)
 }
 
 /// Replaces substring(s) matching a PCRE-like regular expression.
@@ -457,6 +477,14 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     // with rust ones.
     let replacement = regex_replace_posix_groups(replacement);
 
+    // For anchored patterns like ^...(capture)....*$, build a shorter
+    // regex and use captures_read for direct extraction.
+    let short_re = if limit == 1 {
+        try_build_short_extract_regex(&pattern, &replacement)
+    } else {
+        None
+    };
+
     let string_array_type = args[0].data_type();
     match string_array_type {
         DataType::Utf8 | DataType::LargeUtf8 => {
@@ -473,13 +501,37 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
             let mut new_offsets = BufferBuilder::<T>::new(string_array.len() + 1);
             new_offsets.append(T::zero());
 
-            string_array.iter().for_each(|val| {
-                if let Some(val) = val {
-                    let result = re.replacen(val, limit, replacement.as_str());
-                    vals.append_slice(result.as_bytes());
-                }
-                new_offsets.append(T::from_usize(vals.len()).unwrap());
-            });
+            if let Some(ref short_re) = short_re {
+                let mut locs = short_re.capture_locations();
+                string_array.iter().for_each(|val| {
+                    if let Some(val) = val {
+                        if short_re.captures_read(&mut locs, val).is_some() {
+                            let match_end = locs.get(0).unwrap().1;
+                            if memchr(b'\n', &val.as_bytes()[match_end..]).is_none() {
+                                if let Some((start, end)) = locs.get(1) {
+                                    vals.append_slice(&val.as_bytes()[start..end]);
+                                }
+                            } else {
+                                // Newline in remainder: .*$ wouldn't match without 's' flag
+                                let result =
+                                    re.replacen(val, limit, replacement.as_str());
+                                vals.append_slice(result.as_bytes());
+                            }
+                        } else {
+                            vals.append_slice(val.as_bytes());
+                        }
+                    }
+                    new_offsets.append(T::from_usize(vals.len()).unwrap());
+                });
+            } else {
+                string_array.iter().for_each(|val| {
+                    if let Some(val) = val {
+                        let result = re.replacen(val, limit, replacement.as_str());
+                        vals.append_slice(result.as_bytes());
+                    }
+                    new_offsets.append(T::from_usize(vals.len()).unwrap());
+                });
+            }
 
             let data = ArrayDataBuilder::new(GenericStringArray::<T>::DATA_TYPE)
                 .len(string_array.len())
@@ -494,12 +546,39 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
 
             let mut builder = StringViewBuilder::with_capacity(string_view_array.len());
 
-            for val in string_view_array.iter() {
-                if let Some(val) = val {
-                    let result = re.replacen(val, limit, replacement.as_str());
-                    builder.append_value(result);
-                } else {
-                    builder.append_null();
+            if let Some(ref short_re) = short_re {
+                let mut locs = short_re.capture_locations();
+                for val in string_view_array.iter() {
+                    if let Some(val) = val {
+                        if short_re.captures_read(&mut locs, val).is_some() {
+                            let match_end = locs.get(0).unwrap().1;
+                            if memchr(b'\n', &val.as_bytes()[match_end..]).is_none() {
+                                if let Some((start, end)) = locs.get(1) {
+                                    builder.append_value(&val[start..end]);
+                                } else {
+                                    builder.append_value("");
+                                }
+                            } else {
+                                // Newline in remainder: .*$ wouldn't match without 's' flag
+                                let result =
+                                    re.replacen(val, limit, replacement.as_str());
+                                builder.append_value(result);
+                            }
+                        } else {
+                            builder.append_value(val);
+                        }
+                    } else {
+                        builder.append_null();
+                    }
+                }
+            } else {
+                for val in string_view_array.iter() {
+                    if let Some(val) = val {
+                        let result = re.replacen(val, limit, replacement.as_str());
+                        builder.append_value(result);
+                    } else {
+                        builder.append_null();
+                    }
                 }
             }
 
