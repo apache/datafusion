@@ -438,7 +438,11 @@ impl DefaultPhysicalExprAdapterRewriter {
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
         // since that's much cheaper to evalaute.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
-        self.create_cast_expr(resolved_column, physical_field, logical_field)
+        self.create_cast_expr(
+            resolved_column,
+            physical_field.data_type(),
+            logical_field,
+        )
     }
 
     /// Resolves a logical column to the corresponding physical column and field.
@@ -476,25 +480,25 @@ impl DefaultPhysicalExprAdapterRewriter {
 
     /// Validates type compatibility and creates a field-aware CastExpr if needed.
     ///
-    /// Checks whether the physical field can be cast to the logical field type,
+    /// Checks whether the physical data type can be cast to the logical field type,
     /// handling both struct and scalar types. Returns a CastExpr with the
     /// appropriate configuration.
     fn create_cast_expr(
         &self,
         column: Column,
-        physical_field: FieldRef,
+        physical_type: &DataType,
         logical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         validate_data_type_compatibility(
             column.name(),
-            physical_field.data_type(),
+            physical_type,
             logical_field.data_type(),
         )
         .map_err(|e|
                      DataFusionError::Execution(format!(
                         "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type): {e}",
                         column.name(),
-                        physical_field.data_type(),
+                        physical_type,
                         logical_field.data_type()
                     )))?;
 
@@ -1686,7 +1690,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_cast_expr_uses_name_lookup_not_column_index() {
+    fn test_rewrite_resolves_physical_column_by_name_before_casting() {
         // Physical schema has column `a` at index 1; index 0 is an incompatible type.
         let physical_schema = Arc::new(Schema::new(vec![
             Field::new("b", DataType::Binary, true),
@@ -1698,23 +1702,15 @@ mod tests {
             Field::new("b", DataType::Binary, true),
         ]));
 
-        let rewriter = DefaultPhysicalExprAdapterRewriter {
-            logical_file_schema: Arc::clone(&logical_schema),
-            physical_file_schema: Arc::clone(&physical_schema),
-        };
+        let factory = DefaultPhysicalExprAdapterFactory;
+        let adapter = factory
+            .create(Arc::clone(&logical_schema), Arc::clone(&physical_schema))
+            .unwrap();
 
         // Deliberately provide the wrong index for column `a`.
         // Regression: this must still resolve against physical field `a` by name.
-        let transformed = rewriter
-            .create_cast_expr(
-                Column::new("a", 0),
-                Arc::new(physical_schema.field_with_name("a").unwrap().clone()),
-                logical_schema.field_with_name("a").unwrap(),
-            )
-            .unwrap();
-
-        let cast_expr = transformed
-            .data
+        let rewritten = adapter.rewrite(Arc::new(Column::new("a", 0))).unwrap();
+        let cast_expr = rewritten
             .as_any()
             .downcast_ref::<CastExpr>()
             .expect("Expected CastExpr");
@@ -1725,7 +1721,7 @@ mod tests {
             .downcast_ref::<Column>()
             .expect("Expected inner Column");
         assert_eq!(inner_col.name(), "a");
-        assert_eq!(inner_col.index(), 0);
+        assert_eq!(inner_col.index(), 1);
         assert_eq!(cast_expr.target_field().data_type(), &DataType::Int64);
     }
 }
