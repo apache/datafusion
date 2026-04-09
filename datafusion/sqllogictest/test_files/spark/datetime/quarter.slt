@@ -51,6 +51,11 @@ SELECT quarter(NULL::date);
 NULL
 
 query I
+SELECT quarter(NULL::timestamp);
+----
+NULL
+
+query I
 SELECT quarter('2009-01-12 10:00:00'::timestamp);
 ----
 1
