@@ -107,11 +107,37 @@ where
     T: AsDynArray,
     F: FnOnce(&[u64]) -> Result<R>,
 {
-    with_hashes_impl(arrays, &DefaultHashStrategy { random_state }, callback)
+    // Keep the default RandomState path monomorphic: routing it through the
+    // generic custom-hasher abstraction regressed the CI aarch64 with_hashes benchmark.
+    let mut iter = arrays.into_iter().peekable();
+
+    let required_size = match iter.peek() {
+        Some(arr) => arr.as_dyn_array().len(),
+        None => return _internal_err!("with_hashes requires at least one array"),
+    };
+
+    HASH_BUFFER.try_with(|cell| {
+        let mut buffer = cell.try_borrow_mut()
+            .map_err(|_| _internal_datafusion_err!("with_hashes cannot be called reentrantly on the same thread"))?;
+
+        buffer.clear();
+        buffer.resize(required_size, 0);
+
+        create_hashes(iter, random_state, &mut buffer[..required_size])?;
+
+        let result = callback(&buffer[..required_size])?;
+
+        if buffer.capacity() > MAX_BUFFER_SIZE {
+            buffer.truncate(MAX_BUFFER_SIZE);
+            buffer.shrink_to_fit();
+        }
+
+        Ok(result)
+    }).map_err(|_| _internal_datafusion_err!("with_hashes cannot access thread-local storage during or after thread destruction"))?
 }
 
-/// Creates hashes for the given arrays using a thread-local buffer and a custom hash builder,
-/// then calls the provided callback with an immutable reference to the computed hashes.
+/// Creates hashes for the given arrays using a thread-local buffer and a custom
+/// hash builder, then calls the provided callback with the computed hashes.
 pub fn with_hashes_with_hasher<I, T, F, R, S>(
     arrays: I,
     hash_builder: &S,
@@ -123,20 +149,22 @@ where
     F: FnOnce(&[u64]) -> Result<R>,
     S: BuildHasher,
 {
-    with_hashes_impl(arrays, &CustomHashStrategy { hash_builder }, callback)
+    with_hashes_with_hasher_impl(arrays, hash_builder, callback)
 }
 
-fn with_hashes_impl<I, T, F, R, H>(arrays: I, hash_strategy: &H, callback: F) -> Result<R>
+fn with_hashes_with_hasher_impl<I, T, F, R, S>(
+    arrays: I,
+    hash_builder: &S,
+    callback: F,
+) -> Result<R>
 where
     I: IntoIterator<Item = T>,
     T: AsDynArray,
     F: FnOnce(&[u64]) -> Result<R>,
-    H: HashStrategy + ?Sized,
+    S: BuildHasher,
 {
-    // Peek at the first array to determine buffer size without fully collecting
     let mut iter = arrays.into_iter().peekable();
 
-    // Get the required size from the first array
     let required_size = match iter.peek() {
         Some(arr) => arr.as_dyn_array().len(),
         None => return _internal_err!("with_hashes requires at least one array"),
@@ -146,17 +174,17 @@ where
         let mut buffer = cell.try_borrow_mut()
             .map_err(|_| _internal_datafusion_err!("with_hashes cannot be called reentrantly on the same thread"))?;
 
-        // Ensure buffer has sufficient length, clearing old values
         buffer.clear();
         buffer.resize(required_size, 0);
 
-        // Create hashes in the buffer - this consumes the iterator
-        create_hashes_impl(iter, hash_strategy, &mut buffer[..required_size])?;
+        create_hashes_with_hasher_impl(
+            iter,
+            hash_builder,
+            &mut buffer[..required_size],
+        )?;
 
-        // Execute the callback with an immutable slice
         let result = callback(&buffer[..required_size])?;
 
-        // Cleanup: truncate if buffer grew too large
         if buffer.capacity() > MAX_BUFFER_SIZE {
             buffer.truncate(MAX_BUFFER_SIZE);
             buffer.shrink_to_fit();
@@ -167,19 +195,15 @@ where
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_null<H: HashStrategy + ?Sized>(
-    hash_strategy: &H,
-    hashes_buffer: &'_ mut [u64],
-    mul_col: bool,
-) {
+fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: bool) {
     if mul_col {
         hashes_buffer.iter_mut().for_each(|hash| {
             // stable hash for null value
-            *hash = combine_hashes(hash_strategy.hash_null(), *hash);
+            *hash = combine_hashes(random_state.hash_one(1), *hash);
         })
     } else {
         hashes_buffer.iter_mut().for_each(|hash| {
-            *hash = hash_strategy.hash_null();
+            *hash = random_state.hash_one(1);
         })
     }
 }
@@ -240,57 +264,46 @@ fn seeded_state(seed: u64) -> foldhash::fast::SeedableRandomState {
     )
 }
 
-#[cfg_attr(feature = "force_hash_collisions", allow(dead_code))]
-trait HashStrategy {
-    fn hash_null(&self) -> u64;
-    fn hash_one<T: HashValue + ?Sized>(&self, value: &T) -> u64;
-    fn rehash<T: HashValue + ?Sized>(&self, value: &T, existing_hash: u64) -> u64;
+#[cfg(not(feature = "force_hash_collisions"))]
+// Only recursive child hashing is shared; leaf hot loops stay split so the
+// default RandomState path keeps its concrete codegen.
+trait ChildHashing {
+    fn create_hashes<I, T>(&self, arrays: I, hashes_buffer: &mut [u64]) -> Result<()>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsDynArray;
 }
 
-#[cfg_attr(feature = "force_hash_collisions", allow(dead_code))]
-struct DefaultHashStrategy<'a> {
+#[cfg(not(feature = "force_hash_collisions"))]
+struct RandomStateChildHashing<'a> {
     random_state: &'a RandomState,
 }
 
-impl HashStrategy for DefaultHashStrategy<'_> {
-    fn hash_null(&self) -> u64 {
-        self.random_state.hash_one(1)
-    }
-
-    fn hash_one<T: HashValue + ?Sized>(&self, value: &T) -> u64 {
-        value.hash_one(self.random_state)
-    }
-
-    fn rehash<T: HashValue + ?Sized>(&self, value: &T, existing_hash: u64) -> u64 {
-        #[cfg(not(feature = "force_hash_collisions"))]
-        {
-            let mut hasher = seeded_state(existing_hash).build_hasher();
-            value.hash_write(&mut hasher);
-            hasher.finish()
-        }
-        #[cfg(feature = "force_hash_collisions")]
-        {
-            combine_hashes(value.hash_one(self.random_state), existing_hash)
-        }
+#[cfg(not(feature = "force_hash_collisions"))]
+impl ChildHashing for RandomStateChildHashing<'_> {
+    fn create_hashes<I, T>(&self, arrays: I, hashes_buffer: &mut [u64]) -> Result<()>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsDynArray,
+    {
+        create_hashes(arrays, self.random_state, hashes_buffer).map(|_| ())
     }
 }
 
-#[cfg_attr(feature = "force_hash_collisions", allow(dead_code))]
-struct CustomHashStrategy<'a, S> {
+#[cfg(not(feature = "force_hash_collisions"))]
+struct BuildHasherChildHashing<'a, S> {
     hash_builder: &'a S,
 }
 
-impl<S: BuildHasher> HashStrategy for CustomHashStrategy<'_, S> {
-    fn hash_null(&self) -> u64 {
-        self.hash_builder.hash_one(1)
-    }
-
-    fn hash_one<T: HashValue + ?Sized>(&self, value: &T) -> u64 {
-        value.hash_one(self.hash_builder)
-    }
-
-    fn rehash<T: HashValue + ?Sized>(&self, value: &T, existing_hash: u64) -> u64 {
-        combine_hashes(value.hash_one(self.hash_builder), existing_hash)
+#[cfg(not(feature = "force_hash_collisions"))]
+impl<S: BuildHasher> ChildHashing for BuildHasherChildHashing<'_, S> {
+    fn create_hashes<I, T>(&self, arrays: I, hashes_buffer: &mut [u64]) -> Result<()>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsDynArray,
+    {
+        create_hashes_with_hasher_impl(arrays, self.hash_builder, hashes_buffer)
+            .map(|_| ())
     }
 }
 
@@ -298,14 +311,13 @@ impl<S: BuildHasher> HashStrategy for CustomHashStrategy<'_, S> {
 /// If `rehash==true` this folds the existing hash into the hasher state
 /// and hashes only the new value (avoiding a separate combine step).
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_array_primitive<T, H>(
+fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
-    hash_strategy: &H,
+    random_state: &RandomState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) where
     T: ArrowPrimitiveType<Native: HashValue>,
-    H: HashStrategy + ?Sized,
 {
     assert_eq!(
         hashes_buffer.len(),
@@ -316,22 +328,26 @@ fn hash_array_primitive<T, H>(
     if array.null_count() == 0 {
         if rehash {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = hash_strategy.rehash(&value, *hash);
+                let mut hasher = seeded_state(*hash).build_hasher();
+                value.hash_write(&mut hasher);
+                *hash = hasher.finish();
             }
         } else {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = hash_strategy.hash_one(&value);
+                *hash = value.hash_one(random_state);
             }
         }
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = hash_strategy.rehash(&value, hashes_buffer[i]);
+            let mut hasher = seeded_state(hashes_buffer[i]).build_hasher();
+            value.hash_write(&mut hasher);
+            hashes_buffer[i] = hasher.finish();
         }
     } else {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = hash_strategy.hash_one(&value);
+            hashes_buffer[i] = value.hash_one(random_state);
         }
     }
 }
@@ -340,11 +356,14 @@ fn hash_array_primitive<T, H>(
 /// If `rehash==true` this combines the previous hash value in the buffer
 /// with the new hash using `combine_hashes`
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_array<T, H>(array: &T, hash_strategy: &H, hashes_buffer: &mut [u64], rehash: bool)
-where
+fn hash_array<T>(
+    array: &T,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) where
     T: ArrayAccessor,
     T::Item: HashValue,
-    H: HashStrategy + ?Sized,
 {
     assert_eq!(
         hashes_buffer.len(),
@@ -356,24 +375,24 @@ where
         if rehash {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
                 let value = unsafe { array.value_unchecked(i) };
-                *hash = combine_hashes(hash_strategy.hash_one(&value), *hash);
+                *hash = combine_hashes(value.hash_one(random_state), *hash);
             }
         } else {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
                 let value = unsafe { array.value_unchecked(i) };
-                *hash = hash_strategy.hash_one(&value);
+                *hash = value.hash_one(random_state);
             }
         }
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
             hashes_buffer[i] =
-                combine_hashes(hash_strategy.hash_one(&value), hashes_buffer[i]);
+                combine_hashes(value.hash_one(random_state), hashes_buffer[i]);
         }
     } else {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = hash_strategy.hash_one(&value);
+            hashes_buffer[i] = value.hash_one(random_state);
         }
     }
 }
@@ -389,13 +408,12 @@ where
 #[inline(never)]
 fn hash_string_view_array_inner<
     T: ByteViewType,
-    H: HashStrategy + ?Sized,
     const HAS_NULLS: bool,
     const HAS_BUFFERS: bool,
     const REHASH: bool,
 >(
     array: &GenericByteViewArray<T>,
-    hash_strategy: &H,
+    random_state: &RandomState,
     hashes_buffer: &mut [u64],
 ) {
     assert_eq!(
@@ -424,18 +442,22 @@ fn hash_string_view_array_inner<
         // all views are inlined, no need to access external buffers
         if !HAS_BUFFERS || view_len <= 12 {
             if REHASH {
-                *hash = hash_strategy.rehash(&v, *hash);
+                let mut hasher = seeded_state(*hash).build_hasher();
+                v.hash_write(&mut hasher);
+                *hash = hasher.finish();
             } else {
-                *hash = hash_strategy.hash_one(&v);
+                *hash = v.hash_one(random_state);
             }
             continue;
         }
         // view is not inlined, so we need to hash the bytes as well
         let value = view_bytes(view_len, v);
         if REHASH {
-            *hash = hash_strategy.rehash(&value, *hash);
+            let mut hasher = seeded_state(*hash).build_hasher();
+            value.hash_write(&mut hasher);
+            *hash = hasher.finish();
         } else {
-            *hash = hash_strategy.hash_one(&value);
+            *hash = value.hash_one(random_state);
         }
     }
 }
@@ -444,9 +466,9 @@ fn hash_string_view_array_inner<
 /// If `rehash==true` this combines the previous hash value in the buffer
 /// with the new hash using `combine_hashes`
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_generic_byte_view_array<T: ByteViewType, H: HashStrategy + ?Sized>(
+fn hash_generic_byte_view_array<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
-    hash_strategy: &H,
+    random_state: &RandomState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) {
@@ -460,44 +482,267 @@ fn hash_generic_byte_view_array<T: ByteViewType, H: HashStrategy + ?Sized>(
         // don't call the inner function as Rust seems better able to inline this simpler code (2-3% faster)
         (false, false, false) => {
             for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                *hash = hash_strategy.hash_one(&view);
+                *hash = view.hash_one(random_state);
             }
         }
         (false, false, true) => {
             for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                *hash = hash_strategy.rehash(&view, *hash);
+                let mut hasher = seeded_state(*hash).build_hasher();
+                view.hash_write(&mut hasher);
+                *hash = hasher.finish();
             }
         }
-        (false, true, false) => hash_string_view_array_inner::<T, H, false, true, false>(
+        (false, true, false) => hash_string_view_array_inner::<T, false, true, false>(
             array,
-            hash_strategy,
+            random_state,
             hashes_buffer,
         ),
-        (false, true, true) => hash_string_view_array_inner::<T, H, false, true, true>(
+        (false, true, true) => hash_string_view_array_inner::<T, false, true, true>(
             array,
-            hash_strategy,
+            random_state,
             hashes_buffer,
         ),
-        (true, false, false) => hash_string_view_array_inner::<T, H, true, false, false>(
+        (true, false, false) => hash_string_view_array_inner::<T, true, false, false>(
             array,
-            hash_strategy,
+            random_state,
             hashes_buffer,
         ),
-        (true, false, true) => hash_string_view_array_inner::<T, H, true, false, true>(
+        (true, false, true) => hash_string_view_array_inner::<T, true, false, true>(
             array,
-            hash_strategy,
+            random_state,
             hashes_buffer,
         ),
-        (true, true, false) => hash_string_view_array_inner::<T, H, true, true, false>(
+        (true, true, false) => hash_string_view_array_inner::<T, true, true, false>(
             array,
-            hash_strategy,
+            random_state,
             hashes_buffer,
         ),
-        (true, true, true) => hash_string_view_array_inner::<T, H, true, true, true>(
+        (true, true, true) => hash_string_view_array_inner::<T, true, true, true>(
             array,
-            hash_strategy,
+            random_state,
             hashes_buffer,
         ),
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+// The custom BuildHasher path intentionally mirrors the leaf helpers so the
+// default path does not route its tight loops through generic abstractions.
+fn hash_null_with_hasher<S: BuildHasher>(
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+    mul_col: bool,
+) {
+    if mul_col {
+        hashes_buffer.iter_mut().for_each(|hash| {
+            *hash = combine_hashes(hash_builder.hash_one(1), *hash);
+        })
+    } else {
+        hashes_buffer.iter_mut().for_each(|hash| {
+            *hash = hash_builder.hash_one(1);
+        })
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_array_primitive_with_hasher<T, S>(
+    array: &PrimitiveArray<T>,
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) where
+    T: ArrowPrimitiveType<Native: HashValue>,
+    S: BuildHasher,
+{
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    if array.null_count() == 0 {
+        if rehash {
+            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
+                *hash = combine_hashes(value.hash_one(hash_builder), *hash);
+            }
+        } else {
+            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
+                *hash = value.hash_one(hash_builder);
+            }
+        }
+    } else if rehash {
+        for i in array.nulls().unwrap().valid_indices() {
+            let value = unsafe { array.value_unchecked(i) };
+            hashes_buffer[i] =
+                combine_hashes(value.hash_one(hash_builder), hashes_buffer[i]);
+        }
+    } else {
+        for i in array.nulls().unwrap().valid_indices() {
+            let value = unsafe { array.value_unchecked(i) };
+            hashes_buffer[i] = value.hash_one(hash_builder);
+        }
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_array_with_hasher<T, S>(
+    array: &T,
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) where
+    T: ArrayAccessor,
+    T::Item: HashValue,
+    S: BuildHasher,
+{
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    if array.null_count() == 0 {
+        if rehash {
+            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                let value = unsafe { array.value_unchecked(i) };
+                *hash = combine_hashes(value.hash_one(hash_builder), *hash);
+            }
+        } else {
+            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                let value = unsafe { array.value_unchecked(i) };
+                *hash = value.hash_one(hash_builder);
+            }
+        }
+    } else if rehash {
+        for i in array.nulls().unwrap().valid_indices() {
+            let value = unsafe { array.value_unchecked(i) };
+            hashes_buffer[i] =
+                combine_hashes(value.hash_one(hash_builder), hashes_buffer[i]);
+        }
+    } else {
+        for i in array.nulls().unwrap().valid_indices() {
+            let value = unsafe { array.value_unchecked(i) };
+            hashes_buffer[i] = value.hash_one(hash_builder);
+        }
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(never)]
+fn hash_string_view_array_inner_with_hasher<
+    T: ByteViewType,
+    S: BuildHasher,
+    const HAS_NULLS: bool,
+    const HAS_BUFFERS: bool,
+    const REHASH: bool,
+>(
+    array: &GenericByteViewArray<T>,
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+) {
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    let buffers = array.data_buffers();
+    let view_bytes = |view_len: u32, view: u128| {
+        let view = ByteView::from(view);
+        let offset = view.offset as usize;
+        unsafe {
+            let data = buffers.get_unchecked(view.buffer_index as usize);
+            data.get_unchecked(offset..offset + view_len as usize)
+        }
+    };
+
+    let hashes_and_views = hashes_buffer.iter_mut().zip(array.views().iter());
+    for (i, (hash, &v)) in hashes_and_views.enumerate() {
+        if HAS_NULLS && array.is_null(i) {
+            continue;
+        }
+        let view_len = v as u32;
+        if !HAS_BUFFERS || view_len <= 12 {
+            if REHASH {
+                *hash = combine_hashes(v.hash_one(hash_builder), *hash);
+            } else {
+                *hash = v.hash_one(hash_builder);
+            }
+            continue;
+        }
+        let value = view_bytes(view_len, v);
+        if REHASH {
+            *hash = combine_hashes(value.hash_one(hash_builder), *hash);
+        } else {
+            *hash = value.hash_one(hash_builder);
+        }
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_generic_byte_view_array_with_hasher<T: ByteViewType, S: BuildHasher>(
+    array: &GenericByteViewArray<T>,
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) {
+    match (
+        array.null_count() != 0,
+        !array.data_buffers().is_empty(),
+        rehash,
+    ) {
+        (false, false, false) => {
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                *hash = view.hash_one(hash_builder);
+            }
+        }
+        (false, false, true) => {
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                *hash = combine_hashes(view.hash_one(hash_builder), *hash);
+            }
+        }
+        (false, true, false) => {
+            hash_string_view_array_inner_with_hasher::<T, S, false, true, false>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (false, true, true) => {
+            hash_string_view_array_inner_with_hasher::<T, S, false, true, true>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (true, false, false) => {
+            hash_string_view_array_inner_with_hasher::<T, S, true, false, false>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (true, false, true) => {
+            hash_string_view_array_inner_with_hasher::<T, S, true, false, true>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (true, true, false) => {
+            hash_string_view_array_inner_with_hasher::<T, S, true, true, false>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (true, true, true) => {
+            hash_string_view_array_inner_with_hasher::<T, S, true, true, true>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
     }
 }
 
@@ -511,13 +756,13 @@ fn hash_generic_byte_view_array<T: ByteViewType, H: HashStrategy + ?Sized>(
 #[inline(never)]
 fn hash_dictionary_inner<
     K: ArrowDictionaryKeyType,
-    H: HashStrategy + ?Sized,
+    C: ChildHashing + ?Sized,
     const HAS_NULL_KEYS: bool,
     const HAS_NULL_VALUES: bool,
     const MULTI_COL: bool,
 >(
     array: &DictionaryArray<K>,
-    hash_strategy: &H,
+    child_hashing: &C,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     // Hash each dictionary value once, and then use that computed
@@ -525,7 +770,7 @@ fn hash_dictionary_inner<
     // redundant hashing for large dictionary elements (e.g. strings)
     let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
-    create_hashes_impl([dict_values], hash_strategy, &mut dict_hashes)?;
+    child_hashing.create_hashes([dict_values], &mut dict_hashes)?;
 
     if HAS_NULL_KEYS {
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
@@ -557,9 +802,9 @@ fn hash_dictionary_inner<
 
 /// Hash the values in a dictionary array
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_dictionary<K: ArrowDictionaryKeyType, H: HashStrategy + ?Sized>(
+fn hash_dictionary<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
@@ -569,53 +814,53 @@ fn hash_dictionary<K: ArrowDictionaryKeyType, H: HashStrategy + ?Sized>(
     // Dispatcher based on null presence and multi-column mode
     // Should reduce branching within hot loops
     match (has_null_keys, has_null_values, multi_col) {
-        (false, false, false) => hash_dictionary_inner::<K, H, false, false, false>(
+        (false, false, false) => hash_dictionary_inner::<K, _, false, false, false>(
             array,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         ),
-        (false, false, true) => hash_dictionary_inner::<K, H, false, false, true>(
+        (false, false, true) => hash_dictionary_inner::<K, _, false, false, true>(
             array,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         ),
-        (false, true, false) => hash_dictionary_inner::<K, H, false, true, false>(
+        (false, true, false) => hash_dictionary_inner::<K, _, false, true, false>(
             array,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         ),
-        (false, true, true) => hash_dictionary_inner::<K, H, false, true, true>(
+        (false, true, true) => hash_dictionary_inner::<K, _, false, true, true>(
             array,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         ),
-        (true, false, false) => hash_dictionary_inner::<K, H, true, false, false>(
+        (true, false, false) => hash_dictionary_inner::<K, _, true, false, false>(
             array,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         ),
-        (true, false, true) => hash_dictionary_inner::<K, H, true, false, true>(
+        (true, false, true) => hash_dictionary_inner::<K, _, true, false, true>(
             array,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         ),
-        (true, true, false) => hash_dictionary_inner::<K, H, true, true, false>(
+        (true, true, false) => hash_dictionary_inner::<K, _, true, true, false>(
             array,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         ),
-        (true, true, true) => hash_dictionary_inner::<K, H, true, true, true>(
+        (true, true, true) => hash_dictionary_inner::<K, _, true, true, true>(
             array,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         ),
     }
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_struct_array<H: HashStrategy + ?Sized>(
+fn hash_struct_array(
     array: &StructArray,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let nulls = array.nulls();
@@ -623,7 +868,7 @@ fn hash_struct_array<H: HashStrategy + ?Sized>(
 
     // Create hashes for each row that combines the hashes over all the column at that row.
     let mut values_hashes = vec![0u64; row_len];
-    create_hashes_impl(array.columns(), hash_strategy, &mut values_hashes)?;
+    child_hashing.create_hashes(array.columns(), &mut values_hashes)?;
 
     // Separate paths to avoid allocating Vec when there are no nulls
     if let Some(nulls) = nulls {
@@ -643,9 +888,9 @@ fn hash_struct_array<H: HashStrategy + ?Sized>(
 
 // only adding this `cfg` b/c this function is only used with this `cfg`
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_map_array<H: HashStrategy + ?Sized>(
+fn hash_map_array(
     array: &MapArray,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let nulls = array.nulls();
@@ -664,7 +909,7 @@ fn hash_map_array<H: HashStrategy + ?Sized>(
         .iter()
         .map(|col| col.slice(first_offset, entries_len))
         .collect();
-    create_hashes_impl(&sliced_columns, hash_strategy, &mut values_hashes)?;
+    child_hashing.create_hashes(&sliced_columns, &mut values_hashes)?;
 
     // Combine the hashes for entries on each row with each other and previous hash for that row
     // Adjust indices by first_offset since values_hashes is sliced starting from first_offset
@@ -694,25 +939,23 @@ fn hash_map_array<H: HashStrategy + ?Sized>(
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_list_array<OffsetSize, H>(
+fn hash_list_array<OffsetSize>(
     array: &GenericListArray<OffsetSize>,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()>
 where
     OffsetSize: OffsetSizeTrait,
-    H: HashStrategy + ?Sized,
 {
     // In case values is sliced, hash only the bytes used by the offsets of this ListArray
     let first_offset = array.value_offsets().first().cloned().unwrap_or_default();
     let last_offset = array.value_offsets().last().cloned().unwrap_or_default();
     let value_bytes_len = (last_offset - first_offset).as_usize();
     let mut values_hashes = vec![0u64; value_bytes_len];
-    create_hashes_impl(
+    child_hashing.create_hashes(
         [array
             .values()
             .slice(first_offset.as_usize(), value_bytes_len)],
-        hash_strategy,
         &mut values_hashes,
     )?;
 
@@ -746,21 +989,20 @@ where
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_list_view_array<OffsetSize, H>(
+fn hash_list_view_array<OffsetSize>(
     array: &GenericListViewArray<OffsetSize>,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()>
 where
     OffsetSize: OffsetSizeTrait,
-    H: HashStrategy + ?Sized,
 {
     let values = array.values();
     let offsets = array.value_offsets();
     let sizes = array.value_sizes();
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
-    create_hashes_impl([values], hash_strategy, &mut values_hashes)?;
+    child_hashing.create_hashes([values], &mut values_hashes)?;
     if let Some(nulls) = nulls {
         for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
             if nulls.is_valid(i) {
@@ -786,9 +1028,9 @@ where
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_union_array<H: HashStrategy + ?Sized>(
+fn hash_union_array(
     array: &UnionArray,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let DataType::Union(union_fields, _mode) = array.data_type() else {
@@ -798,12 +1040,12 @@ fn hash_union_array<H: HashStrategy + ?Sized>(
     if array.is_dense() {
         // Dense union: children only contain values of their type, so they're already compact.
         // Use the default hashing approach which is efficient for dense unions.
-        hash_union_array_default(array, union_fields, hash_strategy, hashes_buffer)
+        hash_union_array_default(array, union_fields, child_hashing, hashes_buffer)
     } else {
         // Sparse union: each child has the same length as the union array.
         // Optimization: only hash the elements that are actually referenced by type_ids,
         // instead of hashing all K*N elements (where K = num types, N = array length).
-        hash_sparse_union_array(array, union_fields, hash_strategy, hashes_buffer)
+        hash_sparse_union_array(array, union_fields, child_hashing, hashes_buffer)
     }
 }
 
@@ -817,10 +1059,10 @@ fn hash_union_array<H: HashStrategy + ?Sized>(
 /// `hash_sparse_union_array` is more efficient, but for 1-2 types or dense unions,
 /// this simpler approach is preferred.
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_union_array_default<H: HashStrategy + ?Sized>(
+fn hash_union_array_default(
     array: &UnionArray,
     union_fields: &UnionFields,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let mut child_hashes: HashMap<i8, Vec<u64>> =
@@ -830,7 +1072,7 @@ fn hash_union_array_default<H: HashStrategy + ?Sized>(
     for (type_id, _field) in union_fields.iter() {
         let child = array.child(type_id);
         let mut child_hash_buffer = vec![0; child.len()];
-        create_hashes_impl([child], hash_strategy, &mut child_hash_buffer)?;
+        child_hashing.create_hashes([child], &mut child_hash_buffer)?;
 
         child_hashes.insert(type_id, child_hash_buffer);
     }
@@ -858,10 +1100,10 @@ fn hash_union_array_default<H: HashStrategy + ?Sized>(
 /// For 1-2 types, the overhead of take/scatter outweighs the benefit, so we use
 /// the default approach of hashing all children (same as dense unions).
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_sparse_union_array<H: HashStrategy + ?Sized>(
+fn hash_sparse_union_array(
     array: &UnionArray,
     union_fields: &UnionFields,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     use std::collections::HashMap;
@@ -872,7 +1114,7 @@ fn hash_sparse_union_array<H: HashStrategy + ?Sized>(
         return hash_union_array_default(
             array,
             union_fields,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         );
     }
@@ -900,7 +1142,7 @@ fn hash_sparse_union_array<H: HashStrategy + ?Sized>(
 
             // Hash the filtered array
             let mut filtered_hashes = vec![0u64; filtered.len()];
-            create_hashes_impl([&filtered], hash_strategy, &mut filtered_hashes)?;
+            child_hashing.create_hashes([&filtered], &mut filtered_hashes)?;
 
             // Scatter hashes back to correct positions
             for (hash, &idx) in filtered_hashes.iter().zip(indices.iter()) {
@@ -914,16 +1156,16 @@ fn hash_sparse_union_array<H: HashStrategy + ?Sized>(
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_fixed_list_array<H: HashStrategy + ?Sized>(
+fn hash_fixed_list_array(
     array: &FixedSizeListArray,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let values = array.values();
     let value_length = array.value_length() as usize;
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
-    create_hashes_impl([values], hash_strategy, &mut values_hashes)?;
+    child_hashing.create_hashes([values], &mut values_hashes)?;
     if let Some(nulls) = nulls {
         for i in 0..array.len() {
             if nulls.is_valid(i) {
@@ -951,12 +1193,12 @@ fn hash_fixed_list_array<H: HashStrategy + ?Sized>(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_run_array_inner<
     R: RunEndIndexType,
-    H: HashStrategy + ?Sized,
+    C: ChildHashing + ?Sized,
     const HAS_NULL_VALUES: bool,
     const REHASH: bool,
 >(
     array: &RunArray<R>,
-    hash_strategy: &H,
+    child_hashing: &C,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     // We find the relevant runs that cover potentially sliced arrays, so we can only hash those
@@ -983,11 +1225,8 @@ fn hash_run_array_inner<
         end_physical_index - start_physical_index,
     );
     let mut values_hashes = vec![0u64; sliced_values.len()];
-    create_hashes_impl(
-        std::slice::from_ref(&sliced_values),
-        hash_strategy,
-        &mut values_hashes,
-    )?;
+    child_hashing
+        .create_hashes(std::slice::from_ref(&sliced_values), &mut values_hashes)?;
 
     let mut start_in_slice = 0;
     for (adjusted_physical_index, &absolute_run_end) in run_ends_values
@@ -1021,28 +1260,28 @@ fn hash_run_array_inner<
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_run_array<R: RunEndIndexType, H: HashStrategy + ?Sized>(
+fn hash_run_array<R: RunEndIndexType>(
     array: &RunArray<R>,
-    hash_strategy: &H,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) -> Result<()> {
     let has_null_values = array.values().null_count() != 0;
 
     match (has_null_values, rehash) {
-        (false, false) => hash_run_array_inner::<R, H, false, false>(
+        (false, false) => hash_run_array_inner::<R, _, false, false>(
             array,
-            hash_strategy,
+            child_hashing,
             hashes_buffer,
         ),
         (false, true) => {
-            hash_run_array_inner::<R, H, false, true>(array, hash_strategy, hashes_buffer)
+            hash_run_array_inner::<R, _, false, true>(array, child_hashing, hashes_buffer)
         }
         (true, false) => {
-            hash_run_array_inner::<R, H, true, false>(array, hash_strategy, hashes_buffer)
+            hash_run_array_inner::<R, _, true, false>(array, child_hashing, hashes_buffer)
         }
         (true, true) => {
-            hash_run_array_inner::<R, H, true, true>(array, hash_strategy, hashes_buffer)
+            hash_run_array_inner::<R, _, true, true>(array, child_hashing, hashes_buffer)
         }
     }
 }
@@ -1050,64 +1289,68 @@ fn hash_run_array<R: RunEndIndexType, H: HashStrategy + ?Sized>(
 /// Internal helper function that hashes a single array and either initializes or combines
 /// the hash values in the buffer.
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_single_array<H: HashStrategy + ?Sized>(
+fn hash_single_array(
     array: &dyn Array,
-    hash_strategy: &H,
+    random_state: &RandomState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) -> Result<()> {
+    // Nested types recurse through ChildHashing; primitive/string/binary cases
+    // stay on the dedicated RandomState fast path above.
+    let child_hashing = RandomStateChildHashing { random_state };
+
     downcast_primitive_array! {
-        array => hash_array_primitive(array, hash_strategy, hashes_buffer, rehash),
-        DataType::Null => hash_null(hash_strategy, hashes_buffer, rehash),
-        DataType::Boolean => hash_array(&as_boolean_array(array)?, hash_strategy, hashes_buffer, rehash),
-        DataType::Utf8 => hash_array(&as_string_array(array)?, hash_strategy, hashes_buffer, rehash),
-        DataType::Utf8View => hash_generic_byte_view_array(as_string_view_array(array)?, hash_strategy, hashes_buffer, rehash),
-        DataType::LargeUtf8 => hash_array(&as_largestring_array(array), hash_strategy, hashes_buffer, rehash),
-        DataType::Binary => hash_array(&as_generic_binary_array::<i32>(array)?, hash_strategy, hashes_buffer, rehash),
-        DataType::BinaryView => hash_generic_byte_view_array(as_binary_view_array(array)?, hash_strategy, hashes_buffer, rehash),
-        DataType::LargeBinary => hash_array(&as_generic_binary_array::<i64>(array)?, hash_strategy, hashes_buffer, rehash),
+        array => hash_array_primitive(array, random_state, hashes_buffer, rehash),
+        DataType::Null => hash_null(random_state, hashes_buffer, rehash),
+        DataType::Boolean => hash_array(&as_boolean_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::Utf8 => hash_array(&as_string_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::Utf8View => hash_generic_byte_view_array(as_string_view_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::LargeUtf8 => hash_array(&as_largestring_array(array), random_state, hashes_buffer, rehash),
+        DataType::Binary => hash_array(&as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
+        DataType::BinaryView => hash_generic_byte_view_array(as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::LargeBinary => hash_array(&as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, rehash),
         DataType::FixedSizeBinary(_) => {
             let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
-            hash_array(&array, hash_strategy, hashes_buffer, rehash)
+            hash_array(&array, random_state, hashes_buffer, rehash)
         }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            array => hash_dictionary(array, hash_strategy, hashes_buffer, rehash)?,
+            array => hash_dictionary(array, &child_hashing, hashes_buffer, rehash)?,
             _ => unreachable!()
         }
         DataType::Struct(_) => {
             let array = as_struct_array(array)?;
-            hash_struct_array(array, hash_strategy, hashes_buffer)?;
+            hash_struct_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::List(_) => {
             let array = as_list_array(array)?;
-            hash_list_array(array, hash_strategy, hashes_buffer)?;
+            hash_list_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::LargeList(_) => {
             let array = as_large_list_array(array)?;
-            hash_list_array(array, hash_strategy, hashes_buffer)?;
+            hash_list_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::ListView(_) => {
             let array = as_list_view_array(array)?;
-            hash_list_view_array(array, hash_strategy, hashes_buffer)?;
+            hash_list_view_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::LargeListView(_) => {
             let array = as_large_list_view_array(array)?;
-            hash_list_view_array(array, hash_strategy, hashes_buffer)?;
+            hash_list_view_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::Map(_, _) => {
             let array = as_map_array(array)?;
-            hash_map_array(array, hash_strategy, hashes_buffer)?;
+            hash_map_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::FixedSizeList(_,_) => {
             let array = as_fixed_size_list_array(array)?;
-            hash_fixed_list_array(array, hash_strategy, hashes_buffer)?;
+            hash_fixed_list_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::Union(_, _) => {
             let array = as_union_array(array)?;
-            hash_union_array(array, hash_strategy, hashes_buffer)?;
+            hash_union_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::RunEndEncoded(_, _) => downcast_run_array! {
-            array => hash_run_array(array, hash_strategy, hashes_buffer, rehash)?,
+            array => hash_run_array(array, &child_hashing, hashes_buffer, rehash)?,
             _ => unreachable!()
         }
         _ => {
@@ -1121,11 +1364,99 @@ fn hash_single_array<H: HashStrategy + ?Sized>(
     Ok(())
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_single_array_with_hasher<S: BuildHasher>(
+    array: &dyn Array,
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) -> Result<()> {
+    // The custom-hasher path reuses the shared structural combiners but keeps
+    // its own leaf dispatch and rehash semantics.
+    let child_hashing = BuildHasherChildHashing { hash_builder };
+
+    downcast_primitive_array! {
+        array => hash_array_primitive_with_hasher(array, hash_builder, hashes_buffer, rehash),
+        DataType::Null => hash_null_with_hasher(hash_builder, hashes_buffer, rehash),
+        DataType::Boolean => hash_array_with_hasher(&as_boolean_array(array)?, hash_builder, hashes_buffer, rehash),
+        DataType::Utf8 => hash_array_with_hasher(&as_string_array(array)?, hash_builder, hashes_buffer, rehash),
+        DataType::Utf8View => hash_generic_byte_view_array_with_hasher(as_string_view_array(array)?, hash_builder, hashes_buffer, rehash),
+        DataType::LargeUtf8 => hash_array_with_hasher(&as_largestring_array(array), hash_builder, hashes_buffer, rehash),
+        DataType::Binary => hash_array_with_hasher(&as_generic_binary_array::<i32>(array)?, hash_builder, hashes_buffer, rehash),
+        DataType::BinaryView => hash_generic_byte_view_array_with_hasher(as_binary_view_array(array)?, hash_builder, hashes_buffer, rehash),
+        DataType::LargeBinary => hash_array_with_hasher(&as_generic_binary_array::<i64>(array)?, hash_builder, hashes_buffer, rehash),
+        DataType::FixedSizeBinary(_) => {
+            let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
+            hash_array_with_hasher(&array, hash_builder, hashes_buffer, rehash)
+        }
+        DataType::Dictionary(_, _) => downcast_dictionary_array! {
+            array => hash_dictionary(array, &child_hashing, hashes_buffer, rehash)?,
+            _ => unreachable!()
+        }
+        DataType::Struct(_) => {
+            let array = as_struct_array(array)?;
+            hash_struct_array(array, &child_hashing, hashes_buffer)?;
+        }
+        DataType::List(_) => {
+            let array = as_list_array(array)?;
+            hash_list_array(array, &child_hashing, hashes_buffer)?;
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(array)?;
+            hash_list_array(array, &child_hashing, hashes_buffer)?;
+        }
+        DataType::ListView(_) => {
+            let array = as_list_view_array(array)?;
+            hash_list_view_array(array, &child_hashing, hashes_buffer)?;
+        }
+        DataType::LargeListView(_) => {
+            let array = as_large_list_view_array(array)?;
+            hash_list_view_array(array, &child_hashing, hashes_buffer)?;
+        }
+        DataType::Map(_, _) => {
+            let array = as_map_array(array)?;
+            hash_map_array(array, &child_hashing, hashes_buffer)?;
+        }
+        DataType::FixedSizeList(_,_) => {
+            let array = as_fixed_size_list_array(array)?;
+            hash_fixed_list_array(array, &child_hashing, hashes_buffer)?;
+        }
+        DataType::Union(_, _) => {
+            let array = as_union_array(array)?;
+            hash_union_array(array, &child_hashing, hashes_buffer)?;
+        }
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            array => hash_run_array(array, &child_hashing, hashes_buffer, rehash)?,
+            _ => unreachable!()
+        }
+        _ => {
+            return _internal_err!(
+                "Unsupported data type in hasher: {}",
+                array.data_type()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Test version of `hash_single_array` that forces all hashes to collide to zero.
 #[cfg(feature = "force_hash_collisions")]
-fn hash_single_array<H: HashStrategy + ?Sized>(
+fn hash_single_array(
     _array: &dyn Array,
-    _hash_strategy: &H,
+    _random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    _rehash: bool,
+) -> Result<()> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
+    }
+    Ok(())
+}
+
+#[cfg(feature = "force_hash_collisions")]
+fn hash_single_array_with_hasher<S: BuildHasher>(
+    _array: &dyn Array,
+    _hash_builder: &S,
     hashes_buffer: &mut [u64],
     _rehash: bool,
 ) -> Result<()> {
@@ -1172,20 +1503,24 @@ impl AsDynArray for &ArrayRef {
     }
 }
 
-fn create_hashes_impl<'a, I, T, H>(
+fn create_hashes_with_hasher_impl<'a, I, T, S>(
     arrays: I,
-    hash_strategy: &H,
+    hash_builder: &S,
     hashes_buffer: &'a mut [u64],
 ) -> Result<&'a mut [u64]>
 where
     I: IntoIterator<Item = T>,
     T: AsDynArray,
-    H: HashStrategy + ?Sized,
+    S: BuildHasher,
 {
     for (i, array) in arrays.into_iter().enumerate() {
-        // combine hashes with `combine_hashes` for all columns besides the first
         let rehash = i >= 1;
-        hash_single_array(array.as_dyn_array(), hash_strategy, hashes_buffer, rehash)?;
+        hash_single_array_with_hasher(
+            array.as_dyn_array(),
+            hash_builder,
+            hashes_buffer,
+            rehash,
+        )?;
     }
     Ok(hashes_buffer)
 }
@@ -1203,13 +1538,15 @@ where
     I: IntoIterator<Item = T>,
     T: AsDynArray,
 {
-    create_hashes_impl(arrays, &DefaultHashStrategy { random_state }, hashes_buffer)
+    // Keep the default RandomState path concrete for the same benchmark reason as with_hashes.
+    for (i, array) in arrays.into_iter().enumerate() {
+        let rehash = i >= 1;
+        hash_single_array(array.as_dyn_array(), random_state, hashes_buffer, rehash)?;
+    }
+    Ok(hashes_buffer)
 }
 
 /// Creates hash values for every row using a caller-provided hash builder.
-///
-/// The number of rows to hash is determined by `hashes_buffer.len()`.
-/// `hashes_buffer` should be pre-sized appropriately.
 pub fn create_hashes_with_hasher<'a, I, T, S>(
     arrays: I,
     hash_builder: &S,
@@ -1220,7 +1557,7 @@ where
     T: AsDynArray,
     S: BuildHasher,
 {
-    create_hashes_impl(arrays, &CustomHashStrategy { hash_builder }, hashes_buffer)
+    create_hashes_with_hasher_impl(arrays, hash_builder, hashes_buffer)
 }
 
 #[cfg(test)]
@@ -2015,8 +2352,51 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "force_hash_collisions"))]
     #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_large_utf8_multi_column_rehash_matches_combine() {
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let large_utf8: ArrayRef = Arc::new(LargeStringArray::from(vec![
+            Some("repeat"),
+            None,
+            Some("repeat"),
+            Some("different"),
+        ]));
+        let random_state = RandomState::with_seed(0);
+
+        let mut first_col_hashes = vec![0; int_array.len()];
+        create_hashes([&int_array], &random_state, &mut first_col_hashes).unwrap();
+
+        let mut combined_hashes = vec![0; int_array.len()];
+        create_hashes(
+            [&int_array, &large_utf8],
+            &random_state,
+            &mut combined_hashes,
+        )
+        .unwrap();
+
+        let large_utf8 = large_utf8
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap();
+        let expected = (0..large_utf8.len())
+            .map(|i| {
+                if large_utf8.is_valid(i) {
+                    combine_hashes(
+                        large_utf8.value(i).hash_one(&random_state),
+                        first_col_hashes[i],
+                    )
+                } else {
+                    first_col_hashes[i]
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(combined_hashes, expected);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn test_create_hashes_with_custom_hasher() {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 1, 4]));
         let hash_builder = BuildHasherDefault::<TestHasher>::default();
