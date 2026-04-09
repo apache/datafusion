@@ -205,6 +205,8 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
 /// is `\1`, build a shorter regex (stripping trailing `.*$`) and use
 /// `captures_read` with `CaptureLocations` for direct extraction — no
 /// `expand()`, no `String` allocation.
+/// This pattern appears in ClickBench Q28: which uses a regexp like
+/// `^https?://(?:www\.)?([^/]+)/.*$`
 fn try_build_short_extract_regex(pattern: &str, replacement: &str) -> Option<Regex> {
     if replacement != "${1}" || !pattern.starts_with('^') || !pattern.ends_with(".*$") {
         return None;
