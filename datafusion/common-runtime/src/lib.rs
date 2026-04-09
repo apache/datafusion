@@ -34,8 +34,3 @@ pub use join_set::JoinSet;
 pub use trace_utils::{
     JoinSetTracer, JoinSetTracerError, set_join_set_tracer, trace_block, trace_future,
 };
-
-/// Temporary public function to test semver breaking change detection.
-pub fn semver_test_function() -> &'static str {
-    "this will be removed to trigger a breaking change"
-}
