@@ -75,6 +75,13 @@ DF_TO_SPARK_CAST_TYPE = {
     "BINARY": "BINARY",
     "DATE": "DATE",
     "TIMESTAMP": "TIMESTAMP",
+    # PostgreSQL-style aliases used in some .slt files
+    "FLOAT8": "DOUBLE",
+    "FLOAT4": "FLOAT",
+    "INT8": "BIGINT",
+    "INT4": "INT",
+    "INT2": "SMALLINT",
+    "BYTEA": "BINARY",
 }
 
 # Unsupported Arrow types for Spark
@@ -396,6 +403,11 @@ def _translate_casts(sql: str) -> str:
                             break
                     j -= 1
                 if j >= 0 and depth == 0:
+                    # Check if ( is preceded by a function name
+                    func_start = j
+                    while func_start > 0 and (result[func_start - 1].isalnum() or result[func_start - 1] == "_"):
+                        func_start -= 1
+
                     paren_expr = result[j + 1 : i]
                     # Extract type after ::
                     type_start = i + 3
@@ -417,9 +429,16 @@ def _translate_casts(sql: str) -> str:
 
                     cast_type = result[i + 3 : type_end]
                     spark_type = _translate_cast_type(cast_type)
-                    replacement = f"CAST({paren_expr} AS {spark_type})"
 
-                    result = result[:j] + replacement + result[type_end:]
+                    if func_start < j:
+                        # func(...)::TYPE -> CAST(func(...) AS TYPE)
+                        func_call = result[func_start : i + 1]
+                        replacement = f"CAST({func_call} AS {spark_type})"
+                        result = result[:func_start] + replacement + result[type_end:]
+                    else:
+                        # (expr)::TYPE -> CAST(expr AS TYPE)
+                        replacement = f"CAST({paren_expr} AS {spark_type})"
+                        result = result[:j] + replacement + result[type_end:]
                     changed = True
                     break
             i += 1
@@ -479,6 +498,85 @@ def _translate_make_array(sql: str) -> str:
     return sql.replace("make_array(", "array(")
 
 
+def _translate_array_literals(sql: str) -> str:
+    """Translate SQL array literal syntax [...] -> array(...).
+
+    Handles nested arrays like [[1,2],[3,4]] -> array(array(1,2),array(3,4)).
+    Only translates square brackets that are array literals, not array subscripts
+    like column[0]. Skips content inside string literals.
+    """
+    result = []
+    i = 0
+    while i < len(sql):
+        # Skip string literals
+        if sql[i] == "'":
+            result.append(sql[i])
+            i += 1
+            while i < len(sql) and sql[i] != "'":
+                result.append(sql[i])
+                i += 1
+            if i < len(sql):
+                result.append(sql[i])
+                i += 1
+            continue
+        if sql[i] == "[":
+            # Check if this is an array subscript (preceded by identifier or ])
+            if i > 0 and (sql[i - 1].isalnum() or sql[i - 1] == "_" or sql[i - 1] == ")"):
+                result.append(sql[i])
+                i += 1
+                continue
+            # Array literal: find matching ]
+            depth = 1
+            i += 1
+            inner_start = i
+            while i < len(sql) and depth > 0:
+                if sql[i] == "[":
+                    depth += 1
+                elif sql[i] == "]":
+                    depth -= 1
+                i += 1
+            inner = sql[inner_start : i - 1]
+            # Recursively translate nested array literals
+            inner = _translate_array_literals(inner)
+            result.append(f"array({inner})")
+        else:
+            result.append(sql[i])
+            i += 1
+    return "".join(result)
+
+
+def _translate_decimal_literals(sql: str) -> str:
+    """Translate DECIMAL(p,s) 'value' literal syntax -> CAST('value' AS DECIMAL(p,s))."""
+    return re.sub(
+        r"DECIMAL\((\d+\s*,\s*\d+)\)\s+'([^']*)'",
+        r"CAST('\2' AS DECIMAL(\1))",
+        sql,
+        flags=re.IGNORECASE,
+    )
+
+
+def _translate_column_names(sql: str) -> str:
+    """Translate DataFusion column1/column2 names to PySpark col1/col2."""
+    return re.sub(r"\bcolumn(\d+)\b", r"col\1", sql)
+
+
+# Type aliases that appear in CAST() expressions but aren't standard Spark SQL
+_TYPE_ALIAS_PATTERN = re.compile(
+    r"\bCAST\((.+?)\s+AS\s+(FLOAT8|FLOAT4|INT8|INT4|INT2|BYTEA)\b",
+    re.IGNORECASE,
+)
+
+
+def _translate_type_aliases_in_cast(sql: str) -> str:
+    """Translate non-standard type aliases inside CAST() expressions."""
+    def replace_alias(m):
+        expr = m.group(1)
+        alias = m.group(2).upper()
+        spark_type = DF_TO_SPARK_CAST_TYPE.get(alias, alias)
+        return f"CAST({expr} AS {spark_type}"
+    return _TYPE_ALIAS_PATTERN.sub(replace_alias, sql)
+
+
 def translate_sql(sql: str) -> tuple[str, Optional[str]]:
     """Translate DataFusion SQL to PySpark SQL.
 
@@ -493,6 +591,10 @@ def translate_sql(sql: str) -> tuple[str, Optional[str]]:
     # bitwise_not is DataFusion's name; Spark uses bitnot() or ~ operator
     if "bitwise_not(" in sql.lower():
         return sql, "uses bitwise_not() (DataFusion-specific name)"
+    # Spark 4.0 functions not available in Spark 3.x
+    for func_name in ("try_parse_url", "try_url_decode"):
+        if func_name + "(" in sql.lower():
+            return sql, f"uses {func_name}() (Spark 4.0 only)"
 
     # Skip DataFusion config statements
     if re.search(r"set\s+datafusion\.", sql, re.IGNORECASE):
@@ -510,6 +612,18 @@ def translate_sql(sql: str) -> tuple[str, Optional[str]]:
 
         # Translate make_array
         result = _translate_make_array(result)
+
+        # Translate array literal syntax [...] -> array(...)
+        result = _translate_array_literals(result)
+
+        # Translate DECIMAL(p,s) 'value' literal syntax -> CAST('value' AS DECIMAL(p,s))
+        result = _translate_decimal_literals(result)
+
+        # Translate column1/column2 -> col1/col2 (PySpark naming for VALUES columns)
+        result = _translate_column_names(result)
+
+        # Translate type aliases inside CAST() expressions (e.g., CAST(x AS FLOAT8) -> CAST(x AS DOUBLE))
+        result = _translate_type_aliases_in_cast(result)
 
         return result, None
     except _SkipQuery as e:
@@ -598,6 +712,12 @@ def format_value(val) -> str:
             f"{format_value(k)}: {format_value(v)}" for k, v in val.items()
         )
         return "{" + entries + "}"
+    # Binary/bytearray — decode to string for display
+    if isinstance(val, (bytes, bytearray)):
+        try:
+            return val.decode("utf-8")
+        except UnicodeDecodeError:
+            return val.hex()
     # Default
     return str(val)
 
