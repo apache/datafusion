@@ -31,12 +31,15 @@ cd "$SCRIPT_DIR/../.." || exit 1
 
 set +e
 
+BASELINE_REV=$(git rev-parse HEAD~1)
+echo "Baseline revision: $BASELINE_REV"
+
 # Get workspace members from root Cargo.toml, excluding non-public crates
 MEMBERS=$(sed -n '/^members = \[/,/\]/p' Cargo.toml | grep '"' | sed 's/.*"\(.*\)".*/\1/' \
   | grep -v -e '^benchmarks$' -e '^test-utils$' -e '^datafusion/sqllogictest$' -e '^datafusion/doc$')
 
-# Get changed files compared to main
-CHANGED_FILES=$(git diff --name-only HEAD~1...HEAD)
+# Get changed files compared to baseline
+CHANGED_FILES=$(git diff --name-only "$BASELINE_REV"..HEAD)
 
 # Check which workspace members have changes
 PACKAGES=""
@@ -61,7 +64,7 @@ if [ -n "$PACKAGES" ]; then
   done
 
   echo "Running cargo-semver-checks against origin/main..."
-  cargo semver-checks --baseline-rev HEAD~1 $ARGS
+  cargo semver-checks --baseline-rev "$BASELINE_REV" $ARGS
 else
   echo "No public crates changed, skipping semver checks."
 fi
