@@ -500,6 +500,21 @@ fn rescale_byte_size(stats: &mut Statistics, new_num_rows: Precision<usize>) {
     };
 }
 
+/// Fetches base statistics from the operator's built-in `partition_statistics`,
+/// overrides `num_rows` with the registry-computed estimate, and rescales
+/// `total_byte_size` proportionally.
+///
+/// Used by providers that compute a better row count but cannot yet propagate
+/// column-level stats (NDV, min/max) through the operator — pending #20184.
+fn computed_with_row_count(
+    plan: &dyn ExecutionPlan,
+    num_rows: Precision<usize>,
+) -> Result<StatisticsResult> {
+    let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
+    rescale_byte_size(&mut base, num_rows);
+    Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
+}
+
 /// Statistics provider for [`FilterExec`](crate::filter::FilterExec) that uses
 /// pre-computed enhanced child statistics from the registry walk.
 ///
@@ -719,14 +734,7 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 
         let num_rows = Precision::Inexact(estimate);
 
-        // TODO: column-level stats (NDV, min/max) enriched by the registry walk
-        // are lost here because partition_statistics(None) re-fetches raw child
-        // stats internally. Once #20184 lands, pass enhanced child_stats so the
-        // operator's built-in column mapping uses them instead.
-        let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
-        rescale_byte_size(&mut base, num_rows);
-
-        Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
+        computed_with_row_count(plan, num_rows)
     }
 }
 
@@ -866,13 +874,7 @@ impl StatisticsProvider for JoinStatisticsProvider {
             Precision::Inexact(estimated)
         };
 
-        // TODO: column-level stats (NDV, min/max) enriched by the registry walk
-        // are lost here because partition_statistics(None) re-fetches raw child
-        // stats internally. Once #20184 lands, pass enhanced child_stats so the
-        // operator's built-in column mapping uses them instead.
-        let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
-        rescale_byte_size(&mut base, num_rows);
-        Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
+        computed_with_row_count(plan, num_rows)
     }
 }
 
@@ -922,13 +924,7 @@ impl StatisticsProvider for LimitStatisticsProvider {
             },
         };
 
-        // TODO: column-level stats (NDV, min/max) enriched by the registry walk
-        // are lost here because partition_statistics(None) re-fetches raw child
-        // stats internally. Once #20184 lands, pass enhanced child_stats so the
-        // operator's built-in column mapping uses them instead.
-        let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
-        rescale_byte_size(&mut base, num_rows);
-        Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
+        computed_with_row_count(plan, num_rows)
     }
 }
 
@@ -967,13 +963,7 @@ impl StatisticsProvider for UnionStatisticsProvider {
             },
         )?;
 
-        // TODO: column-level stats (NDV, min/max) enriched by the registry walk
-        // are lost here because partition_statistics(None) re-fetches raw child
-        // stats internally. Once #20184 lands, pass enhanced child_stats so the
-        // operator's built-in column mapping uses them instead.
-        let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
-        rescale_byte_size(&mut base, total);
-        Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
+        computed_with_row_count(plan, total)
     }
 }
 
