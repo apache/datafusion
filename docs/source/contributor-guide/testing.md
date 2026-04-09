@@ -113,6 +113,58 @@ Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusio
 
 DataFusion has integrated [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the [README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite) file for instructions.
 
+## PySpark Validation for `datafusion-spark`
+
+The `datafusion-spark` crate provides Apache Spark-compatible functions. Its `.slt` test files
+(in `datafusion/sqllogictest/test_files/spark/`) contain hardcoded expected values that should
+match Apache Spark's output. A PySpark validation script verifies these expected values against
+an actual Spark installation.
+
+### Running the validation
+
+Requires PySpark (`pip install pyspark`):
+
+```shell
+# Validate all .slt files (skips known failures)
+python datafusion/spark/scripts/validate_slt.py
+
+# Validate a specific file or directory
+python datafusion/spark/scripts/validate_slt.py --path math/abs.slt
+python datafusion/spark/scripts/validate_slt.py --path string/
+
+# Verbose output (show each query)
+python datafusion/spark/scripts/validate_slt.py --verbose
+
+# Run all files including known failures
+python datafusion/spark/scripts/validate_slt.py --known-failures=none
+```
+
+### How it works
+
+The script:
+
+1. Parses `.slt` files to extract queries and expected results
+2. Translates DataFusion-specific SQL syntax to PySpark-compatible SQL (e.g., `::TYPE` casts to `CAST()`, `arrow_cast()` to Spark types, `make_array()` to `array()`)
+3. Runs queries against a local PySpark session
+4. Compares PySpark output against the hardcoded expected values, using tolerance for floating-point comparisons
+
+Queries that use DataFusion-only features (e.g., `arrow_typeof`, `spark_cast`, `Utf8View` types,
+ANSI mode blocks) are automatically skipped.
+
+### Known failures
+
+Files with known Spark compatibility issues are listed in
+`datafusion/spark/scripts/known-failures.txt`. Each entry references a GitHub issue.
+These files are skipped by default so the validation passes in CI.
+
+When fixing a known issue, remove the file from `known-failures.txt` and update
+the `.slt` expected values to match Spark's output.
+
+### CI
+
+The PySpark validation runs automatically on PRs that modify `datafusion/spark/` or the Spark
+`.slt` test files. See the `Spark PySpark Validation` workflow.
+
 ## Snapshot testing (`cargo insta`)
 
 [Insta](https://github.com/mitsuhiko/insta) is used for snapshot testing. Snapshots are generated
