@@ -25,6 +25,16 @@ CLIPPY_FEATURES="avro,integration-tests,extended_tests"
 CLIPPY_ARGS=(--all-targets --workspace --features "$CLIPPY_FEATURES")
 CLIPPY_LINT_ARGS=(-- -D warnings)
 
+CURRENT=$(pwd)
+
+cd "$SCRIPT_DIR/../.." || exit 1
+
+set +e
+cargo install cargo-semver-checks
+cargo semver-checks --baseline-rev origin/main
+
+cd ${CURRENT} || exit 1
+
 source "${SCRIPT_DIR}/utils/git.sh"
 
 MODE="check"
@@ -74,3 +84,4 @@ CLIPPY_CMD+=("${CLIPPY_ARGS[@]}" "${CLIPPY_LINT_ARGS[@]}")
 
 echo "[${SCRIPT_NAME}] \`${CLIPPY_CMD[*]}\`"
 "${CLIPPY_CMD[@]}"
+
