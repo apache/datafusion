@@ -31,6 +31,9 @@ on:
       - 'datafusion/sqllogictest/test_files/spark/**'
       - '.github/workflows/spark-pyspark-validation.yml'
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
