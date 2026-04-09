@@ -1215,18 +1215,15 @@ impl MaterializingSortMergeJoinStream {
             return Ok(());
         }
 
-        // For buffered row which is joined with streamed side rows but all joined rows
-        // don't satisfy the join filter
+        // Collect buffered rows that matched on join keys but had every
+        // filter evaluation fail — these must be emitted with NULLs on
+        // the streamed side to satisfy full outer join semantics.
         let not_matched_buffered_indices = buffered_batch
             .join_filter_status
             .iter()
             .enumerate()
             .filter_map(|(i, state)| {
-                if *state == FilterState::AllFailed {
-                    Some(i as u64)
-                } else {
-                    None
-                }
+                matches!(state, FilterState::AllFailed).then_some(i as u64)
             })
             .collect::<Vec<_>>();
 
