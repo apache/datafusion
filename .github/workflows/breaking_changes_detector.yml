@@ -1,3 +1,11 @@
+# Detect semver-incompatible (breaking) API changes in crates modified by a PR.
+#
+# Only public workspace crates that have file changes are checked.
+# Internal crates (benchmarks, test-utils, sqllogictest, doc) are excluded.
+#
+# If breaking changes are found, a sticky comment is posted on the PR.
+# The comment is removed automatically once the issues are resolved.
+
 name: "Detect breaking changes"
 
 on:
@@ -20,20 +28,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      # For fork PRs, `origin` points to the fork, not the upstream repo.
+      # Explicitly fetch the base branch from the upstream repo so we have
+      # a valid baseline ref for both diff and semver-checks.
       - name: Fetch base branch
         run: git fetch https://github.com/${{ github.repository }}.git ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
 
       - name: Determine changed crates
         id: changed_crates
         run: |
-          # Get workspace members from root Cargo.toml, excluding non-public crates
+          # Parse workspace members from root Cargo.toml, excluding internal crates
+          # that are not published / not part of the public API.
           MEMBERS=$(sed -n '/^members = \[/,/\]/p' Cargo.toml | grep '"' | sed 's/.*"\(.*\)".*/\1/' \
             | grep -v -e '^benchmarks$' -e '^test-utils$' -e '^datafusion/sqllogictest$' -e '^datafusion/doc$')
 
-          # Get changed files compared to base
+          # Diff against the base branch to find which files changed in this PR
           CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
 
-          # Check which workspace members have changes
+          # For each workspace member, check if any of its files were modified.
+          # If so, extract the crate name from its Cargo.toml.
           PACKAGES=""
           for member in $MEMBERS; do
             if echo "$CHANGED_FILES" | grep -q "^${member}/"; then
@@ -48,6 +61,7 @@ jobs:
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           echo "Changed crates: $PACKAGES"
 
+      # Only install toolchain and cargo-semver-checks if there are crates to check
       - name: Install Rust toolchain
         if: steps.changed_crates.outputs.packages != ''
         uses: dtolnay/rust-toolchain@stable
@@ -66,6 +80,9 @@ jobs:
             ARGS="$ARGS --package $pkg"
           done
 
+          # Compare the PR's code against the base branch to detect breaking changes.
+          # Use tee to show output in the Actions log while also capturing it.
+          # Strip ANSI escape codes from the captured output for the PR comment.
           cargo semver-checks --baseline-rev origin/${{ github.base_ref }} $ARGS 2>&1 | tee /tmp/semver-output.txt
           EXIT_CODE=${PIPESTATUS[0]}
           OUTPUT=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt)
@@ -74,6 +91,7 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
           exit $EXIT_CODE
 
+  # Post or remove a sticky comment on the PR based on the semver check result.
   comment-on-pr:
     name: Comment on pull request
     runs-on: ubuntu-latest
@@ -99,6 +117,7 @@ jobs:
             ${{ needs.check-semver.outputs.logs }}
             ```
 
+      # Remove the comment if the check passes (e.g. after the PR is updated)
       - name: Delete comment
         if: ${{ needs.check-semver.result == 'success' }}
         uses: marocchino/sticky-pull-request-comment@v2
