@@ -29,11 +29,42 @@ jobs:
       - name: Install cargo-semver-checks
         run: cargo install cargo-semver-checks
 
+      - name: Determine changed crates
+        id: changed_crates
+        run: |
+          # Get workspace members from root Cargo.toml, excluding non-public crates
+          MEMBERS=$(sed -n '/^members = \[/,/\]/p' Cargo.toml | grep '"' | sed 's/.*"\(.*\)".*/\1/' \
+            | grep -v -e '^benchmarks$' -e '^test-utils$' -e '^datafusion/sqllogictest$' -e '^datafusion/doc$')
+
+          # Get changed files compared to main
+          CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+
+          # Check which workspace members have changes
+          PACKAGES=""
+          for member in $MEMBERS; do
+            if echo "$CHANGED_FILES" | grep -q "^${member}/"; then
+              pkg=$(grep '^name\s*=' "$member/Cargo.toml" | head -1 | sed 's/.*=\s*"\(.*\)"/\1/')
+              if [ -n "$pkg" ]; then
+                PACKAGES="$PACKAGES $pkg"
+              fi
+            fi
+          done
+
+          PACKAGES=$(echo "$PACKAGES" | xargs)
+          echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
+          echo "Changed crates: $PACKAGES"
+
       - name: Run cargo-semver-checks
         id: check_semver
+        if: steps.changed_crates.outputs.packages != ''
         run: |
           set +e
-          cargo semver-checks --baseline-rev origin/main 2>&1 | tee /tmp/semver-output.txt
+          ARGS=""
+          for pkg in ${{ steps.changed_crates.outputs.packages }}; do
+            ARGS="$ARGS --package $pkg"
+          done
+
+          cargo semver-checks --baseline-rev origin/main $ARGS 2>&1 | tee /tmp/semver-output.txt
           EXIT_CODE=${PIPESTATUS[0]}
           OUTPUT=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/semver-output.txt)
           echo "logs<<EOF" >> "$GITHUB_OUTPUT"
