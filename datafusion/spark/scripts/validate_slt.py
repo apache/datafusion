@@ -261,16 +261,19 @@ def parse_slt(filepath: str) -> list:
             if i < len(lines) and lines[i].rstrip("\n") == "----":
                 i += 1
 
-            # Collect expected result lines until blank line or next record
+            # Collect expected result lines until blank line or next record.
+            # Note: do NOT treat # as a comment here — result values can
+            # start with # (e.g., soundex('#') -> '#').
             expected = []
             while i < len(lines):
                 result_line = lines[i].rstrip("\n")
                 if result_line == "":
                     i += 1
                     break
-                if result_line.strip().startswith("#"):
-                    break
                 if re.match(r"^(query|statement)\s", result_line):
+                    break
+                # A ## comment line in the results section signals end of results
+                if result_line.startswith("##"):
                     break
                 expected.append(result_line)
                 i += 1
