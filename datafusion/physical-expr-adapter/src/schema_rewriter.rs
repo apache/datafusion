@@ -481,8 +481,11 @@ impl DefaultPhysicalExprAdapterRewriter {
             Column::new_with_schema(column.name(), self.physical_file_schema.as_ref())?
         };
 
-        let physical_field =
-            Arc::new(self.physical_file_schema.field(physical_column_index).clone());
+        let physical_field = Arc::new(
+            self.physical_file_schema
+                .field(physical_column_index)
+                .clone(),
+        );
 
         Ok(Some((column, physical_field)))
     }
@@ -716,7 +719,10 @@ mod tests {
         assert_eq!(return_field.data_type(), &DataType::Int64);
         assert!(!return_field.is_nullable());
         assert_eq!(
-            return_field.metadata().get("logical_meta").map(String::as_str),
+            return_field
+                .metadata()
+                .get("logical_meta")
+                .map(String::as_str),
             Some("1")
         );
 
