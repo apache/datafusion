@@ -52,7 +52,8 @@ fn plan_str(plan: &dyn ExecutionPlan) -> String {
 }
 
 fn optimize(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    let config = ConfigOptions::new();
+    let mut config = ConfigOptions::new();
+    config.optimizer.enable_window_topn = true;
     WindowTopN::new().optimize(plan, &config)
 }
 

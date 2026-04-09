@@ -295,7 +295,12 @@ impl ExecutionPlan for PartitionedTopKExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::UnspecifiedDistribution]
+        let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = self.expr
+            [..self.partition_prefix_len]
+            .iter()
+            .map(|e| Arc::clone(&e.expr))
+            .collect();
+        vec![Distribution::HashPartitioned(partition_exprs)]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

@@ -81,15 +81,16 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 /// - `K >= rn` (flipped) → fetch = K
 /// - `K > rn` (flipped) → fetch = K - 1
 ///
-/// # When the Rule Does NOT Fire
+/// # When the Rule Fires
 ///
-/// - Window function is not `ROW_NUMBER` (e.g., `RANK`, `DENSE_RANK`)
-/// - No `PARTITION BY` clause (global top-K is already handled by
-///   `SortExec` with `fetch`)
-/// - Filter predicate is on a data column, not the window output column
-/// - `FilterExec` has an embedded projection
-/// - Child of `BoundedWindowAggExec` is not a `SortExec`
-/// - Config flag `enable_window_topn` is `false`
+/// All of the following must be true:
+/// - Config flag `enable_window_topn` is `true`
+/// - The plan matches `FilterExec → [ProjectionExec] → BoundedWindowAggExec → SortExec`
+/// - The window function is `ROW_NUMBER` (not `RANK`, `DENSE_RANK`, etc.)
+/// - `ROW_NUMBER` has a `PARTITION BY` clause (global top-K is already
+///   handled by `SortExec` with `fetch`)
+/// - The filter predicate compares the window output column to an integer
+///   literal using `<=`, `<`, `>=`, or `>`
 ///
 /// [`PartitionedTopKExec`]: datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec
 #[derive(Default, Clone, Debug)]
