@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use datafusion_catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_csv::file_format::CsvFormat;
 
@@ -51,8 +51,8 @@ impl TableFunctionImpl for ReadCsvFunc {
 
         let table_path = ListingTableUrl::parse(&path)?;
 
-        let csv_format = CsvFormat::default()
-            .with_options(session.default_table_options().csv);
+        let csv_format =
+            CsvFormat::default().with_options(session.default_table_options().csv);
 
         let listing_options = ListingOptions::new(Arc::new(csv_format))
             .with_file_extension(".csv")

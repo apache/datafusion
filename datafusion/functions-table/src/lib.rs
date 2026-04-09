@@ -37,7 +37,7 @@ pub mod read_parquet;
 use arrow::datatypes::SchemaRef;
 use datafusion_catalog::{Session, TableFunction};
 use datafusion_catalog_listing::ListingOptions;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_expr::Expr;
 use std::sync::Arc;
@@ -51,9 +51,9 @@ pub(crate) fn extract_path(expr: &Expr, func_name: &str) -> Result<String> {
                 "{func_name} requires a string literal path argument, got {scalar:?}"
             ),
         },
-        _ => plan_err!(
-            "{func_name} requires a string literal path argument, got {expr:?}"
-        ),
+        _ => {
+            plan_err!("{func_name} requires a string literal path argument, got {expr:?}")
+        }
     }
 }
 
@@ -72,10 +72,7 @@ pub(crate) fn infer_schema_blocking(
     let handle = tokio::runtime::Handle::current();
     std::thread::scope(|scope| {
         scope
-            .spawn(|| {
-                handle
-                    .block_on(listing_options.infer_schema(session, table_path))
-            })
+            .spawn(|| handle.block_on(listing_options.infer_schema(session, table_path)))
             .join()
             .expect("infer_schema thread panicked")
     })

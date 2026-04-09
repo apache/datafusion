@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use datafusion_catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_parquet::file_format::ParquetFormat;
 

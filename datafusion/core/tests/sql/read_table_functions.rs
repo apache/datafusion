@@ -37,7 +37,12 @@ use tempfile::TempDir;
 /// Create a temporary parquet file with known data and return the path.
 async fn write_test_parquet(dir: &TempDir) -> Result<String> {
     let ctx = SessionContext::new();
-    let path = dir.path().join("test.parquet").to_str().unwrap().to_string();
+    let path = dir
+        .path()
+        .join("test.parquet")
+        .to_str()
+        .unwrap()
+        .to_string();
 
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
@@ -155,7 +160,9 @@ async fn read_parquet_count() -> Result<()> {
 
     let ctx = SessionContext::new();
     let results = ctx
-        .sql(&format!("SELECT count(*) AS cnt FROM read_parquet('{path}')"))
+        .sql(&format!(
+            "SELECT count(*) AS cnt FROM read_parquet('{path}')"
+        ))
         .await?
         .collect()
         .await?;
@@ -186,8 +193,18 @@ async fn read_parquet_glob() -> Result<()> {
         vec![Arc::new(Int32Array::from(vec![3, 4]))],
     )?;
 
-    let path1 = tmp.path().join("part1.parquet").to_str().unwrap().to_string();
-    let path2 = tmp.path().join("part2.parquet").to_str().unwrap().to_string();
+    let path1 = tmp
+        .path()
+        .join("part1.parquet")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let path2 = tmp
+        .path()
+        .join("part2.parquet")
+        .to_str()
+        .unwrap()
+        .to_string();
 
     ctx.read_batch(batch1)?
         .write_parquet(
@@ -262,9 +279,7 @@ async fn read_parquet_projection_pushdown() -> Result<()> {
 
     let ctx = SessionContext::new();
     let df = ctx
-        .sql(&format!(
-            "EXPLAIN SELECT name FROM read_parquet('{path}')"
-        ))
+        .sql(&format!("EXPLAIN SELECT name FROM read_parquet('{path}')"))
         .await?;
     let results = df.collect().await?;
 
@@ -284,16 +299,11 @@ async fn read_csv_basic() -> Result<()> {
     let tmp = TempDir::new()?;
     let path = tmp.path().join("test.csv").to_str().unwrap().to_string();
 
-    std::fs::write(
-        &path,
-        "id,name,value\n1,a,1.0\n2,b,2.0\n3,c,3.0\n",
-    )?;
+    std::fs::write(&path, "id,name,value\n1,a,1.0\n2,b,2.0\n3,c,3.0\n")?;
 
     let ctx = SessionContext::new();
     let results = ctx
-        .sql(&format!(
-            "SELECT * FROM read_csv('{path}') ORDER BY id"
-        ))
+        .sql(&format!("SELECT * FROM read_csv('{path}') ORDER BY id"))
         .await?
         .collect()
         .await?;
@@ -317,10 +327,7 @@ async fn read_csv_with_filter() -> Result<()> {
     let tmp = TempDir::new()?;
     let path = tmp.path().join("test.csv").to_str().unwrap().to_string();
 
-    std::fs::write(
-        &path,
-        "id,name,value\n1,a,1.0\n2,b,2.0\n3,c,3.0\n",
-    )?;
+    std::fs::write(&path, "id,name,value\n1,a,1.0\n2,b,2.0\n3,c,3.0\n")?;
 
     let ctx = SessionContext::new();
     let results = ctx
@@ -363,9 +370,7 @@ async fn read_json_basic() -> Result<()> {
 
     let ctx = SessionContext::new();
     let results = ctx
-        .sql(&format!(
-            "SELECT * FROM read_json('{path}') ORDER BY id"
-        ))
+        .sql(&format!("SELECT * FROM read_json('{path}') ORDER BY id"))
         .await?
         .collect()
         .await?;
@@ -464,7 +469,9 @@ async fn read_parquet_single_threaded_runtime() -> Result<()> {
 
     let ctx = SessionContext::new();
     let results = ctx
-        .sql(&format!("SELECT count(*) AS cnt FROM read_parquet('{path}')"))
+        .sql(&format!(
+            "SELECT count(*) AS cnt FROM read_parquet('{path}')"
+        ))
         .await?
         .collect()
         .await?;
