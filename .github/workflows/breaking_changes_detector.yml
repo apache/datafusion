@@ -1,0 +1,52 @@
+name: "Detect breaking changes"
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check-semver:
+    name: Check semver
+    runs-on: ubuntu-latest
+    outputs:
+      logs: ${{ steps.check_semver.outputs.logs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run cargo-semver-checks
+        id: check_semver
+        # Fork https://github.com/obi1kenobi/cargo-semver-checks-action/pull/65
+        uses: orhun/cargo-semver-checks-action@cc19b888f2062f8cc964c1d52f7f29d910becb31
+
+  comment-on-pr:
+    name: Comment on pull request
+    runs-on: ubuntu-latest
+    needs: check-semver
+    if: always()
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment
+        if: ${{ needs.check-semver.result != 'success' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-semver-check-error
+          message: |
+            Thank you for opening this pull request!
+
+            Reviewer note: [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported the current version number is not SemVer-compatible with the changes made since the last release.
+
+            Details:
+
+            ```
+            ${{ needs.check-semver.outputs.logs }}
+            ```
+
+      - name: Delete comment
+        if: ${{ needs.check-semver.result == 'success' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-semver-check-error
+          delete: true
