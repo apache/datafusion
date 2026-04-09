@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   check-semver:
     name: Check semver
@@ -41,6 +44,7 @@ jobs:
     needs: check-semver
     if: always()
     permissions:
+      contents: read
       pull-requests: write
     steps:
       - name: Comment
