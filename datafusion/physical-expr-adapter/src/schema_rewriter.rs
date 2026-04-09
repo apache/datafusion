@@ -423,13 +423,13 @@ impl DefaultPhysicalExprAdapterRewriter {
         };
 
         let fields_match = logical_field == physical_field.as_ref();
-        match (resolved_column.index() == column.index(), fields_match) {
-            (true, true) => return Ok(Transformed::no(expr)),
-            (_, true) => {
-                // If the fields match (including metadata/nullability), we can use the column as is
-                return Ok(Transformed::yes(Arc::new(resolved_column)));
+        if fields_match {
+            if resolved_column.index() == column.index() {
+                return Ok(Transformed::no(expr));
             }
-            (_, false) => {}
+
+            // If the fields match (including metadata/nullability), we can use the column as is
+            return Ok(Transformed::yes(Arc::new(resolved_column)));
         }
 
         // We need a cast expression whenever the logical and physical fields differ,
@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(inner_col.index(), index);
     }
 
-    fn make_stale_index_cast_adapter() -> Arc<dyn PhysicalExprAdapter> {
+    fn stale_index_cast_schemas() -> (SchemaRef, SchemaRef) {
         let physical_schema = Arc::new(Schema::new(vec![
             Field::new("b", DataType::Binary, true),
             Field::new("a", DataType::Int32, false),
@@ -662,9 +662,7 @@ mod tests {
             Field::new("b", DataType::Binary, true),
         ]));
 
-        DefaultPhysicalExprAdapterFactory
-            .create(logical_schema, physical_schema)
-            .unwrap()
+        (logical_schema, physical_schema)
     }
 
     fn create_test_schema() -> (Schema, Schema) {
@@ -1679,7 +1677,10 @@ mod tests {
 
     #[test]
     fn test_rewrite_resolves_physical_column_by_name_before_casting() {
-        let adapter = make_stale_index_cast_adapter();
+        let (logical_schema, physical_schema) = stale_index_cast_schemas();
+        let adapter = DefaultPhysicalExprAdapterFactory
+            .create(logical_schema, physical_schema)
+            .unwrap();
 
         // Deliberately provide the wrong index for column `a`.
         // Regression: this must still resolve against physical field `a` by name.
