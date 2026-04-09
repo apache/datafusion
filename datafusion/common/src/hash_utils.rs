@@ -209,13 +209,13 @@ fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: 
 }
 
 pub trait HashValue {
-    fn hash_one<S: BuildHasher>(&self, state: &S) -> u64;
+    fn hash_one(&self, state: &RandomState) -> u64;
     /// Write this value into an existing hasher (same data as `hash_one`).
     fn hash_write(&self, hasher: &mut impl Hasher);
 }
 
 impl<T: HashValue + ?Sized> HashValue for &T {
-    fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
+    fn hash_one(&self, state: &RandomState) -> u64 {
         T::hash_one(self, state)
     }
     fn hash_write(&self, hasher: &mut impl Hasher) {
@@ -223,14 +223,34 @@ impl<T: HashValue + ?Sized> HashValue for &T {
     }
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
+// Keep custom BuildHasher leaf hashing off the default RandomState fast path.
+trait BuildHasherHashValue {
+    fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64;
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+impl<T: BuildHasherHashValue + ?Sized> BuildHasherHashValue for &T {
+    fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
+        T::hash_one_with_hasher(self, state)
+    }
+}
+
 macro_rules! hash_value {
     ($($t:ty),+) => {
         $(impl HashValue for $t {
-            fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
+            fn hash_one(&self, state: &RandomState) -> u64 {
                 state.hash_one(self)
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
                 Hash::hash(self, hasher)
+            }
+        }
+
+        #[cfg(not(feature = "force_hash_collisions"))]
+        impl BuildHasherHashValue for $t {
+            fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
+                state.hash_one(self)
             }
         })+
     };
@@ -241,11 +261,18 @@ hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 macro_rules! hash_float_value {
     ($(($t:ty, $i:ty)),+) => {
         $(impl HashValue for $t {
-            fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
+            fn hash_one(&self, state: &RandomState) -> u64 {
                 state.hash_one(<$i>::from_ne_bytes(self.to_ne_bytes()))
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
                 hasher.write(&self.to_ne_bytes())
+            }
+        }
+
+        #[cfg(not(feature = "force_hash_collisions"))]
+        impl BuildHasherHashValue for $t {
+            fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
+                state.hash_one(<$i>::from_ne_bytes(self.to_ne_bytes()))
             }
         })+
     };
@@ -551,7 +578,7 @@ fn hash_array_primitive_with_hasher<T, S>(
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) where
-    T: ArrowPrimitiveType<Native: HashValue>,
+    T: ArrowPrimitiveType<Native: BuildHasherHashValue>,
     S: BuildHasher,
 {
     assert_eq!(
@@ -563,23 +590,25 @@ fn hash_array_primitive_with_hasher<T, S>(
     if array.null_count() == 0 {
         if rehash {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = combine_hashes(value.hash_one(hash_builder), *hash);
+                *hash = combine_hashes(value.hash_one_with_hasher(hash_builder), *hash);
             }
         } else {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = value.hash_one(hash_builder);
+                *hash = value.hash_one_with_hasher(hash_builder);
             }
         }
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] =
-                combine_hashes(value.hash_one(hash_builder), hashes_buffer[i]);
+            hashes_buffer[i] = combine_hashes(
+                value.hash_one_with_hasher(hash_builder),
+                hashes_buffer[i],
+            );
         }
     } else {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = value.hash_one(hash_builder);
+            hashes_buffer[i] = value.hash_one_with_hasher(hash_builder);
         }
     }
 }
@@ -592,7 +621,7 @@ fn hash_array_with_hasher<T, S>(
     rehash: bool,
 ) where
     T: ArrayAccessor,
-    T::Item: HashValue,
+    T::Item: BuildHasherHashValue,
     S: BuildHasher,
 {
     assert_eq!(
@@ -605,24 +634,26 @@ fn hash_array_with_hasher<T, S>(
         if rehash {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
                 let value = unsafe { array.value_unchecked(i) };
-                *hash = combine_hashes(value.hash_one(hash_builder), *hash);
+                *hash = combine_hashes(value.hash_one_with_hasher(hash_builder), *hash);
             }
         } else {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
                 let value = unsafe { array.value_unchecked(i) };
-                *hash = value.hash_one(hash_builder);
+                *hash = value.hash_one_with_hasher(hash_builder);
             }
         }
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] =
-                combine_hashes(value.hash_one(hash_builder), hashes_buffer[i]);
+            hashes_buffer[i] = combine_hashes(
+                value.hash_one_with_hasher(hash_builder),
+                hashes_buffer[i],
+            );
         }
     } else {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = value.hash_one(hash_builder);
+            hashes_buffer[i] = value.hash_one_with_hasher(hash_builder);
         }
     }
 }
@@ -664,17 +695,17 @@ fn hash_string_view_array_inner_with_hasher<
         let view_len = v as u32;
         if !HAS_BUFFERS || view_len <= 12 {
             if REHASH {
-                *hash = combine_hashes(v.hash_one(hash_builder), *hash);
+                *hash = combine_hashes(v.hash_one_with_hasher(hash_builder), *hash);
             } else {
-                *hash = v.hash_one(hash_builder);
+                *hash = v.hash_one_with_hasher(hash_builder);
             }
             continue;
         }
         let value = view_bytes(view_len, v);
         if REHASH {
-            *hash = combine_hashes(value.hash_one(hash_builder), *hash);
+            *hash = combine_hashes(value.hash_one_with_hasher(hash_builder), *hash);
         } else {
-            *hash = value.hash_one(hash_builder);
+            *hash = value.hash_one_with_hasher(hash_builder);
         }
     }
 }
@@ -693,12 +724,12 @@ fn hash_generic_byte_view_array_with_hasher<T: ByteViewType, S: BuildHasher>(
     ) {
         (false, false, false) => {
             for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                *hash = view.hash_one(hash_builder);
+                *hash = view.hash_one_with_hasher(hash_builder);
             }
         }
         (false, false, true) => {
             for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                *hash = combine_hashes(view.hash_one(hash_builder), *hash);
+                *hash = combine_hashes(view.hash_one_with_hasher(hash_builder), *hash);
             }
         }
         (false, true, false) => {
