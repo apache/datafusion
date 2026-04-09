@@ -757,9 +757,7 @@ impl StatisticsProvider for JoinStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::joins::{
-            CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
-        };
+        use crate::joins::{CrossJoinExec, HashJoinExec, SortMergeJoinExec};
         use datafusion_common::JoinType;
         use datafusion_physical_expr::expressions::Column;
 
@@ -826,15 +824,6 @@ impl StatisticsProvider for JoinStatisticsProvider {
         } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
             let est = equi_join_estimate(smj.on(), left, right, left_rows, right_rows);
             (est, false, smj.join_type())
-        } else if let Some(nl_join) = plan.downcast_ref::<NestedLoopJoinExec>() {
-            // Cartesian product is exact when both inputs are exact
-            let both_exact = left.num_rows.is_exact().unwrap_or(false)
-                && right.num_rows.is_exact().unwrap_or(false);
-            (
-                left_rows.saturating_mul(right_rows),
-                both_exact,
-                *nl_join.join_type(),
-            )
         } else if plan.downcast_ref::<CrossJoinExec>().is_some() {
             let both_exact = left.num_rows.is_exact().unwrap_or(false)
                 && right.num_rows.is_exact().unwrap_or(false);
@@ -1965,10 +1954,11 @@ mod tests {
     }
 
     #[test]
-    fn test_nl_join_exact_cartesian() -> Result<()> {
+    fn test_nl_join_delegates() -> Result<()> {
         use crate::joins::NestedLoopJoinExec;
 
-        // NL join with exact inputs: Cartesian product should be Exact
+        // NL join delegates to the built-in (NestedLoopJoinExec may have an
+        // arbitrary JoinFilter, so the provider cannot safely assume Cartesian).
         let left = make_source(100);
         let right = make_source(200);
         let join: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
@@ -1984,7 +1974,11 @@ mod tests {
             Arc::new(DefaultStatisticsProvider),
         ]);
         let stats = registry.compute(join.as_ref())?;
-        assert_eq!(stats.base.num_rows, Precision::Exact(20_000));
+        // Provider delegates; result comes from built-in partition_statistics.
+        assert!(
+            stats.base.num_rows.get_value().is_some()
+                || matches!(stats.base.num_rows, Precision::Absent)
+        );
         Ok(())
     }
 
