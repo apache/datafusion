@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
@@ -320,12 +321,16 @@ impl FilterExec {
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
     ) -> Result<Statistics> {
-        let eq_columns = collect_equality_columns(predicate);
+        let (eq_columns, is_infeasible) = collect_equality_columns(predicate);
 
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
 
-        let (selectivity, mut column_statistics) = if !check_support(predicate, schema) {
+        let (selectivity, mut column_statistics) = if is_infeasible {
+            // Contradictory equality predicates (e.g. `a = 1 AND a = 2`)
+            // can never be satisfied.
+            (0.0, input_stats.to_inexact().column_statistics)
+        } else if !check_support(predicate, schema) {
             (
                 default_selectivity as f64 / 100.0,
                 input_stats.to_inexact().column_statistics,
@@ -350,11 +355,17 @@ impl FilterExec {
         let num_rows = num_rows.with_estimated_selectivity(selectivity);
         let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
-        for idx in &eq_columns {
-            if *idx < column_statistics.len()
-                && column_statistics[*idx].distinct_count != Precision::Exact(0)
-            {
-                column_statistics[*idx].distinct_count = Precision::Exact(1);
+        if is_infeasible {
+            for col_stat in &mut column_statistics {
+                col_stat.distinct_count = Precision::Exact(0);
+            }
+        } else {
+            for idx in eq_columns.keys() {
+                if *idx < column_statistics.len()
+                    && column_statistics[*idx].distinct_count != Precision::Exact(0)
+                {
+                    column_statistics[*idx].distinct_count = Precision::Exact(1);
+                }
             }
         }
 
@@ -770,12 +781,23 @@ impl EmbeddedProjection for FilterExec {
     }
 }
 
-/// Returns column indices constrained to a single value by `col = literal`
-/// equality predicates in a conjunction. Only recurses through AND (via
-/// `split_conjunction`); OR is intentionally not traversed since
-/// `a = 1 OR a = 2` does not pin NDV to 1.
-fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> Vec<usize> {
-    let mut eq_columns = Vec::new();
+/// Collects column equality information from `col = literal` predicates in a
+/// conjunction.
+///
+/// Returns `(eq_columns, is_infeasible)`:
+/// - `eq_columns`: column indices constrained to a single value.
+/// - `is_infeasible`: `true` when the same column is equated to two different
+///   non-null literals (e.g. `name = 'alice' AND name = 'bob'`), which is
+///   always unsatisfiable.
+///
+/// Only recurses through AND (via `split_conjunction`); OR is intentionally
+/// not traversed since `a = 1 OR a = 2` does not pin NDV to 1.
+fn collect_equality_columns(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> (HashMap<usize, ScalarValue>, bool) {
+    let mut eq_columns: HashMap<usize, ScalarValue> = HashMap::new();
+    let mut infeasible = false;
+
     for expr in split_conjunction(predicate) {
         let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() else {
             continue;
@@ -785,17 +807,32 @@ fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> Vec<usize> {
         }
         let left = binary.left();
         let right = binary.right();
-        if let Some(col) = left.as_any().downcast_ref::<Column>()
-            && right.as_any().is::<Literal>()
+        let pair = if let Some(col) = left.as_any().downcast_ref::<Column>()
+            && let Some(lit) = right.as_any().downcast_ref::<Literal>()
+            && !lit.value().is_null()
         {
-            eq_columns.push(col.index());
+            Some((col.index(), lit.value().clone()))
         } else if let Some(col) = right.as_any().downcast_ref::<Column>()
-            && left.as_any().is::<Literal>()
+            && let Some(lit) = left.as_any().downcast_ref::<Literal>()
+            && !lit.value().is_null()
         {
-            eq_columns.push(col.index());
+            Some((col.index(), lit.value().clone()))
+        } else {
+            None
+        };
+
+        if let Some((idx, value)) = pair {
+            if let Some(prev) = eq_columns.get(&idx) {
+                if *prev != value {
+                    infeasible = true;
+                }
+            } else {
+                eq_columns.insert(idx, value);
+            }
         }
     }
-    eq_columns
+
+    (eq_columns, infeasible)
 }
 
 /// Converts an interval bound to a [`Precision`] value. NULL bounds (which
@@ -2492,6 +2529,32 @@ mod tests {
                 )),
                 vec![Precision::Exact(1)],
             ),
+            (
+                "contradictory utf8 equality (infeasible)",
+                vec![Field::new("name", DataType::Utf8, false)],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(100),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("name", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "alice".to_string(),
+                        )))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("name", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "bob".to_string(),
+                        )))),
+                    )),
+                )),
+                vec![Precision::Exact(0)],
+            ),
         ];
 
         for (desc, fields, col_stats, predicate, expected_ndvs) in cases {
@@ -2520,7 +2583,10 @@ mod tests {
 
     #[test]
     fn test_collect_equality_columns() {
-        let cases: Vec<(&str, Arc<dyn PhysicalExpr>, Vec<usize>)> = vec![
+        use std::collections::HashSet;
+        // (description, predicate, expected_column_indices, expected_infeasible)
+        #[expect(clippy::type_complexity)]
+        let cases: Vec<(&str, Arc<dyn PhysicalExpr>, Vec<usize>, bool)> = vec![
             (
                 "simple col = literal",
                 Arc::new(BinaryExpr::new(
@@ -2529,6 +2595,7 @@ mod tests {
                     Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
                 )),
                 vec![0],
+                false,
             ),
             (
                 "reversed literal = col",
@@ -2538,6 +2605,7 @@ mod tests {
                     Arc::new(Column::new("a", 0)),
                 )),
                 vec![0],
+                false,
             ),
             (
                 "AND with two equalities",
@@ -2557,6 +2625,7 @@ mod tests {
                     )),
                 )),
                 vec![0, 1],
+                false,
             ),
             (
                 "OR produces empty set",
@@ -2574,6 +2643,7 @@ mod tests {
                     )),
                 )),
                 vec![],
+                false,
             ),
             (
                 "greater-than produces empty set",
@@ -2583,6 +2653,7 @@ mod tests {
                     Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
                 )),
                 vec![],
+                false,
             ),
             (
                 "col = col produces empty set",
@@ -2592,6 +2663,7 @@ mod tests {
                     Arc::new(Column::new("b", 1)),
                 )),
                 vec![],
+                false,
             ),
             (
                 "nested AND with three equalities",
@@ -2617,6 +2689,7 @@ mod tests {
                     )),
                 )),
                 vec![0, 1, 2],
+                false,
             ),
             (
                 "AND with mixed equality and non-equality",
@@ -2634,12 +2707,79 @@ mod tests {
                     )),
                 )),
                 vec![0],
+                false,
+            ),
+            (
+                "col = NULL is excluded",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Int32(None))),
+                )),
+                vec![],
+                false,
+            ),
+            (
+                "NULL = col is excluded",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Literal::new(ScalarValue::Utf8(None))),
+                    Operator::Eq,
+                    Arc::new(Column::new("a", 0)),
+                )),
+                vec![],
+                false,
+            ),
+            (
+                "contradictory: same col, different literals",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "alice".to_string(),
+                        )))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "bob".to_string(),
+                        )))),
+                    )),
+                )),
+                vec![0],
+                true,
+            ),
+            (
+                "same col, same literal is not contradictory",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    )),
+                )),
+                vec![0],
+                false,
             ),
         ];
 
-        for (desc, expr, expected) in cases {
-            let result = collect_equality_columns(&expr);
-            assert_eq!(result, expected, "case '{desc}': mismatch");
+        for (desc, expr, expected_cols, expected_infeasible) in cases {
+            let (result, infeasible) = collect_equality_columns(&expr);
+            let result_keys: HashSet<usize> = result.keys().copied().collect();
+            let expected: HashSet<usize> = expected_cols.into_iter().collect();
+            assert_eq!(result_keys, expected, "case '{desc}': columns mismatch");
+            assert_eq!(
+                infeasible, expected_infeasible,
+                "case '{desc}': infeasible mismatch"
+            );
         }
     }
 }
