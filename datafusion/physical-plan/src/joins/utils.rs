@@ -1827,6 +1827,11 @@ fn eq_dyn_null(
 /// dispatch. Wraps `arrow_ord::ord::DynComparator` closures built once per
 /// batch pair, used for all row comparisons within those batches.
 ///
+/// The first key column is stored separately so that single-column joins
+/// (the common case) avoid Vec iteration entirely, and multi-column joins
+/// short-circuit without entering the loop when the first column is
+/// selective.
+///
 /// Null handling is baked into the closures at construction time:
 /// - `NullEqualsNull`: `make_comparator` returns `Equal` for both-null, which
 ///   is the desired behavior. Closures are used as-is.
@@ -1840,19 +1845,22 @@ fn eq_dyn_null(
 /// buffered head/tail equality in SMJ) should construct with
 /// `NullEqualsNull`.
 pub struct JoinKeyComparator {
-    comparators: Vec<DynComparator>,
+    first: DynComparator,
+    rest: Vec<DynComparator>,
 }
 
 impl JoinKeyComparator {
-    /// Build comparators for each join key column pair. The `sort_options`
-    /// slice must have the same length as the array slices.
+    /// Build comparators for each join key column pair.
     pub fn new(
         left_arrays: &[ArrayRef],
         right_arrays: &[ArrayRef],
         sort_options: &[SortOptions],
         null_equality: NullEquality,
     ) -> Result<Self> {
-        let comparators = left_arrays
+        debug_assert_eq!(left_arrays.len(), right_arrays.len());
+        debug_assert_eq!(left_arrays.len(), sort_options.len());
+
+        let mut iter = left_arrays
             .iter()
             .zip(right_arrays.iter())
             .zip(sort_options.iter())
@@ -1877,17 +1885,22 @@ impl JoinKeyComparator {
                 } else {
                     Ok(inner)
                 }
-            })
-            .collect::<Result<Vec<_>>>()?;
+            });
 
-        Ok(Self { comparators })
+        let first = iter.next().expect("join must have at least one key")?;
+        let rest = iter.collect::<Result<Vec<_>>>()?;
+        Ok(Self { first, rest })
     }
 
     /// Compare row `left` (in the left arrays) with row `right` (in the right
     /// arrays). Returns the lexicographic ordering across all key columns.
     #[inline]
     pub fn compare(&self, left: usize, right: usize) -> Ordering {
-        for cmp_fn in &self.comparators {
+        let ord = (self.first)(left, right);
+        if ord != Ordering::Equal || self.rest.is_empty() {
+            return ord;
+        }
+        for cmp_fn in &self.rest {
             let ord = cmp_fn(left, right);
             if ord != Ordering::Equal {
                 return ord;
@@ -1902,7 +1915,10 @@ impl JoinKeyComparator {
     /// `false` because the override is baked into the comparators.
     #[inline]
     pub fn is_equal(&self, left: usize, right: usize) -> bool {
-        for cmp_fn in &self.comparators {
+        if (self.first)(left, right) != Ordering::Equal {
+            return false;
+        }
+        for cmp_fn in &self.rest {
             if cmp_fn(left, right) != Ordering::Equal {
                 return false;
             }
