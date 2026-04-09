@@ -1521,10 +1521,12 @@ pub(crate) fn build_pruning_predicates(
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
 ) -> Option<Arc<PruningPredicate>> {
-    let Some(predicate) = predicate.as_ref() else {
-        return None;
-    };
-    build_pruning_predicate(Arc::clone(predicate), file_schema, predicate_creation_errors)
+    let predicate = predicate.as_ref()?;
+    build_pruning_predicate(
+        Arc::clone(predicate),
+        file_schema,
+        predicate_creation_errors,
+    )
 }
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
@@ -1557,7 +1559,6 @@ async fn load_page_index<T: AsyncFileReader>(
         Ok(reader_metadata)
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -2549,6 +2550,74 @@ mod test {
             reverse_values,
             vec![7, 5, 1],
             "Reverse scan with non-contiguous row groups should correctly map RowSelection"
+        );
+    }
+
+    /// Test that page pruning predicates are only built and applied when `enable_page_index` is true.
+    ///
+    /// The file has a single row group with 10 pages (10 rows each, values 1..100).
+    /// With page index enabled, pages whose max value <= 90 are pruned, returning only
+    /// the last page (rows 91..100). With page index disabled, all 100 rows are returned
+    /// since neither pushdown nor row-group pruning is active.
+    #[tokio::test]
+    async fn test_page_pruning_predicate_respects_enable_page_index() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // 100 rows with values 1..=100, written as a single row group with 10 rows per page
+        let values: Vec<i32> = (1..=100).collect();
+        let batch = record_batch!((
+            "a",
+            Int32,
+            values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
+        ))
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(10)
+            .set_write_batch_size(10)
+            .build();
+        let schema = batch.schema();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+
+        let file = PartitionedFile::new("test.parquet".to_string(), data_size as u64);
+
+        // predicate: a > 90 — should allow page index to prune first 9 pages
+        let predicate = logical2physical(&col("a").gt(lit(90i32)), &schema);
+
+        let make_opener = |enable_page_index| {
+            let mut opener = ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(Arc::clone(&predicate))
+                // disable pushdown and row-group pruning so the only pruning path is page index
+                .with_pushdown_filters(false)
+                .with_row_group_stats_pruning(false)
+                .build();
+            opener.enable_page_index = enable_page_index;
+            opener
+        };
+        let (_, rows_with_page_index) = count_batches_and_rows(
+            make_opener(true).open(file.clone()).unwrap().await.unwrap(),
+        )
+        .await;
+        let (_, rows_without_page_index) =
+            count_batches_and_rows(make_opener(false).open(file).unwrap().await.unwrap())
+                .await;
+
+        assert_eq!(
+            rows_with_page_index, 10,
+            "page index should prune 9 of 10 pages"
+        );
+        assert_eq!(
+            rows_without_page_index, 100,
+            "without page index all rows are returned"
         );
     }
 }
