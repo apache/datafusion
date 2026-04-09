@@ -807,133 +807,21 @@ FROM VALUES
   Line 19: PASS
   Line 24: PASS
   Line 29: PASS
+  Line 35: PASS
+  Line 40: PASS
+  Line 45: PASS
+  Line 51: PASS
+  Line 56: PASS
+  Line 61: PASS
   Line 67: PASS
   Line 72: PASS
   Line 77: PASS
+  Line 82: PASS
+  Line 103: PASS
   Line 147: PASS
   Line 153: PASS
-  Line 35: MISMATCH
-    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'UTC'::string);
-    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('UTC' AS STRING));
-  Expected (1 lines):
-    2018-03-13T04:18:23
-  Actual (1 lines):
-    2018-03-12T22:18:23
-  Line 40: MISMATCH
-    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string);
-    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('Asia/Seoul' AS STRING));
-  Expected (1 lines):
-    2018-03-13T13:18:23
-  Actual (1 lines):
-    2018-03-13T07:18:23
-  Line 45: MISMATCH
-    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string);
-    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('America/New_York' AS STRING));
-  Expected (1 lines):
-    2018-03-13T00:18:23
-  Actual (1 lines):
-    2018-03-12T18:18:23
-  Line 51: MISMATCH
-    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string);
-    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('UTC' AS STRING));
-  Expected (1 lines):
-    2018-03-13T04:18:23
-  Actual (1 lines):
-    2018-03-12T22:18:23
-  Line 56: MISMATCH
-    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string);
-    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING));
-  Expected (1 lines):
-    2018-03-13T13:18:23
-  Actual (1 lines):
-    2018-03-13T07:18:23
-  Line 61: MISMATCH
-    SQL: SELECT from_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string);
-    Translated: SELECT from_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('America/New_York' AS STRING));
-  Expected (1 lines):
-    2018-03-13T00:18:23
-  Actual (1 lines):
-    2018-03-12T18:18:23
-  Line 82: MISMATCH
-    SQL: SELECT from_utc_timestamp(column1, column2)
-FROM VALUES
-('2016-08-31'::string, 'Asia/Seoul'::string),
-('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string),
-('2016-08-31'::string, 'UTC'::string),
-('2018-03-13T06:18:23+02:00'::string, 'UTC'::string),
-('2016-08-31'::string, 'America/New_York'::string),
-('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string),
-(NULL::string, 'Asia/Seoul'::string),
-('2016-08-31'::string, NULL::string);
-    Translated: SELECT from_utc_timestamp(col1, col2)
-FROM VALUES
-(CAST('2016-08-31' AS STRING), CAST('Asia/Seoul' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('Asia/Seoul' AS STRING)),
-(CAST('2016-08-31' AS STRING), CAST('UTC' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('UTC' AS STRING)),
-(CAST('2016-08-31' AS STRING), CAST('America/New_York' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('America/New_York' AS STRING)),
-(CAST(NULL AS STRING), CAST('Asia/Seoul' AS STRING)),
-(CAST('2016-08-31' AS STRING), CAST(NULL AS STRING));
-  Expected (8 lines):
-    2016-08-31T09:00:00
-    2018-03-13T13:18:23
-    2016-08-31T00:00:00
-    2018-03-13T04:18:23
-    2016-08-30T20:00:00
-    2018-03-13T00:18:23
-    NULL
-    NULL
-  Actual (8 lines):
-    2016-08-31T09:00:00
-    2018-03-13T07:18:23
-    2016-08-31T00:00:00
-    2018-03-12T22:18:23
-    2016-08-30T20:00:00
-    2018-03-12T18:18:23
-    NULL
-    NULL
-  Line 103: MISMATCH
-    SQL: SELECT from_utc_timestamp(column1, column2)
-FROM VALUES
-('2016-08-31'::timestamp, 'Asia/Seoul'::string),
-('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string),
-('2016-08-31'::timestamp, 'UTC'::string),
-('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string),
-('2016-08-31'::timestamp, 'America/New_York'::string),
-('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string),
-(NULL::timestamp, 'Asia/Seoul'::string),
-('2018-03-13T06:18:23+00:00'::timestamp, NULL::string);
-    Translated: SELECT from_utc_timestamp(col1, col2)
-FROM VALUES
-(CAST('2016-08-31' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
-(CAST('2016-08-31' AS TIMESTAMP), CAST('UTC' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('UTC' AS STRING)),
-(CAST('2016-08-31' AS TIMESTAMP), CAST('America/New_York' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('America/New_York' AS STRING)),
-(CAST(NULL AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
-(CAST('2018-03-13T06:18:23+00:00' AS TIMESTAMP), CAST(NULL AS STRING));
-  Expected (8 lines):
-    2016-08-31T09:00:00
-    2018-03-13T13:18:23
-    2016-08-31T00:00:00
-    2018-03-13T04:18:23
-    2016-08-30T20:00:00
-    2018-03-13T00:18:23
-    NULL
-    NULL
-  Actual (8 lines):
-    2016-08-31T09:00:00
-    2018-03-13T07:18:23
-    2016-08-31T00:00:00
-    2018-03-12T22:18:23
-    2016-08-30T20:00:00
-    2018-03-12T18:18:23
-    NULL
-    NULL
   Line 124: skipped (unmapped Arrow type: Timestamp(Microsecond, Some("Asia/Seoul")))
-  Result: 8 passed, 8 FAILED, 1 skipped
+  Result: 16 passed, 1 skipped
 
 --- datetime/hour.slt ---
   Line 26: PASS
@@ -983,77 +871,77 @@ FROM VALUES
   Expected (1 lines):
     1 days 12 hours 30 mins 1.001001 secs
   Actual (1 lines):
-    1 day, 12:30:01.001001
+    INTERVAL '1 12:30:01.001001' DAY TO SECOND
   Line 40: MISMATCH
     SQL: SELECT make_dt_interval(2::int);
     Translated: SELECT make_dt_interval(CAST(2 AS INT));
   Expected (1 lines):
     2 days 0 hours 0 mins 0.000000 secs
   Actual (1 lines):
-    2 days, 0:00:00
+    INTERVAL '2 00:00:00' DAY TO SECOND
   Line 67: MISMATCH
     SQL: SELECT (make_dt_interval()) AS make_dt_interval
     Translated: SELECT (make_dt_interval()) AS make_dt_interval
   Expected (1 lines):
     0 days 0 hours 0 mins 0.000000 secs
   Actual (1 lines):
-    0:00:00
+    INTERVAL '0 00:00:00' DAY TO SECOND
   Line 73: MISMATCH
     SQL: SELECT (make_dt_interval(1)) AS make_dt_interval
     Translated: SELECT (make_dt_interval(1)) AS make_dt_interval
   Expected (1 lines):
     1 days 0 hours 0 mins 0.000000 secs
   Actual (1 lines):
-    1 day, 0:00:00
+    INTERVAL '1 00:00:00' DAY TO SECOND
   Line 78: MISMATCH
     SQL: SELECT (make_dt_interval(1, 1)) AS make_dt_interval
     Translated: SELECT (make_dt_interval(1, 1)) AS make_dt_interval
   Expected (1 lines):
     1 days 1 hours 0 mins 0.000000 secs
   Actual (1 lines):
-    1 day, 1:00:00
+    INTERVAL '1 01:00:00' DAY TO SECOND
   Line 83: MISMATCH
     SQL: SELECT (make_dt_interval(1, 1, 1)) AS make_dt_interval
     Translated: SELECT (make_dt_interval(1, 1, 1)) AS make_dt_interval
   Expected (1 lines):
     1 days 1 hours 1 mins 0.000000 secs
   Actual (1 lines):
-    1 day, 1:01:00
+    INTERVAL '1 01:01:00' DAY TO SECOND
   Line 88: MISMATCH
     SQL: SELECT (make_dt_interval(1, 1, 1, 1)) AS make_dt_interval
     Translated: SELECT (make_dt_interval(1, 1, 1, 1)) AS make_dt_interval
   Expected (1 lines):
     1 days 1 hours 1 mins 1.000000 secs
   Actual (1 lines):
-    1 day, 1:01:01
+    INTERVAL '1 01:01:01' DAY TO SECOND
   Line 95: MISMATCH
     SQL: SELECT (make_dt_interval(0, 0, 0, 0))
     Translated: SELECT (make_dt_interval(0, 0, 0, 0))
   Expected (1 lines):
     0 days 0 hours 0 mins 0.000000 secs
   Actual (1 lines):
-    0:00:00
+    INTERVAL '0 00:00:00' DAY TO SECOND
   Line 100: MISMATCH
     SQL: SELECT (make_dt_interval(-1, 24, 0, 0)) df
     Translated: SELECT (make_dt_interval(-1, 24, 0, 0)) df
   Expected (1 lines):
     0 days 0 hours 0 mins 0.000000 secs
   Actual (1 lines):
-    0:00:00
+    INTERVAL '0 00:00:00' DAY TO SECOND
   Line 105: MISMATCH
     SQL: SELECT (make_dt_interval(1, -24, 0, 0)) dt
     Translated: SELECT (make_dt_interval(1, -24, 0, 0)) dt
   Expected (1 lines):
     0 days 0 hours 0 mins 0.000000 secs
   Actual (1 lines):
-    0:00:00
+    INTERVAL '0 00:00:00' DAY TO SECOND
   Line 110: MISMATCH
     SQL: SELECT (make_dt_interval(0, 0, 0, 0.1))
     Translated: SELECT (make_dt_interval(0, 0, 0, 0.1))
   Expected (1 lines):
     0 days 0 hours 0 mins 0.100000 secs
   Actual (1 lines):
-    0:00:00.100000
+    INTERVAL '0 00:00:00.1' DAY TO SECOND
   Line 119: MISMATCH
     SQL: SELECT MAKE_DT_INTERVAL(day) AS interval_val
 FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
@@ -1062,7 +950,7 @@ FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
   Expected (1 lines):
     1 days 0 hours 0 mins 0.000000 secs
   Actual (1 lines):
-    1 day, 0:00:00
+    INTERVAL '1 00:00:00' DAY TO SECOND
   Line 125: MISMATCH
     SQL: SELECT MAKE_DT_INTERVAL(day, hour) AS interval_val
 FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
@@ -1071,7 +959,7 @@ FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
   Expected (1 lines):
     1 days 12 hours 0 mins 0.000000 secs
   Actual (1 lines):
-    1 day, 12:00:00
+    INTERVAL '1 12:00:00' DAY TO SECOND
   Line 131: MISMATCH
     SQL: SELECT MAKE_DT_INTERVAL(day, hour, min) AS interval_val
 FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
@@ -1080,7 +968,7 @@ FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
   Expected (1 lines):
     1 days 12 hours 30 mins 0.000000 secs
   Actual (1 lines):
-    1 day, 12:30:00
+    INTERVAL '1 12:30:00' DAY TO SECOND
   Line 137: MISMATCH
     SQL: SELECT MAKE_DT_INTERVAL(day, hour, min, sec) AS interval_val
 FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
@@ -1089,25 +977,25 @@ FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
   Expected (1 lines):
     1 days 12 hours 30 mins 1.001001 secs
   Actual (1 lines):
-    1 day, 12:30:01.001001
+    INTERVAL '1 12:30:01.001001' DAY TO SECOND
   Line 143: MISMATCH
     SQL: SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001)
     Translated: SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001)
   Expected (1 lines):
     1 days 12 hours 30 mins 1.001001 secs
   Actual (1 lines):
-    1 day, 12:30:01.001001
+    INTERVAL '1 12:30:01.001001' DAY TO SECOND
   Line 148: MISMATCH
     SQL: SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001);
     Translated: SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001);
   Expected (1 lines):
     1 days 12 hours 30 mins 1.001001 secs
   Actual (1 lines):
-    1 day, 12:30:01.001001
+    INTERVAL '1 12:30:01.001001' DAY TO SECOND
   Result: 5 passed, 17 FAILED
 
 --- datetime/make_interval.slt ---
-  Line 24: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+  Line 24: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': "Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}"}
     SQL: SELECT
   y, m, w, d, h, mi, s,
   make_interval(y, m, w, d, h, mi, s) AS interval
@@ -1121,32 +1009,32 @@ FROM VALUES
   (1,   2,   3,   4,   5,   6,   CAST(NULL AS DOUBLE)),
   (1,   1,   1,   1,   1,   1,   1.0)
 AS v(y, m, w, d, h, mi, s);
-  Line 48: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+  Line 48: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': "Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}"}
     SQL: SELECT
   y, m, w, d, h, mi, s,
   make_interval(y, m, w, d, h, mi, s) AS interval
 FROM VALUES
   (0,   0,   0,   0,   0,   0,   CAST('NaN' AS DOUBLE))
 AS v(y, m, w, d, h, mi, s);
-  Line 58: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+  Line 58: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': "Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}"}
     SQL: SELECT
   y, m, w, d, h, mi, s,
   make_interval(y, m, w, d, h, mi, s) AS interval
 FROM VALUES
   (0,   0,   0,   0,   0,   0,   CAST('Infinity' AS DOUBLE))
 AS v(y, m, w, d, h, mi, s);
-  Line 68: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+  Line 68: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': "Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}"}
     SQL: SELECT
   y, m, w, d, h, mi, s,
   make_interval(y, m, w, d, h, mi, s) AS interval
 FROM VALUES
   (0,   0,   0,   0,   0,   0,   CAST('-Infinity' AS DOUBLE))
 AS v(y, m, w, d, h, mi, s);
-  Line 78: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+  Line 78: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': "Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}"}
     SQL: SELECT make_interval(2147483647, 1, 0, 0, 0, 0, 0.0);
-  Line 83: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+  Line 83: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': "Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}"}
     SQL: SELECT make_interval(0, 0, 2147483647, 1, 0, 0, 0.0);
-  Line 88: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+  Line 88: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': "Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}"}
     SQL: SELECT make_interval(0, 0, 0, 0, 2147483647, 1, 0.0);
   Line 93: PySpark error: [DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve "concat(make_interval(0, 0, 0, 0, 0, 0, 0.0), )" due to data type mismatch: Parameter 1 requires the ("STRING" or "BINARY" or "ARRAY") type, however "make_interval(0, 0, 0, 0, 0, 0, 0.0)" has the type "INTERVAL".; line 1 pos 7;
 'Project [unresolvedalias(concat(make_interval(0, 0, 0, 0, 0, 0, cast(0.0 as decimal(18,6)), false), ), None)]
@@ -1164,7 +1052,7 @@ AS v(y, m, w, d, h, mi, s);
   Expected (1 lines):
     1.000000000 secs
   Actual (1 lines):
-    0:00:01
+    INTERVAL '01' SECOND
   Result: 10 FAILED
 
 --- datetime/make_timestamp.slt ---
@@ -1320,133 +1208,21 @@ SELECT time_trunc('HOUR', CAST(NULL AS TIME));
   Line 20: PASS
   Line 25: PASS
   Line 30: PASS
+  Line 36: PASS
+  Line 41: PASS
+  Line 46: PASS
+  Line 52: PASS
+  Line 57: PASS
+  Line 62: PASS
   Line 68: PASS
   Line 73: PASS
   Line 78: PASS
+  Line 83: PASS
+  Line 104: PASS
   Line 148: PASS
   Line 154: PASS
-  Line 36: MISMATCH
-    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'UTC'::string);
-    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('UTC' AS STRING));
-  Expected (1 lines):
-    2018-03-13T04:18:23
-  Actual (1 lines):
-    2018-03-12T22:18:23
-  Line 41: MISMATCH
-    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string);
-    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('Asia/Seoul' AS STRING));
-  Expected (1 lines):
-    2018-03-12T19:18:23
-  Actual (1 lines):
-    2018-03-12T13:18:23
-  Line 46: MISMATCH
-    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string);
-    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('America/New_York' AS STRING));
-  Expected (1 lines):
-    2018-03-13T08:18:23
-  Actual (1 lines):
-    2018-03-13T02:18:23
-  Line 52: MISMATCH
-    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string);
-    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('UTC' AS STRING));
-  Expected (1 lines):
-    2018-03-13T04:18:23
-  Actual (1 lines):
-    2018-03-12T22:18:23
-  Line 57: MISMATCH
-    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string);
-    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING));
-  Expected (1 lines):
-    2018-03-12T19:18:23
-  Actual (1 lines):
-    2018-03-12T13:18:23
-  Line 62: MISMATCH
-    SQL: SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string);
-    Translated: SELECT to_utc_timestamp(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('America/New_York' AS STRING));
-  Expected (1 lines):
-    2018-03-13T08:18:23
-  Actual (1 lines):
-    2018-03-13T02:18:23
-  Line 83: MISMATCH
-    SQL: SELECT to_utc_timestamp(column1, column2)
-FROM VALUES
-('2016-08-31'::string, 'Asia/Seoul'::string),
-('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string),
-('2016-08-31'::string, 'UTC'::string),
-('2018-03-13T06:18:23+02:00'::string, 'UTC'::string),
-('2016-08-31'::string, 'America/New_York'::string),
-('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string),
-(NULL::string, 'Asia/Seoul'::string),
-('2016-08-31'::string, NULL::string);
-    Translated: SELECT to_utc_timestamp(col1, col2)
-FROM VALUES
-(CAST('2016-08-31' AS STRING), CAST('Asia/Seoul' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('Asia/Seoul' AS STRING)),
-(CAST('2016-08-31' AS STRING), CAST('UTC' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('UTC' AS STRING)),
-(CAST('2016-08-31' AS STRING), CAST('America/New_York' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS STRING), CAST('America/New_York' AS STRING)),
-(CAST(NULL AS STRING), CAST('Asia/Seoul' AS STRING)),
-(CAST('2016-08-31' AS STRING), CAST(NULL AS STRING));
-  Expected (8 lines):
-    2016-08-30T15:00:00
-    2018-03-12T19:18:23
-    2016-08-31T00:00:00
-    2018-03-13T04:18:23
-    2016-08-31T04:00:00
-    2018-03-13T08:18:23
-    NULL
-    NULL
-  Actual (8 lines):
-    2016-08-30T15:00:00
-    2018-03-12T13:18:23
-    2016-08-31T00:00:00
-    2018-03-12T22:18:23
-    2016-08-31T04:00:00
-    2018-03-13T02:18:23
-    NULL
-    NULL
-  Line 104: MISMATCH
-    SQL: SELECT to_utc_timestamp(column1, column2)
-FROM VALUES
-('2016-08-31'::timestamp, 'Asia/Seoul'::string),
-('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string),
-('2016-08-31'::timestamp, 'UTC'::string),
-('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string),
-('2016-08-31'::timestamp, 'America/New_York'::string),
-('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string),
-(NULL::timestamp, 'Asia/Seoul'::string),
-('2018-03-13T06:18:23+00:00'::timestamp, NULL::string);
-    Translated: SELECT to_utc_timestamp(col1, col2)
-FROM VALUES
-(CAST('2016-08-31' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
-(CAST('2016-08-31' AS TIMESTAMP), CAST('UTC' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('UTC' AS STRING)),
-(CAST('2016-08-31' AS TIMESTAMP), CAST('America/New_York' AS STRING)),
-(CAST('2018-03-13T06:18:23+02:00' AS TIMESTAMP), CAST('America/New_York' AS STRING)),
-(CAST(NULL AS TIMESTAMP), CAST('Asia/Seoul' AS STRING)),
-(CAST('2018-03-13T06:18:23+00:00' AS TIMESTAMP), CAST(NULL AS STRING));
-  Expected (8 lines):
-    2016-08-30T15:00:00
-    2018-03-12T19:18:23
-    2016-08-31T00:00:00
-    2018-03-13T04:18:23
-    2016-08-31T04:00:00
-    2018-03-13T08:18:23
-    NULL
-    NULL
-  Actual (8 lines):
-    2016-08-30T15:00:00
-    2018-03-12T13:18:23
-    2016-08-31T00:00:00
-    2018-03-12T22:18:23
-    2016-08-31T04:00:00
-    2018-03-13T02:18:23
-    NULL
-    NULL
   Line 125: skipped (unmapped Arrow type: Timestamp(Microsecond, Some("Asia/Seoul")))
-  Result: 8 passed, 8 FAILED, 1 skipped
+  Result: 16 passed, 1 skipped
 
 --- datetime/trunc.slt ---
   Line 19: PASS
@@ -1697,7 +1473,6 @@ SELECT json_tuple(CAST('\' AS STRING), CAST('f1' AS STRING));
   Result: 7 passed, 12 FAILED, 1 skipped
 
 --- map/map_from_arrays.slt ---
-  Line 29: PASS
   Line 34: PASS
   Line 40: PASS
   Line 45: PASS
@@ -1712,14 +1487,21 @@ SELECT json_tuple(CAST('\' AS STRING), CAST('f1' AS STRING));
   Expected (1 lines):
     {1.0: 2, 3.0: 4}
   Actual (1 lines):
-    {1: 2, 3: 4}
+    {1.0 -> 2, 3.0 -> 4}
   Line 24: MISMATCH
     SQL: SELECT map_from_arrays(array(2, 5), array('a', 'b'));
     Translated: SELECT map_from_arrays(array(2, 5), array('a', 'b'));
   Expected (1 lines):
     {2: a, 5: b}
   Actual (1 lines):
-    {5: b, 2: a}
+    {2 -> a, 5 -> b}
+  Line 29: MISMATCH
+    SQL: SELECT map_from_arrays(array(1, 2), array('a', NULL));
+    Translated: SELECT map_from_arrays(array(1, 2), array('a', NULL));
+  Expected (1 lines):
+    {1: a, 2: NULL}
+  Actual (1 lines):
+    {1 -> a, 2 -> NULL}
   Line 74: PySpark error: 
 [PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 5, pos 12)
 
@@ -1746,8 +1528,13 @@ from values
     (array[], array[]),
     (array[6, 7, 8], array['f', 'g', 'h']) 
 as tab(a, b);
-  Line 95: PySpark error: unhashable type: 'list'
+  Line 95: MISMATCH
     SQL: SELECT map_from_arrays(array(array('a', 'b'), array('c', 'd')), array(struct(1, 2, 3), struct(4, 5, 6)));
+    Translated: SELECT map_from_arrays(array(array('a', 'b'), array('c', 'd')), array(struct(1, 2, 3), struct(4, 5, 6)));
+  Expected (1 lines):
+    {[a, b]: {c0: 1, c1: 2, c2: 3}, [c, d]: {c0: 4, c1: 5, c2: 6}}
+  Actual (1 lines):
+    {[a, b] -> {1, 2, 3}, [c, d] -> {4, 5, 6}}
   Line 101: PySpark error: 
 [PARSE_SYNTAX_ERROR] Syntax error at or near ',': missing ']'.(line 3, pos 26)
 
@@ -1790,7 +1577,7 @@ SELECT
     SQL: SELECT map_from_arrays(array(true, false, true), array('a', NULL, 'b'));
   Line 128: skipped (unsupported Arrow type: LargeList(Int32))
   Line 133: skipped (unsupported Arrow type: FixedSizeList(3, Utf8))
-  Result: 9 passed, 6 FAILED, 2 skipped
+  Result: 8 passed, 7 FAILED, 2 skipped
 
 --- map/map_from_entries.slt ---
   Line 51: PASS (error expected and received)
@@ -2011,27 +1798,105 @@ SELECT
   Result: 3 passed, 9 FAILED
 
 --- map/str_to_map.slt ---
-  Line 25: PASS
-  Line 31: PASS
-  Line 37: PASS
-  Line 49: PASS
-  Line 55: PASS
-  Line 61: PASS
   Line 68: PASS (error expected and received)
   Line 75: PASS
-  Line 81: PASS
-  Line 87: PASS
-  Line 93: PASS
-  Line 101: PASS
-  Line 109: PASS
+  Line 25: MISMATCH
+    SQL: SELECT str_to_map('a:1,b:2,c:3');
+    Translated: SELECT str_to_map('a:1,b:2,c:3');
+  Expected (1 lines):
+    {a: 1, b: 2, c: 3}
+  Actual (1 lines):
+    {a -> 1, b -> 2, c -> 3}
+  Line 31: MISMATCH
+    SQL: SELECT str_to_map('a: ,b:2');
+    Translated: SELECT str_to_map('a: ,b:2');
+  Expected (1 lines):
+    {a:  , b: 2}
+  Actual (1 lines):
+    {a ->  , b -> 2}
+  Line 37: MISMATCH
+    SQL: SELECT str_to_map('a=1,b=2,c=3', ',', '=');
+    Translated: SELECT str_to_map('a=1,b=2,c=3', ',', '=');
+  Expected (1 lines):
+    {a: 1, b: 2, c: 3}
+  Actual (1 lines):
+    {a -> 1, b -> 2, c -> 3}
   Line 43: MISMATCH
     SQL: SELECT str_to_map('', ',', '=');
     Translated: SELECT str_to_map('', ',', '=');
   Expected (1 lines):
     {: NULL}
   Actual (1 lines):
-    {(empty): NULL}
-  Result: 13 passed, 1 FAILED
+    { -> NULL}
+  Line 49: MISMATCH
+    SQL: SELECT str_to_map('a:1_b:2_c:3', '_', ':');
+    Translated: SELECT str_to_map('a:1_b:2_c:3', '_', ':');
+  Expected (1 lines):
+    {a: 1, b: 2, c: 3}
+  Actual (1 lines):
+    {a -> 1, b -> 2, c -> 3}
+  Line 55: MISMATCH
+    SQL: SELECT str_to_map('a');
+    Translated: SELECT str_to_map('a');
+  Expected (1 lines):
+    {a: NULL}
+  Actual (1 lines):
+    {a -> NULL}
+  Line 61: MISMATCH
+    SQL: SELECT str_to_map('a=1&b=2&c=3', '&', '=');
+    Translated: SELECT str_to_map('a=1&b=2&c=3', '&', '=');
+  Expected (1 lines):
+    {a: 1, b: 2, c: 3}
+  Actual (1 lines):
+    {a -> 1, b -> 2, c -> 3}
+  Line 81: MISMATCH
+    SQL: SELECT str_to_map('a:1,b:2,c:3', ',', ':');
+    Translated: SELECT str_to_map('a:1,b:2,c:3', ',', ':');
+  Expected (1 lines):
+    {a: 1, b: 2, c: 3}
+  Actual (1 lines):
+    {a -> 1, b -> 2, c -> 3}
+  Line 87: MISMATCH
+    SQL: SELECT str_to_map('a,b:2', ',', ':');
+    Translated: SELECT str_to_map('a,b:2', ',', ':');
+  Expected (1 lines):
+    {a: NULL, b: 2}
+  Actual (1 lines):
+    {a -> NULL, b -> 2}
+  Line 93: MISMATCH
+    SQL: SELECT str_to_map(col) FROM (VALUES ('a:1,b:2'), ('x:9'), (NULL)) AS t(col);
+    Translated: SELECT str_to_map(col) FROM (VALUES ('a:1,b:2'), ('x:9'), (NULL)) AS t(col);
+  Expected (3 lines):
+    {a: 1, b: 2}
+    {x: 9}
+    NULL
+  Actual (3 lines):
+    {a -> 1, b -> 2}
+    {x -> 9}
+    NULL
+  Line 101: MISMATCH
+    SQL: SELECT str_to_map(col, ',', '=') FROM (VALUES ('a=1,b=2'), ('x=9'), (NULL)) AS t(col);
+    Translated: SELECT str_to_map(col, ',', '=') FROM (VALUES ('a=1,b=2'), ('x=9'), (NULL)) AS t(col);
+  Expected (3 lines):
+    {a: 1, b: 2}
+    {x: 9}
+    NULL
+  Actual (3 lines):
+    {a -> 1, b -> 2}
+    {x -> 9}
+    NULL
+  Line 109: MISMATCH
+    SQL: SELECT str_to_map(col1, col2, col3) FROM (VALUES ('a=1,b=2', ',', '='), ('x#9', ',', '#'), (NULL, ',', '=')) AS t(col1, col2, col3);
+    Translated: SELECT str_to_map(col1, col2, col3) FROM (VALUES ('a=1,b=2', ',', '='), ('x#9', ',', '#'), (NULL, ',', '=')) AS t(col1, col2, col3);
+  Expected (3 lines):
+    {a: 1, b: 2}
+    {x: 9}
+    NULL
+  Actual (3 lines):
+    {a -> 1, b -> 2}
+    {x -> 9}
+    NULL
+  Result: 2 passed, 12 FAILED
 
 --- math/abs.slt ---
   Line 29: PASS
@@ -2127,7 +1992,6 @@ SELECT
   Result: 
 
 --- math/csc.slt ---
-  Line 40: PASS
   Line 27: MISMATCH
     SQL: SELECT csc(1::INT);
     Translated: SELECT csc(CAST(1 AS INT));
@@ -2148,7 +2012,20 @@ SELECT
     1.1883951057781212
     -1.1883951057781212
     NULL
-  Result: 1 passed, 2 FAILED
+  Line 40: MISMATCH
+    SQL: SELECT csc(a) FROM (VALUES (pi()), (-pi()), (pi()/2) , (arrow_cast('NAN','Float32'))) AS t(a);
+    Translated: SELECT csc(a) FROM (VALUES (pi()), (-pi()), (pi()/2) , (CAST('NAN' AS FLOAT))) AS t(a);
+  Expected (4 lines):
+    8165619676597685
+    -8165619676597685
+    1
+    NaN
+  Actual (4 lines):
+    8.165619676597685E15
+    -8.165619676597685E15
+    1
+    NaN
+  Result: 3 FAILED
 
 --- math/degrees.slt ---
   Result: 
@@ -2280,6 +2157,7 @@ SELECT
   Line 52: PASS
   Line 58: PASS
   Line 64: PASS
+  Line 70: PASS
   Line 76: PASS
   Line 82: PASS
   Line 88: PASS
@@ -2291,7 +2169,6 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Line 123: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`test_negative` cannot be foun
   Line 127: PASS
   Line 133: PASS
-  Line 139: PASS
   Line 146: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
   Line 154: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`min_values_int` cannot be fou
   Line 158: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
@@ -2308,44 +2185,44 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Line 224: PASS
   Line 267: statement error (non-fatal): [NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported, if you 
   Line 278: statement error (non-fatal): [TABLE_OR_VIEW_NOT_FOUND] The table or view `spark_catalog`.`default`.`interval_test` cannot be foun
-  Line 70: MISMATCH
-    SQL: SELECT negative(3.14::float);
-    Translated: SELECT negative(CAST(3.14 AS FLOAT));
+  Line 139: MISMATCH
+    SQL: SELECT negative(1234567890.123456::double);
+    Translated: SELECT negative(CAST(1234567890.123456 AS DOUBLE));
   Expected (1 lines):
-    -3.14
+    -1234567890.123456
   Actual (1 lines):
-    -3.140000104904175
+    -1.234567890123456E9
   Line 230: MISMATCH
     SQL: SELECT negative(3.4028235e38::float);
     Translated: SELECT negative(CAST(3.4028235e38 AS FLOAT));
   Expected (1 lines):
     -340282350000000000000000000000000000000
   Actual (1 lines):
-    -340282346638528859811704183484516925440
+    -3.4028235E38
   Line 236: MISMATCH
     SQL: SELECT negative(-3.4028235e38::float);
     Translated: SELECT negative(CAST(-3.4028235e38 AS FLOAT));
   Expected (1 lines):
     340282350000000000000000000000000000000
   Actual (1 lines):
-    340282346638528859811704183484516925440
+    3.4028235E38
   Line 242: MISMATCH
     SQL: SELECT negative(1.7976931348623157e308::double);
     Translated: SELECT negative(CAST(1.7976931348623157e308 AS DOUBLE));
   Expected (1 lines):
     -179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
   Actual (1 lines):
-    -179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368
+    -1.7976931348623157E308
   Line 248: MISMATCH
     SQL: SELECT negative(-1.7976931348623157e308::double);
     Translated: SELECT negative(CAST(-1.7976931348623157e308 AS DOUBLE));
   Expected (1 lines):
     179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
   Actual (1 lines):
-    179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368
-  Line 255: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+    1.7976931348623157E308
+  Line 255: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': "Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}"}
     SQL: SELECT negative(make_interval(1, 2, 3, 4, 5, 6, 7.5));
-  Line 261: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}
+  Line 261: PySpark error: Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': "Undefined error message parameter for error class: CANNOT_PARSE_DATATYPE. Parameters: {'error': 'interval'}"}
     SQL: SELECT negative(make_interval(-2, -5, -1, -10, -3, -30, -15.25));
   Line 115: skipped (references skipped table)
   Line 149: skipped (references skipped table)
@@ -2402,7 +2279,6 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Line 185: PASS
   Line 190: PASS
   Line 195: PASS
-  Line 200: PASS
   Line 206: PASS
   Line 211: PASS
   Line 216: PASS
@@ -2439,11 +2315,18 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
     1.8
   Actual (1 lines):
     1.7999999999999998
+  Line 200: MISMATCH
+    SQL: SELECT pmod(-5.0::float8, 2.5::float8) as pmod_float_6;
+    Translated: SELECT pmod(CAST(-5.0 AS DOUBLE), CAST(2.5 AS DOUBLE)) as pmod_float_6;
+  Expected (1 lines):
+    0
+  Actual (1 lines):
+    -0
   Line 78: skipped (ANSI mode block)
   Line 81: skipped (ANSI mode block)
   Line 84: skipped (ANSI mode block)
   Line 87: skipped (DataFusion config statement)
-  Result: 60 passed, 1 FAILED, 4 skipped
+  Result: 59 passed, 2 FAILED, 4 skipped
 
 --- math/positive.slt ---
   Result: 
@@ -2499,6 +2382,7 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Line 68: PASS
   Line 74: PASS
   Line 79: PASS
+  Line 85: PASS
   Line 91: PASS
   Line 101: PASS
   Line 106: PASS
@@ -2555,13 +2439,6 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Line 502: PASS
   Line 576: PASS (error expected and received)
   Line 580: PASS (error expected and received)
-  Line 85: MISMATCH
-    SQL: SELECT round(arrow_cast(2.345, 'Float32'), 2::int);
-    Translated: SELECT round(CAST(2.345 AS FLOAT), CAST(2 AS INT));
-  Expected (1 lines):
-    2.35
-  Actual (1 lines):
-    2.3499999046325684
   Line 284: skipped (unmapped Arrow type: Decimal32(9, 1))
   Line 289: skipped (unmapped Arrow type: Decimal32(9, 1))
   Line 295: skipped (unmapped Arrow type: Decimal32(9, 3))
@@ -2588,11 +2465,10 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Line 560: skipped (ANSI mode block)
   Line 564: skipped (DataFusion config statement)
   Line 572: skipped (Spark did not error, DataFusion expects error)
-  Result: 64 passed, 1 FAILED, 26 skipped
+  Result: 65 passed, 26 skipped
 
 --- math/sec.slt ---
   Line 26: PASS
-  Line 39: PASS
   Line 31: MISMATCH
     SQL: SELECT sec(a) FROM (VALUES (0::INT), (1::INT), (-1::INT), (null)) AS t(a);
     Translated: SELECT sec(a) FROM (VALUES (CAST(0 AS INT)), (CAST(1 AS INT)), (CAST(-1 AS INT)), (null)) AS t(a);
@@ -2606,7 +2482,20 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
     1.8508157176809255
     1.8508157176809255
     NULL
-  Result: 2 passed, 1 FAILED
+  Line 39: MISMATCH
+    SQL: SELECT sec(a) FROM (VALUES (pi()), (3 * pi()/2), (pi()/2) , (arrow_cast('NAN','Float32'))) AS t(a);
+    Translated: SELECT sec(a) FROM (VALUES (pi()), (3 * pi()/2), (pi()/2) , (CAST('NAN' AS FLOAT))) AS t(a);
+  Expected (4 lines):
+    -1
+    -5443746451065123
+    16331239353195370
+    NaN
+  Actual (4 lines):
+    -1
+    -5.443746451065123E15
+    1.633123935319537E16
+    NaN
+  Result: 1 passed, 2 FAILED
 
 --- math/shiftleft.slt ---
   Line 28: PASS
@@ -2704,9 +2593,10 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
     0abc
     0123
   Actual (4 lines):
-    01a2b3
+    ��
     
-    0abc
+    
+�
     #
   Line 68: MISMATCH
     SQL: SELECT unhex(a) FROM VALUES ('4a4B4c'), ('F'), ('A'), ('AbCdEf'), ('123abc'), ('41 42'), ('00'), ('FF') AS t(a);
@@ -2725,11 +2615,11 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
     
     
 
-    abcdef
-    123abc
+    ���
+    :�
     NULL
      
-    ff
+    �
   Line 81: skipped (unsupported Arrow type: LargeUtf8)
   Line 84: skipped (references skipped table)
   Line 91: skipped (unsupported Arrow type: Utf8View)
@@ -2999,42 +2889,23 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Line 336: PASS
   Line 342: PASS
   Line 368: PASS
+  Line 392: PASS
+  Line 416: PASS
   Line 719: PASS
   Line 749: PASS
   Line 754: PASS
-  Line 770: PASS
   Line 776: PASS
-  Line 783: PASS
   Line 789: PASS
-  Line 819: PASS
-  Line 825: PASS
   Line 831: PASS
-  Line 837: PASS
-  Line 843: PASS
   Line 849: PASS
-  Line 855: PASS
   Line 861: PASS
-  Line 867: PASS
   Line 873: PASS
   Line 879: PASS
   Line 885: PASS
-  Line 891: PASS
   Line 897: PASS
   Line 909: PASS
   Line 915: PASS
-  Line 921: PASS
   Line 927: PASS
-  Line 999: PASS
-  Line 1005: PASS
-  Line 1011: PASS
-  Line 1017: PASS
-  Line 1023: PASS
-  Line 1029: PASS
-  Line 1035: PASS
-  Line 1041: PASS
-  Line 1047: PASS
-  Line 1059: PASS
-  Line 1065: PASS
   Line 1110: PASS
   Line 1116: PASS
   Line 1122: PASS
@@ -3192,14 +3063,14 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Expected (1 lines):
     Hour: 14
   Actual (1 lines):
-    Hour: 01
+    Hour: 10
   Line 362: MISMATCH
     SQL: SELECT format_string('Hour: %tI', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Hour: %tI', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Hour: 02
   Actual (1 lines):
-    Hour: 01
+    Hour: 10
   Line 374: MISMATCH
     SQL: SELECT format_string('Second: %tS', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Second: %tS', TIMESTAMP '2023-12-25 14:30:45');
@@ -3221,69 +3092,55 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
     AM/PM: PM
   Actual (1 lines):
     AM/PM: AM
-  Line 392: MISMATCH
-    SQL: SELECT format_string('AM/PM: %Tp', TIMESTAMP '2023-12-25 09:30:45');
-    Translated: SELECT format_string('AM/PM: %Tp', TIMESTAMP '2023-12-25 09:30:45');
-  Expected (1 lines):
-    AM/PM: AM
-  Actual (1 lines):
-    AM/PM: PM
   Line 398: MISMATCH
     SQL: SELECT format_string('Year: %tY', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Year: %tY', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Year: 2023
   Actual (1 lines):
-    Year: 55953
+    Year: 55952
   Line 404: MISMATCH
     SQL: SELECT format_string('Year: %TY', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Year: %TY', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Year: 2023
   Actual (1 lines):
-    Year: 55953
+    Year: 55952
   Line 410: MISMATCH
     SQL: SELECT format_string('Month: %tm', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Month: %tm', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Month: 12
   Actual (1 lines):
-    Month: 01
-  Line 416: MISMATCH
-    SQL: SELECT format_string('Day: %td', TIMESTAMP '2023-12-25 14:30:45');
-    Translated: SELECT format_string('Day: %td', TIMESTAMP '2023-12-25 14:30:45');
-  Expected (1 lines):
-    Day: 25
-  Actual (1 lines):
-    Day: 11
+    Month: 03
   Line 422: MISMATCH
     SQL: SELECT format_string('Time: %tR', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Time: %tR', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Time: 14:30
   Actual (1 lines):
-    Time: 01:30
+    Time: 10:30
   Line 428: MISMATCH
     SQL: SELECT format_string('Time: %tT', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Time: %tT', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Time: 14:30:45
   Actual (1 lines):
-    Time: 01:30:00
+    Time: 10:30:00
   Line 434: MISMATCH
     SQL: SELECT format_string('Date: %tD', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Date: %tD', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Date: 12/25/23
   Actual (1 lines):
-    Date: 01/11/53
+    Date: 03/25/52
   Line 440: MISMATCH
     SQL: SELECT format_string('ISO Date: %tF', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('ISO Date: %tF', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     ISO Date: 2023-12-25
   Actual (1 lines):
-    ISO Date: 55953-01-11
+    ISO Date: 55952-03-25
   Line 446: MISMATCH
     SQL: SELECT format_string('Date: %tc', TIMESTAMP '1969-07-20 16:17:00') LIKE 'Date: Sun Jul 20 16:17:00 % 1969';
     Translated: SELECT format_string('Date: %tc', TIMESTAMP '1969-07-20 16:17:00') LIKE 'Date: Sun Jul 20 16:17:00 % 1969';
@@ -3297,14 +3154,14 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Expected (1 lines):
     Hour: 4
   Actual (1 lines):
-    Hour: 9
+    Hour: 17
   Line 459: MISMATCH
     SQL: SELECT format_string('Hour: %tl', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Hour: %tl', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Hour: 2
   Actual (1 lines):
-    Hour: 1
+    Hour: 10
   Line 465: MISMATCH
     SQL: SELECT format_string('Milliseconds: %tL', TIMESTAMP '2023-12-25 14:30:45.123');
     Translated: SELECT format_string('Milliseconds: %tL', TIMESTAMP '2023-12-25 14:30:45.123');
@@ -3325,7 +3182,7 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Expected (1 lines):
     Timezone: +0000
   Actual (1 lines):
-    Timezone: -0700
+    Timezone: -0600
   Line 483: PySpark error: All week-based patterns are unsupported since Spark 3.0, detected: e, Please use the SQL function EXTRACT instead
     SQL: SELECT format_string('Timezone: %tZ', from_unixtime(1599572549, 'America/New_York'));
   Line 489: MISMATCH
@@ -3334,77 +3191,77 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Expected (1 lines):
     Epoch seconds: 1
   Actual (1 lines):
-    Epoch seconds: 25201000
+    Epoch seconds: 1000
   Line 495: MISMATCH
     SQL: SELECT format_string('Epoch millis: %tQ', TIMESTAMP '1970-01-01 00:00:01');
     Translated: SELECT format_string('Epoch millis: %tQ', TIMESTAMP '1970-01-01 00:00:01');
   Expected (1 lines):
     Epoch millis: 1000
   Actual (1 lines):
-    Epoch millis: 25201000000
+    Epoch millis: 1000000
   Line 501: MISMATCH
     SQL: SELECT format_string('Month: %tB', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Month: %tB', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Month: December
   Actual (1 lines):
-    Month: January
+    Month: March
   Line 507: MISMATCH
     SQL: SELECT format_string('Month: %TB', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Month: %TB', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Month: DECEMBER
   Actual (1 lines):
-    Month: JANUARY
+    Month: MARCH
   Line 513: MISMATCH
     SQL: SELECT format_string('Month: %tb', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Month: %tb', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Month: Dec
   Actual (1 lines):
-    Month: Jan
+    Month: Mar
   Line 519: MISMATCH
     SQL: SELECT format_string('Month: %Tb', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Month: %Tb', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Month: DEC
   Actual (1 lines):
-    Month: JAN
+    Month: MAR
   Line 525: MISMATCH
     SQL: SELECT format_string('Month: %th', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Month: %th', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Month: Dec
   Actual (1 lines):
-    Month: Jan
+    Month: Mar
   Line 531: MISMATCH
     SQL: SELECT format_string('Day: %tA', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Day: %tA', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Day: Monday
   Actual (1 lines):
-    Day: Sunday
+    Day: Tuesday
   Line 537: MISMATCH
     SQL: SELECT format_string('Day: %TA', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Day: %TA', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Day: MONDAY
   Actual (1 lines):
-    Day: SUNDAY
+    Day: TUESDAY
   Line 543: MISMATCH
     SQL: SELECT format_string('Day: %ta', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Day: %ta', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Day: Mon
   Actual (1 lines):
-    Day: Sun
+    Day: Tue
   Line 549: MISMATCH
     SQL: SELECT format_string('Day: %Ta', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Day: %Ta', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Day: MON
   Actual (1 lines):
-    Day: SUN
+    Day: TUE
   Line 555: MISMATCH
     SQL: SELECT format_string('Century: %tC', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Century: %tC', TIMESTAMP '2023-12-25 14:30:45');
@@ -3418,28 +3275,28 @@ Operation not allowed: Schema may not be specified in a Create Table As Select (
   Expected (1 lines):
     Year: 23
   Actual (1 lines):
-    Year: 53
+    Year: 52
   Line 567: MISMATCH
     SQL: SELECT format_string('Day of year: %tj', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Day of year: %tj', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Day of year: 359
   Actual (1 lines):
-    Day of year: 011
+    Day of year: 085
   Line 573: MISMATCH
     SQL: SELECT format_string('Day: %te', TIMESTAMP '2023-12-05 14:30:45');
     Translated: SELECT format_string('Day: %te', TIMESTAMP '2023-12-05 14:30:45');
   Expected (1 lines):
     Day: 5
   Actual (1 lines):
-    Day: 9
+    Day: 21
   Line 579: MISMATCH
     SQL: SELECT format_string('Time: %tr', TIMESTAMP '2023-12-25 14:30:45');
     Translated: SELECT format_string('Time: %tr', TIMESTAMP '2023-12-25 14:30:45');
   Expected (1 lines):
     Time: 02:30:45 PM
   Actual (1 lines):
-    Time: 01:30:00 AM
+    Time: 10:30:00 AM
   Line 604: PySpark error: f != org.apache.spark.sql.types.Decimal
     SQL: SELECT format_string('Decimal: %f', CAST(123.456 AS DECIMAL(10,3)));
   Line 610: PySpark error: f != org.apache.spark.sql.types.Decimal
@@ -3490,6 +3347,153 @@ Line2
     SQL: SELECT format_string('String: %s, Integer: %d, Float: %.2f', 'test', 42, 3.14159);
   Line 739: PySpark error: f != org.apache.spark.sql.types.Decimal
     SQL: SELECT format_string('Mixed: %10s %5d %.2f', 'hello', 123, 45.678);
+  Line 770: MISMATCH
+    SQL: SELECT format_string('Value: %s', NULL);
+    Translated: SELECT format_string('Value: %s', NULL);
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 783: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'Utf8'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS STRING));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 819: MISMATCH
+    SQL: SELECT format_string('Integer: %d', arrow_cast(NULL, 'Int32'));
+    Translated: SELECT format_string('Integer: %d', CAST(NULL AS INT));
+  Expected (1 lines):
+    Integer: null
+  Actual (1 lines):
+    Integer: NULL
+  Line 825: MISMATCH
+    SQL: SELECT format_string('Hex: %x', arrow_cast(NULL, 'Int32'));
+    Translated: SELECT format_string('Hex: %x', CAST(NULL AS INT));
+  Expected (1 lines):
+    Hex: null
+  Actual (1 lines):
+    Hex: NULL
+  Line 837: MISMATCH
+    SQL: SELECT format_string('Octal: %o', arrow_cast(NULL, 'Int32'));
+    Translated: SELECT format_string('Octal: %o', CAST(NULL AS INT));
+  Expected (1 lines):
+    Octal: null
+  Actual (1 lines):
+    Octal: NULL
+  Line 843: MISMATCH
+    SQL: SELECT format_string('Float: %f', arrow_cast(NULL, 'Float64'));
+    Translated: SELECT format_string('Float: %f', CAST(NULL AS DOUBLE));
+  Expected (1 lines):
+    Float: null
+  Actual (1 lines):
+    Float: NULL
+  Line 855: MISMATCH
+    SQL: SELECT format_string('Scientific: %e', arrow_cast(NULL, 'Float64'));
+    Translated: SELECT format_string('Scientific: %e', CAST(NULL AS DOUBLE));
+  Expected (1 lines):
+    Scientific: null
+  Actual (1 lines):
+    Scientific: NULL
+  Line 867: MISMATCH
+    SQL: SELECT format_string('Compact: %g', arrow_cast(NULL, 'Float64'));
+    Translated: SELECT format_string('Compact: %g', CAST(NULL AS DOUBLE));
+  Expected (1 lines):
+    Compact: null
+  Actual (1 lines):
+    Compact: NULL
+  Line 891: MISMATCH
+    SQL: SELECT format_string('Hex float: %a', arrow_cast(NULL, 'Float64'));
+    Translated: SELECT format_string('Hex float: %a', CAST(NULL AS DOUBLE));
+  Expected (1 lines):
+    Hex float: null
+  Actual (1 lines):
+    Hex float: NULL
+  Line 921: MISMATCH
+    SQL: SELECT format_string('Char: %c', arrow_cast(NULL, 'Int32'));
+    Translated: SELECT format_string('Char: %c', CAST(NULL AS INT));
+  Expected (1 lines):
+    Char: null
+  Actual (1 lines):
+    Char: NULL
+  Line 999: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'Int8'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS TINYINT));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1005: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'Int16'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS SMALLINT));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1011: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'Int64'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS BIGINT));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1017: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'UInt8'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS SMALLINT));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1023: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'UInt16'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS INT));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1029: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'UInt32'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS BIGINT));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1035: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'UInt64'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS BIGINT));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1041: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'Float32'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS FLOAT));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1047: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'Float64'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS DOUBLE));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1059: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'Date32'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS DATE));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
+  Line 1065: MISMATCH
+    SQL: SELECT format_string('Value: %s', arrow_cast(NULL, 'Date64'));
+    Translated: SELECT format_string('Value: %s', CAST(NULL AS DATE));
+  Expected (1 lines):
+    Value: null
+  Actual (1 lines):
+    Value: NULL
   Line 1287: PySpark error: c != java.lang.Long
     SQL: SELECT format_string('Char: %c', CAST(65 AS BIGINT));
   Line 1292: PySpark error: c != java.lang.Long
@@ -3743,7 +3747,7 @@ Line2
   Line 2290: skipped (Spark did not error, DataFusion expects error)
   Line 2294: skipped (Spark did not error, DataFusion expects error)
   Line 2298: skipped (Spark did not error, DataFusion expects error)
-  Result: 176 passed, 121 FAILED, 86 skipped
+  Result: 157 passed, 140 FAILED, 86 skipped
 
 --- string/initcap.slt ---
   Result: 
@@ -4223,7 +4227,7 @@ FROM VALUES
   Result: 
 
 ============================================================
-Overall: 1227 passed, 241 failed, 451 skipped
+Overall: 1210 passed, 258 failed, 451 skipped
 
 Failed files:
   array/array.slt
@@ -4233,11 +4237,9 @@ Failed files:
   collection/size.slt
   datetime/date_add.slt
   datetime/date_sub.slt
-  datetime/from_utc_timestamp.slt
   datetime/make_dt_interval.slt
   datetime/make_interval.slt
   datetime/time_trunc.slt
-  datetime/to_utc_timestamp.slt
   json/json_tuple.slt
   map/map_from_arrays.slt
   map/map_from_entries.slt
@@ -4246,7 +4248,6 @@ Failed files:
   math/mod.slt
   math/negative.slt
   math/pmod.slt
-  math/round.slt
   math/sec.slt
   math/unhex.slt
   string/char.slt
