@@ -111,11 +111,10 @@ impl DefaultFileStatisticsCacheState {
 
         let old_value = self.lru_queue.put(key.clone(), value);
         self.memory_used += entry_size;
+        self.memory_used += key.path.as_ref().heap_size();
 
         if let Some(old_entry) = &old_value {
             self.memory_used -= old_entry.heap_size();
-        } else {
-            self.memory_used += key.path.as_ref().heap_size();
         }
 
         self.evict_entries();
