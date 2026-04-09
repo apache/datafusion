@@ -23,12 +23,6 @@ jobs:
       - name: Fetch main branch
         run: git fetch https://github.com/${{ github.repository }}.git main:refs/remotes/origin/main
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-semver-checks
-        run: cargo install cargo-semver-checks
-
       - name: Determine changed crates
         id: changed_crates
         run: |
@@ -53,6 +47,14 @@ jobs:
           PACKAGES=$(echo "$PACKAGES" | xargs)
           echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
           echo "Changed crates: $PACKAGES"
+
+      - name: Install Rust toolchain
+        if: steps.changed_crates.outputs.packages != ''
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-semver-checks
+        if: steps.changed_crates.outputs.packages != ''
+        run: cargo install cargo-semver-checks
 
       - name: Run cargo-semver-checks
         id: check_semver
