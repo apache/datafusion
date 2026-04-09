@@ -232,7 +232,6 @@ impl PartitionedTopKExec {
     /// The output is sorted by `sort_exprs` (partition keys then order keys),
     /// uses the same partitioning as the input, emits all output at once
     /// (`EmissionType::Final`), and is bounded.
-
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
