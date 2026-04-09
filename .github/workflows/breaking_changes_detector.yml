@@ -20,6 +20,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch main branch
+        run: git fetch https://github.com/${{ github.repository }}.git main:refs/remotes/origin/main
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 

@@ -30,8 +30,16 @@ CURRENT=$(pwd)
 cd "$SCRIPT_DIR/../.." || exit 1
 
 set +e
+echo "Fetching main branch for semver checks..."
+git fetch https://github.com/apache/datafusion.git main:refs/remotes/origin/main
+echo "installing cargo-semver-checks..."
 cargo install cargo-semver-checks
+
+echo "Running cargo-semver-checks against origin/main..."
 cargo semver-checks --baseline-rev origin/main
+
+
+echo "Running cargo clippy..."
 
 cd ${CURRENT} || exit 1
 
