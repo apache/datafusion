@@ -647,6 +647,7 @@ def get_spark():
             SparkSession.builder.master("local[1]")
             .appName("slt-validator")
             .config("spark.sql.ansi.enabled", "false")
+            .config("spark.sql.session.timeZone", "UTC")
             .config("spark.ui.enabled", "false")
             .config("spark.driver.bindAddress", "127.0.0.1")
             .config("spark.log.level", "WARN")
@@ -657,12 +658,62 @@ def get_spark():
     return _spark_session
 
 
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$")
+_FLOAT_RE = re.compile(r"^-?\d+\.0$")
+_DECIMAL_TRAILING_ZEROS_RE = re.compile(r"^(-?\d+\.\d*?)0+$")
+_DECIMAL_SCIENTIFIC_ZERO_RE = re.compile(r"^0E-?\d+$")
+
+
+def _normalize_numeric_string(val: str) -> str:
+    """Normalize Spark's cast-to-string output for numeric types to match .slt.
+
+    Spark's cast(numeric AS string) preserves scale for decimals (0 -> 0.00)
+    and trailing .0 for floats (1.0 instead of 1). The .slt files strip these.
+    """
+    # 0E-10, 0E+5, etc. -> 0
+    if _DECIMAL_SCIENTIFIC_ZERO_RE.match(val):
+        return "0"
+    # 1.0 -> 1 (float/double whole numbers)
+    if _FLOAT_RE.match(val):
+        return val[:-2]  # strip .0
+    # 99999999.990000 -> 99999999.99 (strip trailing zeros after decimal)
+    m = _DECIMAL_TRAILING_ZEROS_RE.match(val)
+    if m:
+        result = m.group(1)
+        if result.endswith("."):
+            return result[:-1]  # 0. -> 0
+        return result
+    return val
+
+
 def format_value(val) -> str:
-    """Format a single value to match .slt conventions."""
+    """Format a single value to match .slt conventions.
+
+    All values arrive as strings (from Spark's cast-to-string), None, or
+    occasionally native Python types for complex columns.
+    """
     if val is None:
         return "NULL"
-    if isinstance(val, str) and val == "":
-        return "(empty)"
+    if isinstance(val, str):
+        if val == "":
+            return "(empty)"
+        # Normalize timestamp format: Spark uses space separator,
+        # .slt uses T separator (e.g., 2018-03-13 04:18:23 -> 2018-03-13T04:18:23)
+        if _TIMESTAMP_RE.match(val):
+            return val.replace(" ", "T", 1)
+        # Normalize timestamps inside complex types (arrays, maps)
+        # e.g., [2001-09-28 01:00:00, ...] -> [2001-09-28T01:00:00, ...]
+        val = re.sub(
+            r"(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)",
+            r"\1T\2",
+            val,
+        )
+        # Normalize lowercase null -> NULL inside complex types
+        val = re.sub(r"\bnull\b", "NULL", val)
+        # Normalize numeric strings (float .0, decimal trailing zeros)
+        return _normalize_numeric_string(val)
+    # Fallbacks for non-string types (complex columns that Spark
+    # cast-to-string may still return as native Python types)
     if isinstance(val, bool):
         return "true" if val else "false"
     if isinstance(val, float):
@@ -670,55 +721,22 @@ def format_value(val) -> str:
             return "NaN"
         if math.isinf(val):
             return "Infinity" if val > 0 else "-Infinity"
-        # Format: remove trailing zeros but keep at least one decimal if float
-        if val == int(val) and not math.isinf(val):
+        if val == int(val):
             return str(int(val))
         return str(val)
-    if isinstance(val, (int,)):
-        return str(val)
-    # Dates
-    import datetime
-
-    if isinstance(val, datetime.date) and not isinstance(val, datetime.datetime):
-        return val.strftime("%Y-%m-%d")
-    if isinstance(val, datetime.datetime):
-        # .slt uses ISO format with T separator, no timezone
-        base = val.strftime("%Y-%m-%dT%H:%M:%S")
-        # Include fractional seconds if non-zero
-        if val.microsecond:
-            frac = f".{val.microsecond:06d}".rstrip("0")
-            return base + frac
-        return base
-    # Decimal
-    from decimal import Decimal
-
-    if isinstance(val, Decimal):
-        # Format to match .slt conventions: remove trailing zeros
-        # but keep the number in plain decimal notation (no scientific notation)
-        if val == 0:
-            return "0"
-        # Convert to string, strip trailing zeros after decimal point
-        s = format(val, "f")  # plain decimal notation, no scientific
-        if "." in s:
-            s = s.rstrip("0").rstrip(".")
-        return s
-    # Arrays/lists
     if isinstance(val, (list, tuple)):
         inner = ", ".join(format_value(v) for v in val)
         return f"[{inner}]"
-    # Maps/dicts
     if isinstance(val, dict):
         entries = ", ".join(
             f"{format_value(k)}: {format_value(v)}" for k, v in val.items()
         )
         return "{" + entries + "}"
-    # Binary/bytearray — decode to string for display
     if isinstance(val, (bytes, bytearray)):
         try:
             return val.decode("utf-8")
         except UnicodeDecodeError:
             return val.hex()
-    # Default
     return str(val)
 
 
@@ -744,11 +762,26 @@ def run_query(sql: str, num_cols: int) -> tuple[Optional[list[str]], Optional[st
     """Run a query against PySpark and return formatted results.
 
     Returns (result_lines, error_message).
+
+    Casts all columns to string inside Spark before collecting to avoid
+    PySpark's collect() converting timestamps to the local Python timezone.
     """
     spark = get_spark()
     try:
         df = spark.sql(sql)
-        rows = df.collect()
+        # Cast all columns to string inside Spark to preserve Spark's
+        # internal representation (especially for timestamps which
+        # collect() would convert to local Python timezone).
+        # Rename columns to unique _c0, _c1, ... names first to avoid
+        # ambiguous reference errors when column names contain special
+        # characters or are duplicated.
+        unique_names = [f"_c{i}" for i in range(len(df.columns))]
+        df = df.toDF(*unique_names)
+        from pyspark.sql import functions as F
+
+        cast_exprs = [F.col(c).cast("string") for c in unique_names]
+        string_df = df.select(cast_exprs)
+        rows = string_df.collect()
         return format_result(rows, num_cols), None
     except Exception as e:
         return None, str(e)
