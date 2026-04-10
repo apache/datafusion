@@ -17,13 +17,13 @@
 
 use std::sync::Arc;
 
-use crate::strings::make_and_append_view;
+use crate::strings::append_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringArray, Int64Array, NullBufferBuilder,
-    OffsetSizeTrait, StringArrayType, StringViewArray, StringViewBuilder, make_view,
+    Array, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
+    StringArrayType, StringViewArray, StringViewBuilder, make_view,
 };
-use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
@@ -278,15 +278,16 @@ fn string_view_substr(
     let is_ascii =
         enable_ascii_fast_path(&string_view_array, start_array, count_array_opt);
 
-    let mut views_buf = Vec::with_capacity(string_view_array.len());
-    let mut null_builder = NullBufferBuilder::new(string_view_array.len());
+    // Combine null bitmaps from all inputs in bulk.
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_view_array.nulls(), start_array.nulls()).as_ref(),
+        count_array_opt.and_then(|a| a.nulls()),
+    );
 
-    for i in 0..string_view_array.len() {
-        if string_view_array.is_null(i)
-            || start_array.is_null(i)
-            || count_array_opt.map(|a| a.is_null(i)).unwrap_or(false)
-        {
-            null_builder.append_null();
+    let mut views_buf = Vec::with_capacity(string_view_array.len());
+
+    for (i, raw_view) in string_view_array.views().iter().enumerate() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
             views_buf.push(0);
             continue;
         }
@@ -294,22 +295,14 @@ fn string_view_substr(
         let string = string_view_array.value(i);
         let start = start_array.value(i);
         let count = count_array_opt.map(|a| a.value(i));
-        let raw_view = string_view_array.views()[i];
 
         let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
         let substr = &string[byte_start..byte_end];
 
-        make_and_append_view(
-            &mut views_buf,
-            &mut null_builder,
-            &raw_view,
-            substr,
-            byte_start as u32,
-        );
+        append_view(&mut views_buf, raw_view, substr, byte_start as u32);
     }
 
     let views_buf = ScalarBuffer::from(views_buf);
-    let nulls_buf = null_builder.finish();
 
     // Safety:
     // (1) The blocks of the given views are all provided
@@ -319,7 +312,7 @@ fn string_view_substr(
         let array = StringViewArray::new_unchecked(
             views_buf,
             string_view_array.data_buffers().to_vec(),
-            nulls_buf,
+            nulls,
         );
         Ok(Arc::new(array) as ArrayRef)
     }
@@ -336,7 +329,6 @@ fn values_fit_in_u32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -
 #[inline]
 fn append_new_view(
     views_buf: &mut Vec<u128>,
-    null_builder: &mut NullBufferBuilder,
     substr: &str,
     byte_offset: usize,
 ) -> bool {
@@ -350,7 +342,6 @@ fn append_new_view(
     };
 
     views_buf.push(view);
-    null_builder.append_non_null();
     is_out_of_line
 }
 
@@ -372,15 +363,16 @@ fn generic_string_substr<T: OffsetSizeTrait>(
     let is_ascii = enable_ascii_fast_path(&string_array, start_array, count_array_opt);
     let offsets = string_array.value_offsets();
     let mut views_buf = Vec::with_capacity(string_array.len());
-    let mut null_builder = NullBufferBuilder::new(string_array.len());
     let mut has_out_of_line = false;
 
+    // Combine null bitmaps from all inputs in bulk.
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_array.nulls(), start_array.nulls()).as_ref(),
+        count_array_opt.and_then(|a| a.nulls()),
+    );
+
     for i in 0..string_array.len() {
-        if string_array.is_null(i)
-            || start_array.is_null(i)
-            || count_array_opt.map(|a| a.is_null(i)).unwrap_or(false)
-        {
-            null_builder.append_null();
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
             views_buf.push(0);
             continue;
         }
@@ -393,14 +385,12 @@ fn generic_string_substr<T: OffsetSizeTrait>(
         let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
         has_out_of_line |= append_new_view(
             &mut views_buf,
-            &mut null_builder,
             &string[byte_start..byte_end],
             source_offset + byte_start,
         );
     }
 
     let views_buf = ScalarBuffer::from(views_buf);
-    let nulls_buf = null_builder.finish();
 
     // If all result strings are stored inline, we don't need to retain the
     // input string array.
@@ -414,7 +404,7 @@ fn generic_string_substr<T: OffsetSizeTrait>(
     // (1) The blocks of the given views are all provided
     // (2) Each referenced range in the source values buffer is within bounds
     unsafe {
-        let array = StringViewArray::new_unchecked(views_buf, data_buffers, nulls_buf);
+        let array = StringViewArray::new_unchecked(views_buf, data_buffers, nulls);
         Ok(Arc::new(array) as ArrayRef)
     }
 }
@@ -429,13 +419,17 @@ fn generic_string_substr_copy<T: OffsetSizeTrait>(
     let count_array_opt = args.get(1).map(|a| as_int64_array(a)).transpose()?;
 
     let is_ascii = enable_ascii_fast_path(&string_array, start_array, count_array_opt);
-    let mut result_builder = StringViewBuilder::with_capacity(string_array.len());
+
+    // Combine null bitmaps from all inputs in bulk.
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_array.nulls(), start_array.nulls()).as_ref(),
+        count_array_opt.and_then(|a| a.nulls()),
+    );
+
+    let mut result_builder = StringViewBuilder::new();
 
     for i in 0..string_array.len() {
-        if string_array.is_null(i)
-            || start_array.is_null(i)
-            || count_array_opt.map(|a| a.is_null(i)).unwrap_or(false)
-        {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
             result_builder.append_null();
             continue;
         }

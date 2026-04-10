@@ -1100,16 +1100,16 @@ CREATE EXTERNAL TABLE reversed_parquet(id INT, value INT)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/sort_pushdown/reversed/';
 
-# Test 4.1: SortExec must be present because files are not in inter-file order
+# Test 4.1: PushdownSort reorders files by min/max statistics so they are
+# already in correct sort order → non-overlapping → no SortExec needed.
+# (files reordered from [a_high, b_mid, c_low] to [c_low, b_mid, a_high])
 query TT
 EXPLAIN SELECT * FROM reversed_parquet ORDER BY id ASC;
 ----
 logical_plan
 01)Sort: reversed_parquet.id ASC NULLS LAST
 02)--TableScan: reversed_parquet projection=[id, value]
-physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/a_high.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/c_low.parquet]]}, projection=[id, value], file_type=parquet
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/c_low.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/a_high.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 # Test 4.2: Results must be correct
 query II
@@ -1184,16 +1184,15 @@ STORED AS PARQUET
 LOCATION 'test_files/scratch/sort_pushdown/reversed/'
 WITH ORDER (id ASC);
 
-# Test 6.1: SortExec must be present despite WITH ORDER
+# Test 6.1: Files sorted by statistics → non-overlapping → SortExec eliminated
+# WITH ORDER declared + files reordered to correct order
 query TT
 EXPLAIN SELECT * FROM reversed_with_order_parquet ORDER BY id ASC;
 ----
 logical_plan
 01)Sort: reversed_with_order_parquet.id ASC NULLS LAST
 02)--TableScan: reversed_with_order_parquet projection=[id, value]
-physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/a_high.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/c_low.parquet]]}, projection=[id, value], file_type=parquet
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/c_low.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/a_high.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 # Test 6.2: Results must be correct
 query II
@@ -1322,17 +1321,15 @@ STORED AS PARQUET
 LOCATION 'test_files/scratch/sort_pushdown/desc_reversed/'
 WITH ORDER (id DESC);
 
-# Test 8.1: SortExec must be present — files are in wrong inter-file DESC order
-# (a_low has 1-3, b_high has 7-9; for DESC, b_high should come first)
+# Test 8.1: Files sorted by statistics → non-overlapping → SortExec eliminated
+# (files reordered: b_high(7-9) before a_low(1-3) for DESC order)
 query TT
 EXPLAIN SELECT * FROM desc_reversed_parquet ORDER BY id DESC;
 ----
 logical_plan
 01)Sort: desc_reversed_parquet.id DESC NULLS FIRST
 02)--TableScan: desc_reversed_parquet projection=[id, value]
-physical_plan
-01)SortExec: expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/desc_reversed/a_low.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/desc_reversed/b_high.parquet]]}, projection=[id, value], file_type=parquet
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/desc_reversed/b_high.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/desc_reversed/a_low.parquet]]}, projection=[id, value], output_ordering=[id@0 DESC], file_type=parquet
 
 # Test 8.2: Results must be correct
 query II
@@ -1775,7 +1772,7 @@ logical_plan
 02)--TableScan: tb_overlap projection=[id, value]
 physical_plan
 01)SortExec: TopK(fetch=5), expr=[id@0 DESC, value@1 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tb_overlap/file_x.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tb_overlap/file_y.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tb_overlap/file_z.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tb_overlap/file_z.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tb_overlap/file_y.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tb_overlap/file_x.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 query II
 SELECT * FROM tb_overlap ORDER BY id DESC, value DESC LIMIT 5;
@@ -2091,6 +2088,188 @@ DROP TABLE te_src_c;
 
 statement ok
 DROP TABLE te_inferred_multi;
+
+# ===========================================================
+# Test F: NULL handling — sort pushdown must not eliminate Sort
+# when files contain NULLs in sort columns, because NULL ordering
+# (NULLS FIRST/LAST) across files requires a full sort.
+# ===========================================================
+
+# Test F.1: NULLS LAST — file with NULL must not cause wrong ordering
+statement ok
+CREATE TABLE null_src_a(id INT) AS VALUES (1), (NULL);
+
+statement ok
+CREATE TABLE null_src_b(id INT) AS VALUES (2), (3);
+
+query I
+COPY (SELECT * FROM null_src_a ORDER BY id ASC NULLS LAST)
+TO 'test_files/scratch/sort_pushdown/tf_nulls/b_null_tail.parquet';
+----
+2
+
+query I
+COPY (SELECT * FROM null_src_b ORDER BY id ASC NULLS LAST)
+TO 'test_files/scratch/sort_pushdown/tf_nulls/a_nonnull.parquet';
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE tf_nulls_last(id INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tf_nulls/'
+WITH ORDER (id ASC NULLS LAST);
+
+# With target_partitions=1, files end up in separate groups via
+# split_groups_by_statistics. EnforceSorting eliminates SortExec,
+# SPM merges the two sorted streams.
+query TT
+EXPLAIN SELECT * FROM tf_nulls_last ORDER BY id ASC NULLS LAST;
+----
+logical_plan
+01)Sort: tf_nulls_last.id ASC NULLS LAST
+02)--TableScan: tf_nulls_last projection=[id]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tf_nulls/a_nonnull.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tf_nulls/b_null_tail.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+# Results must be correct: NULLs at the end
+query I
+SELECT * FROM tf_nulls_last ORDER BY id ASC NULLS LAST;
+----
+1
+2
+3
+NULL
+
+# Test F.2: NULLS FIRST — NULLs should come first
+query I
+SELECT * FROM tf_nulls_last ORDER BY id ASC NULLS FIRST;
+----
+NULL
+1
+2
+3
+
+# Cleanup Test F
+statement ok
+DROP TABLE null_src_a;
+
+statement ok
+DROP TABLE null_src_b;
+
+statement ok
+DROP TABLE tf_nulls_last;
+
+# ===========================================================
+# Test G: BufferExec insertion when sort elimination removes
+# SortExec under SortPreservingMergeExec.
+#
+# When PushdownSort eliminates SortExec(preserve_partitioning=true),
+# SPM loses SortExec's memory buffer. A BufferExec is inserted to
+# compensate, allowing I/O pipelining with merge computation.
+# ===========================================================
+
+# Create files with reversed naming: c_low has smallest values,
+# a_high has largest — alphabetical order ≠ sort key order.
+statement ok
+CREATE TABLE tg_src_low(id INT, value INT) AS VALUES (1, 100), (2, 200), (3, 300);
+
+statement ok
+CREATE TABLE tg_src_mid(id INT, value INT) AS VALUES (4, 400), (5, 500), (6, 600);
+
+statement ok
+CREATE TABLE tg_src_high(id INT, value INT) AS VALUES (7, 700), (8, 800), (9, 900), (10, 1000);
+
+query I
+COPY (SELECT * FROM tg_src_low ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM tg_src_mid ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM tg_src_high ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet';
+----
+4
+
+# Use target_partitions=2 so files are split across 2 groups.
+# Files are in wrong alphabetical order → validated_output_ordering strips ordering
+# → EnforceSorting adds SortExec(preserve_partitioning) + SPM
+# → PushdownSort eliminates SortExec and inserts BufferExec
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE EXTERNAL TABLE tg_buffer(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/tg_buffer/'
+WITH ORDER (id ASC);
+
+# Test G.1: BufferExec appears between SPM and DataSourceExec
+query TT
+EXPLAIN SELECT * FROM tg_buffer ORDER BY id ASC;
+----
+logical_plan
+01)Sort: tg_buffer.id ASC NULLS LAST
+02)--TableScan: tg_buffer projection=[id, value]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--BufferExec: capacity=1073741824
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+# Verify correctness
+query II
+SELECT * FROM tg_buffer ORDER BY id ASC;
+----
+1 100
+2 200
+3 300
+4 400
+5 500
+6 600
+7 700
+8 800
+9 900
+10 1000
+
+# Test G.2: LIMIT query with BufferExec
+query TT
+EXPLAIN SELECT * FROM tg_buffer ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: tg_buffer.id ASC NULLS LAST, fetch=3
+02)--TableScan: tg_buffer projection=[id, value]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST], fetch=3
+02)--BufferExec: capacity=1073741824
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet]]}, projection=[id, value], limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+query II
+SELECT * FROM tg_buffer ORDER BY id ASC LIMIT 3;
+----
+1 100
+2 200
+3 300
+
+# Cleanup Test G
+statement ok
+DROP TABLE tg_src_low;
+
+statement ok
+DROP TABLE tg_src_mid;
+
+statement ok
+DROP TABLE tg_src_high;
+
+statement ok
+DROP TABLE tg_buffer;
 
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok

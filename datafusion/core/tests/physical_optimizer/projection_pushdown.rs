@@ -46,7 +46,7 @@ use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
-use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
@@ -1306,8 +1306,8 @@ fn test_hash_join_after_projection() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@3 as c_from_right]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]
+    ProjectionExec: expr=[c@0 as c_from_left, b@1 as b_from_left, a@2 as a_from_left, c@3 as c_from_right]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[c@2, b@1, a@0, c@7]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "
@@ -1749,6 +1749,124 @@ fn test_hash_join_empty_projection_embeds() -> Result<()> {
     HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, a@0)], projection=[]
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+    "
+    );
+
+    Ok(())
+}
+
+/// Regression test for <https://github.com/apache/datafusion/issues/21459>
+///
+/// When a `ProjectionExec` sits on top of a `FilterExec` that already carries
+/// an embedded projection, the `ProjectionPushdown` optimizer must not panic.
+///
+/// Before the fix, `FilterExecBuilder::from(self)` copied stale projection
+/// indices (e.g. `[0, 1, 2]`). After swapping, the new input was narrower
+/// (2 columns), so `.build()` panicked with "project index out of bounds".
+#[test]
+fn test_filter_with_embedded_projection_after_projection() -> Result<()> {
+    // DataSourceExec: [a, b, c, d, e]
+    let csv = create_simple_csv_exec();
+
+    // FilterExec: a > 0, projection=[0, 1, 2] → output: [a, b, c]
+    let predicate = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("a", 0)),
+        Operator::Gt,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+    ));
+    let filter: Arc<dyn ExecutionPlan> = Arc::new(
+        FilterExecBuilder::new(predicate, csv)
+            .apply_projection(Some(vec![0, 1, 2]))?
+            .build()?,
+    );
+
+    // ProjectionExec: narrows [a, b, c] → [a, b]
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+        ],
+        filter,
+    )?);
+
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
+    let actual = initial.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    ProjectionExec: expr=[a@0 as a, b@1 as b]
+      FilterExec: a@0 > 0, projection=[a@0, b@1, c@2]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+    "
+    );
+
+    // This must not panic
+    let after_optimize =
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
+    let actual = after_optimize_string.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    FilterExec: a@0 > 0
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b], file_type=csv, has_header=false
+    "
+    );
+
+    Ok(())
+}
+
+/// Same as above, but the outer ProjectionExec also renames columns.
+/// Ensures the rename is preserved after the projection pushdown swap.
+#[test]
+fn test_filter_with_embedded_projection_after_renaming_projection() -> Result<()> {
+    let csv = create_simple_csv_exec();
+
+    // FilterExec: b > 10, projection=[0, 1, 2, 3] → output: [a, b, c, d]
+    let predicate = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("b", 1)),
+        Operator::Gt,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+    ));
+    let filter: Arc<dyn ExecutionPlan> = Arc::new(
+        FilterExecBuilder::new(predicate, csv)
+            .apply_projection(Some(vec![0, 1, 2, 3]))?
+            .build()?,
+    );
+
+    // ProjectionExec: [a as x, b as y] — narrows and renames
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "x"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "y"),
+        ],
+        filter,
+    )?);
+
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
+    let actual = initial.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    ProjectionExec: expr=[a@0 as x, b@1 as y]
+      FilterExec: b@1 > 10, projection=[a@0, b@1, c@2, d@3]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+    "
+    );
+
+    let after_optimize =
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
+    let actual = after_optimize_string.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    FilterExec: y@1 > 10
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a@0 as x, b@1 as y], file_type=csv, has_header=false
     "
     );
 
