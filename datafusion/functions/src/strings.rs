@@ -21,9 +21,9 @@ use datafusion_common::{Result, exec_datafusion_err, internal_err};
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, BinaryArray, ByteView, LargeStringArray,
-    StringArray, StringViewArray, StringViewBuilder, make_view,
+    StringArray, StringViewArray, make_view,
 };
-use arrow::buffer::{MutableBuffer, NullBuffer};
+use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 
 /// Optimized version of the StringBuilder in Arrow that:
@@ -150,18 +150,25 @@ impl StringArrayBuilder {
     }
 }
 
+/// Optimized version of Arrow's [`StringViewBuilder`]. Rather than adding NULLs
+/// on a row-by-row basis, the caller should provide nulls when calling
+/// [`finish`](Self::finish). This allows callers to compute nulls more
+/// efficiently (e.g., via bulk bitmap operations).
+///
+/// [`StringViewBuilder`]: arrow::array::StringViewBuilder
 pub struct StringViewArrayBuilder {
-    builder: StringViewBuilder,
+    views: Vec<u128>,
+    data: Vec<u8>,
     block: Vec<u8>,
     /// If true, a safety check is required during the `append_offset` call
     tainted: bool,
 }
 
 impl StringViewArrayBuilder {
-    pub fn with_capacity(item_capacity: usize, _data_capacity: usize) -> Self {
-        let builder = StringViewBuilder::with_capacity(item_capacity);
+    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         Self {
-            builder,
+            views: Vec::with_capacity(item_capacity),
+            data: Vec::with_capacity(data_capacity),
             block: vec![],
             tainted: false,
         }
@@ -214,16 +221,23 @@ impl StringViewArrayBuilder {
         }
     }
 
+    /// Finalizes the current row by converting the accumulated data into a
+    /// StringView and appending it to the views buffer.
     pub fn append_offset(&mut self) -> Result<()> {
-        let block_str = if self.tainted {
+        if self.tainted {
             std::str::from_utf8(&self.block)
-                .map_err(|_| exec_datafusion_err!("invalid UTF-8 in binary literal"))?
-        } else {
-            // SAFETY: all data that was appended was valid UTF8
-            unsafe { std::str::from_utf8_unchecked(&self.block) }
-        };
-        self.builder.append_value(block_str);
+                .map_err(|_| exec_datafusion_err!("invalid UTF-8 in binary literal"))?;
+        }
+
+        let v = &self.block;
+        let offset = self.data.len() as u32;
+        if v.len() > 12 {
+            self.data.extend_from_slice(v);
+        }
+        self.views.push(make_view(v, 0, offset));
+
         self.block.clear();
+        self.tainted = false;
         Ok(())
     }
 
@@ -233,21 +247,35 @@ impl StringViewArrayBuilder {
     ///
     /// Returns an error when:
     ///
-    /// - the provided `null_buffer` does not match amount of `append_offset` calls.
-    pub fn finish(mut self, null_buffer: Option<NullBuffer>) -> Result<StringViewArray> {
-        let array = self.builder.finish();
-        match null_buffer {
-            Some(nulls) if nulls.len() != array.len() => {
-                internal_err!("Null buffer and views buffer must be the same length")
-            }
-            Some(nulls) => {
-                let array_builder = array.into_data().into_builder().nulls(Some(nulls));
-                // SAFETY: the underlying data is valid; we are only adding a null buffer
-                let array_data = unsafe { array_builder.build_unchecked() };
-                Ok(StringViewArray::from(array_data))
-            }
-            None => Ok(array),
+    /// - the provided `null_buffer` length does not match the row count.
+    pub fn finish(self, null_buffer: Option<NullBuffer>) -> Result<StringViewArray> {
+        if let Some(ref nulls) = null_buffer
+            && nulls.len() != self.views.len()
+        {
+            return internal_err!(
+                "Null buffer length ({}) must match row count ({})",
+                nulls.len(),
+                self.views.len()
+            );
         }
+
+        let buffers: Vec<Buffer> = if self.data.is_empty() {
+            vec![]
+        } else {
+            vec![Buffer::from(self.data)]
+        };
+
+        // SAFETY: views were constructed with correct lengths, offsets, and
+        // prefixes. UTF-8 validity was checked when tainted, or guaranteed
+        // by &str inputs.
+        let array = unsafe {
+            StringViewArray::new_unchecked(
+                ScalarBuffer::from(self.views),
+                buffers,
+                null_buffer,
+            )
+        };
+        Ok(array)
     }
 }
 
