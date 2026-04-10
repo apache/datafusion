@@ -19,8 +19,8 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullBufferBuilder,
-    OffsetSizeTrait, make_array,
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
+    make_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
@@ -107,7 +107,7 @@ impl ScalarUDFImpl for ArrayCompact {
 }
 
 /// array_compact SQL function
-pub fn array_compact_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_compact_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let [input_array] = take_function_args("array_compact", arg)?;
 
     match &input_array.data_type() {
@@ -130,20 +130,25 @@ fn compact_list<O: OffsetSizeTrait>(
     field: &Arc<arrow::datatypes::Field>,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
+
+    // Fast path: no nulls in values, return input unchanged
+    if values.null_count() == 0 {
+        return Ok(Arc::new(list_array.clone()));
+    }
+
     let original_data = values.to_data();
+    let capacity = original_data.len() - values.null_count();
     let mut offsets = Vec::<O>::with_capacity(list_array.len() + 1);
     offsets.push(O::zero());
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data],
         false,
-        Capacities::Array(original_data.len()),
+        Capacities::Array(capacity),
     );
-    let mut valid = NullBufferBuilder::new(list_array.len());
 
     for row_index in 0..list_array.len() {
         if list_array.is_null(row_index) {
             offsets.push(offsets[row_index]);
-            valid.append_null();
             continue;
         }
 
@@ -151,15 +156,29 @@ fn compact_list<O: OffsetSizeTrait>(
         let end = list_array.offsets()[row_index + 1].as_usize();
         let mut copied = 0usize;
 
+        // Batch consecutive non-null elements into single extend() calls
+        // to reduce per-element overhead. For [1, 2, NULL, 3, 4] this
+        // produces 2 extend calls (0..2, 3..5) instead of 4 individual ones.
+        let mut batch_start: Option<usize> = None;
         for i in start..end {
-            if !values.is_null(i) {
-                mutable.extend(0, i, i + 1);
-                copied += 1;
+            if values.is_null(i) {
+                // Null breaks the current batch — flush it
+                if let Some(bs) = batch_start {
+                    mutable.extend(0, bs, i);
+                    copied += i - bs;
+                    batch_start = None;
+                }
+            } else if batch_start.is_none() {
+                batch_start = Some(i);
             }
+        }
+        // Flush any remaining batch after the loop
+        if let Some(bs) = batch_start {
+            mutable.extend(0, bs, end);
+            copied += end - bs;
         }
 
         offsets.push(offsets[row_index] + O::usize_as(copied));
-        valid.append_non_null();
     }
 
     let new_values = make_array(mutable.freeze());
@@ -167,6 +186,6 @@ fn compact_list<O: OffsetSizeTrait>(
         Arc::clone(field),
         OffsetBuffer::new(offsets.into()),
         new_values,
-        valid.finish(),
+        list_array.nulls().cloned(),
     )?))
 }
