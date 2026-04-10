@@ -32,7 +32,7 @@ use datafusion_functions_aggregate::first_last::{
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::col;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 fn prepare_groups_accumulator(is_first: bool) -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![
@@ -106,29 +106,24 @@ fn evaluate_bench(
     let group_indices: Vec<usize> = (0..n).map(|i| i % num_groups).collect();
 
     c.bench_function(name, |b| {
-        b.iter_custom(|iters| {
-            // Every `evaluate` call mutates the accumulator, so prebuild `iters` accumulators
-            let mut accumulators: Vec<Box<dyn GroupsAccumulator>> = (0..iters)
-                .map(|_| {
-                    let mut accumulator = prepare_groups_accumulator(is_first);
-                    accumulator
-                        .update_batch(
-                            &[Arc::clone(&values), Arc::clone(&ord)],
-                            &group_indices,
-                            opt_filter,
-                            num_groups,
-                        )
-                        .unwrap();
-                    accumulator
-                })
-                .collect();
-
-            let start = Instant::now();
-            for accumulator in &mut accumulators {
+        b.iter_batched(
+            || {
+                let mut accumulator = prepare_groups_accumulator(is_first);
+                accumulator
+                    .update_batch(
+                        &[Arc::clone(&values), Arc::clone(&ord)],
+                        &group_indices,
+                        opt_filter,
+                        num_groups,
+                    )
+                    .unwrap();
+                accumulator
+            },
+            |mut accumulator| {
                 black_box(accumulator.evaluate(emit_to).unwrap());
-            }
-            start.elapsed()
-        })
+            },
+            BatchSize::SmallInput,
+        )
     });
 }
 
@@ -156,40 +151,36 @@ fn update_bench(
     ]));
 
     c.bench_function(name, |b| {
-        b.iter_custom(|iters| {
-            // Every `update_batch` call mutates the accumulator, so prebuild `iters` accumulators.
-            // Each is pre-populated with worst_ord so all is_sets=true before the timed call.
-            let mut accumulators: Vec<Box<dyn GroupsAccumulator>> = (0..iters)
-                .map(|_| {
-                    let mut accumulator = prepare_groups_accumulator(is_first);
-                    accumulator
-                        .update_batch(
-                            &[Arc::clone(&values), Arc::clone(&worst_ord)],
-                            &group_indices,
-                            None, // no filter: ensure all groups are initialised
-                            num_groups,
-                        )
-                        .unwrap();
-                    accumulator
-                })
-                .collect();
-
-            let start = Instant::now();
-            for accumulator in &mut accumulators {
-                #[expect(clippy::unit_arg)]
-                black_box(
-                    accumulator
-                        .update_batch(
-                            &[Arc::clone(&values), Arc::clone(&ord)],
-                            &group_indices,
-                            opt_filter,
-                            num_groups,
-                        )
-                        .unwrap(),
-                );
-            }
-            start.elapsed()
-        })
+        b.iter_batched(
+            || {
+                let mut accumulator = prepare_groups_accumulator(is_first);
+                accumulator
+                    .update_batch(
+                        &[Arc::clone(&values), Arc::clone(&worst_ord)],
+                        &group_indices,
+                        None, // no filter: ensure all groups are initialised
+                        num_groups,
+                    )
+                    .unwrap();
+                accumulator
+            },
+            |mut accumulator| {
+                for _ in 0..100 {
+                    #[expect(clippy::unit_arg)]
+                    black_box(
+                        accumulator
+                            .update_batch(
+                                &[Arc::clone(&values), Arc::clone(&ord)],
+                                &group_indices,
+                                opt_filter,
+                                num_groups,
+                            )
+                            .unwrap(),
+                    );
+                }
+            },
+            BatchSize::SmallInput,
+        )
     });
 }
 
@@ -218,39 +209,41 @@ fn merge_bench(
     ]));
 
     c.bench_function(name, |b| {
-        b.iter_custom(|iters| {
-            // Every `merge_batch` call mutates the accumulator, so prebuild `iters` accumulators
-            let mut accumulators: Vec<Box<dyn GroupsAccumulator>> = (0..iters)
-                .map(|_| {
-                    let mut accumulator = prepare_groups_accumulator(is_first);
-                    accumulator
-                        .update_batch(
-                            &[Arc::clone(&values), Arc::clone(&worst_ord)],
-                            &group_indices,
-                            opt_filter,
-                            num_groups,
-                        )
-                        .unwrap();
-                    accumulator
-                })
-                .collect();
-
-            let start = Instant::now();
-            for accumulator in &mut accumulators {
-                #[expect(clippy::unit_arg)]
-                black_box(
-                    accumulator
-                        .merge_batch(
-                            &[Arc::clone(&values), Arc::clone(&ord), Arc::clone(&is_set)],
-                            &group_indices,
-                            opt_filter,
-                            num_groups,
-                        )
-                        .unwrap(),
-                );
-            }
-            start.elapsed()
-        })
+        b.iter_batched(
+            || {
+                // Prebuild accumulator
+                let mut accumulator = prepare_groups_accumulator(is_first);
+                accumulator
+                    .update_batch(
+                        &[Arc::clone(&values), Arc::clone(&worst_ord)],
+                        &group_indices,
+                        opt_filter,
+                        num_groups,
+                    )
+                    .unwrap();
+                accumulator
+            },
+            |mut accumulator| {
+                for _ in 0..100 {
+                    #[expect(clippy::unit_arg)]
+                    black_box(
+                        accumulator
+                            .merge_batch(
+                                &[
+                                    Arc::clone(&values),
+                                    Arc::clone(&ord),
+                                    Arc::clone(&is_set),
+                                ],
+                                &group_indices,
+                                opt_filter,
+                                num_groups,
+                            )
+                            .unwrap(),
+                    );
+                }
+            },
+            BatchSize::SmallInput,
+        )
     });
 }
 
@@ -264,8 +257,8 @@ fn trivial_update_bench(
 ) {
     c.bench_function(name, |b| {
         b.iter_custom(|iters| {
-            // The bench is way too fast, so apply 10x factor
-            let mut accumulators: Vec<Box<dyn Accumulator>> = (0..iters * 10)
+            // The bench is way too fast, so apply scaling factor
+            let mut accumulators: Vec<Box<dyn Accumulator>> = (0..iters * 100)
                 .map(|_| create_trivial_accumulator(is_first, ignore_nulls))
                 .collect();
             let start = Instant::now();
