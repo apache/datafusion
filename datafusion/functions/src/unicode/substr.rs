@@ -327,7 +327,11 @@ fn values_fit_in_u32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -
 }
 
 #[inline]
-fn append_view_from_buffer(views_buf: &mut Vec<u128>, substr: &str, byte_offset: usize) -> bool {
+fn append_view_from_buffer(
+    views_buf: &mut Vec<u128>,
+    substr: &str,
+    byte_offset: usize,
+) -> bool {
     let is_out_of_line = substr.len() > 12;
     let view = if is_out_of_line {
         let byte_offset = u32::try_from(byte_offset)
