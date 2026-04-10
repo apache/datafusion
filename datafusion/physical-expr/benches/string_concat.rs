@@ -18,10 +18,10 @@
 use arrow::array::StringViewArray;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::hint::black_box;
@@ -71,11 +71,9 @@ fn bench_concat_utf8view(c: &mut Criterion) {
         let left = create_string_view_array(NUM_ROWS, 16, null_density, SEED);
         let right = create_string_view_array(NUM_ROWS, 16, null_density, SEED + 1);
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(left), Arc::new(right)],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(left), Arc::new(right)])
+                .unwrap();
 
         let label = format!("nulls_{}", (null_density * 100.0) as u32);
         group.bench_with_input(
