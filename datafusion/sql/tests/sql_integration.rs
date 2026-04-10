@@ -26,16 +26,18 @@ use std::vec;
 
 use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
-use datafusion_common::{DataFusionError, Result, assert_contains};
+use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::{DataFusionError, Result, TableReference, assert_contains};
 use datafusion_expr::{
     ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility, col, logical_plan::LogicalPlan,
+    ScalarUDFImpl, Signature, TableSource, Volatility, col,
+    logical_plan::LogicalPlan, planner::ExprPlanner, planner::TypePlanner,
     test::function_stub::sum_udaf,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{NullOrdering, ParserOptions, SqlToRel},
+    planner::{ContextProvider, NullOrdering, ParserOptions, SqlToRel},
 };
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
@@ -55,6 +57,109 @@ use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 mod cases;
 mod common;
+
+#[derive(Debug)]
+struct SqlTestTableSource {
+    schema: SchemaRef,
+}
+
+impl SqlTestTableSource {
+    fn new(schema: SchemaRef) -> Self {
+        Self { schema }
+    }
+}
+
+impl TableSource for SqlTestTableSource {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+struct UpdatePlanningContextProvider {
+    inner: MockContextProvider,
+}
+
+impl UpdatePlanningContextProvider {
+    fn new(state: MockSessionState) -> Self {
+        Self {
+            inner: MockContextProvider { state },
+        }
+    }
+}
+
+impl ContextProvider for UpdatePlanningContextProvider {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        match name.table() {
+            "t1" | "t2" => Ok(Arc::new(SqlTestTableSource::new(update_test_schema()))),
+            _ => self.inner.get_table_source(name),
+        }
+    }
+
+    fn get_file_type(&self, ext: &str) -> Result<Arc<dyn FileType>> {
+        self.inner.get_file_type(ext)
+    }
+
+    fn create_cte_work_table(
+        &self,
+        name: &str,
+        schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        self.inner.create_cte_work_table(name, schema)
+    }
+
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        self.inner.get_expr_planners()
+    }
+
+    fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
+        self.inner.get_type_planner()
+    }
+
+    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+        self.inner.get_function_meta(name)
+    }
+
+    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<datafusion_expr::AggregateUDF>> {
+        self.inner.get_aggregate_meta(name)
+    }
+
+    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
+        self.inner.get_window_meta(name)
+    }
+
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
+        self.inner.get_variable_type(variable_names)
+    }
+
+    fn options(&self) -> &datafusion_common::config::ConfigOptions {
+        self.inner.options()
+    }
+
+    fn udf_names(&self) -> Vec<String> {
+        self.inner.udf_names()
+    }
+
+    fn udaf_names(&self) -> Vec<String> {
+        self.inner.udaf_names()
+    }
+
+    fn udwf_names(&self) -> Vec<String> {
+        self.inner.udwf_names()
+    }
+}
+
+fn update_test_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+        Field::new("d", DataType::Int32, false),
+    ]))
+}
 
 #[test]
 fn parse_decimals_1() {
@@ -744,7 +849,7 @@ fn plan_update_from_with_aliases() {
                SET b = source.b, c = source.a, d = 1 \
                FROM t2 AS source \
                WHERE target.a = source.a AND target.b > 'foo' AND source.c > 1.0";
-    let plan = logical_plan(sql).unwrap();
+    let plan = update_logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -764,7 +869,7 @@ fn plan_update_from_with_aliases() {
 fn plan_explain_update_from() {
     let sql = "EXPLAIN UPDATE t1 SET b = t2.b, c = t2.a, d = 1 \
                FROM t2 WHERE t1.a = t2.a AND t1.b > 'foo' AND t2.c > 1.0";
-    let plan = logical_plan(sql).unwrap();
+    let plan = update_logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3499,6 +3604,10 @@ fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }
 
+fn update_logical_plan(sql: &str) -> Result<LogicalPlan> {
+    update_logical_plan_with_options(sql, ParserOptions::default())
+}
+
 fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<LogicalPlan> {
     let dialect = &GenericDialect {};
     logical_plan_with_dialect_and_options(sql, dialect, options)
@@ -3518,7 +3627,29 @@ fn logical_plan_with_dialect_and_options(
     dialect: &dyn Dialect,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
-    let state = MockSessionState::default()
+    let state = sql_test_state();
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new_with_options(&context, options);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect);
+    let mut ast = result?;
+    planner.statement_to_plan(ast.pop_front().unwrap())
+}
+
+fn update_logical_plan_with_options(
+    sql: &str,
+    options: ParserOptions,
+) -> Result<LogicalPlan> {
+    let dialect = &GenericDialect {};
+    let state = sql_test_state();
+    let context = UpdatePlanningContextProvider::new(state);
+    let planner = SqlToRel::new_with_options(&context, options);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect);
+    let mut ast = result?;
+    planner.statement_to_plan(ast.pop_front().unwrap())
+}
+
+fn sql_test_state() -> MockSessionState {
+    MockSessionState::default()
         .with_scalar_function(Arc::new(unicode::character_length().as_ref().clone()))
         .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
         .with_scalar_function(Arc::new(make_udf(
@@ -3555,13 +3686,7 @@ fn logical_plan_with_dialect_and_options(
         .with_aggregate_function(grouping_udaf())
         .with_window_function(rank_udwf())
         .with_window_function(row_number_udwf())
-        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
-
-    let context = MockContextProvider { state };
-    let planner = SqlToRel::new_with_options(&context, options);
-    let result = DFParser::parse_sql_with_dialect(sql, dialect);
-    let mut ast = result?;
-    planner.statement_to_plan(ast.pop_front().unwrap())
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
 }
 
 fn make_udf(name: &'static str, args: Vec<DataType>, return_type: DataType) -> ScalarUDF {

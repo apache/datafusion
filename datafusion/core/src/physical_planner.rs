@@ -777,10 +777,11 @@ impl DefaultPhysicalPlanner {
                 input,
                 ..
             }) => {
+                let analysis = analyze_dml_input(input, table_name)?;
                 // TODO: remove this guard once UPDATE ... FROM routing via
                 // TableProvider::update_from(...) and joined assignment handling land.
                 // See https://github.com/apache/datafusion/issues/19950.
-                if update_uses_joined_input(input)? {
+                if analysis.has_joined_input {
                     return not_impl_err!("UPDATE ... FROM is not supported");
                 }
 
@@ -2105,27 +2106,15 @@ fn extract_dml_filters(
     input: &Arc<LogicalPlan>,
     target: &TableReference,
 ) -> Result<Vec<Expr>> {
+    let analysis = analyze_dml_input(input, target)?;
     let mut filters = Vec::new();
-    let mut allowed_refs = vec![target.clone()];
-
-    // First pass: collect any alias references to the target table
-    input.apply(|node| {
-        if let LogicalPlan::SubqueryAlias(alias) = node
-            // Check if this alias points to the target table
-            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
-            && scan.table_name.resolved_eq(target)
-        {
-            allowed_refs.push(TableReference::bare(alias.alias.to_string()));
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
 
     input.apply(|node| {
         match node {
             LogicalPlan::Filter(filter) => {
                 // Split AND predicates into individual expressions
                 for predicate in split_conjunction(&filter.predicate) {
-                    if predicate_is_on_target_multi(predicate, &allowed_refs)? {
+                    if predicate_is_on_target_multi(predicate, &analysis.target_refs)? {
                         filters.push(predicate.clone());
                     }
                 }
@@ -2201,16 +2190,45 @@ fn extract_dml_filters(
         })
 }
 
-fn update_uses_joined_input(input: &Arc<LogicalPlan>) -> Result<bool> {
-    let mut has_join = false;
-    input.apply(|node| {
-        if matches!(node, LogicalPlan::Join(_)) {
-            has_join = true;
-            return Ok(TreeNodeRecursion::Stop);
+#[derive(Debug)]
+struct DmlInputAnalysis {
+    has_joined_input: bool,
+    target_refs: Vec<TableReference>,
+}
+
+fn analyze_dml_input(
+    input: &Arc<LogicalPlan>,
+    target: &TableReference,
+) -> Result<DmlInputAnalysis> {
+    let mut analysis = DmlInputAnalysis {
+        has_joined_input: false,
+        target_refs: vec![target.clone()],
+    };
+    analyze_target_branch(input, &mut analysis)?;
+    Ok(analysis)
+}
+
+fn analyze_target_branch(
+    input: &Arc<LogicalPlan>,
+    analysis: &mut DmlInputAnalysis,
+) -> Result<()> {
+    match input.as_ref() {
+        LogicalPlan::Projection(projection) => {
+            analyze_target_branch(&projection.input, analysis)
         }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    Ok(has_join)
+        LogicalPlan::Filter(filter) => analyze_target_branch(&filter.input, analysis),
+        LogicalPlan::SubqueryAlias(alias) => {
+            analysis
+                .target_refs
+                .push(TableReference::bare(alias.alias.to_string()));
+            analyze_target_branch(&alias.input, analysis)
+        }
+        LogicalPlan::Join(join) => {
+            analysis.has_joined_input = true;
+            analyze_target_branch(&join.left, analysis)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Determine whether a predicate references only columns from the target table
@@ -2259,7 +2277,8 @@ fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
 /// Extract column assignments from an UPDATE input plan.
 /// For UPDATE statements, the SQL planner encodes assignments as a projection
 /// over the source table. This function extracts column name and expression pairs
-/// from the projection. Column qualifiers are stripped from the expressions.
+/// from the projection. Column qualifiers are stripped only for single-table
+/// updates so provider-facing expressions remain resolvable.
 ///
 fn extract_update_assignments(
     input: &Arc<LogicalPlan>,
@@ -2271,16 +2290,16 @@ fn extract_update_assignments(
     //     TableScan
     //
     // Each projected expression has an alias matching the column name
+    let analysis = analyze_dml_input(input, target)?;
     let mut assignments = Vec::new();
-    let strip_qualifiers = !update_uses_joined_input(input)?;
-    let target_refs = collect_target_refs(input, target)?;
+    let strip_qualifiers = !analysis.has_joined_input;
 
     // Find the top-level projection
     if let LogicalPlan::Projection(projection) = input.as_ref() {
         append_update_assignments(
             &mut assignments,
             projection,
-            &target_refs,
+            &analysis.target_refs,
             strip_qualifiers,
         )?;
     } else {
@@ -2290,7 +2309,7 @@ fn extract_update_assignments(
                 append_update_assignments(
                     &mut assignments,
                     projection,
-                    &target_refs,
+                    &analysis.target_refs,
                     strip_qualifiers,
                 )?;
                 return Ok(TreeNodeRecursion::Stop);
@@ -2325,37 +2344,6 @@ fn append_update_assignments(
         }
     }
     Ok(())
-}
-
-fn collect_target_refs(
-    input: &Arc<LogicalPlan>,
-    target: &TableReference,
-) -> Result<Vec<TableReference>> {
-    let mut target_refs = vec![target.clone()];
-    collect_target_refs_from_target_branch(input, &mut target_refs)?;
-    Ok(target_refs)
-}
-
-fn collect_target_refs_from_target_branch(
-    input: &Arc<LogicalPlan>,
-    target_refs: &mut Vec<TableReference>,
-) -> Result<()> {
-    match input.as_ref() {
-        LogicalPlan::Projection(projection) => {
-            collect_target_refs_from_target_branch(&projection.input, target_refs)
-        }
-        LogicalPlan::Filter(filter) => {
-            collect_target_refs_from_target_branch(&filter.input, target_refs)
-        }
-        LogicalPlan::Join(join) => {
-            collect_target_refs_from_target_branch(&join.left, target_refs)
-        }
-        LogicalPlan::SubqueryAlias(alias) => {
-            target_refs.push(TableReference::bare(alias.alias.to_string()));
-            collect_target_refs_from_target_branch(&alias.input, target_refs)
-        }
-        _ => Ok(()),
-    }
 }
 
 fn normalize_update_assignment_expr(expr: Expr, strip_qualifiers: bool) -> Result<Expr> {
