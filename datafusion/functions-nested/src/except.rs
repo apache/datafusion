@@ -35,7 +35,6 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -99,9 +98,6 @@ impl ArrayExcept {
 }
 
 impl ScalarUDFImpl for ArrayExcept {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_except"
     }

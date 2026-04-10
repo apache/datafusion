@@ -1564,4 +1564,102 @@ mod tests {
 
         Ok(())
     }
+
+    /// Test that orderings propagate through struct-producing projections.
+    ///
+    /// When a projection creates a struct via `named_struct('a', col_a, ...)`,
+    /// the output should preserve the ordering of `col_a` as an ordering on
+    /// `get_field(col("s"), "a")`. This enables sort elimination when the
+    /// framework sorts by a struct field that corresponds to an already-sorted
+    /// input column.
+    #[test]
+    fn test_ordering_propagation_through_named_struct() -> Result<()> {
+        use crate::expressions::Literal;
+        use datafusion_common::ScalarValue;
+        use datafusion_functions::core::{get_field, named_struct};
+
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let col_a = col("a", &input_schema)?;
+        let col_b = col("b", &input_schema)?;
+        let config = Arc::new(ConfigOptions::new());
+
+        // Build: named_struct('a', col_a, 'b', col_b) AS s
+        let named_struct_udf = named_struct();
+        let named_struct_expr = Arc::new(ScalarFunctionExpr::new(
+            "named_struct",
+            named_struct_udf,
+            vec![
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("a".to_string())))),
+                Arc::clone(&col_a),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("b".to_string())))),
+                Arc::clone(&col_b),
+            ],
+            Arc::new(Field::new(
+                "named_struct",
+                DataType::Struct(
+                    vec![
+                        Field::new("a", DataType::Int32, true),
+                        Field::new("b", DataType::Int32, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            )),
+            Arc::clone(&config),
+        )) as Arc<dyn PhysicalExpr>;
+
+        // Projection: named_struct(...) AS s
+        let proj_exprs = vec![(named_struct_expr, "s".to_string())];
+        let projection_mapping = ProjectionMapping::try_new(proj_exprs, &input_schema)?;
+
+        // Input is ordered by [a ASC]
+        let mut input_properties = EquivalenceProperties::new(Arc::clone(&input_schema));
+        let sort_a = PhysicalSortExpr::new(
+            Arc::clone(&col_a),
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        );
+        input_properties.add_orderings([vec![sort_a]]);
+
+        // Project through the named_struct
+        let out_schema = output_schema(&projection_mapping, &input_schema)?;
+        let out_properties = input_properties.project(&projection_mapping, out_schema);
+
+        // Build the sort expression: get_field(col("s"), "a")
+        // This is what the framework would generate for ORDER BY s.a
+        let get_field_udf = get_field();
+        let col_s = Arc::new(Column::new("s", 0)) as Arc<dyn PhysicalExpr>;
+        let get_field_expr = Arc::new(ScalarFunctionExpr::new(
+            "get_field",
+            get_field_udf,
+            vec![
+                Arc::clone(&col_s),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("a".to_string())))),
+            ],
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::clone(&config),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let sort_get_field_a = PhysicalSortExpr::new(
+            get_field_expr,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        );
+
+        // The output should satisfy ordering by get_field(s, "a")
+        assert!(
+            out_properties.ordering_satisfy(vec![sort_get_field_a])?,
+            "Output should be ordered by get_field(s, 'a') since input is ordered by col_a"
+        );
+
+        Ok(())
+    }
 }

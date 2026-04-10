@@ -39,7 +39,6 @@
 /// # Example
 ///
 /// ```
-/// # use std::any::Any;
 /// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
@@ -72,9 +71,6 @@
 /// #  }
 /// #
 /// #  impl WindowUDFImpl for SimpleUDWF {
-/// #      fn as_any(&self) -> &dyn Any {
-/// #          self
-/// #      }
 /// #      fn name(&self) -> &str {
 /// #          "simple_user_defined_window_function"
 /// #      }
@@ -137,7 +133,6 @@ macro_rules! get_or_init_udwf {
 ///
 /// 1. With Zero Parameters
 /// ```
-/// # use std::any::Any;
 /// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
@@ -184,9 +179,6 @@ macro_rules! get_or_init_udwf {
 /// #     }
 /// # }
 /// # impl WindowUDFImpl for RowNumber {
-/// #     fn as_any(&self) -> &dyn Any {
-/// #         self
-/// #     }
 /// #     fn name(&self) -> &str {
 /// #         "row_number"
 /// #     }
@@ -207,7 +199,6 @@ macro_rules! get_or_init_udwf {
 ///
 /// 2. With Multiple Parameters
 /// ```
-/// # use std::any::Any;
 /// use arrow::datatypes::FieldRef;
 /// #
 /// # use datafusion_expr::{
@@ -273,9 +264,6 @@ macro_rules! get_or_init_udwf {
 /// # }
 /// #
 /// # impl WindowUDFImpl for Lead {
-/// #     fn as_any(&self) -> &dyn Any {
-/// #         self
-/// #     }
 /// #     fn name(&self) -> &str {
 /// #         "lead"
 /// #     }
@@ -352,7 +340,6 @@ macro_rules! create_udwf_expr {
 /// 1. Uses default constructor for UDWF.
 ///
 /// ```
-/// # use std::any::Any;
 /// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
@@ -392,9 +379,6 @@ macro_rules! create_udwf_expr {
 /// #  }
 /// #
 /// #  impl WindowUDFImpl for SimpleUDWF {
-/// #      fn as_any(&self) -> &dyn Any {
-/// #          self
-/// #      }
 /// #      fn name(&self) -> &str {
 /// #          "simple_user_defined_window_function"
 /// #      }
@@ -417,7 +401,6 @@ macro_rules! create_udwf_expr {
 /// 2. Uses a custom constructor for UDWF.
 ///
 /// ```
-/// # use std::any::Any;
 /// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
@@ -458,9 +441,6 @@ macro_rules! create_udwf_expr {
 /// #     }
 /// # }
 /// # impl WindowUDFImpl for RowNumber {
-/// #     fn as_any(&self) -> &dyn Any {
-/// #         self
-/// #     }
 /// #     fn name(&self) -> &str {
 /// #         "row_number"
 /// #     }
@@ -483,7 +463,6 @@ macro_rules! create_udwf_expr {
 /// 3. Uses default constructor for UDWF
 ///
 /// ```
-/// # use std::any::Any;
 /// use arrow::datatypes::FieldRef;
 /// #
 /// # use datafusion_expr::{
@@ -546,9 +525,6 @@ macro_rules! create_udwf_expr {
 /// # }
 /// #
 /// # impl WindowUDFImpl for Lead {
-/// #     fn as_any(&self) -> &dyn Any {
-/// #         self
-/// #     }
 /// #     fn name(&self) -> &str {
 /// #         "lead"
 /// #     }
@@ -573,7 +549,6 @@ macro_rules! create_udwf_expr {
 /// 4. Uses custom constructor for UDWF
 ///
 /// ```
-/// # use std::any::Any;
 /// use arrow::datatypes::FieldRef;
 /// #
 /// # use datafusion_expr::{
@@ -637,9 +612,6 @@ macro_rules! create_udwf_expr {
 /// # }
 /// #
 /// # impl WindowUDFImpl for Lead {
-/// #     fn as_any(&self) -> &dyn Any {
-/// #         self
-/// #     }
 /// #     fn name(&self) -> &str {
 /// #         "lead"
 /// #     }

@@ -5664,6 +5664,56 @@ DROP TABLE new_table;
 statement ok
 DROP TABLE aggregate_test_100_utf8view;
 
+# Window function only in ORDER BY
+query I
+SELECT c2 FROM aggregate_test_100 ORDER BY row_number() OVER (ORDER BY c9) LIMIT 5;
+----
+4
+2
+5
+2
+2
+
+# Window function in both SELECT and ORDER BY (deduplication)
+query II
+SELECT c2, row_number() OVER (ORDER BY c9) as rn FROM aggregate_test_100 ORDER BY row_number() OVER (ORDER BY c9) LIMIT 5;
+----
+4 1
+2 2
+5 3
+2 4
+2 5
+
+# Nested expression: ORDER BY window_func(...) + 1
+query I
+SELECT c2 FROM aggregate_test_100 ORDER BY row_number() OVER (ORDER BY c9) + 1 LIMIT 5;
+----
+4
+2
+5
+2
+2
+
+# Multiple window functions in ORDER BY
+query I
+SELECT c2 FROM aggregate_test_100 ORDER BY row_number() OVER (ORDER BY c9), max(c3) OVER (ORDER BY c9) LIMIT 5;
+----
+4
+2
+5
+2
+2
+
+# DESC ordering with window function
+query I
+SELECT c2 FROM aggregate_test_100 ORDER BY row_number() OVER (ORDER BY c9) DESC LIMIT 5;
+----
+5
+1
+1
+2
+1
+
 statement ok
 DROP TABLE aggregate_test_100
 

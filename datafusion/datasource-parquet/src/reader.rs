@@ -37,7 +37,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// Interface for reading parquet files.
+/// Interface for reading Apache Parquet files.
 ///
 /// The combined implementations of [`ParquetFileReaderFactory`] and
 /// [`AsyncFileReader`] can be used to provide custom data access operations

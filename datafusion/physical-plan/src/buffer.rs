@@ -37,13 +37,12 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::{
-    ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+    ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
-use std::any::Any;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -153,10 +152,6 @@ impl ExecutionPlan for BufferExec {
         "BufferExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -204,12 +199,16 @@ impl ExecutionPlan for BufferExec {
         let curr_mem_in = Arc::new(AtomicUsize::new(0));
         let curr_mem_out = Arc::clone(&curr_mem_in);
         let mut max_mem_in = 0;
-        let max_mem = MetricBuilder::new(&self.metrics).gauge("max_mem_used", partition);
+        let max_mem = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Bytes)
+            .gauge("max_mem_used", partition);
 
         let curr_queued_in = Arc::new(AtomicUsize::new(0));
         let curr_queued_out = Arc::clone(&curr_queued_in);
         let mut max_queued_in = 0;
-        let max_queued = MetricBuilder::new(&self.metrics).gauge("max_queued", partition);
+        let max_queued = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
+            .gauge("max_queued", partition);
 
         // Capture metrics when an element is queued on the stream.
         let in_stream = in_stream.inspect_ok(move |v| {

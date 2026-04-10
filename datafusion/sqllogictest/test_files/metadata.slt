@@ -139,6 +139,23 @@ ORDER BY id, name, l_name;
 NULL bar NULL
 NULL NULL l_bar
 
+# Regression test: UNION ALL + optimize_projections pruning unused columns causes
+# metadata loss when one branch has NULL literals (empty metadata) and the other
+# has field metadata. The optimizer prunes unused columns, triggering recompute_schema
+# which rebuilds the Union schema via intersect_metadata_for_union. Previously, this
+# intersection would drop metadata when any branch had empty metadata (from NULL literals).
+# See https://github.com/apache/datafusion/issues/19049
+query T
+SELECT name FROM (
+  SELECT id, name FROM "table_with_metadata"
+  UNION ALL
+  SELECT NULL::int as id, NULL::string as name
+) GROUP BY name ORDER BY name;
+----
+bar
+baz
+NULL
+
 # Regression test: missing field metadata from left side of the union when right side is chosen
 query T
 select name from (
@@ -202,6 +219,34 @@ FROM table_with_metadata;
 2020-09-08
 2020-09-08
 2020-09-08
+
+# Regression test: CAST should preserve source field metadata
+query DT
+SELECT
+    CAST(ts AS DATE) as casted,
+    arrow_metadata(CAST(ts AS DATE), 'metadata_key')
+FROM table_with_metadata;
+----
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+
+# Regression test: CAST preserves metadata on integer column
+query IT
+SELECT
+    CAST(id AS BIGINT) as casted,
+    arrow_metadata(CAST(id AS BIGINT), 'metadata_key')
+FROM table_with_metadata;
+----
+1 the id field
+NULL the id field
+3 the id field
+
+# Regression test: CAST with single-argument arrow_metadata (returns full map)
+query ?
+select arrow_metadata(CAST(id AS BIGINT)) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
 
 # Regression test: distinct with cast
 query D
@@ -327,6 +372,45 @@ NULL the id field bar the name field
 # Test arrow_metadata with single argument (returns Map)
 query ?
 select arrow_metadata(id) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
+
+# Regression test: TRY_CAST should preserve source field metadata
+query DT
+SELECT
+    TRY_CAST(ts AS DATE) as try_casted,
+    arrow_metadata(TRY_CAST(ts AS DATE), 'metadata_key')
+FROM table_with_metadata;
+----
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+2020-09-08 ts non-nullable field
+
+# Regression test: TRY_CAST preserves metadata on integer column
+query IT
+SELECT
+    TRY_CAST(id AS BIGINT) as try_casted,
+    arrow_metadata(TRY_CAST(id AS BIGINT), 'metadata_key')
+FROM table_with_metadata;
+----
+1 the id field
+NULL the id field
+3 the id field
+
+# Regression test: TRY_CAST preserves metadata even when cast fails (returns NULL)
+query IT
+SELECT
+    TRY_CAST(name AS INT) as try_casted,
+    arrow_metadata(TRY_CAST(name AS INT), 'metadata_key')
+FROM table_with_metadata;
+----
+NULL the name field
+NULL the name field
+NULL the name field
+
+# Regression test: TRY_CAST with single-argument arrow_metadata (returns full map)
+query ?
+select arrow_metadata(TRY_CAST(id AS BIGINT)) from table_with_metadata limit 1;
 ----
 {metadata_key: the id field}
 

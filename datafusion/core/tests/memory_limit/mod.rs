@@ -24,6 +24,7 @@ use std::sync::{Arc, LazyLock};
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
 mod repartition_mem_limit;
+mod union_nullable_spill;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
@@ -212,6 +213,7 @@ async fn sort_merge_join_spill() {
         .with_config(config)
         .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
+        .with_expected_success()
         .run()
         .await
 }
