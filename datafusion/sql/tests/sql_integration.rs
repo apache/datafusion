@@ -760,6 +760,17 @@ fn plan_update_from_with_aliases() {
     );
 }
 
+#[test]
+fn explain_update_from_is_rejected() {
+    let sql = "EXPLAIN UPDATE t1 SET b = t2.b, c = t2.a, d = 1 \
+               FROM t2 WHERE t1.a = t2.a AND t1.b > 'foo' AND t2.c > 1.0";
+    let err = logical_plan(sql).expect_err("EXPLAIN UPDATE ... FROM should fail");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"This feature is not implemented: UPDATE ... FROM is not supported"#
+    );
+}
+
 #[rstest]
 #[case::missing_assignment_target("UPDATE person SET doesnotexist = true")]
 #[case::missing_assignment_expression("UPDATE person SET age = doesnotexist + 42")]

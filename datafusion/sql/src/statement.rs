@@ -32,6 +32,7 @@ use crate::utils::normalize_ident;
 use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
     ScalarValue, SchemaError, SchemaReference, TableReference, ToDFSchema, exec_err,
@@ -1912,6 +1913,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         statement: DFStatement,
     ) -> Result<LogicalPlan> {
         let plan = self.statement_to_plan(statement)?;
+        // TODO: remove this guard once UPDATE ... FROM routing via
+        // TableProvider::update_from(...) and joined assignment handling land.
+        // See https://github.com/apache/datafusion/issues/19950.
+        if update_uses_joined_input(&plan)? {
+            return not_impl_err!("UPDATE ... FROM is not supported");
+        }
         if matches!(plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
@@ -2565,4 +2572,25 @@ ON p.function_name = r.routine_name
             }
         }
     }
+}
+
+fn update_uses_joined_input(plan: &LogicalPlan) -> Result<bool> {
+    let LogicalPlan::Dml(DmlStatement {
+        op: WriteOp::Update,
+        input,
+        ..
+    }) = plan
+    else {
+        return Ok(false);
+    };
+
+    let mut has_join = false;
+    input.apply(|node| {
+        if matches!(node, LogicalPlan::Join(_)) {
+            has_join = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(has_join)
 }
