@@ -790,9 +790,11 @@ impl DefaultPhysicalPlanner {
                 {
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input, table_name)?;
+                    let filters =
+                        extract_dml_filters_with_analysis(input, table_name, &analysis)?;
                     // Extract assignments from the projection in input plan
-                    let assignments = extract_update_assignments(input, table_name)?;
+                    let assignments =
+                        extract_update_assignments_with_analysis(input, &analysis)?;
                     provider
                         .table_provider
                         .update(session_state, assignments, filters)
@@ -2107,6 +2109,15 @@ fn extract_dml_filters(
     target: &TableReference,
 ) -> Result<Vec<Expr>> {
     let analysis = analyze_dml_input(input, target)?;
+    extract_dml_filters_with_analysis(input, target, &analysis)
+}
+
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
+fn extract_dml_filters_with_analysis(
+    input: &Arc<LogicalPlan>,
+    target: &TableReference,
+    analysis: &DmlInputAnalysis,
+) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
 
     input.apply(|node| {
@@ -2204,30 +2215,28 @@ fn analyze_dml_input(
         has_joined_input: false,
         target_refs: vec![target.clone()],
     };
-    analyze_target_branch(input, &mut analysis)?;
+    analyze_target_branch(input, &mut analysis);
     Ok(analysis)
 }
 
-fn analyze_target_branch(
-    input: &Arc<LogicalPlan>,
-    analysis: &mut DmlInputAnalysis,
-) -> Result<()> {
-    match input.as_ref() {
-        LogicalPlan::Projection(projection) => {
-            analyze_target_branch(&projection.input, analysis)
+fn analyze_target_branch(input: &Arc<LogicalPlan>, analysis: &mut DmlInputAnalysis) {
+    let mut current = input;
+    loop {
+        match current.as_ref() {
+            LogicalPlan::Projection(projection) => current = &projection.input,
+            LogicalPlan::Filter(filter) => current = &filter.input,
+            LogicalPlan::SubqueryAlias(alias) => {
+                analysis
+                    .target_refs
+                    .push(TableReference::bare(alias.alias.to_string()));
+                current = &alias.input;
+            }
+            LogicalPlan::Join(join) => {
+                analysis.has_joined_input = true;
+                current = &join.left;
+            }
+            _ => return,
         }
-        LogicalPlan::Filter(filter) => analyze_target_branch(&filter.input, analysis),
-        LogicalPlan::SubqueryAlias(alias) => {
-            analysis
-                .target_refs
-                .push(TableReference::bare(alias.alias.to_string()));
-            analyze_target_branch(&alias.input, analysis)
-        }
-        LogicalPlan::Join(join) => {
-            analysis.has_joined_input = true;
-            analyze_target_branch(&join.left, analysis)
-        }
-        _ => Ok(()),
     }
 }
 
@@ -2280,6 +2289,7 @@ fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
 /// from the projection. Column qualifiers are stripped only for single-table
 /// updates so provider-facing expressions remain resolvable.
 ///
+#[cfg(test)]
 fn extract_update_assignments(
     input: &Arc<LogicalPlan>,
     target: &TableReference,
@@ -2291,67 +2301,65 @@ fn extract_update_assignments(
     //
     // Each projected expression has an alias matching the column name
     let analysis = analyze_dml_input(input, target)?;
-    let mut assignments = Vec::new();
-    let strip_qualifiers = !analysis.has_joined_input;
+    extract_update_assignments_with_analysis(input, &analysis)
+}
 
-    // Find the top-level projection
+fn extract_update_assignments_with_analysis(
+    input: &Arc<LogicalPlan>,
+    analysis: &DmlInputAnalysis,
+) -> Result<Vec<(String, Expr)>> {
+    find_update_projection(input)?
+        .map(|projection| {
+            append_update_assignments(
+                projection,
+                &analysis.target_refs,
+                !analysis.has_joined_input,
+            )
+        })
+        .transpose()
+        .map(|assignments| assignments.unwrap_or_default())
+}
+
+fn find_update_projection(input: &Arc<LogicalPlan>) -> Result<Option<&Projection>> {
     if let LogicalPlan::Projection(projection) = input.as_ref() {
-        append_update_assignments(
-            &mut assignments,
-            projection,
-            &analysis.target_refs,
-            strip_qualifiers,
-        )?;
-    } else {
-        // Try to find projection deeper in the plan
-        input.apply(|node| {
-            if let LogicalPlan::Projection(projection) = node {
-                append_update_assignments(
-                    &mut assignments,
-                    projection,
-                    &analysis.target_refs,
-                    strip_qualifiers,
-                )?;
-                return Ok(TreeNodeRecursion::Stop);
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
+        return Ok(Some(projection));
     }
 
-    Ok(assignments)
+    let mut found_projection = None;
+    input.apply(|node| {
+        if let LogicalPlan::Projection(projection) = node {
+            found_projection = Some(projection);
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(found_projection)
 }
 
 fn append_update_assignments(
-    assignments: &mut Vec<(String, Expr)>,
     projection: &Projection,
     target_refs: &[TableReference],
     strip_qualifiers: bool,
-) -> Result<()> {
-    for expr in &projection.expr {
-        if let Expr::Alias(alias) = expr {
-            // The alias name is the column name being updated
-            // The inner expression is the new value
-            let column_name = alias.name.clone();
-            // Only include if it's not just a column reference to itself
-            // (those are columns that aren't being updated)
-            if !is_identity_assignment(&alias.expr, &column_name, target_refs) {
-                let assignment_expr = normalize_update_assignment_expr(
-                    (*alias.expr).clone(),
-                    strip_qualifiers,
-                )?;
-                assignments.push((column_name, assignment_expr));
+) -> Result<Vec<(String, Expr)>> {
+    projection
+        .expr
+        .iter()
+        .filter_map(|expr| match expr {
+            Expr::Alias(alias)
+                if !is_identity_assignment(&alias.expr, &alias.name, target_refs) =>
+            {
+                Some(
+                    if strip_qualifiers {
+                        strip_column_qualifiers((*alias.expr).clone())
+                    } else {
+                        Ok((*alias.expr).clone())
+                    }
+                    .map(|assignment_expr| (alias.name.clone(), assignment_expr)),
+                )
             }
-        }
-    }
-    Ok(())
-}
-
-fn normalize_update_assignment_expr(expr: Expr, strip_qualifiers: bool) -> Result<Expr> {
-    if strip_qualifiers {
-        strip_column_qualifiers(expr)
-    } else {
-        Ok(expr)
-    }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Check if an assignment is an identity assignment (column = column)
@@ -3247,20 +3255,19 @@ mod tests {
         Arc::new(MemTable::try_new(schema, vec![vec![]]).unwrap())
     }
 
+    fn test_update_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]))
+    }
+
     async fn update_assignments_for_sql(sql: &str) -> Result<Vec<(String, Expr)>> {
         let ctx = SessionContext::new();
-        let t1_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]));
-        let t2_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]));
-        ctx.register_table("t1", make_test_mem_table(t1_schema))?;
-        ctx.register_table("t2", make_test_mem_table(t2_schema))?;
+        let schema = test_update_schema();
+        ctx.register_table("t1", make_test_mem_table(Arc::clone(&schema)))?;
+        ctx.register_table("t2", make_test_mem_table(schema))?;
 
         let df = ctx.sql(sql).await?;
         let (table_name, input) = match df.logical_plan() {
@@ -3274,6 +3281,16 @@ mod tests {
         };
 
         extract_update_assignments(&input, &table_name)
+    }
+
+    async fn assert_update_assignment(sql: &str, column: &str, expected: &str) {
+        let assignments: HashMap<_, _> = update_assignments_for_sql(sql)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(name, expr)| (name, expr.to_string()))
+            .collect();
+        assert_eq!(assignments.get(column).map(String::as_str), Some(expected));
     }
 
     #[tokio::test]
@@ -4861,81 +4878,53 @@ digraph {
 
     #[tokio::test]
     async fn test_extract_update_assignments_preserves_joined_source_qualifiers() {
-        let assignments = update_assignments_for_sql(
+        assert_update_assignment(
             "UPDATE t1 SET b = t2.b FROM t2 WHERE t1.id = t2.id",
+            "b",
+            "t2.b",
         )
-        .await
-        .unwrap();
-
-        let assignments: HashMap<_, _> = assignments.into_iter().collect();
-        assert_eq!(
-            assignments.get("b").map(ToString::to_string).as_deref(),
-            Some("t2.b")
-        );
+        .await;
     }
 
     #[tokio::test]
     async fn test_extract_update_assignments_preserves_alias_qualified_sources() {
-        let assignments = update_assignments_for_sql(
+        assert_update_assignment(
             "UPDATE t1 AS target SET b = source.b FROM t2 AS source \
              WHERE target.id = source.id",
+            "b",
+            "source.b",
         )
-        .await
-        .unwrap();
-
-        let assignments: HashMap<_, _> = assignments.into_iter().collect();
-        assert_eq!(
-            assignments.get("b").map(ToString::to_string).as_deref(),
-            Some("source.b")
-        );
+        .await;
     }
 
     #[tokio::test]
     async fn test_extract_update_assignments_distinguishes_same_name_join_columns() {
-        let assignments = update_assignments_for_sql(
+        let assignments: HashMap<_, _> = update_assignments_for_sql(
             "UPDATE t1 SET a = t2.a, b = t1.a FROM t2 WHERE t1.id = t2.id",
         )
         .await
-        .unwrap();
-
-        let assignments: HashMap<_, _> = assignments.into_iter().collect();
-        assert_eq!(
-            assignments.get("a").map(ToString::to_string).as_deref(),
-            Some("t2.a")
-        );
-        assert_eq!(
-            assignments.get("b").map(ToString::to_string).as_deref(),
-            Some("t1.a")
-        );
+        .unwrap()
+        .into_iter()
+        .map(|(name, expr)| (name, expr.to_string()))
+        .collect();
+        assert_eq!(assignments.get("a").map(String::as_str), Some("t2.a"));
+        assert_eq!(assignments.get("b").map(String::as_str), Some("t1.a"));
     }
 
     #[tokio::test]
     async fn test_extract_update_assignments_preserves_self_join_source_alias() {
-        let assignments = update_assignments_for_sql(
+        assert_update_assignment(
             "UPDATE t1 AS target SET a = src.a FROM t1 AS src \
              WHERE target.id = src.id",
+            "a",
+            "src.a",
         )
-        .await
-        .unwrap();
-
-        let assignments: HashMap<_, _> = assignments.into_iter().collect();
-        assert_eq!(
-            assignments.get("a").map(ToString::to_string).as_deref(),
-            Some("src.a")
-        );
+        .await;
     }
 
     #[tokio::test]
     async fn test_extract_update_assignments_strips_single_table_target_qualifiers() {
-        let assignments =
-            update_assignments_for_sql("UPDATE t1 SET b = t1.a WHERE t1.id = 1")
-                .await
-                .unwrap();
-
-        let assignments: HashMap<_, _> = assignments.into_iter().collect();
-        assert_eq!(
-            assignments.get("b").map(ToString::to_string).as_deref(),
-            Some("a")
-        );
+        assert_update_assignment("UPDATE t1 SET b = t1.a WHERE t1.id = 1", "b", "a")
+            .await;
     }
 }

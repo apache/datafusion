@@ -29,8 +29,8 @@ use common::MockContextProvider;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DataFusionError, Result, TableReference, assert_contains};
 use datafusion_expr::{
-    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, TableSource, Volatility, col,
+    AggregateUDF, ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, TableSource, Volatility, WindowUDF, col,
     logical_plan::LogicalPlan, planner::ExprPlanner, planner::TypePlanner,
     test::function_stub::sum_udaf,
 };
@@ -81,20 +81,26 @@ impl TableSource for SqlTestTableSource {
 
 struct UpdatePlanningContextProvider {
     inner: MockContextProvider,
+    update_schema: SchemaRef,
 }
 
 impl UpdatePlanningContextProvider {
     fn new(state: MockSessionState) -> Self {
         Self {
             inner: MockContextProvider { state },
+            update_schema: update_test_schema(),
         }
+    }
+
+    fn get_update_table_source(&self) -> Arc<dyn TableSource> {
+        Arc::new(SqlTestTableSource::new(Arc::clone(&self.update_schema)))
     }
 }
 
 impl ContextProvider for UpdatePlanningContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         match name.table() {
-            "t1" | "t2" => Ok(Arc::new(SqlTestTableSource::new(update_test_schema()))),
+            "t1" | "t2" => Ok(self.get_update_table_source()),
             _ => self.inner.get_table_source(name),
         }
     }
@@ -123,11 +129,11 @@ impl ContextProvider for UpdatePlanningContextProvider {
         self.inner.get_function_meta(name)
     }
 
-    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<datafusion_expr::AggregateUDF>> {
+    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.inner.get_aggregate_meta(name)
     }
 
-    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
         self.inner.get_window_meta(name)
     }
 
@@ -3629,10 +3635,7 @@ fn logical_plan_with_dialect_and_options(
 ) -> Result<LogicalPlan> {
     let state = sql_test_state();
     let context = MockContextProvider { state };
-    let planner = SqlToRel::new_with_options(&context, options);
-    let result = DFParser::parse_sql_with_dialect(sql, dialect);
-    let mut ast = result?;
-    planner.statement_to_plan(ast.pop_front().unwrap())
+    plan_sql_with_options(sql, dialect, options, &context)
 }
 
 fn update_logical_plan_with_options(
@@ -3642,9 +3645,17 @@ fn update_logical_plan_with_options(
     let dialect = &GenericDialect {};
     let state = sql_test_state();
     let context = UpdatePlanningContextProvider::new(state);
-    let planner = SqlToRel::new_with_options(&context, options);
-    let result = DFParser::parse_sql_with_dialect(sql, dialect);
-    let mut ast = result?;
+    plan_sql_with_options(sql, dialect, options, &context)
+}
+
+fn plan_sql_with_options<S: ContextProvider>(
+    sql: &str,
+    dialect: &dyn Dialect,
+    options: ParserOptions,
+    context: &S,
+) -> Result<LogicalPlan> {
+    let planner = SqlToRel::new_with_options(context, options);
+    let mut ast = DFParser::parse_sql_with_dialect(sql, dialect)?;
     planner.statement_to_plan(ast.pop_front().unwrap())
 }
 
