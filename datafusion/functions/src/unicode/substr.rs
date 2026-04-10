@@ -327,11 +327,7 @@ fn values_fit_in_u32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -
 }
 
 #[inline]
-fn append_new_view(
-    views_buf: &mut Vec<u128>,
-    substr: &str,
-    byte_offset: usize,
-) -> bool {
+fn append_view_from_buffer(views_buf: &mut Vec<u128>, substr: &str, byte_offset: usize) -> bool {
     let is_out_of_line = substr.len() > 12;
     let view = if is_out_of_line {
         let byte_offset = u32::try_from(byte_offset)
@@ -350,9 +346,9 @@ fn generic_string_substr<T: OffsetSizeTrait>(
     string_array: &GenericStringArray<T>,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
-    // We return a StringViewArray that points into the input string array's
-    // values buffer, avoiding copies. This is only possible when the values
-    // buffer is <= 4GB, since StringView offsets are u32.
+    // We'd like to return a StringViewArray that points into the input string
+    // array's values buffer. Since StringView offsets are u32, we can't use
+    // this approach when the values buffer is >4GB, so fallback to copying.
     if !values_fit_in_u32(string_array) {
         return generic_string_substr_copy(string_array, args);
     }
@@ -383,7 +379,7 @@ fn generic_string_substr<T: OffsetSizeTrait>(
         let count = count_array_opt.map(|a| a.value(i));
 
         let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
-        has_out_of_line |= append_new_view(
+        has_out_of_line |= append_view_from_buffer(
             &mut views_buf,
             &string[byte_start..byte_end],
             source_offset + byte_start,
