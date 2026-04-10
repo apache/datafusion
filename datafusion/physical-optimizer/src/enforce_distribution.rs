@@ -1331,9 +1331,11 @@ pub fn ensure_distribution(
             let allow_subset_satisfy_partitioning = (current_partitions
                 >= subset_satisfaction_threshold
                 // `preserve_file_partitions` exposes existing file-group
-                // partitioning to the optimizer. Respect it even when the
-                // file-group count is below `target_partitions`.
-                || config.optimizer.preserve_file_partitions > 0)
+                // partitioning to the optimizer. Respect it when the only
+                // reason to repartition would be to increase partition count
+                // beyond the preserved file-group count.
+                || (config.optimizer.preserve_file_partitions > 0
+                    && current_partitions < target_partitions))
                 && !is_partitioned_join
                 && !requires_grouping_id;
 
