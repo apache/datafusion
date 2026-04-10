@@ -738,6 +738,28 @@ fn plan_update() {
     );
 }
 
+#[test]
+fn plan_update_from_with_aliases() {
+    let sql = "UPDATE t1 AS target \
+               SET b = source.b, c = source.a, d = 1 \
+               FROM t2 AS source \
+               WHERE target.a = source.a AND target.b > 'foo' AND source.c > 1.0";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Update] table=[t1]
+      Projection: target.a AS a, source.b AS b, CAST(source.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d
+        Filter: target.a = source.a AND target.b > Utf8("foo") AND source.c > Float64(1)
+          Cross Join:
+            SubqueryAlias: target
+              TableScan: t1
+            SubqueryAlias: source
+              TableScan: t2
+    "#
+    );
+}
+
 #[rstest]
 #[case::missing_assignment_target("UPDATE person SET doesnotexist = true")]
 #[case::missing_assignment_expression("UPDATE person SET age = doesnotexist + 42")]

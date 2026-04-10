@@ -725,8 +725,6 @@ async fn test_delete_target_table_scoping() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_from_drops_non_target_predicates() -> Result<()> {
-    // UPDATE ... FROM is currently not working
-    // TODO fix https://github.com/apache/datafusion/issues/19950
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
         test_schema(),
         TableProviderFilterPushDown::Exact,
@@ -743,17 +741,19 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
-    let result = ctx
+    let df = ctx
         .sql(
             "UPDATE t1 SET value = 1 FROM t2 \
              WHERE t1.id = t2.id AND t2.src_only = 'active' AND t1.value > 10",
         )
-        .await;
+        .await?;
 
-    // Verify UPDATE ... FROM is rejected with appropriate error
-    // TODO fix https://github.com/apache/datafusion/issues/19950
-    assert!(result.is_err());
-    let err = result.unwrap_err();
+    // Verify UPDATE ... FROM reaches logical planning but still fails closed
+    // before the unsafe single-table update runtime path can execute.
+    let err = df
+        .collect()
+        .await
+        .expect_err("UPDATE ... FROM should fail closed");
     assert!(
         err.to_string().contains("UPDATE ... FROM is not supported"),
         "Expected 'UPDATE ... FROM is not supported' error, got: {err}"

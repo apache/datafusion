@@ -777,6 +777,13 @@ impl DefaultPhysicalPlanner {
                 input,
                 ..
             }) => {
+                // TODO: remove this guard once UPDATE ... FROM routing via
+                // TableProvider::update_from(...) and joined assignment handling land.
+                // See https://github.com/apache/datafusion/issues/19950.
+                if update_uses_joined_input(input)? {
+                    return not_impl_err!("UPDATE ... FROM is not supported");
+                }
+
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
@@ -2192,6 +2199,18 @@ fn extract_dml_filters(
             }
             Ok(deduped)
         })
+}
+
+fn update_uses_joined_input(input: &Arc<LogicalPlan>) -> Result<bool> {
+    let mut has_join = false;
+    input.apply(|node| {
+        if matches!(node, LogicalPlan::Join(_)) {
+            has_join = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(has_join)
 }
 
 /// Determine whether a predicate references only columns from the target table

@@ -124,6 +124,18 @@ impl ContextProvider for MockContextProvider {
                 Field::new("id", DataType::Int32, false),
                 Field::new("price", DataType::Decimal128(10, 2), false),
             ])),
+            "t1" => Ok(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+                Field::new("c", DataType::Float64, false),
+                Field::new("d", DataType::Int32, false),
+            ])),
+            "t2" => Ok(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+                Field::new("c", DataType::Float64, false),
+                Field::new("d", DataType::Int32, false),
+            ])),
             "person" => Ok(Schema::new(vec![
                 Field::new("id", DataType::UInt32, false),
                 Field::new("first_name", DataType::Utf8, false),
