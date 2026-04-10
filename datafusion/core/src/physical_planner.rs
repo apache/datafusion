@@ -2277,42 +2277,22 @@ fn extract_update_assignments(
 
     // Find the top-level projection
     if let LogicalPlan::Projection(projection) = input.as_ref() {
-        for expr in &projection.expr {
-            if let Expr::Alias(alias) = expr {
-                // The alias name is the column name being updated
-                // The inner expression is the new value
-                let column_name = alias.name.clone();
-                // Only include if it's not just a column reference to itself
-                // (those are columns that aren't being updated)
-                if !is_identity_assignment(&alias.expr, &column_name, &target_refs) {
-                    let assignment_expr = normalize_update_assignment_expr(
-                        (*alias.expr).clone(),
-                        strip_qualifiers,
-                    )?;
-                    assignments.push((column_name, assignment_expr));
-                }
-            }
-        }
+        append_update_assignments(
+            &mut assignments,
+            projection,
+            &target_refs,
+            strip_qualifiers,
+        )?;
     } else {
         // Try to find projection deeper in the plan
         input.apply(|node| {
             if let LogicalPlan::Projection(projection) = node {
-                for expr in &projection.expr {
-                    if let Expr::Alias(alias) = expr {
-                        let column_name = alias.name.clone();
-                        if !is_identity_assignment(
-                            &alias.expr,
-                            &column_name,
-                            &target_refs,
-                        ) {
-                            let assignment_expr = normalize_update_assignment_expr(
-                                (*alias.expr).clone(),
-                                strip_qualifiers,
-                            )?;
-                            assignments.push((column_name, assignment_expr));
-                        }
-                    }
-                }
+                append_update_assignments(
+                    &mut assignments,
+                    projection,
+                    &target_refs,
+                    strip_qualifiers,
+                )?;
                 return Ok(TreeNodeRecursion::Stop);
             }
             Ok(TreeNodeRecursion::Continue)
@@ -2320,6 +2300,31 @@ fn extract_update_assignments(
     }
 
     Ok(assignments)
+}
+
+fn append_update_assignments(
+    assignments: &mut Vec<(String, Expr)>,
+    projection: &Projection,
+    target_refs: &[TableReference],
+    strip_qualifiers: bool,
+) -> Result<()> {
+    for expr in &projection.expr {
+        if let Expr::Alias(alias) = expr {
+            // The alias name is the column name being updated
+            // The inner expression is the new value
+            let column_name = alias.name.clone();
+            // Only include if it's not just a column reference to itself
+            // (those are columns that aren't being updated)
+            if !is_identity_assignment(&alias.expr, &column_name, target_refs) {
+                let assignment_expr = normalize_update_assignment_expr(
+                    (*alias.expr).clone(),
+                    strip_qualifiers,
+                )?;
+                assignments.push((column_name, assignment_expr));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_target_refs(

@@ -761,13 +761,21 @@ fn plan_update_from_with_aliases() {
 }
 
 #[test]
-fn explain_update_from_is_rejected() {
+fn plan_explain_update_from() {
     let sql = "EXPLAIN UPDATE t1 SET b = t2.b, c = t2.a, d = 1 \
                FROM t2 WHERE t1.a = t2.a AND t1.b > 'foo' AND t2.c > 1.0";
-    let err = logical_plan(sql).expect_err("EXPLAIN UPDATE ... FROM should fail");
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
-        err.strip_backtrace(),
-        @r#"This feature is not implemented: UPDATE ... FROM is not supported"#
+        plan,
+        @r#"
+    Explain
+      Dml: op=[Update] table=[t1]
+        Projection: t1.a AS a, t2.b AS b, CAST(t2.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d
+          Filter: t1.a = t2.a AND t1.b > Utf8("foo") AND t2.c > Float64(1)
+            Cross Join:
+              TableScan: t1
+              TableScan: t2
+    "#
     );
 }
 
