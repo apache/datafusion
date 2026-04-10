@@ -653,8 +653,6 @@ mod tests {
         Ok(())
     }
 
-    /// Shows that the statistics cache is not enabled by default yet
-    /// See https://github.com/apache/datafusion/issues/19217
     #[tokio::test]
     async fn test_statistics_cache_default() -> Result<(), DataFusionError> {
         let ctx = SessionContext::new();
@@ -684,8 +682,6 @@ mod tests {
             .await?;
         }
 
-        // When the cache manager creates a StatisticsCache by default,
-        // the contents will show up here
         let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
