@@ -25,7 +25,11 @@ use arrow::{
 use arrow_schema::SortOptions;
 use datafusion::{
     assert_batches_eq,
-    logical_expr::Operator,
+    datasource::{MemTable, provider_as_source},
+    execution::session_state::SessionStateBuilder,
+    logical_expr::{
+        LogicalPlanBuilder, Operator, col as logical_col, lit as logical_lit,
+    },
     physical_plan::{
         PhysicalExpr,
         expressions::{BinaryExpr, Column, Literal},
@@ -5433,5 +5437,63 @@ fn test_filter_with_fetch_pushdown_through_sort() {
           -   FilterExec: a@0 = foo
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
+    );
+}
+
+#[tokio::test]
+async fn test_filter_pushdown_through_sort_with_projection() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Utf8, false),
+        Field::new("body", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec!["2026-04-09T02:00:00Z"])),
+            Arc::new(StringArray::from(vec!["starting datafusion query engine"])),
+        ],
+    )
+    .unwrap();
+
+    let session_state = SessionStateBuilder::new()
+        .with_config(SessionConfig::new().with_target_partitions(1))
+        .with_default_features()
+        .with_optimizer_rules(vec![])
+        .build();
+    let ctx = SessionContext::new_with_state(session_state);
+
+    let table = Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap());
+    let logical_plan = LogicalPlanBuilder::scan("logs", provider_as_source(table), None)
+        .unwrap()
+        .sort(vec![logical_col("time").sort(false, false)])
+        .unwrap()
+        .filter(logical_col("body").like(logical_lit("%datafusion%")))
+        .unwrap()
+        .project(vec![logical_col("time")])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = ctx
+        .state()
+        .create_physical_plan(&logical_plan)
+        .await
+        .unwrap();
+
+    insta::assert_snapshot!(
+            OptimizationTest::new(plan, FilterPushdown::new(), false),
+            @r"
+        OptimizationTest:
+          input:
+            - FilterExec: body@1 LIKE %datafusion%, projection=[time@0]
+            -   SortExec: expr=[time@0 DESC NULLS LAST], preserve_partitioning=[false]
+            -     DataSourceExec: partitions=1, partition_sizes=[1]
+          output:
+            Ok:
+              - ProjectionExec: expr=[time@0 as time]
+              -   SortExec: expr=[time@0 DESC NULLS LAST], preserve_partitioning=[false]
+              -     FilterExec: body@1 LIKE %datafusion%
+              -       DataSourceExec: partitions=1, partition_sizes=[1]
+        "
     );
 }
