@@ -266,8 +266,8 @@ impl StringViewArrayBuilder {
         };
 
         // SAFETY: views were constructed with correct lengths, offsets, and
-        // prefixes. UTF-8 validity was checked when tainted, or guaranteed
-        // by &str inputs.
+        // prefixes. UTF-8 validity has also been checked, if the input was
+        // tainted.
         let array = unsafe {
             StringViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
