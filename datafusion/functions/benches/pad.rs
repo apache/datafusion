@@ -21,8 +21,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Int64Type};
 use arrow::util::bench_util::{
-    create_primitive_list_array_with_seed, create_string_array_with_len,
-    create_string_view_array_with_len,
+    create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
