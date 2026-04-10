@@ -206,7 +206,7 @@ impl ExprSchemable for Expr {
             Expr::HigherOrderFunction(_func) => {
                 Ok(self.to_field(schema)?.1.data_type().clone())
             }
-            Expr::Lambda(Lambda { params: _, body }) => body.get_type(schema),
+            Expr::Lambda(_lambda) => Ok(DataType::Null),
             Expr::LambdaVariable(LambdaVariable { field, .. }) => {
                 Ok(field.data_type().clone())
             }
@@ -366,7 +366,7 @@ impl ExprSchemable for Expr {
             Expr::HigherOrderFunction(_func) => {
                 Ok(self.to_field(input_schema)?.1.is_nullable())
             }
-            Expr::Lambda(l) => l.body.nullable(input_schema),
+            Expr::Lambda(_lambda) => Ok(true),
             Expr::LambdaVariable(LambdaVariable { field, .. }) => Ok(field.is_nullable()),
         }
     }
@@ -612,12 +612,16 @@ impl ExprSchemable for Expr {
                 let arg_fields = func
                     .args
                     .iter()
-                    .map(|arg| {
-                        let field = arg.to_field(schema)?.1;
-                        match arg {
-                            Expr::Lambda(_lambda) => Ok(ValueOrLambda::Lambda(field)),
-                            _ => Ok(ValueOrLambda::Value(field)),
+                    .map(|arg| match arg {
+                        Expr::Lambda(Lambda { params: _, body }) => {
+                            // use the name of the lambda instead of just the body to help with debugging
+                            Ok(ValueOrLambda::Lambda(Arc::new(Field::new(
+                                arg.qualified_name().1,
+                                body.get_type(schema)?,
+                                body.nullable(schema)?,
+                            ))))
                         }
+                        _ => Ok(ValueOrLambda::Value(arg.to_field(schema)?.1)),
                     })
                     .collect::<Result<Vec<_>>>()?;
 
