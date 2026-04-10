@@ -2332,16 +2332,30 @@ fn collect_target_refs(
     target: &TableReference,
 ) -> Result<Vec<TableReference>> {
     let mut target_refs = vec![target.clone()];
-    input.apply(|node| {
-        if let LogicalPlan::SubqueryAlias(alias) = node
-            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
-            && scan.table_name.resolved_eq(target)
-        {
-            target_refs.push(TableReference::bare(alias.alias.to_string()));
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
+    collect_target_refs_from_target_branch(input, &mut target_refs)?;
     Ok(target_refs)
+}
+
+fn collect_target_refs_from_target_branch(
+    input: &Arc<LogicalPlan>,
+    target_refs: &mut Vec<TableReference>,
+) -> Result<()> {
+    match input.as_ref() {
+        LogicalPlan::Projection(projection) => {
+            collect_target_refs_from_target_branch(&projection.input, target_refs)
+        }
+        LogicalPlan::Filter(filter) => {
+            collect_target_refs_from_target_branch(&filter.input, target_refs)
+        }
+        LogicalPlan::Join(join) => {
+            collect_target_refs_from_target_branch(&join.left, target_refs)
+        }
+        LogicalPlan::SubqueryAlias(alias) => {
+            target_refs.push(TableReference::bare(alias.alias.to_string()));
+            collect_target_refs_from_target_branch(&alias.input, target_refs)
+        }
+        _ => Ok(()),
+    }
 }
 
 fn normalize_update_assignment_expr(expr: Expr, strip_qualifiers: bool) -> Result<Expr> {
@@ -4904,6 +4918,22 @@ digraph {
         assert_eq!(
             assignments.get("b").map(ToString::to_string).as_deref(),
             Some("t1.a")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_extract_update_assignments_preserves_self_join_source_alias() {
+        let assignments = update_assignments_for_sql(
+            "UPDATE t1 AS target SET a = src.a FROM t1 AS src \
+             WHERE target.id = src.id",
+        )
+        .await
+        .unwrap();
+
+        let assignments: HashMap<_, _> = assignments.into_iter().collect();
+        assert_eq!(
+            assignments.get("a").map(ToString::to_string).as_deref(),
+            Some("src.a")
         );
     }
 
