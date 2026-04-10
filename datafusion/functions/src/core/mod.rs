@@ -24,6 +24,7 @@ pub mod arrow_cast;
 pub mod arrow_metadata;
 pub mod arrow_try_cast;
 pub mod arrowtypeof;
+pub mod cast_to_type;
 pub mod coalesce;
 pub mod expr_ext;
 pub mod getfield;
@@ -37,6 +38,7 @@ pub mod nvl2;
 pub mod overlay;
 pub mod planner;
 pub mod r#struct;
+pub mod try_cast_to_type;
 pub mod union_extract;
 pub mod union_tag;
 pub mod version;
@@ -44,6 +46,8 @@ pub mod version;
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, arrow_cast);
 make_udf_function!(arrow_try_cast::ArrowTryCastFunc, arrow_try_cast);
+make_udf_function!(cast_to_type::CastToTypeFunc, cast_to_type);
+make_udf_function!(try_cast_to_type::TryCastToTypeFunc, try_cast_to_type);
 make_udf_function!(nullif::NullIfFunc, nullif);
 make_udf_function!(nvl::NVLFunc, nvl);
 make_udf_function!(nvl2::NVL2Func, nvl2);
@@ -74,6 +78,14 @@ pub mod expr_fn {
     ),(
         arrow_try_cast,
         "Casts a value to a specific Arrow data type, returning NULL if the cast fails",
+        arg1 arg2
+    ),(
+        cast_to_type,
+        "Casts the first argument to the data type of the second argument",
+        arg1 arg2
+    ),(
+        try_cast_to_type,
+        "Casts the first argument to the data type of the second argument, returning NULL on failure",
         arg1 arg2
     ),(
         nvl,
@@ -147,6 +159,8 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         nullif(),
         arrow_cast(),
         arrow_try_cast(),
+        cast_to_type(),
+        try_cast_to_type(),
         arrow_metadata(),
         nvl(),
         nvl2(),
