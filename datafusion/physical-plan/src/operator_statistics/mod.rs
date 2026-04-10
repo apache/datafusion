@@ -45,7 +45,7 @@
 //! 2. [`ProjectionStatisticsProvider`] - column mapping through projections
 //! 3. [`PassthroughStatisticsProvider`] - passthrough for cardinality-preserving operators
 //! 4. [`AggregateStatisticsProvider`] - NDV-based GROUP BY cardinality estimation
-//! 5. [`JoinStatisticsProvider`] - NDV-based join output estimation (hash, sort-merge, cross); nested-loop delegates to built-in
+//! 5. [`JoinStatisticsProvider`] - NDV-based join output estimation (hash, sort-merge, cross)
 //! 6. [`LimitStatisticsProvider`] - caps output at the fetch limit (local and global)
 //! 7. [`UnionStatisticsProvider`] - sums input row counts
 //! 8. [`DefaultStatisticsProvider`] - fallback to `partition_statistics(None)`
@@ -745,9 +745,6 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 /// across all join key columns (assuming independence between keys),
 /// falling back to the Cartesian product when any key lacks NDV on both sides.
 /// For cross joins, uses the exact Cartesian product.
-/// Nested-loop joins delegate to the built-in `partition_statistics` since an
-/// arbitrary `JoinFilter` can be highly selective and the Cartesian product
-/// would overestimate.
 ///
 /// The base inner-join estimate is then adjusted for the join type:
 /// - Semi joins: capped at the preserved-side row count
