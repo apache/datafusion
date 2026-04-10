@@ -178,28 +178,26 @@ pub fn concat_elements_utf8view(
             right.len()
         )));
     }
-    let capacity = left.len();
-    let mut result = StringViewBuilder::with_capacity(capacity);
+    let mut result = StringViewBuilder::with_capacity(left.len());
 
-    // Avoid reallocations by writing to a reused buffer (note we
-    // could be even more efficient r by creating the view directly
-    // here and avoid the buffer but that would be more complex)
+    // Avoid reallocations by writing to a reused buffer (note we could be even
+    // more efficient by creating the view directly here and avoid the buffer
+    // but that would be more complex)
     let mut buffer = String::new();
 
-    // Pre-compute combined null bitmap instead of checking each
-    // array's nulls per row via Option-returning iterators
+    // Pre-compute combined null bitmap, so the per-row NULL check is more
+    // efficient
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
     for i in 0..left.len() {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
             result.append_null();
         } else {
-            use std::fmt::Write;
-            buffer.clear();
             let l = left.value(i);
             let r = right.value(i);
-            write!(&mut buffer, "{l}{r}")
-                .expect("writing into string buffer failed");
+            buffer.clear();
+            buffer.push_str(l);
+            buffer.push_str(r);
             result.try_append_value(&buffer)?;
         }
     }
