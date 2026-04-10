@@ -39,10 +39,12 @@ use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
 };
+use datafusion_expr::preimage::PreimageResult;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, TypeSignature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility, interval_arithmetic::Interval,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -422,6 +424,38 @@ impl ScalarUDFImpl for DateTruncFunc {
         &self.aliases
     }
 
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        _info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        let [precision, col_expr] =
+            datafusion_common::utils::take_function_args(self.name(), args)?;
+
+        let Some(granularity) = precision
+            .as_literal()
+            .and_then(|sv| sv.try_as_str().flatten())
+            .and_then(|s| DateTruncGranularity::from_str(s).ok())
+        else {
+            return Ok(PreimageResult::None);
+        };
+
+        let Some(literal) = lit_expr.as_literal() else {
+            return Ok(PreimageResult::None);
+        };
+
+        let Some((lower, upper)) = date_trunc_preimage_bounds(granularity, literal)
+        else {
+            return Ok(PreimageResult::None);
+        };
+
+        Ok(PreimageResult::Range {
+            expr: col_expr.clone(),
+            interval: Box::new(Interval::try_new(lower, upper)?),
+        })
+    }
+
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // The DATE_TRUNC function preserves the order of its second argument.
         let precision = &input[0];
@@ -568,6 +602,185 @@ where
     T: Datelike,
 {
     1 + 3 * ((date.month() - 1) / 3)
+}
+
+fn date_trunc_preimage_bounds(
+    granularity: DateTruncGranularity,
+    literal: &ScalarValue,
+) -> Option<(ScalarValue, ScalarValue)> {
+    match literal {
+        ScalarValue::TimestampSecond(Some(value), tz_opt) => {
+            let (lower, upper) =
+                timestamp_preimage_bounds(Second, *value, tz_opt.clone(), granularity)?;
+            Some((
+                ScalarValue::TimestampSecond(Some(lower), tz_opt.clone()),
+                ScalarValue::TimestampSecond(Some(upper), tz_opt.clone()),
+            ))
+        }
+        ScalarValue::TimestampMillisecond(Some(value), tz_opt) => {
+            let (lower, upper) = timestamp_preimage_bounds(
+                Millisecond,
+                *value,
+                tz_opt.clone(),
+                granularity,
+            )?;
+            Some((
+                ScalarValue::TimestampMillisecond(Some(lower), tz_opt.clone()),
+                ScalarValue::TimestampMillisecond(Some(upper), tz_opt.clone()),
+            ))
+        }
+        ScalarValue::TimestampMicrosecond(Some(value), tz_opt) => {
+            let (lower, upper) = timestamp_preimage_bounds(
+                Microsecond,
+                *value,
+                tz_opt.clone(),
+                granularity,
+            )?;
+            Some((
+                ScalarValue::TimestampMicrosecond(Some(lower), tz_opt.clone()),
+                ScalarValue::TimestampMicrosecond(Some(upper), tz_opt.clone()),
+            ))
+        }
+        ScalarValue::TimestampNanosecond(Some(value), tz_opt) => {
+            let (lower, upper) = timestamp_preimage_bounds(
+                Nanosecond,
+                *value,
+                tz_opt.clone(),
+                granularity,
+            )?;
+            Some((
+                ScalarValue::TimestampNanosecond(Some(lower), tz_opt.clone()),
+                ScalarValue::TimestampNanosecond(Some(upper), tz_opt.clone()),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Returns timestamp preimage bounds [lower, upper) for:
+/// date_trunc(granularity, expr) = lower.
+fn timestamp_preimage_bounds(
+    unit: TimeUnit,
+    lower: i64,
+    tz_opt: Option<Arc<str>>,
+    granularity: DateTruncGranularity,
+) -> Option<(i64, i64)> {
+    // Coarse timezone-aware buckets can have variable widths around DST.
+    // Keep preimage conservative for those cases.
+    if tz_opt.is_some()
+        && matches!(
+            granularity,
+            DateTruncGranularity::Day
+                | DateTruncGranularity::Week
+                | DateTruncGranularity::Month
+                | DateTruncGranularity::Quarter
+                | DateTruncGranularity::Year
+        )
+    {
+        return None;
+    }
+
+    let tz = parse_tz(&tz_opt).ok().flatten();
+    let truncated = general_date_trunc(unit, lower, tz, granularity).ok()?;
+    if truncated != lower {
+        return None;
+    }
+
+    let upper = if let Some(step) = constant_granularity_step(unit, granularity) {
+        let step = if step == 0 { 1 } else { step };
+        lower.checked_add(step)?
+    } else {
+        next_calendar_boundary_utc(unit, lower, granularity)?
+    };
+
+    Some((lower, upper))
+}
+
+fn constant_granularity_step(
+    unit: TimeUnit,
+    granularity: DateTruncGranularity,
+) -> Option<i64> {
+    match (unit, granularity) {
+        (Second, DateTruncGranularity::Microsecond) => Some(0),
+        (Second, DateTruncGranularity::Millisecond) => Some(0),
+        (Second, DateTruncGranularity::Second) => Some(1),
+        (Second, DateTruncGranularity::Minute) => Some(60),
+        (Second, DateTruncGranularity::Hour) => Some(3_600),
+        (Second, DateTruncGranularity::Day) => Some(86_400),
+        (Second, DateTruncGranularity::Week) => Some(604_800),
+
+        (Millisecond, DateTruncGranularity::Microsecond) => Some(0),
+        (Millisecond, DateTruncGranularity::Millisecond) => Some(1),
+        (Millisecond, DateTruncGranularity::Second) => Some(1_000),
+        (Millisecond, DateTruncGranularity::Minute) => Some(60_000),
+        (Millisecond, DateTruncGranularity::Hour) => Some(3_600_000),
+        (Millisecond, DateTruncGranularity::Day) => Some(86_400_000),
+        (Millisecond, DateTruncGranularity::Week) => Some(604_800_000),
+
+        (Microsecond, DateTruncGranularity::Microsecond) => Some(1),
+        (Microsecond, DateTruncGranularity::Millisecond) => Some(1_000),
+        (Microsecond, DateTruncGranularity::Second) => Some(1_000_000),
+        (Microsecond, DateTruncGranularity::Minute) => Some(60_000_000),
+        (Microsecond, DateTruncGranularity::Hour) => Some(3_600_000_000),
+        (Microsecond, DateTruncGranularity::Day) => Some(86_400_000_000),
+        (Microsecond, DateTruncGranularity::Week) => Some(604_800_000_000),
+
+        (Nanosecond, DateTruncGranularity::Microsecond) => Some(1_000),
+        (Nanosecond, DateTruncGranularity::Millisecond) => Some(1_000_000),
+        (Nanosecond, DateTruncGranularity::Second) => Some(1_000_000_000),
+        (Nanosecond, DateTruncGranularity::Minute) => Some(60_000_000_000),
+        (Nanosecond, DateTruncGranularity::Hour) => Some(3_600_000_000_000),
+        (Nanosecond, DateTruncGranularity::Day) => Some(86_400_000_000_000),
+        (Nanosecond, DateTruncGranularity::Week) => Some(604_800_000_000_000),
+        _ => None,
+    }
+}
+
+fn next_calendar_boundary_utc(
+    unit: TimeUnit,
+    lower: i64,
+    granularity: DateTruncGranularity,
+) -> Option<i64> {
+    let scale = timestamp_unit_scale(unit);
+    let lower_ns = lower.checked_mul(scale)?;
+    let lower_dt = timestamp_ns_to_datetime(lower_ns)?;
+
+    let next_dt = match granularity {
+        DateTruncGranularity::Month => add_month_boundaries(lower_dt, 1)?,
+        DateTruncGranularity::Quarter => add_month_boundaries(lower_dt, 3)?,
+        DateTruncGranularity::Year => {
+            let next_year = lower_dt.year().checked_add(1)?;
+            chrono::NaiveDate::from_ymd_opt(next_year, 1, 1)?.and_hms_opt(0, 0, 0)?
+        }
+        _ => return None,
+    };
+
+    let upper_ns = next_dt.and_utc().timestamp_nanos_opt()?;
+    if upper_ns % scale != 0 {
+        return None;
+    }
+    Some(upper_ns / scale)
+}
+
+fn add_month_boundaries(lower: NaiveDateTime, months: i32) -> Option<NaiveDateTime> {
+    let total_months = lower
+        .year()
+        .checked_mul(12)?
+        .checked_add(lower.month0() as i32)?
+        .checked_add(months)?;
+
+    let next_year = total_months.div_euclid(12);
+    let next_month = total_months.rem_euclid(12) as u32 + 1;
+    chrono::NaiveDate::from_ymd_opt(next_year, next_month, 1)?.and_hms_opt(0, 0, 0)
+}
+
+fn timestamp_unit_scale(unit: TimeUnit) -> i64 {
+    match unit {
+        Second => 1_000_000_000,
+        Millisecond => 1_000_000,
+        Microsecond => 1_000,
+        Nanosecond => 1,
+    }
 }
 
 fn _date_trunc_coarse_with_tz(
@@ -775,7 +988,56 @@ mod tests {
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_expr::preimage::PreimageResult;
+    use datafusion_expr::simplify::SimplifyContext;
+    use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col};
+
+    fn assert_preimage_range(
+        granularity: &str,
+        literal: ScalarValue,
+        expected_lower: ScalarValue,
+        expected_upper: ScalarValue,
+    ) {
+        let date_trunc = DateTruncFunc::new();
+        let args = vec![
+            Expr::Literal(ScalarValue::Utf8(Some(granularity.to_string())), None),
+            col("x"),
+        ];
+        let lit_expr = Expr::Literal(literal.clone(), None);
+
+        let result = date_trunc
+            .preimage(&args, &lit_expr, &SimplifyContext::default())
+            .unwrap();
+
+        match result {
+            PreimageResult::Range { expr, interval } => {
+                assert_eq!(expr, col("x"));
+                assert_eq!(interval.lower().clone(), expected_lower);
+                assert_eq!(interval.upper().clone(), expected_upper);
+            }
+            PreimageResult::None => {
+                panic!("expected range preimage for literal {literal:?}")
+            }
+        }
+    }
+
+    fn assert_preimage_none(granularity: &str, literal: ScalarValue) {
+        let date_trunc = DateTruncFunc::new();
+        let args = vec![
+            Expr::Literal(ScalarValue::Utf8(Some(granularity.to_string())), None),
+            col("x"),
+        ];
+        let lit_expr = Expr::Literal(literal.clone(), None);
+
+        let result = date_trunc
+            .preimage(&args, &lit_expr, &SimplifyContext::default())
+            .unwrap();
+
+        assert!(
+            matches!(result, PreimageResult::None),
+            "expected no preimage for literal {literal:?}"
+        );
+    }
 
     #[test]
     fn date_trunc_test() {
@@ -871,6 +1133,67 @@ mod tests {
             let result = date_trunc_coarse(granularity_enum, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
         });
+    }
+
+    #[test]
+    fn test_date_trunc_preimage_timestamp_valid_cases() {
+        let day_start = string_to_timestamp_nanos("2024-05-01T00:00:00Z").unwrap();
+        let next_day = string_to_timestamp_nanos("2024-05-02T00:00:00Z").unwrap();
+        assert_preimage_range(
+            "day",
+            ScalarValue::TimestampNanosecond(Some(day_start), None),
+            ScalarValue::TimestampNanosecond(Some(day_start), None),
+            ScalarValue::TimestampNanosecond(Some(next_day), None),
+        );
+
+        let month_start = string_to_timestamp_nanos("2024-05-01T00:00:00Z").unwrap();
+        let next_month = string_to_timestamp_nanos("2024-06-01T00:00:00Z").unwrap();
+        assert_preimage_range(
+            "month",
+            ScalarValue::TimestampNanosecond(Some(month_start), None),
+            ScalarValue::TimestampNanosecond(Some(month_start), None),
+            ScalarValue::TimestampNanosecond(Some(next_month), None),
+        );
+
+        assert_preimage_range(
+            "microsecond",
+            ScalarValue::TimestampSecond(Some(1_700_000_000), None),
+            ScalarValue::TimestampSecond(Some(1_700_000_000), None),
+            ScalarValue::TimestampSecond(Some(1_700_000_001), None),
+        );
+    }
+
+    #[test]
+    fn test_date_trunc_preimage_timestamp_timezone_fine_granularity() {
+        let lower = string_to_timestamp_nanos("2024-10-27T02:00:00+02:00").unwrap();
+        let upper = string_to_timestamp_nanos("2024-10-27T02:01:00+02:00").unwrap();
+        let tz = Some(Arc::<str>::from("+02"));
+
+        assert_preimage_range(
+            "minute",
+            ScalarValue::TimestampNanosecond(Some(lower), tz.clone()),
+            ScalarValue::TimestampNanosecond(Some(lower), tz.clone()),
+            ScalarValue::TimestampNanosecond(Some(upper), tz),
+        );
+    }
+
+    #[test]
+    fn test_date_trunc_preimage_none_cases() {
+        let non_truncated = string_to_timestamp_nanos("2024-05-01T10:30:15Z").unwrap();
+        assert_preimage_none(
+            "minute",
+            ScalarValue::TimestampNanosecond(Some(non_truncated), None),
+        );
+
+        let day_start_tz =
+            string_to_timestamp_nanos("2024-10-27T00:00:00+02:00").unwrap();
+        assert_preimage_none(
+            "day",
+            ScalarValue::TimestampNanosecond(
+                Some(day_start_tz),
+                Some(Arc::<str>::from("Europe/Berlin")),
+            ),
+        );
     }
 
     #[test]
