@@ -19,14 +19,14 @@
 //!
 //! This module contains the statistics-based file sorting, non-overlapping
 //! validation, and NULL handling logic used by
-//! [`FileScanConfig::try_pushdown_sort`](crate::file_scan_config::FileScanConfig::try_pushdown_sort).
+//! [`FileScanConfig::try_pushdown_sort`](super::FileScanConfig::try_pushdown_sort).
 //!
 //! Extracted from `file_scan_config.rs` to keep that module focused on
 //! core configuration and data-source plumbing.
 
+use super::FileScanConfig;
 use crate::file::FileSource;
 use crate::file_groups::FileGroup;
-use crate::file_scan_config::FileScanConfig;
 use crate::source::DataSource;
 use crate::statistics::MinMaxStatistics;
 

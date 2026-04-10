@@ -41,7 +41,6 @@ pub mod memory;
 pub mod projection;
 pub mod schema_adapter;
 pub mod sink;
-pub(crate) mod sort_pushdown;
 pub mod source;
 mod statistics;
 pub mod table_schema;

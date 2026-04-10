@@ -18,6 +18,8 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
+pub(crate) mod sort_pushdown;
+
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
@@ -604,7 +606,7 @@ impl DataSource for FileScanConfig {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
                 let orderings =
-                    crate::sort_pushdown::get_projected_output_ordering(self, &schema);
+                    sort_pushdown::get_projected_output_ordering(self, &schema);
 
                 write!(f, "file_groups=")?;
                 FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -1023,7 +1025,7 @@ impl FileScanConfig {
     /// upstream e.g. by `SortPreservingMergeExec`.
     fn validated_output_ordering(&self) -> Vec<LexOrdering> {
         let schema = self.file_source.table_schema().table_schema();
-        crate::sort_pushdown::validate_orderings(
+        sort_pushdown::validate_orderings(
             &self.output_ordering,
             schema,
             &self.file_groups,
@@ -1316,8 +1318,7 @@ impl Debug for FileScanConfig {
 impl DisplayAs for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         let schema = self.projected_schema().map_err(|_| std::fmt::Error {})?;
-        let orderings =
-            crate::sort_pushdown::get_projected_output_ordering(self, &schema);
+        let orderings = sort_pushdown::get_projected_output_ordering(self, &schema);
 
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
