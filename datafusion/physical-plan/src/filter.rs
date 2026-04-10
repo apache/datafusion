@@ -341,7 +341,10 @@ impl FilterExec {
             schema,
             &input_stats.column_statistics,
             analysis_ctx.boundaries,
-            num_rows.get_value().copied(),
+            match &num_rows {
+                Precision::Absent => None,
+                p => Some(*p),
+            },
         );
         Ok(Statistics {
             num_rows,
@@ -782,7 +785,7 @@ fn collect_new_statistics(
     schema: &SchemaRef,
     input_column_stats: &[ColumnStatistics],
     analysis_boundaries: Vec<ExprBoundaries>,
-    filtered_num_rows: Option<usize>,
+    filtered_num_rows: Option<Precision<usize>>,
 ) -> Vec<ColumnStatistics> {
     analysis_boundaries
         .into_iter()
@@ -824,9 +827,7 @@ fn collect_new_statistics(
                     Precision::Exact(1)
                 } else {
                     match filtered_num_rows {
-                        Some(rows) => {
-                            distinct_count.to_inexact().min(&Precision::Inexact(rows))
-                        }
+                        Some(rows) => distinct_count.to_inexact().min(&rows),
                         None => distinct_count.to_inexact(),
                     }
                 };
