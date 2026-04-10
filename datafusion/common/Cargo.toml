@@ -49,7 +49,7 @@ parquet_encryption = [
 ]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
-parquet = ["dep:parquet", "object_store"]
+parquet = ["dep:parquet"]
 sql = ["sqlparser"]
 
 [[bench]]
