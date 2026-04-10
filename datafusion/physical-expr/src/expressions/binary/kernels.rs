@@ -18,6 +18,7 @@
 //! This module contains computation kernels that are specific to
 //! datafusion and not (yet) targeted to  port upstream to arrow
 use arrow::array::*;
+use arrow::buffer::NullBuffer;
 use arrow::compute::kernels::bitwise::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
@@ -185,16 +186,21 @@ pub fn concat_elements_utf8view(
     // here and avoid the buffer but that would be more complex)
     let mut buffer = String::new();
 
-    for (left, right) in left.iter().zip(right.iter()) {
-        if let (Some(left), Some(right)) = (left, right) {
+    // Pre-compute combined null bitmap instead of checking each
+    // array's nulls per row via Option-returning iterators
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+
+    for i in 0..left.len() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            result.append_null();
+        } else {
             use std::fmt::Write;
             buffer.clear();
-            write!(&mut buffer, "{left}{right}")
+            let l = left.value(i);
+            let r = right.value(i);
+            write!(&mut buffer, "{l}{r}")
                 .expect("writing into string buffer failed");
             result.try_append_value(&buffer)?;
-        } else {
-            // at least one of the values is null, so the output is also null
-            result.append_null()
         }
     }
     Ok(result.finish())
