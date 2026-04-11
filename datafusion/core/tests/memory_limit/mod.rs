@@ -213,6 +213,7 @@ async fn sort_merge_join_spill() {
         .with_config(config)
         .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
+        .with_expected_success()
         .run()
         .await
 }

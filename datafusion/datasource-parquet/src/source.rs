@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
-use crate::opener::ParquetOpener;
 use crate::opener::build_pruning_predicates;
+use crate::opener::{ParquetMorselizer, ParquetOpener};
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
@@ -543,32 +543,34 @@ impl FileSource for ParquetSource {
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
 
         let opener = Arc::new(ParquetOpener {
-            partition_index: partition,
-            projection: self.projection.clone(),
-            batch_size: self
-                .batch_size
-                .expect("Batch size must set before creating ParquetOpener"),
-            limit: base_config.limit,
-            preserve_order: base_config.preserve_order,
-            predicate: self.predicate.clone(),
-            table_schema: self.table_schema.clone(),
-            metadata_size_hint: self.metadata_size_hint,
-            metrics: self.metrics().clone(),
-            parquet_file_reader_factory,
-            pushdown_filters: self.pushdown_filters(),
-            reorder_filters: self.reorder_filters(),
-            force_filter_selections: self.force_filter_selections(),
-            enable_page_index: self.enable_page_index(),
-            enable_bloom_filter: self.bloom_filter_on_read(),
-            enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
-            coerce_int96,
-            #[cfg(feature = "parquet_encryption")]
-            file_decryption_properties,
-            expr_adapter_factory,
-            #[cfg(feature = "parquet_encryption")]
-            encryption_factory: self.get_encryption_factory_with_config(),
-            max_predicate_cache_size: self.max_predicate_cache_size(),
-            reverse_row_groups: self.reverse_row_groups,
+            morselizer: ParquetMorselizer {
+                partition_index: partition,
+                projection: self.projection.clone(),
+                batch_size: self
+                    .batch_size
+                    .expect("Batch size must set before creating ParquetOpener"),
+                limit: base_config.limit,
+                preserve_order: base_config.preserve_order,
+                predicate: self.predicate.clone(),
+                table_schema: self.table_schema.clone(),
+                metadata_size_hint: self.metadata_size_hint,
+                metrics: self.metrics().clone(),
+                parquet_file_reader_factory,
+                pushdown_filters: self.pushdown_filters(),
+                reorder_filters: self.reorder_filters(),
+                force_filter_selections: self.force_filter_selections(),
+                enable_page_index: self.enable_page_index(),
+                enable_bloom_filter: self.bloom_filter_on_read(),
+                enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
+                coerce_int96,
+                #[cfg(feature = "parquet_encryption")]
+                file_decryption_properties,
+                expr_adapter_factory,
+                #[cfg(feature = "parquet_encryption")]
+                encryption_factory: self.get_encryption_factory_with_config(),
+                max_predicate_cache_size: self.max_predicate_cache_size(),
+                reverse_row_groups: self.reverse_row_groups,
+            },
         });
         Ok(opener)
     }
