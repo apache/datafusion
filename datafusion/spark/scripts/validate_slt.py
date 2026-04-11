@@ -89,8 +89,8 @@ DF_TO_SPARK_CAST_TYPE = {
     "BYTEA": "BINARY",
 }
 
-# Unsupported Arrow types for Spark (no direct equivalent)
-UNSUPPORTED_ARROW_TYPES: set[str] = set()
+# Pre-compiled regex for Decimal Arrow types in arrow_cast
+_DECIMAL_ARROW_RE = re.compile(r"Decimal(?:32|64|128|256)\((\d+),\s*(\d+)\)")
 
 # ---------------------------------------------------------------------------
 # SLT record types
@@ -343,13 +343,13 @@ def _replace_arrow_cast_nested(sql: str) -> str:
 
             # Find the last top-level comma (outside parens and quotes)
             depth = 0
-            in_quote = False
+            in_quote: Optional[str] = None
             last_comma = -1
             for idx, ch in enumerate(inner):
-                if ch in ("'", '"') and not in_quote:
+                if ch in ("'", '"') and in_quote is None:
                     in_quote = ch
                 elif ch == in_quote:
-                    in_quote = False
+                    in_quote = None
                 elif not in_quote:
                     if ch == "(":
                         depth += 1
@@ -365,21 +365,11 @@ def _replace_arrow_cast_nested(sql: str) -> str:
             expr = inner[:last_comma].strip()
             arrow_type_raw = inner[last_comma + 1 :].strip().strip("'\"")
 
-            if arrow_type_raw in UNSUPPORTED_ARROW_TYPES:
-                raise _SkipQuery(f"unsupported Arrow type: {arrow_type_raw}")
-            if arrow_type_raw.startswith("Dictionary("):
-                raise _SkipQuery(f"unsupported Arrow type: {arrow_type_raw}")
-            if arrow_type_raw.startswith(("LargeList(", "FixedSizeList(")):
-                raise _SkipQuery(f"unsupported Arrow type: {arrow_type_raw}")
-            if arrow_type_raw.startswith("List("):
-                # List(X) -> ARRAY<spark_type> - skip for now
+            if arrow_type_raw.startswith(("Dictionary(", "LargeList(", "FixedSizeList(", "List(")):
                 raise _SkipQuery(f"unsupported Arrow type: {arrow_type_raw}")
 
-            # Handle Decimal types: Decimal32(p,s), Decimal64(p,s),
-            # Decimal128(p,s), Decimal256(p,s) -> DECIMAL(p,s)
-            decimal_match = re.match(
-                r"Decimal(?:32|64|128|256)\((\d+),\s*(\d+)\)", arrow_type_raw
-            )
+            # Decimal32(p,s), Decimal64(p,s), Decimal128(p,s), Decimal256(p,s) -> DECIMAL(p,s)
+            decimal_match = _DECIMAL_ARROW_RE.match(arrow_type_raw)
             if decimal_match:
                 p, s = decimal_match.group(1), decimal_match.group(2)
                 if int(p) > 38:
@@ -679,10 +669,13 @@ def get_spark():
         )
         # Suppress Spark logging
         _spark_session.sparkContext.setLogLevel("WARN")
-        # Detect Spark version
-        ver_str = _spark_session.version  # e.g. "3.5.8" or "4.0.2"
-        _spark_version = tuple(int(x) for x in ver_str.split(".")[:2])
+        _spark_version = _parse_version(_spark_session.version)
     return _spark_session
+
+
+def _parse_version(ver_str: str) -> tuple[int, ...]:
+    """Parse a version string like '3.5.8' into a (major, minor) tuple."""
+    return tuple(int(x) for x in ver_str.split(".")[:2])
 
 
 def spark_version() -> tuple[int, ...]:
@@ -1136,8 +1129,17 @@ def _check_version_condition(op: str, ver: tuple[int, ...]) -> bool:
     return True  # unknown op, include by default
 
 
-def load_known_failures(filepath: str) -> set[str]:
-    """Load known failure file paths from a text file.
+@dataclass
+class _KnownFailureEntry:
+    """A known-failure entry, possibly with a Spark version condition."""
+
+    path: str
+    op: Optional[str] = None
+    ver: Optional[tuple[int, ...]] = None
+
+
+def load_known_failures(filepath: str) -> list[_KnownFailureEntry]:
+    """Load known failure entries from a text file.
 
     Each non-blank, non-comment line is a .slt file path relative to the
     spark test directory (e.g., 'string/format_string.slt').
@@ -1145,24 +1147,39 @@ def load_known_failures(filepath: str) -> set[str]:
     Lines can optionally have a version condition prefix:
         [spark>=4.0] math/abs.slt
     which means the entry only applies when running against Spark >= 4.0.
+
+    Returns a list of entries; version conditions are evaluated lazily via
+    resolve_known_failures() after SparkSession is available.
     """
-    known = set()
+    entries: list[_KnownFailureEntry] = []
     if not os.path.isfile(filepath):
-        return known
+        return entries
     with open(filepath) as f:
         for line in f:
             stripped = line.strip()
             if stripped and not stripped.startswith("#"):
-                # Check for version condition
                 m = _VERSION_CONDITION_RE.match(stripped)
                 if m:
                     op, ver_str, path = m.group(1), m.group(2), m.group(3)
-                    ver = tuple(int(x) for x in ver_str.split("."))
-                    if not _check_version_condition(op, ver):
-                        continue
-                    stripped = path
-                # Normalize path separators
-                known.add(stripped.replace("\\", "/"))
+                    ver = _parse_version(ver_str)
+                    entries.append(_KnownFailureEntry(
+                        path=path.replace("\\", "/"), op=op, ver=ver
+                    ))
+                else:
+                    entries.append(_KnownFailureEntry(
+                        path=stripped.replace("\\", "/")
+                    ))
+    return entries
+
+
+def resolve_known_failures(entries: list[_KnownFailureEntry]) -> set[str]:
+    """Resolve version-conditional entries against the running Spark version."""
+    known = set()
+    for entry in entries:
+        if entry.op is not None and entry.ver is not None:
+            if not _check_version_condition(entry.op, entry.ver):
+                continue
+        known.add(entry.path)
     return known
 
 
@@ -1196,13 +1213,13 @@ def main():
     )
     args = parser.parse_args()
 
-    # Load known failures
+    # Load known failure entries (version conditions resolved after Spark init)
     if args.known_failures.lower() == "none":
-        known_failures = set()
+        known_failure_entries: list[_KnownFailureEntry] = []
     else:
-        known_failures = load_known_failures(args.known_failures)
-        if known_failures:
-            print(f"Loaded {len(known_failures)} known failure file(s)")
+        known_failure_entries = load_known_failures(args.known_failures)
+        if known_failure_entries:
+            print(f"Loaded {len(known_failure_entries)} known failure entry(ies)")
 
     files = discover_slt_files(args.test_dir, args.path)
     if not files:
@@ -1210,6 +1227,9 @@ def main():
         sys.exit(1)
 
     print(f"Found {len(files)} .slt file(s) to validate\n")
+
+    # Resolve version-conditional known failures now that Spark will init on demand
+    known_failures = resolve_known_failures(known_failure_entries)
 
     total_passed = 0
     total_failed = 0
