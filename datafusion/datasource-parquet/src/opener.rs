@@ -926,16 +926,6 @@ impl MetadataLoadedParquetOpen {
             &prepared.predicate_creation_errors,
         );
 
-        // Only build page pruning predicate if page index is enabled
-        let page_pruning_predicate = if prepared.enable_page_index {
-            prepared.predicate.as_ref().and_then(|predicate| {
-                let p = build_page_pruning_predicate(predicate, &physical_file_schema);
-                (p.filter_number() > 0).then_some(p)
-            })
-        } else {
-            None
-        };
-
         Ok(FiltersPreparedParquetOpen {
             loaded: MetadataLoadedParquetOpen {
                 prepared,
@@ -943,7 +933,23 @@ impl MetadataLoadedParquetOpen {
                 options,
             },
             pruning_predicate,
-            page_pruning_predicate,
+            page_pruning_predicate: None,
+        })
+    }
+}
+
+impl MetadataLoadedParquetOpen {
+    fn has_page_index(&self) -> bool {
+        self.reader_metadata.metadata().column_index().is_some()
+            && self.reader_metadata.metadata().offset_index().is_some()
+    }
+}
+
+impl PreparedParquetOpen {
+    fn build_page_pruning_predicate(&self) -> Option<Arc<PagePruningAccessPlanFilter>> {
+        self.predicate.as_ref().and_then(|predicate| {
+            let p = build_page_pruning_predicate(predicate, &self.physical_file_schema);
+            (p.filter_number() > 0).then_some(p)
         })
     }
 }
@@ -953,9 +959,9 @@ impl FiltersPreparedParquetOpen {
     async fn load_page_index(mut self) -> Result<Self> {
         // The page index is not stored inline in the parquet footer so the
         // metadata load above may not have read the page index structures yet.
-        // If we need them for reading and they aren't yet loaded, we need to
+        // If we need them for reading, and they aren't yet loaded, we need to
         // load them now.
-        if self.page_pruning_predicate.is_some() {
+        if self.loaded.prepared.enable_page_index {
             self.loaded.reader_metadata = load_page_index(
                 self.loaded.reader_metadata,
                 &mut self.loaded.prepared.async_file_reader,
@@ -965,6 +971,13 @@ impl FiltersPreparedParquetOpen {
                     .with_page_index_policy(PageIndexPolicy::Optional),
             )
             .await?;
+
+            // Since creating a page pruning predicate can be non trivial
+            // only do it when we are sure we have enough metadata to use it
+            if self.loaded.has_page_index() {
+                self.page_pruning_predicate =
+                    self.loaded.prepared.build_page_pruning_predicate();
+            }
         }
 
         Ok(self)
@@ -2708,70 +2721,122 @@ mod test {
         );
     }
 
-    /// Test that page pruning predicates are only built and applied when `enable_page_index` is true.
-    ///
-    /// The file has a single row group with 10 pages (10 rows each, values 1..100).
-    /// With page index enabled, pages whose max value <= 90 are pruned, returning only
-    /// the last page (rows 91..100). With page index disabled, all 100 rows are returned
-    /// since neither pushdown nor row-group pruning is active.
+    /// Test that page pruning occurs when enabled and page index metadata is available.
     #[tokio::test]
     async fn test_page_pruning_predicate_respects_enable_page_index() {
-        use parquet::file::properties::WriterProperties;
+        let fixture = PagePruningFixture::new("test-with-page-index.parquet")
+            .with_write_page_index(true);
+        let rows = fixture.test(true).await;
 
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        assert_eq!(rows, 10, "page index should prune 9 of 10 pages");
+    }
 
-        // 100 rows with values 1..=100, written as a single row group with 10 rows per page
-        let values: Vec<i32> = (1..=100).collect();
-        let batch = record_batch!((
-            "a",
-            Int32,
-            values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
-        ))
-        .unwrap();
-        let props = WriterProperties::builder()
-            .set_data_page_row_count_limit(10)
-            .set_write_batch_size(10)
-            .build();
-        let schema = batch.schema();
-        let data_size = write_parquet_batches(
-            Arc::clone(&store),
-            "test.parquet",
-            vec![batch],
-            Some(props),
-        )
-        .await;
+    /// Test that page pruning does not occur when page index pruning is disabled.
+    #[tokio::test]
+    async fn test_page_pruning_predicate_disabled_without_option() {
+        let fixture = PagePruningFixture::new("test-page-index-disabled.parquet")
+            .with_write_page_index(true);
+        let rows = fixture.test(false).await;
 
-        let file = PartitionedFile::new("test.parquet".to_string(), data_size as u64);
+        assert_eq!(rows, 100, "without page index all rows are returned");
+    }
 
-        // predicate: a > 90 — should allow page index to prune first 9 pages
-        let predicate = logical2physical(&col("a").gt(lit(90i32)), &schema);
+    /// Test that page pruning does not occur when page index metadata is unavailable.
+    #[tokio::test]
+    async fn test_page_pruning_predicate_disabled_without_page_index() {
+        let fixture = PagePruningFixture::new("test-without-page-index.parquet")
+            .with_write_page_index(false);
+        let rows = fixture.test(true).await;
 
-        let make_opener = |enable_page_index| {
+        assert_eq!(
+            rows, 100,
+            "when page index metadata is unavailable all rows are returned"
+        );
+    }
+
+    struct PagePruningFixture {
+        store: Arc<dyn ObjectStore>,
+        schema: SchemaRef,
+        path: String,
+        predicate: Arc<dyn PhysicalExpr>,
+        write_page_index: bool,
+    }
+
+    impl PagePruningFixture {
+        // Creates a page pruning fixture with default settings.
+        fn new(path: &str) -> Self {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let values: Vec<i32> = (1..=100).collect();
+            let batch = record_batch!((
+                "a",
+                Int32,
+                values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
+            ))
+            .unwrap();
+            let schema = batch.schema();
+            let predicate = logical2physical(&col("a").gt(lit(90i32)), &schema);
+
+            Self {
+                store,
+                schema,
+                path: path.to_string(),
+                predicate,
+                write_page_index: false,
+            }
+        }
+
+        // Configures whether the generated parquet file should include page indexes.
+        fn with_write_page_index(mut self, write_page_index: bool) -> Self {
+            self.write_page_index = write_page_index;
+            self
+        }
+
+        // Writes the parquet test file and returns the matching partitioned file.
+        async fn create_file(&self) -> PartitionedFile {
+            use parquet::file::properties::WriterProperties;
+
+            let values: Vec<i32> = (1..=100).collect();
+            let batch = record_batch!((
+                "a",
+                Int32,
+                values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
+            ))
+            .unwrap();
+            let props = WriterProperties::builder()
+                .set_data_page_row_count_limit(10)
+                .set_write_batch_size(10)
+                .set_offset_index_disabled(!self.write_page_index)
+                .build();
+            let size = write_parquet_batches(
+                Arc::clone(&self.store),
+                &self.path,
+                vec![batch],
+                Some(props),
+            )
+            .await;
+
+            PartitionedFile::new(self.path.clone(), size as u64)
+        }
+
+        // Builds a parquet opener configured so page pruning is the only pruning path.
+        fn opener(&self, enable_page_index: bool) -> ParquetOpener {
             ParquetOpenerBuilder::new()
-                .with_store(Arc::clone(&store))
-                .with_schema(Arc::clone(&schema))
-                .with_predicate(Arc::clone(&predicate))
+                .with_store(Arc::clone(&self.store))
+                .with_schema(Arc::clone(&self.schema))
+                .with_predicate(Arc::clone(&self.predicate))
                 .with_enable_page_index(enable_page_index)
-                // disable pushdown and row-group pruning so the only pruning path is page index
                 .with_pushdown_filters(false)
                 .with_row_group_stats_pruning(false)
                 .build()
-        };
-        let (_, rows_with_page_index) = count_batches_and_rows(
-            make_opener(true).open(file.clone()).unwrap().await.unwrap(),
-        )
-        .await;
-        let (_, rows_without_page_index) =
-            count_batches_and_rows(make_opener(false).open(file).unwrap().await.unwrap())
-                .await;
+        }
 
-        assert_eq!(
-            rows_with_page_index, 10,
-            "page index should prune 9 of 10 pages"
-        );
-        assert_eq!(
-            rows_without_page_index, 100,
-            "without page index all rows are returned"
-        );
+        // Writes the test file, opens it, and returns only the produced row count.
+        async fn test(&self, enable_page_index: bool) -> usize {
+            let file = self.create_file().await;
+            let opener = self.opener(enable_page_index);
+            let (_, rows) =
+                count_batches_and_rows(opener.open(file).unwrap().await.unwrap()).await;
+            rows
+        }
     }
 }
