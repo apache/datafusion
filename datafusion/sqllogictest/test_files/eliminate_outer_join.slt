@@ -199,6 +199,133 @@ select * from t1 left join t2 on t1.a = t2.x where t2.x in (1, 2) or t2.x is nul
 NULL 40 d NULL NULL NULL
 
 ###
+### LIKE tests
+###
+
+# LEFT JOIN + WHERE t2.z LIKE ... -> INNER JOIN
+# LIKE is null-rejecting: if t2.z is NULL, LIKE returns NULL (filtered out).
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where t2.z like 'p%';
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.z LIKE Utf8View("p%")
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where t2.z like 'p%';
+----
+1 10 a 1 100 p
+
+# RIGHT JOIN + WHERE t1.c LIKE ... -> INNER JOIN
+query TT
+explain select * from t1 right join t2 on t1.a = t2.x where t1.c like '%b%';
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--Filter: t1.c LIKE Utf8View("%b%")
+03)----TableScan: t1 projection=[a, b, c]
+04)--TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 right join t2 on t1.a = t2.x where t1.c like '%b%';
+----
+2 20 b 2 200 q
+
+###
+### IS TRUE / IS FALSE / IS NOT UNKNOWN tests
+###
+
+# LEFT JOIN + WHERE (t2.y > 150) IS TRUE -> INNER JOIN
+# IS TRUE is null-rejecting: if the expression is NULL, IS TRUE returns false.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is true;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.y > Int32(150) IS TRUE
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is true;
+----
+2 20 b 2 200 q
+
+# LEFT JOIN + WHERE (t2.y > 150) IS FALSE -> INNER JOIN
+# IS FALSE is null-rejecting: if the expression is NULL, IS FALSE returns false.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is false;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.y > Int32(150) IS FALSE
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is false;
+----
+1 10 a 1 100 p
+
+# LEFT JOIN + WHERE (t2.y > 150) IS NOT UNKNOWN -> INNER JOIN
+# IS NOT UNKNOWN is null-rejecting: if the expression is NULL, IS NOT UNKNOWN returns false.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is not unknown;
+----
+logical_plan
+01)Inner Join: t1.a = t2.x
+02)--TableScan: t1 projection=[a, b, c]
+03)--Filter: t2.y > Int32(150) IS NOT UNKNOWN
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is not unknown;
+----
+1 10 a 1 100 p
+2 20 b 2 200 q
+
+###
+### Negative: IS NOT TRUE / IS UNKNOWN should NOT eliminate
+###
+
+# LEFT JOIN + WHERE (t2.y > 150) IS NOT TRUE -> stays LEFT JOIN
+# IS NOT TRUE returns true for NULL, so it is NOT null-rejecting.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is not true;
+----
+logical_plan
+01)Filter: t2.y > Int32(150) IS NOT TRUE
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b, c]
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is not true;
+----
+1 10 a 1 100 p
+3 30 c NULL NULL NULL
+NULL 40 d NULL NULL NULL
+
+# LEFT JOIN + WHERE (t2.y > 150) IS UNKNOWN -> stays LEFT JOIN
+# IS UNKNOWN returns true for NULL, so it is NOT null-rejecting.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is unknown;
+----
+logical_plan
+01)Filter: t2.y > Int32(150) IS UNKNOWN
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b, c]
+04)----TableScan: t2 projection=[x, y, z]
+
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is unknown;
+----
+3 30 c NULL NULL NULL
+NULL 40 d NULL NULL NULL
+
+###
 ### Cleanup
 ###
 
