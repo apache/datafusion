@@ -1128,9 +1128,9 @@ fn rewrite_expr_to_prunable(
         verify_support_type_for_prune(&from_type, cast.cast_type())?;
         let (left, op, right) =
             rewrite_expr_to_prunable(cast.expr(), op, scalar_expr, schema)?;
-        let left = Arc::new(phys_expr::CastExpr::new(
+        let left = Arc::new(phys_expr::CastExpr::new_with_target_field(
             left,
-            cast.cast_type().clone(),
+            Arc::clone(cast.target_field()),
             None,
         ));
         Ok((left, op, right))
