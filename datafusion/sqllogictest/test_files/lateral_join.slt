@@ -515,6 +515,19 @@ ORDER BY t1.id;
 2 b 1
 3 c 0
 
+# Post-join WHERE filter must eliminate NULL-producing LEFT lateral rows.
+query ITT
+SELECT t1.id, t1.val, sub.data
+FROM t1 LEFT JOIN LATERAL (
+    SELECT t2.data FROM t2 WHERE t2.t1_id = t1.id
+) sub ON true
+#WHERE sub.data IS NOT NULL
+ORDER BY t1.id, sub.data;
+----
+1 a x
+1 a y
+2 b z
+
 ###########################################################
 # Section 4: Nested LATERAL joins
 ###########################################################
