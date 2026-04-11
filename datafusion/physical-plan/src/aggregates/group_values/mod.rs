@@ -41,7 +41,7 @@ pub(crate) use single_group_by::primitive::HashValue;
 use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive, dictionary::GroupValuesDictionary,
     },
     order::GroupOrdering,
 };
@@ -137,6 +137,9 @@ pub fn new_group_values(
 ) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
+        println!(
+            "[should be dictionary encoded] single column group by with data type: {d:#?}"
+        );
 
         macro_rules! downcast_helper {
             ($t:ty, $d:ident) => {
@@ -196,6 +199,11 @@ pub fn new_group_values(
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new()));
             }
+            /*DataType::Dictionary(_, _) => {
+                println!("dictionary type detected, using SingleDictionaryGroupValues");
+                return Ok(Box::new(SingleDictionaryGroupValues::new()));
+
+            }*/
             _ => {}
         }
     }
@@ -207,6 +215,7 @@ pub fn new_group_values(
             Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
         }
     } else {
+        // TODO:  add specialized implementation for dictionary encoding columns for 2+ group by columns case
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
     }
 }

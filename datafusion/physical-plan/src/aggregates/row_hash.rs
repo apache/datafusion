@@ -502,8 +502,10 @@ impl GroupedHashAggregateStream {
             .iter()
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
+        println!("aggregation input schema: {:#?}", agg.input().schema());
 
         let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
+        println!("(group_schema): {group_schema:#?}");
 
         // fix https://github.com/apache/datafusion/issues/13949
         // Builds a **partial aggregation** schema by combining the group columns and
@@ -941,15 +943,18 @@ impl GroupedHashAggregateStream {
         } else {
             evaluate_optional(&self.filter_expressions, batch)?
         };
+        println!("group_by_values: {:#?}", group_by_values);
 
         for group_values in &group_by_values {
             let groups_start_time = Instant::now();
 
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
+            println!("pre group_values.intern() call to self.current_group_indices: {:#?}", self.current_group_indices);
             self.group_values
                 .intern(group_values, &mut self.current_group_indices)?;
             let group_indices = &self.current_group_indices;
+            println!("post group_values.intern() call to self.current_group_indices: {:#?}", self.current_group_indices);
 
             // Update ordering information if necessary
             let total_num_groups = self.group_values.len();
@@ -1697,6 +1702,109 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod dictionary_aggregation {
+    use super::*;
+    use crate::aggregates::{ArrayRef, DataType, Field, RecordBatch, Schema};
+    use crate::expressions::col;
+    use crate::test::TestMemoryExec;
+    use arrow::datatypes::UInt8Type;
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+
+    /// Equivalent SQL:
+    /// SELECT region, COUNT(*)
+    /// FROM events
+    /// GROUP BY region
+    ///
+    /// Smoke test to verify that aggregation over a dictionary-encoded
+    /// GROUP BY column produces output without panicking or erroring.
+    /// region is a low cardinality dictionary-encoded string column
+    /// with 3 distinct values across 6 rows, mirroring a realistic
+    /// events table where region is always present.
+    #[tokio::test]
+    async fn test_count_group_by_dictionary_column() -> Result<()> {
+        // dictionary encoded region column
+        // 3 distinct values across 6 rows
+        let keys = UInt8Array::from(vec![0, 1, 0, 2, 1, 0]);
+        let values = StringArray::from(vec!["us-east", "us-west", "eu-central"]);
+        let region_col: ArrayRef = Arc::new(
+            DictionaryArray::<UInt8Type>::try_new(keys, Arc::new(values)).unwrap(),
+        );
+
+        // event_id column to count
+        let event_id_col: ArrayRef =
+            Arc::new(Int64Array::from(vec![1001, 1002, 1003, 1004, 1005, 1006]));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "region",
+                DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new("event_id", DataType::Int64, false),
+        ]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![region_col, event_id_col])?;
+
+        let exec = Arc::new(TestMemoryExec::try_new(
+            &[vec![batch]],
+            schema.clone(),
+            None,
+        )?);
+
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![(
+                col("region", &schema)?,
+                "region".to_string(),
+            )]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("event_id", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("count")
+                    .build()?,
+            )],
+            vec![None],
+            exec,
+            schema,
+        )?;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let mut stream = GroupedHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
+
+        let mut batches = vec![];
+        while let Some(result) = stream.next().await {
+            batches.push(result?);
+        }
+
+        // verify we got output
+        assert!(!batches.is_empty());
+        // verify we got 3 groups - one per distinct region
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
+        println!("record batches: {:#?}", batches);
+
+        Ok(())
+    }
+    #[test]
+    fn test_new_group_values_hits_dictionary() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "region",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        // this is the call that routes to new_group_values internally
+        let group_values = new_group_values(schema, &GroupOrdering::None)?;
+
+        // currently falls through to GroupValuesRows
+        // this is where your Dictionary arm would intercept it
+        assert_eq!(group_values.len(), 0);
         Ok(())
     }
 }
