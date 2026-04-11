@@ -59,6 +59,9 @@ map/map_from_entries.slt
 # str_to_map empty key: (empty) vs empty string in map display
 map/str_to_map.slt
 
+# abs() on max-precision DECIMAL(38,10) overflows in Spark 4.x
+[spark>=4.0] math/abs.slt
+
 # Float32 precision loss in negative() for float max values
 # Scientific notation in cast translation for float max values
 math/negative.slt

@@ -41,7 +41,11 @@ concurrency:
 jobs:
   pyspark-validation:
     runs-on: ubuntu-latest
-    name: Validate .slt tests against PySpark
+    strategy:
+      matrix:
+        pyspark-version: ['3.5.8', '4.0.2']
+      fail-fast: false
+    name: Validate .slt tests against PySpark ${{ matrix.pyspark-version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,7 +61,7 @@ jobs:
           java-version: '17'
 
       - name: Install PySpark
-        run: pip install pyspark==4.0.2
+        run: pip install pyspark==${{ matrix.pyspark-version }}
 
       - name: Run PySpark validation
         run: python datafusion/spark/scripts/validate_slt.py

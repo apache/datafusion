@@ -1109,11 +1109,38 @@ def cleanup_tables():
         pass
 
 
+_VERSION_CONDITION_RE = re.compile(
+    r"^\[spark([<>=!]+)(\d+\.\d+)\]\s+(.+)$"
+)
+
+
+def _check_version_condition(op: str, ver: tuple[int, ...]) -> bool:
+    """Check if the current Spark version satisfies the condition."""
+    current = spark_version()
+    if op == ">=":
+        return current >= ver
+    if op == "<=":
+        return current <= ver
+    if op == ">":
+        return current > ver
+    if op == "<":
+        return current < ver
+    if op == "==":
+        return current == ver
+    if op == "!=":
+        return current != ver
+    return True  # unknown op, include by default
+
+
 def load_known_failures(filepath: str) -> set[str]:
     """Load known failure file paths from a text file.
 
     Each non-blank, non-comment line is a .slt file path relative to the
     spark test directory (e.g., 'string/format_string.slt').
+
+    Lines can optionally have a version condition prefix:
+        [spark>=4.0] math/abs.slt
+    which means the entry only applies when running against Spark >= 4.0.
     """
     known = set()
     if not os.path.isfile(filepath):
@@ -1122,6 +1149,14 @@ def load_known_failures(filepath: str) -> set[str]:
         for line in f:
             stripped = line.strip()
             if stripped and not stripped.startswith("#"):
+                # Check for version condition
+                m = _VERSION_CONDITION_RE.match(stripped)
+                if m:
+                    op, ver_str, path = m.group(1), m.group(2), m.group(3)
+                    ver = tuple(int(x) for x in ver_str.split("."))
+                    if not _check_version_condition(op, ver):
+                        continue
+                    stripped = path
                 # Normalize path separators
                 known.add(stripped.replace("\\", "/"))
     return known
