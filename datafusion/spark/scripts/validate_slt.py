@@ -57,6 +57,10 @@ ARROW_TO_SPARK_TYPE = {
     "Binary": "BINARY",
     "Date32": "DATE",
     "Date64": "DATE",
+    "Utf8View": "STRING",
+    "LargeUtf8": "STRING",
+    "BinaryView": "BINARY",
+    "LargeBinary": "BINARY",
 }
 
 # DataFusion cast type -> Spark type mapping
@@ -85,13 +89,8 @@ DF_TO_SPARK_CAST_TYPE = {
     "BYTEA": "BINARY",
 }
 
-# Unsupported Arrow types for Spark
-UNSUPPORTED_ARROW_TYPES = {
-    "Utf8View",
-    "LargeUtf8",
-    "LargeBinary",
-    "BinaryView",
-}
+# Unsupported Arrow types for Spark (no direct equivalent)
+UNSUPPORTED_ARROW_TYPES: set[str] = set()
 
 # ---------------------------------------------------------------------------
 # SLT record types
@@ -314,7 +313,8 @@ def _translate_cast_type(df_type: str) -> Optional[str]:
         if m and int(m.group(1)) > 38:
             raise _SkipQuery(f"Decimal precision {m.group(1)} exceeds Spark max of 38")
         return df_type  # pass through
-    return upper  # pass through and hope for the best
+    # Unknown type - skip rather than produce a misleading test failure
+    raise _SkipQuery(f"unsupported cast type: {df_type}")
 
 
 class _SkipQuery(Exception):
@@ -341,16 +341,22 @@ def _replace_arrow_cast_nested(sql: str) -> str:
                 i += 1
             inner = sql[inner_start : i - 1]
 
-            # Find the last top-level comma
+            # Find the last top-level comma (outside parens and quotes)
             depth = 0
+            in_quote = False
             last_comma = -1
             for idx, ch in enumerate(inner):
-                if ch == "(":
-                    depth += 1
-                elif ch == ")":
-                    depth -= 1
-                elif ch == "," and depth == 0:
-                    last_comma = idx
+                if ch in ("'", '"') and not in_quote:
+                    in_quote = ch
+                elif ch == in_quote:
+                    in_quote = False
+                elif not in_quote:
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth -= 1
+                    elif ch == "," and depth == 0:
+                        last_comma = idx
 
             if last_comma == -1:
                 result.append(sql[start:i])
@@ -369,7 +375,18 @@ def _replace_arrow_cast_nested(sql: str) -> str:
                 # List(X) -> ARRAY<spark_type> - skip for now
                 raise _SkipQuery(f"unsupported Arrow type: {arrow_type_raw}")
 
-            spark_type = ARROW_TO_SPARK_TYPE.get(arrow_type_raw)
+            # Handle Decimal types: Decimal32(p,s), Decimal64(p,s),
+            # Decimal128(p,s), Decimal256(p,s) -> DECIMAL(p,s)
+            decimal_match = re.match(
+                r"Decimal(?:32|64|128|256)\((\d+),\s*(\d+)\)", arrow_type_raw
+            )
+            if decimal_match:
+                p, s = decimal_match.group(1), decimal_match.group(2)
+                if int(p) > 38:
+                    raise _SkipQuery(f"Decimal precision {p} exceeds Spark max of 38")
+                spark_type = f"DECIMAL({p}, {s})"
+            else:
+                spark_type = ARROW_TO_SPARK_TYPE.get(arrow_type_raw)
             if spark_type is None:
                 raise _SkipQuery(f"unmapped Arrow type: {arrow_type_raw}")
 
@@ -449,8 +466,8 @@ def _translate_casts(sql: str) -> str:
         if changed:
             continue
 
-        # 2. String literals: 'val'::TYPE
-        m = re.search(r"'([^']*)'::(\w+(?:\([^)]*\))?)", result)
+        # 2. String literals: 'val'::TYPE (handles escaped quotes like 'Andy''s')
+        m = re.search(r"'((?:[^']|'')*)'::(\w+(?:\([^)]*\))?)", result)
         if m:
             cast_type = m.group(2)
             spark_type = _translate_cast_type(cast_type)
@@ -512,13 +529,20 @@ def _translate_array_literals(sql: str) -> str:
     result = []
     i = 0
     while i < len(sql):
-        # Skip string literals
+        # Skip string literals (handling escaped quotes like 'Andy''s')
         if sql[i] == "'":
             result.append(sql[i])
             i += 1
-            while i < len(sql) and sql[i] != "'":
-                result.append(sql[i])
-                i += 1
+            while i < len(sql):
+                if sql[i] == "'" and i + 1 < len(sql) and sql[i + 1] == "'":
+                    result.append(sql[i])
+                    result.append(sql[i + 1])
+                    i += 2
+                elif sql[i] == "'":
+                    break
+                else:
+                    result.append(sql[i])
+                    i += 1
             if i < len(sql):
                 result.append(sql[i])
                 i += 1
@@ -595,11 +619,6 @@ def translate_sql(sql: str) -> tuple[str, Optional[str]]:
     # bitwise_not is DataFusion's name; Spark uses bitnot() or ~ operator
     if "bitwise_not(" in sql.lower():
         return sql, "uses bitwise_not() (DataFusion-specific name)"
-    # Spark 4.0 functions not available in Spark 3.x
-    for func_name in ("try_parse_url", "try_url_decode"):
-        if func_name + "(" in sql.lower():
-            return sql, f"uses {func_name}() (Spark 4.0 only)"
-
     # Skip DataFusion config statements
     if re.search(r"set\s+datafusion\.", sql, re.IGNORECASE):
         return sql, "DataFusion config statement"

@@ -45,7 +45,7 @@ datetime/date_sub.slt
 datetime/make_dt_interval.slt
 datetime/make_interval.slt
 
-# TIME data type is Spark 4.0 only
+# TIME data type handling differences between DataFusion and Spark
 datetime/time_trunc.slt
 
 # json_tuple is a generator function returning multiple columns;
