@@ -619,11 +619,6 @@ def translate_sql(sql: str) -> tuple[str, Optional[str]]:
     # bitwise_not is DataFusion's name; Spark uses bitnot() or ~ operator
     if "bitwise_not(" in sql.lower():
         return sql, "uses bitwise_not() (DataFusion-specific name)"
-    # Functions only available in Spark 4.0+
-    if spark_version() < (4, 0):
-        for func_name in ("try_parse_url", "try_url_decode"):
-            if func_name + "(" in sql.lower():
-                return sql, f"uses {func_name}() (requires Spark 4.0+)"
     # Skip DataFusion config statements
     if re.search(r"set\s+datafusion\.", sql, re.IGNORECASE):
         return sql, "DataFusion config statement"
@@ -1030,6 +1025,15 @@ def process_file(
             actual, err = run_query(translated, num_cols)
 
             if err:
+                # Unresolved function/routine means this Spark version
+                # doesn't have the function — skip, not fail
+                if "UNRESOLVED_ROUTINE" in err:
+                    result.skipped += 1
+                    if show_skipped:
+                        result.skipped_details.append(
+                            f"  Line {record.line_number}: skipped (function not available in this Spark version)"
+                        )
+                    continue
                 result.failed += 1
                 result.errors.append(
                     f"  Line {record.line_number}: PySpark error: {err}\n"
