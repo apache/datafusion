@@ -1123,12 +1123,13 @@ fn rewrite_expr_to_prunable(
         Ok((Arc::clone(column_expr), op, Arc::clone(scalar_expr)))
     } else if let Some(cast) = column_expr_any.downcast_ref::<phys_expr::CastExpr>() {
         // `cast(col) op lit()`
-        verify_support_type_for_prune(
-            &cast.expr().data_type(schema.as_arrow())?,
+        let (left, op, right) = rewrite_cast_child_to_prunable(
+            cast.expr(),
             cast.cast_type(),
+            op,
+            scalar_expr,
+            schema,
         )?;
-        let (left, op, right) =
-            rewrite_expr_to_prunable(cast.expr(), op, scalar_expr, schema)?;
         let left = Arc::new(phys_expr::CastExpr::new_with_target_field(
             left,
             Arc::clone(cast.target_field()),
@@ -1139,12 +1140,13 @@ fn rewrite_expr_to_prunable(
         column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()
     {
         // `try_cast(col) op lit()`
-        verify_support_type_for_prune(
-            &try_cast.expr().data_type(schema.as_arrow())?,
+        let (left, op, right) = rewrite_cast_child_to_prunable(
+            try_cast.expr(),
             try_cast.cast_type(),
+            op,
+            scalar_expr,
+            schema,
         )?;
-        let (left, op, right) =
-            rewrite_expr_to_prunable(try_cast.expr(), op, scalar_expr, schema)?;
         let left = Arc::new(phys_expr::TryCastExpr::new(
             left,
             try_cast.cast_type().clone(),
@@ -1176,6 +1178,20 @@ fn rewrite_expr_to_prunable(
     } else {
         plan_err!("column expression {column_expr:?} is not supported")
     }
+}
+
+fn rewrite_cast_child_to_prunable(
+    cast_child_expr: &PhysicalExprRef,
+    cast_type: &DataType,
+    op: Operator,
+    scalar_expr: &PhysicalExprRef,
+    schema: DFSchema,
+) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
+    verify_support_type_for_prune(
+        &cast_child_expr.data_type(schema.as_arrow())?,
+        cast_type,
+    )?;
+    rewrite_expr_to_prunable(cast_child_expr, op, scalar_expr, schema)
 }
 
 fn is_compare_op(op: Operator) -> bool {

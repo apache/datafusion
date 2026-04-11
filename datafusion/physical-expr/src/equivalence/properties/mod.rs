@@ -857,18 +857,20 @@ impl EquivalenceProperties {
                     // The sort expression comes from this schema, so the
                     // following call to `unwrap` is safe.
                     let expr_type = sort_expr.expr.data_type(schema).unwrap();
+                    let original_sort_expr = sort_expr.clone();
                     // TODO: Add one-to-one analysis for ScalarFunctions.
-                    let substitutions = mapping
+                    mapping
                         .iter()
                         .map(|(source, _target)| source)
-                        .filter(|source| expr_refers(source, &sort_expr.expr))
+                        .filter(|source| expr_refers(source, &original_sort_expr.expr))
                         .cloned()
                         .filter_map(|r_expr| {
-                            Self::substitute_cast_ordering(r_expr, &sort_expr, &expr_type)
+                            Self::substitute_cast_ordering(
+                                r_expr,
+                                &original_sort_expr,
+                                &expr_type,
+                            )
                         })
-                        .collect::<Vec<_>>();
-                    substitutions
-                        .into_iter()
                         .chain(std::iter::once(sort_expr))
                         .collect::<Vec<_>>()
                 })
