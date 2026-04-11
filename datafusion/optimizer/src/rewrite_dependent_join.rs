@@ -1296,8 +1296,8 @@ mod tests {
         //     Filter: inner_table_lv1.c = outer_ref(outer_table.c)
         //       TableScan: inner_table_lv1
 
-        assert_dependent_join_rewrite!(plan, @r"
-        DependentJoin on [outer_table.c lvl 1] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
+        assert_dependent_join_rewrite!(plan, @"
+        DependentJoin on [outer_table.c lvl 1 provided by 4] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
           TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
           Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
@@ -1365,14 +1365,15 @@ mod tests {
         //               TableScan: inner_table_lv2
         //         TableScan: inner_table_lv1
 
-        assert_dependent_join_rewrite!(plan, @r"
-        DependentJoin on [outer_table.a lvl 2, outer_table.c lvl 1] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
+        assert_dependent_join_rewrite!(plan, @"
+        DependentJoin on [outer_table.a lvl 2 provided by 10, outer_table.c lvl 2 provided by 10] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
           TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
           Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
             Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c [a:UInt32, b:UInt32, c:UInt32]
-              Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_1 = Int32(1) [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
-                DependentJoin on [inner_table_lv1.b lvl 2] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
-                  TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+              Filter: __scalar_sq_1 = Int32(1) [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
+                DependentJoin on [inner_table_lv1.b lvl 2 provided by 8] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
+                  Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+                    TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
                   Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
                     Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
                       TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
@@ -1420,13 +1421,14 @@ mod tests {
         //     TableScan: outer_right_table
         //     TableScan: outer_left_table
 
-        assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @"
         Projection: outer_right_table.a, outer_right_table.b, outer_right_table.c, outer_left_table.a, outer_left_table.b, outer_left_table.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
-          Filter: outer_table.a > Int32(1) AND __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, __in_sq_1:Boolean]
-            DependentJoin on [outer_right_table.a lvl 1, outer_left_table.a lvl 1] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, __in_sq_1:Boolean]
-              Left Join(ComparisonJoin):  Filter: outer_left_table.a = outer_right_table.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
-                TableScan: outer_right_table [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: outer_left_table [a:UInt32, b:UInt32, c:UInt32]
+          Filter: __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, __in_sq_1:Boolean]
+            DependentJoin on [outer_right_table.a lvl 1 provided by 6, outer_left_table.a lvl 1 provided by 6] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, __in_sq_1:Boolean]
+              Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+                Left Join:  Filter: outer_left_table.a = outer_right_table.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+                  TableScan: outer_right_table [a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: outer_left_table [a:UInt32, b:UInt32, c:UInt32]
               Projection: count(inner_table_lv1.a) AS count_a [count_a:Int64]
                 Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
                   Filter: inner_table_lv1.a = outer_ref(outer_left_table.a) + outer_ref(outer_right_table.a) [a:UInt32, b:UInt32, c:UInt32]
@@ -1511,24 +1513,26 @@ mod tests {
         //         TableScan: inner_table_lv1
         //   TableScan: outer_table
 
-        assert_dependent_join_rewrite!(plan, @r"
-        Projection: outer_table.a, __scalar_sq_3 + __scalar_sq_4 [a:UInt32, __scalar_sq_3 + __scalar_sq_4:Int64]
-          DependentJoin on [outer_table.a lvl 2, outer_table.c lvl 1] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_3:Int64, __scalar_sq_4:Int64]
-            DependentJoin on [inner_table_lv1.b lvl 2, outer_table.a lvl 2, outer_table.c lvl 1] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_3:Int64]
+        assert_dependent_join_rewrite!(plan, @"
+        Projection: outer_table.a, __scalar_sq_3 + __scalar_sq_4 AS count(inner_table_lv1.a) + count(inner_table_lv1.b) [a:UInt32, count(inner_table_lv1.a) + count(inner_table_lv1.b):Int64]
+          DependentJoin on [outer_table.a lvl 2 provided by 19, outer_table.c lvl 2 provided by 19] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_3:Int64, __scalar_sq_4:Int64]
+            DependentJoin on [outer_table.a lvl 2 provided by 19, outer_table.c lvl 2 provided by 19] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_3:Int64]
               TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
               Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
                 Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c [a:UInt32, b:UInt32, c:UInt32]
-                  Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_1 = Int32(1) [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
-                    DependentJoin on [inner_table_lv1.b lvl 2] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
-                      TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+                  Filter: __scalar_sq_1 = Int32(1) [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
+                    DependentJoin on [inner_table_lv1.b lvl 2 provided by 8] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
+                      Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+                        TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
                       Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
                         Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
                           TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
             Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.b)]] [count(inner_table_lv1.b):Int64]
               Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c [a:UInt32, b:UInt32, c:UInt32]
-                Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_2 = Int32(1) [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_2:Int64]
-                  DependentJoin on [inner_table_lv1.b lvl 2] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_2:Int64]
-                    TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+                Filter: __scalar_sq_2 = Int32(1) [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_2:Int64]
+                  DependentJoin on [inner_table_lv1.b lvl 2 provided by 17] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_2:Int64]
+                    Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+                      TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
                     Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
                       Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
                         TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
@@ -1586,16 +1590,18 @@ mod tests {
         //         TableScan: inner_table_lv1
         //   TableScan: outer_table
 
-        assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __scalar_sq_2 = outer_table.a [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_2:Int64]
-            DependentJoin on [outer_table.a lvl 2, outer_table.c lvl 1] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_2:Int64]
-              TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+          Filter: __scalar_sq_2 = outer_table.a [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_2:Int64]
+            DependentJoin on [outer_table.a lvl 2 provided by 10, outer_table.c lvl 2 provided by 10] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_2:Int64]
+              Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
               Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
                 Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c [a:UInt32, b:UInt32, c:UInt32]
-                  Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_1 = Int32(1) [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
-                    DependentJoin on [inner_table_lv1.b lvl 2] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
-                      TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+                  Filter: __scalar_sq_1 = Int32(1) [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
+                    DependentJoin on [inner_table_lv1.b lvl 2 provided by 8] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, __scalar_sq_1:Int64]
+                      Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+                        TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
                       Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
                         Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
                           TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
@@ -1639,12 +1645,13 @@ mod tests {
         //         TableScan: inner_table_lv1
         //   TableScan: outer_table
 
-        assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __exists_sq_1 AND __in_sq_2 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean, __in_sq_2:Boolean]
+          Filter: __exists_sq_1 AND __in_sq_2 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean, __in_sq_2:Boolean]
             DependentJoin on [] with expr outer_table.b IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean, __in_sq_2:Boolean]
               DependentJoin on [] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean]
-                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+                Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Filter: inner_table_lv1.a AND inner_table_lv1.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
               Projection: inner_table_lv1.a [a:UInt32]
@@ -1694,11 +1701,12 @@ mod tests {
         //           TableScan: inner_table_lv1
         //   TableScan: outer_table
 
-        assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
-            DependentJoin on [outer_table.a lvl 1, outer_table.b lvl 1] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
-              TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+          Filter: __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
+            DependentJoin on [outer_table.a lvl 1 provided by 6, outer_table.b lvl 1 provided by 6] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
+              Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
               Projection: count(inner_table_lv1.a) AS count_a [count_a:Int64]
                 Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
                   Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
@@ -1743,11 +1751,12 @@ mod tests {
         //         TableScan: inner_table_lv1
         //   TableScan: outer_table
 
-        assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __exists_sq_1 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean]
-            DependentJoin on [outer_table.a lvl 1, outer_table.b lvl 1] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean]
-              TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+          Filter: __exists_sq_1 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean]
+            DependentJoin on [outer_table.a lvl 1 provided by 5, outer_table.b lvl 1 provided by 5] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean]
+              Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
               Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
                 Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
@@ -1777,11 +1786,12 @@ mod tests {
         //         TableScan: inner_table_lv1
         //   TableScan: outer_table
 
-        assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __exists_sq_1 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean]
+          Filter: __exists_sq_1 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean]
             DependentJoin on [] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1:Boolean]
-              TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+              Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
               Projection: inner_table_lv1.b, inner_table_lv1.a [b:UInt32, a:UInt32]
                 Filter: inner_table_lv1.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
@@ -1815,11 +1825,12 @@ mod tests {
         //         TableScan: inner_table_lv1
         //   TableScan: outer_table
 
-        assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
+          Filter: __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
             DependentJoin on [] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
-              TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+              Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
               Projection: inner_table_lv1.b [b:UInt32]
                 Filter: inner_table_lv1.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
@@ -1867,11 +1878,12 @@ mod tests {
         //         TableScan: inner_table_lv1
         //   TableScan: outer_table
 
-        assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
-            DependentJoin on [outer_table.a lvl 1, outer_table.b lvl 1] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
-              TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+          Filter: __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
+            DependentJoin on [outer_table.a lvl 1 provided by 5, outer_table.b lvl 1 provided by 5] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
+              Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
               Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
                 Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
                   TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
@@ -1912,12 +1924,13 @@ mod tests {
         //   SubqueryAlias: outer_table_alias
         //     TableScan: outer_table
 
-        assert_dependent_join_rewrite!(plan, @r"
+        assert_dependent_join_rewrite!(plan, @"
         Projection: outer_table_alias.a, outer_table_alias.b, outer_table_alias.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
-            DependentJoin on [outer_table_alias.a lvl 1] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
-              SubqueryAlias: outer_table_alias [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+          Filter: __in_sq_1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
+            DependentJoin on [outer_table_alias.a lvl 1 provided by 6] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, __in_sq_1:Boolean]
+              Filter: outer_table.a > Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+                SubqueryAlias: outer_table_alias [a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
               Projection: count(inner_table_lv1.a) AS count_a [count_a:Int64]
                 Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
                   Filter: inner_table_lv1.a = outer_ref(outer_table_alias.a) [a:UInt32, b:UInt32, c:UInt32]
@@ -1981,16 +1994,16 @@ mod tests {
         // Verify the rewrite result
         assert_dependent_join_rewrite!(
             plan,
-            @r"
-        Sort: i1.i DESC NULLS LAST [i:Int32]
-          Projection: i1.i [i:Int32]
-            Filter: __in_sq_1 [i:Int32, __in_sq_1:Boolean]
-              DependentJoin on [i1.i lvl 1] with expr i1.i IN (<subquery>) depth 1 [i:Int32, __in_sq_1:Boolean]
-                SubqueryAlias: i1 [i:Int32]
-                  TableScan: integers [i:Int32]
-                Projection: integers.i [i:Int32]
-                  Filter: integers.i = outer_ref(i1.i) [i:Int32]
-                    TableScan: integers [i:Int32]
+            @"
+        Sort: i1.i DESC NULLS LAST [i:Int32;N]
+          Projection: i1.i [i:Int32;N]
+            Filter: __in_sq_1 [i:Int32;N, __in_sq_1:Boolean]
+              DependentJoin on [i1.i lvl 1 provided by 6] with expr i1.i IN (<subquery>) depth 1 [i:Int32;N, __in_sq_1:Boolean]
+                SubqueryAlias: i1 [i:Int32;N]
+                  TableScan: integers [i:Int32;N]
+                Projection: integers.i [i:Int32;N]
+                  Filter: integers.i = outer_ref(i1.i) [i:Int32;N]
+                    TableScan: integers [i:Int32;N]
         "
         );
 
@@ -2074,16 +2087,16 @@ mod tests {
         // Verify the rewrite result
         assert_dependent_join_rewrite!(
             plan,
-            @r"
-        Projection: t0.c0 [c0:Int32]
-          Filter: __in_sq_2 [c0:Int32, __in_sq_2:Boolean]
-            DependentJoin on [t0.c0 lvl 2] with expr Int32(1) IN (<subquery>) depth 1 [c0:Int32, __in_sq_2:Boolean]
-              TableScan: t0 [c0:Int32]
+            @"
+        Projection: t0.c0 [c0:Int32;N]
+          Filter: __in_sq_2 [c0:Int32;N, __in_sq_2:Boolean]
+            DependentJoin on [t0.c0 lvl 2 provided by 8] with expr Int32(1) IN (<subquery>) depth 1 [c0:Int32;N, __in_sq_2:Boolean]
+              TableScan: t0 [c0:Int32;N]
               Projection: Int32(1) [Int32(1):Int32]
-                DependentJoin on [] lateral Inner join with Boolean(true) depth 2 [c0:Int32]
-                  TableScan: t1 [c0:Int32]
+                DependentJoin on [] lateral Inner join with Boolean(true) depth 2 [c0:Int32;N]
+                  TableScan: t1 [c0:Int32;N]
                   Aggregate: groupBy=[[outer_ref(t0.c0)]], aggr=[[count(Int32(1))]] [outer_ref(t0.c0):Int32;N, count(Int32(1)):Int64]
-                    TableScan: t1 [c0:Int32]
+                    TableScan: t1 [c0:Int32;N]
         "
         );
 
@@ -2139,15 +2152,15 @@ mod tests {
         // Verify the rewrite result
         assert_dependent_join_rewrite!(
             plan,
-            @r"
-        Projection: t1.a, __scalar_sq_1 [a:Int32, __scalar_sq_1:Int32]
-          DependentJoin on [t1.a lvl 1] with expr (<subquery>) depth 1 [a:Int32, b:Int32, __scalar_sq_1:Int32]
-            SubqueryAlias: t1 [a:Int32, b:Int32]
-              TableScan: t [a:Int32, b:Int32]
-            Aggregate: groupBy=[[t2.b]], aggr=[[sum(t2.b)]] [b:Int32, sum(t2.b):Int64;N]
-              Filter: t2.a = outer_ref(t1.a) [a:Int32, b:Int32]
-                SubqueryAlias: t2 [a:Int32, b:Int32]
-                  TableScan: t [a:Int32, b:Int32]
+            @"
+        Projection: t1.a, __scalar_sq_1 AS b [a:Int32;N, b:Int32]
+          DependentJoin on [t1.a lvl 1 provided by 6] with expr (<subquery>) depth 1 [a:Int32;N, b:Int32;N, __scalar_sq_1:Int32]
+            SubqueryAlias: t1 [a:Int32;N, b:Int32;N]
+              TableScan: t [a:Int32;N, b:Int32;N]
+            Aggregate: groupBy=[[t2.b]], aggr=[[sum(t2.b)]] [b:Int32;N, sum(t2.b):Int64;N]
+              Filter: t2.a = outer_ref(t1.a) [a:Int32;N, b:Int32;N]
+                SubqueryAlias: t2 [a:Int32;N, b:Int32;N]
+                  TableScan: t [a:Int32;N, b:Int32;N]
         "
         );
 
@@ -2204,16 +2217,16 @@ mod tests {
         // Verify the rewrite result
         assert_dependent_join_rewrite!(
             plan,
-            @r"
-        Projection: t1.a, sum_scalar [a:Int32, sum_scalar:Int64;N]
-          Aggregate: groupBy=[[t1.a]], aggr=[[sum(__scalar_sq_1) AS sum_scalar]] [a:Int32, sum_scalar:Int64;N]
-            DependentJoin on [t1.a lvl 1] with expr (<subquery>) depth 1 [a:Int32, b:Int32, __scalar_sq_1:Int32]
-              SubqueryAlias: t1 [a:Int32, b:Int32]
-                TableScan: t [a:Int32, b:Int32]
-              Projection: t2.b [b:Int32]
-                Filter: t2.a = outer_ref(t1.a) [a:Int32, b:Int32]
-                  SubqueryAlias: t2 [a:Int32, b:Int32]
-                    TableScan: t [a:Int32, b:Int32]
+            @"
+        Projection: t1.a, sum_scalar [a:Int32;N, sum_scalar:Int64;N]
+          Aggregate: groupBy=[[t1.a]], aggr=[[sum(__scalar_sq_1) AS sum_scalar]] [a:Int32;N, sum_scalar:Int64;N]
+            DependentJoin on [t1.a lvl 1 provided by 6] with expr (<subquery>) depth 1 [a:Int32;N, b:Int32;N, __scalar_sq_1:Int32]
+              SubqueryAlias: t1 [a:Int32;N, b:Int32;N]
+                TableScan: t [a:Int32;N, b:Int32;N]
+              Projection: t2.b [b:Int32;N]
+                Filter: t2.a = outer_ref(t1.a) [a:Int32;N, b:Int32;N]
+                  SubqueryAlias: t2 [a:Int32;N, b:Int32;N]
+                    TableScan: t [a:Int32;N, b:Int32;N]
         "
         );
 
@@ -2254,11 +2267,11 @@ mod tests {
         assert_dependent_join_rewrite!(
             plan,
             @r#"
-        Projection: Boolean(false) IN ([Boolean(true), __scalar_sq_1 BETWEEN t0.c0 AND t0.c0]) [Boolean(false) IN Boolean(true), __scalar_sq_1 BETWEEN t0.c0 AND t0.c0:Boolean]
-          DependentJoin on [] with expr (<subquery>) depth 1 [c0:Time64(Second), c1:Float64, __scalar_sq_1:Utf8]
-            TableScan: t0 [c0:Time64(Second), c1:Float64]
+        Projection: Boolean(false) IN ([Boolean(true), __scalar_sq_1 BETWEEN t0.c0 AND t0.c0]) AS Boolean(false) IN Boolean(true), Utf8("13:35:07") BETWEEN t0.c0 AND t0.c0 [Boolean(false) IN Boolean(true), Utf8("13:35:07") BETWEEN t0.c0 AND t0.c0:Boolean;N]
+          DependentJoin on [] with expr (<subquery>) depth 1 [c0:Time64(s);N, c1:Float64;N, __scalar_sq_1:Utf8]
+            TableScan: t0 [c0:Time64(s);N, c1:Float64;N]
             Projection: Utf8("13:35:07") [Utf8("13:35:07"):Utf8]
-              TableScan: t1 [c0:Int32]
+              TableScan: t1 [c0:Int32;N]
         "#
         );
 
@@ -2319,15 +2332,15 @@ mod tests {
 
         assert_dependent_join_rewrite!(
             plan,
-            @r"
-        Filter: t2.key = t1.key AND t2.val > __scalar_sq_1 [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32, __scalar_sq_1:Int64]
-          DependentJoin on [t1.id lvl 1] with expr (<subquery>) depth 1 [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32, __scalar_sq_1:Int64]
-            Cross Join(ComparisonJoin):  [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32]
-              TableScan: t1 [key:Int32, id:Int32, val:Int32]
-              TableScan: t2 [key:Int32, val:Int32]
+            @"
+        Filter: t2.key = t1.key AND t2.val > __scalar_sq_1 [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N, __scalar_sq_1:Int64]
+          DependentJoin on [t1.id lvl 1 provided by 5] with expr (<subquery>) depth 1 [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N, __scalar_sq_1:Int64]
+            Cross Join: [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N]
+              TableScan: t1 [key:Int32;N, id:Int32;N, val:Int32;N]
+              TableScan: t2 [key:Int32;N, val:Int32;N]
             Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]] [count(Int32(1)):Int64]
-              Filter: t3.id = outer_ref(t1.id) [id:Int32, val:Int32]
-                TableScan: t3 [id:Int32, val:Int32]
+              Filter: t3.id = outer_ref(t1.id) [id:Int32;N, val:Int32;N]
+                TableScan: t3 [id:Int32;N, val:Int32;N]
         "
         );
 
@@ -2467,18 +2480,18 @@ mod tests {
 
         assert_dependent_join_rewrite!(
             plan,
-            @r"
-        Filter: t2.key = t1.key AND t2.val > __scalar_sq_1 OR __exists_sq_2 [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32, __scalar_sq_1:Int64, __exists_sq_2:Boolean]
-          DependentJoin on [t2.key lvl 1] with expr EXISTS (<subquery>) depth 1 [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32, __scalar_sq_1:Int64, __exists_sq_2:Boolean]
-            DependentJoin on [t1.id lvl 1] with expr (<subquery>) depth 1 [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32, __scalar_sq_1:Int64]
-              Cross Join(ComparisonJoin):  [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32]
-                TableScan: t1 [key:Int32, id:Int32, val:Int32]
-                TableScan: t2 [key:Int32, val:Int32]
+            @"
+        Filter: t2.key = t1.key AND t2.val > __scalar_sq_1 OR __exists_sq_2 [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N, __scalar_sq_1:Int64, __exists_sq_2:Boolean]
+          DependentJoin on [t2.key lvl 1 provided by 9] with expr EXISTS (<subquery>) depth 1 [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N, __scalar_sq_1:Int64, __exists_sq_2:Boolean]
+            DependentJoin on [t1.id lvl 1 provided by 8] with expr (<subquery>) depth 1 [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N, __scalar_sq_1:Int64]
+              Cross Join: [key:Int32;N, id:Int32;N, val:Int32;N, key:Int32;N, val:Int32;N]
+                TableScan: t1 [key:Int32;N, id:Int32;N, val:Int32;N]
+                TableScan: t2 [key:Int32;N, val:Int32;N]
               Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]] [count(Int32(1)):Int64]
-                Filter: t3.id = outer_ref(t1.id) [id:Int32, val:Int32]
-                  TableScan: t3 [id:Int32, val:Int32]
-            Filter: t3.id = outer_ref(t2.key) [id:Int32, val:Int32]
-              TableScan: t3 [id:Int32, val:Int32]
+                Filter: t3.id = outer_ref(t1.id) [id:Int32;N, val:Int32;N]
+                  TableScan: t3 [id:Int32;N, val:Int32;N]
+            Filter: t3.id = outer_ref(t2.key) [id:Int32;N, val:Int32;N]
+              TableScan: t3 [id:Int32;N, val:Int32;N]
         "
         );
 
@@ -2531,17 +2544,17 @@ mod tests {
 
         assert_dependent_join_rewrite!(
             plan,
-            @r"
-            Projection: t1.id [id:Int32]
-              Projection: t1.id, t1.value [id:Int32, value:Int32]
-                Filter: __exists_sq_1 OR NOT __exists_sq_2 [id:Int32, value:Int32, __exists_sq_1:Boolean, __exists_sq_2:Boolean]
-                  DependentJoin on [t1.id lvl 1] with expr EXISTS (<subquery>) depth 1 [id:Int32, value:Int32, __exists_sq_1:Boolean, __exists_sq_2:Boolean]
-                    DependentJoin on [t1.id lvl 1] with expr EXISTS (<subquery>) depth 1 [id:Int32, value:Int32, __exists_sq_1:Boolean]
-                      TableScan: t1 [id:Int32, value:Int32]
-                      Filter: t2.id = outer_ref(t1.id) [id:Int32, value:Int32]
-                        TableScan: t2 [id:Int32, value:Int32]
-                    Filter: t2.value = outer_ref(t1.id) [id:Int32, value:Int32]
-                      TableScan: t2 [id:Int32, value:Int32]
+            @"
+        Projection: t1.id [id:Int32;N]
+          Projection: t1.id, t1.value [id:Int32;N, value:Int32;N]
+            Filter: __exists_sq_1 OR NOT __exists_sq_2 [id:Int32;N, value:Int32;N, __exists_sq_1:Boolean, __exists_sq_2:Boolean]
+              DependentJoin on [t1.id lvl 1 provided by 8] with expr EXISTS (<subquery>) depth 1 [id:Int32;N, value:Int32;N, __exists_sq_1:Boolean, __exists_sq_2:Boolean]
+                DependentJoin on [t1.id lvl 1 provided by 8] with expr EXISTS (<subquery>) depth 1 [id:Int32;N, value:Int32;N, __exists_sq_1:Boolean]
+                  TableScan: t1 [id:Int32;N, value:Int32;N]
+                  Filter: t2.id = outer_ref(t1.id) [id:Int32;N, value:Int32;N]
+                    TableScan: t2 [id:Int32;N, value:Int32;N]
+                Filter: t2.value = outer_ref(t1.id) [id:Int32;N, value:Int32;N]
+                  TableScan: t2 [id:Int32;N, value:Int32;N]
         "
         );
 
