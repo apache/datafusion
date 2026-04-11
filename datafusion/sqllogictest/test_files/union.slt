@@ -256,6 +256,30 @@ Bob_new
 John
 John_new
 
+# Test UNION ALL with unaliased duplicate literal values on the right side.
+# The second projection will inherit field names from the first one, and so
+# pass the unique projection expression name check.
+query TII rowsort
+SELECT name, 1 as table, 1 as row FROM t1 WHERE id = 1
+UNION ALL
+SELECT name, 2, 2 FROM t2 WHERE id = 2
+----
+Alex 1 1
+Bob 2 2
+
+# Test nested UNION, EXCEPT, INTERSECT with duplicate unaliased literals.
+# Only the first SELECT has column aliases, which should propagate to all projections.
+query III rowsort
+SELECT 1 as a, 0 as b, 0 as c
+UNION ALL
+((SELECT 2, 0, 0 UNION ALL SELECT 3, 0, 0) EXCEPT SELECT 3, 0, 0)
+UNION ALL
+(SELECT 4, 0, 0 INTERSECT SELECT 4, 0, 0)
+----
+1 0 0
+2 0 0
+4 0 0
+
 # Plan is unnested
 query TT
 EXPLAIN SELECT name FROM t1 UNION ALL (SELECT name from t2 UNION ALL SELECT name || '_new' from t2)
