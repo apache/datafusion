@@ -939,7 +939,33 @@ impl MetadataLoadedParquetOpen {
 }
 
 impl MetadataLoadedParquetOpen {
-    fn has_page_index(&self) -> bool {
+    /// Returns true if the footer metadata contains page index locations for
+    /// every column chunk.
+    ///
+    /// This is different from `metadata().offset_index()` /
+    /// `metadata().column_index()`: the `*_offset()` accessors tell us where
+    /// the page index payload lives in the file, while `offset_index()` and
+    /// `column_index()` tell us whether the index has actually been fetched and
+    /// decoded.
+    fn has_page_index_location(&self) -> bool {
+        self.reader_metadata
+            .metadata()
+            .row_groups()
+            .iter()
+            .flat_map(|row_group| row_group.columns())
+            .all(|column| {
+                column.column_index_offset().is_some()
+                    && column.offset_index_offset().is_some()
+            })
+    }
+
+    /// Returns true only after the page index payload has been fetched and
+    /// decoded into `metadata().column_index()` / `metadata().offset_index()`.
+    ///
+    /// Unlike `has_page_index_location`, this does not mean the footer merely
+    /// advertises the index location; it means the in-memory page index data is
+    /// already available for pruning.
+    fn has_loaded_page_index(&self) -> bool {
         self.reader_metadata.metadata().column_index().is_some()
             && self.reader_metadata.metadata().offset_index().is_some()
     }
@@ -956,29 +982,42 @@ impl PreparedParquetOpen {
 
 impl FiltersPreparedParquetOpen {
     /// Load the page index if pruning requires it and metadata did not include it.
+    ///
+    /// The page index is not stored inline in the parquet footer, so the first
+    /// metadata load may not have read the page index structures yet. If
+    /// pruning can use them and they are not already loaded, fetch them now.
     async fn load_page_index(mut self) -> Result<Self> {
-        // The page index is not stored inline in the parquet footer so the
-        // metadata load above may not have read the page index structures yet.
-        // If we need them for reading, and they aren't yet loaded, we need to
-        // load them now.
-        if self.loaded.prepared.enable_page_index {
-            self.loaded.reader_metadata = load_page_index(
-                self.loaded.reader_metadata,
-                &mut self.loaded.prepared.async_file_reader,
-                self.loaded
-                    .options
-                    .clone()
-                    .with_page_index_policy(PageIndexPolicy::Optional),
-            )
-            .await?;
-
-            // Since creating a page pruning predicate can be non trivial
-            // only do it when we are sure we have enough metadata to use it
-            if self.loaded.has_page_index() {
-                self.page_pruning_predicate =
-                    self.loaded.prepared.build_page_pruning_predicate();
-            }
+        // Page index pruning is disabled for this scan.
+        if !self.loaded.prepared.enable_page_index {
+            return Ok(self);
         }
+
+        // If not all column chunks have page indexes, skip page pruning.
+        if !self.loaded.has_page_index_location() {
+            return Ok(self);
+        }
+
+        // Build the predicate used for page pruning.
+        self.page_pruning_predicate = self.loaded.prepared.build_page_pruning_predicate();
+        // If there is no usable page pruning predicate, there is nothing to load.
+        if self.page_pruning_predicate.is_none() {
+            return Ok(self);
+        }
+
+        // If the page index is already loaded, no need to fetch it again.
+        if self.loaded.has_loaded_page_index() {
+            return Ok(self);
+        }
+
+        self.loaded.reader_metadata = load_page_index(
+            self.loaded.reader_metadata,
+            &mut self.loaded.prepared.async_file_reader,
+            self.loaded
+                .options
+                .clone()
+                .with_page_index_policy(PageIndexPolicy::Optional),
+        )
+        .await?;
 
         Ok(self)
     }
@@ -2754,6 +2793,7 @@ mod test {
         );
     }
 
+    /// Test parquet page pruning
     struct PagePruningFixture {
         store: Arc<dyn ObjectStore>,
         schema: SchemaRef,
@@ -2763,7 +2803,7 @@ mod test {
     }
 
     impl PagePruningFixture {
-        // Creates a page pruning fixture with default settings.
+        /// Creates a page pruning fixture with default settings.
         fn new(path: &str) -> Self {
             let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
             let values: Vec<i32> = (1..=100).collect();
@@ -2785,13 +2825,13 @@ mod test {
             }
         }
 
-        // Configures whether the generated parquet file should include page indexes.
+        /// Configures whether the generated parquet file should include page indexes.
         fn with_write_page_index(mut self, write_page_index: bool) -> Self {
             self.write_page_index = write_page_index;
             self
         }
 
-        // Writes the parquet test file and returns the matching partitioned file.
+        /// Writes the parquet test file and returns the matching partitioned file.
         async fn create_file(&self) -> PartitionedFile {
             use parquet::file::properties::WriterProperties;
 
@@ -2818,7 +2858,7 @@ mod test {
             PartitionedFile::new(self.path.clone(), size as u64)
         }
 
-        // Builds a parquet opener configured so page pruning is the only pruning path.
+        /// Builds a parquet opener configured so page pruning is the only pruning path.
         fn opener(&self, enable_page_index: bool) -> ParquetOpener {
             ParquetOpenerBuilder::new()
                 .with_store(Arc::clone(&self.store))
@@ -2830,7 +2870,7 @@ mod test {
                 .build()
         }
 
-        // Writes the test file, opens it, and returns only the produced row count.
+        /// Writes the test file, opens it, and returns only the produced row count.
         async fn test(&self, enable_page_index: bool) -> usize {
             let file = self.create_file().await;
             let opener = self.opener(enable_page_index);
