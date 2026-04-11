@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        pyspark-version: ['3.5.8', '4.1.1']
+        pyspark-version: ['3.4.4', '3.5.8', '4.1.1']
       fail-fast: false
     name: Validate .slt tests against PySpark ${{ matrix.pyspark-version }}
     steps:
