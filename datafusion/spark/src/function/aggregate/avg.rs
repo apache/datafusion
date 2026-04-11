@@ -16,11 +16,13 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, Int64Array, PrimitiveArray,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, BooleanArray, Int64Array,
+    PrimitiveArray,
     builder::PrimitiveBuilder,
     cast::AsArray,
     types::{Float64Type, Int64Type},
 };
+use arrow::buffer::NullBuffer;
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::{NativeType, logical_float64};
@@ -248,7 +250,7 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&arrow::array::BooleanArray>,
+        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
@@ -285,7 +287,7 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&arrow::array::BooleanArray>,
+        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -343,7 +345,141 @@ where
         ])
     }
 
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let sums = values[0]
+            .as_primitive::<T>()
+            .clone()
+            .with_data_type(self.return_data_type.clone());
+
+        let counts = Int64Array::from_value(1, sums.len());
+
+        // null out filtered / null input rows
+        let filter_nulls = opt_filter.map(|f| {
+            let (bools, nulls) = f.clone().into_parts();
+            NullBuffer::union(Some(&NullBuffer::from(bools)), nulls.as_ref())
+                .expect("at least one input is Some")
+        });
+        let nulls =
+            NullBuffer::union(filter_nulls.as_ref(), sums.logical_nulls().as_ref());
+
+        let (dt, buf, _) = sums.into_parts();
+        let sums = PrimitiveArray::<T>::new(buf, nulls.clone()).with_data_type(dt);
+        let (_, buf, _) = counts.into_parts();
+        let counts = Int64Array::new(buf, nulls);
+
+        // [sum, count] - must match state() and merge_batch()
+        Ok(vec![
+            Arc::new(sums) as ArrayRef,
+            Arc::new(counts) as ArrayRef,
+        ])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<i64>() + self.sums.capacity() * size_of::<T>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Float64Array;
+
+    fn make_acc() -> AvgGroupsAccumulator<Float64Type, impl Fn(f64, i64) -> Result<f64>> {
+        AvgGroupsAccumulator::<Float64Type, _>::new(&DataType::Float64, |sum, count| {
+            Ok(sum / count as f64)
+        })
+    }
+
+    #[test]
+    fn supports_convert_to_state() {
+        assert!(make_acc().supports_convert_to_state());
+    }
+
+    #[test]
+    fn convert_to_state_basic() {
+        let acc = make_acc();
+        let values: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]))];
+        let state = acc.convert_to_state(&values, None).unwrap();
+
+        assert_eq!(state.len(), 2);
+        let sums = state[0].as_primitive::<Float64Type>();
+        let counts = state[1].as_primitive::<Int64Type>();
+
+        assert_eq!(sums.values().as_ref(), &[1.0, 2.0, 3.0]);
+        assert_eq!(counts.values().as_ref(), &[1, 1, 1]);
+        assert_eq!(sums.null_count(), 0);
+        assert_eq!(counts.null_count(), 0);
+    }
+
+    #[test]
+    fn convert_to_state_with_nulls() {
+        let acc = make_acc();
+        let values: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(3.0),
+        ]))];
+        let state = acc.convert_to_state(&values, None).unwrap();
+
+        let sums = state[0].as_primitive::<Float64Type>();
+        let counts = state[1].as_primitive::<Int64Type>();
+
+        assert!(!sums.is_null(0));
+        assert!(sums.is_null(1));
+        assert!(!sums.is_null(2));
+
+        assert_eq!(counts.value(0), 1);
+        assert!(counts.is_null(1));
+        assert_eq!(counts.value(2), 1);
+    }
+
+    #[test]
+    fn convert_to_state_with_filter() {
+        let acc = make_acc();
+        let values: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]))];
+        let filter = BooleanArray::from(vec![true, false, true]);
+        let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
+
+        let sums = state[0].as_primitive::<Float64Type>();
+        let counts = state[1].as_primitive::<Int64Type>();
+
+        assert!(!sums.is_null(0));
+        assert!(sums.is_null(1));
+        assert!(!sums.is_null(2));
+
+        assert_eq!(counts.value(0), 1);
+        assert!(counts.is_null(1));
+        assert_eq!(counts.value(2), 1);
+    }
+
+    #[test]
+    fn convert_to_state_roundtrips_through_merge() {
+        let mut acc = make_acc();
+        let input: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0]))];
+        let state = acc.convert_to_state(&input, None).unwrap();
+
+        // feed the converted state back through merge_batch
+        acc.merge_batch(
+            &state,
+            &[0, 0, 0],
+            None,
+            1, // single group
+        )
+        .unwrap();
+
+        let result = acc.evaluate(EmitTo::All).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert_eq!(result.value(0), 20.0); // (10+20+30)/3
     }
 }
