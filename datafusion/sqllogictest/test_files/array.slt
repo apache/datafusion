@@ -2435,6 +2435,50 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 [] [] [] []
 [6.0] [6.0] [] []
 
+# array_slice with overlapping nulls across multiple inputs
+query ?
+select array_slice(column1, column2, column3) from (
+  values
+    (make_array(1, 2, 3), NULL, NULL),
+    (NULL, NULL, 3),
+    (NULL, 1, NULL),
+    (make_array(4, 5, 6), 1, 3)
+) as t(column1, column2, column3);
+----
+NULL
+NULL
+NULL
+[4, 5, 6]
+
+query ?
+select array_slice(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) from (
+  values
+    (make_array(1, 2, 3), NULL, NULL),
+    (NULL, NULL, 3),
+    (NULL, 1, NULL),
+    (make_array(4, 5, 6), 1, 3)
+) as t(column1, column2, column3);
+----
+NULL
+NULL
+NULL
+[4, 5, 6]
+
+# array_slice with overlapping nulls including stride
+query ?
+select array_slice(column1, column2, column3, column4) from (
+  values
+    (make_array(1, 2, 3, 4, 5), 1, 5, NULL),
+    (NULL, NULL, 3, 2),
+    (make_array(1, 2, 3, 4, 5), NULL, NULL, NULL),
+    (make_array(1, 2, 3, 4, 5), 1, 5, 2)
+) as t(column1, column2, column3, column4);
+----
+NULL
+NULL
+NULL
+[1, 3, 5]
+
 # Testing with empty arguments should result in an error
 query error DataFusion error: Error during planning: 'array_slice' does not support zero arguments
 select array_slice();

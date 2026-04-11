@@ -17,10 +17,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::types::Int32Type;
 use arrow::array::{Array, PrimitiveArray};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType::Time32;
 use arrow::datatypes::{DataType, Time32SecondType, TimeUnit};
 use chrono::prelude::*;
@@ -142,24 +142,31 @@ impl ScalarUDFImpl for MakeTimeFunc {
                 let minutes = minutes.as_primitive::<Int32Type>();
                 let seconds = seconds.as_primitive::<Int32Type>();
 
-                let mut builder: PrimitiveBuilder<Time32SecondType> =
-                    PrimitiveArray::builder(len);
+                let nulls = NullBuffer::union(
+                    NullBuffer::union(hours.nulls(), minutes.nulls()).as_ref(),
+                    seconds.nulls(),
+                );
 
+                let mut values = Vec::with_capacity(len);
                 for i in 0..len {
-                    // match postgresql behaviour which returns null for any null input
-                    if hours.is_null(i) || minutes.is_null(i) || seconds.is_null(i) {
-                        builder.append_null();
+                    // Match Postgres behaviour which returns null for any null input
+                    if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                        values.push(0);
                     } else {
                         make_time_inner(
                             hours.value(i),
                             minutes.value(i),
                             seconds.value(i),
-                            |seconds: i32| builder.append_value(seconds),
+                            |seconds: i32| values.push(seconds),
                         )?;
                     }
                 }
 
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+                Ok(ColumnarValue::Array(Arc::new(PrimitiveArray::<
+                    Time32SecondType,
+                >::new(
+                    values.into(), nulls
+                ))))
             }
         }
     }
