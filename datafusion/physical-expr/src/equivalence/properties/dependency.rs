@@ -931,8 +931,7 @@ mod tests {
         struct TestCase {
             name: &'static str,
             constants: Vec<Arc<dyn PhysicalExpr>>,
-            equal_conditions: Vec<[Arc<dyn PhysicalExpr>; 2]>,
-            sort_columns: &'static [&'static str],
+            equal_condition: [Arc<dyn PhysicalExpr>; 2],
             should_satisfy_ordering: bool,
         }
 
@@ -944,24 +943,23 @@ mod tests {
             Arc::new(Field::new("c", DataType::Date32, true)),
             None,
         )) as _;
+        let required_sort = vec![PhysicalSortExpr::new_default(col("c", &schema)?)];
 
         let cases = vec![
             TestCase {
-                name: "(a, b, c) -> (c)",
+                name: "cast_c = a",
                 // b is constant, so it should be removed from the sort order
                 constants: vec![Arc::clone(&col_b)],
-                equal_conditions: vec![[Arc::clone(&cast_c), Arc::clone(&col_a)]],
-                sort_columns: &["c"],
+                equal_condition: [Arc::clone(&cast_c), Arc::clone(&col_a)],
                 should_satisfy_ordering: true,
             },
             // Same test with above test, where equality order is swapped.
             // Algorithm shouldn't depend on this order.
             TestCase {
-                name: "(a, b, c) -> (c)",
+                name: "a = cast_c",
                 // b is constant, so it should be removed from the sort order
                 constants: vec![col_b],
-                equal_conditions: vec![[Arc::clone(&col_a), Arc::clone(&cast_c)]],
-                sort_columns: &["c"],
+                equal_condition: [Arc::clone(&col_a), Arc::clone(&cast_c)],
                 should_satisfy_ordering: true,
             },
             TestCase {
@@ -969,8 +967,7 @@ mod tests {
                 // b is not constant anymore
                 constants: vec![],
                 // a and c are still compatible, but this is irrelevant since the original ordering is (a, b, c)
-                equal_conditions: vec![[Arc::clone(&cast_c), Arc::clone(&col_a)]],
-                sort_columns: &["c"],
+                equal_condition: [Arc::clone(&cast_c), Arc::clone(&col_a)],
                 should_satisfy_ordering: false,
             },
         ];
@@ -983,9 +980,8 @@ mod tests {
                 // Equal conditions before constants
                 {
                     let mut properties = base_properties.clone();
-                    for [left, right] in case.equal_conditions.clone() {
-                        properties.add_equal_conditions(left, right)?
-                    }
+                    let [left, right] = case.equal_condition.clone();
+                    properties.add_equal_conditions(left, right)?;
                     properties.add_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
                     )?;
@@ -997,20 +993,13 @@ mod tests {
                     properties.add_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
                     )?;
-                    for [left, right] in case.equal_conditions {
-                        properties.add_equal_conditions(left, right)?
-                    }
+                    let [left, right] = case.equal_condition;
+                    properties.add_equal_conditions(left, right)?;
                     properties
                 },
             ] {
-                let sort = case
-                    .sort_columns
-                    .iter()
-                    .map(|&name| col(name, &schema).map(PhysicalSortExpr::new_default))
-                    .collect::<Result<Vec<_>>>()?;
-
                 assert_eq!(
-                    properties.ordering_satisfy(sort)?,
+                    properties.ordering_satisfy(required_sort.clone())?,
                     case.should_satisfy_ordering,
                     "failed test '{}'",
                     case.name

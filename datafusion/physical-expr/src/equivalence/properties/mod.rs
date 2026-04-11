@@ -204,7 +204,7 @@ impl EquivalenceProperties {
     /// widening/order-preserving conversion. Without those restrictions, a
     /// narrowing cast could collapse distinct values and violate the existing
     /// sort order.
-    fn substitute_cast_like_ordering(
+    fn substitute_cast_ordering(
         r_expr: Arc<dyn PhysicalExpr>,
         sort_expr: &PhysicalSortExpr,
         expr_type: &DataType,
@@ -854,25 +854,23 @@ impl EquivalenceProperties {
             order
                 .into_iter()
                 .map(|sort_expr| {
-                    let referring_exprs = mapping
-                        .iter()
-                        .map(|(source, _target)| source)
-                        .filter(|source| expr_refers(source, &sort_expr.expr))
-                        .cloned();
-                    let mut result = vec![];
                     // The sort expression comes from this schema, so the
                     // following call to `unwrap` is safe.
                     let expr_type = sort_expr.expr.data_type(schema).unwrap();
                     // TODO: Add one-to-one analysis for ScalarFunctions.
-                    for r_expr in referring_exprs {
-                        if let Some(substituted) = Self::substitute_cast_like_ordering(
-                            r_expr, &sort_expr, &expr_type,
-                        ) {
-                            result.push(substituted);
-                        }
-                    }
-                    result.push(sort_expr);
-                    result
+                    let substitutions = mapping
+                        .iter()
+                        .map(|(source, _target)| source)
+                        .filter(|source| expr_refers(source, &sort_expr.expr))
+                        .cloned()
+                        .filter_map(|r_expr| {
+                            Self::substitute_cast_ordering(r_expr, &sort_expr, &expr_type)
+                        })
+                        .collect::<Vec<_>>();
+                    substitutions
+                        .into_iter()
+                        .chain(std::iter::once(sort_expr))
+                        .collect::<Vec<_>>()
                 })
                 // Generate all valid orderings given substituted expressions:
                 .multi_cartesian_product()
