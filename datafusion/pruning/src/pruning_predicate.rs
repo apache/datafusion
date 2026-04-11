@@ -1135,6 +1135,10 @@ fn rewrite_expr_to_prunable(
             Arc::clone(cast.target_field()),
             None,
         ));
+        // PruningPredicate does not support pruning on nested fields yet.
+        // End-to-end nested-field pruning also requires Parquet statistics
+        // extraction to agree with PruningPredicate on a stats representation
+        // for nested field expressions.
         Ok((left, op, right))
     } else if let Some(try_cast) =
         column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()
