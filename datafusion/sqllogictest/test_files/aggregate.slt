@@ -1646,13 +1646,14 @@ logical_plan
 03)----Aggregate: groupBy=[[t.c AS alias1]], aggr=[[]]
 04)------TableScan: t projection=[c]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[median(alias1)]
-02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
-04)------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-05)--------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[median(alias1)@0 as median(DISTINCT t.c)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[median(alias1)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -7897,11 +7898,12 @@ logical_plan
 03)----Aggregate: groupBy=[[]], aggr=[[count(aggregate_test_100.c5)]]
 04)------TableScan: aggregate_test_100 projection=[c5]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[count(aggregate_test_100.c5)]
-02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[count(aggregate_test_100.c5)]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c5], file_type=csv, has_header=true
+01)ProjectionExec: expr=[count(aggregate_test_100.c5)@0 as count_c5]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(aggregate_test_100.c5)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(aggregate_test_100.c5)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c5], file_type=csv, has_header=true
 
 statement count 0
 drop table aggregate_test_100;

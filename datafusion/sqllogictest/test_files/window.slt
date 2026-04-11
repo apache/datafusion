@@ -273,18 +273,19 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(d.a)]
-04)------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
-05)--------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
-06)----------UnionExec
-07)------------ProjectionExec: expr=[1 as a, aa as b]
-08)--------------PlaceholderRowExec
-09)------------ProjectionExec: expr=[3 as a, aa as b]
-10)--------------PlaceholderRowExec
-11)------------ProjectionExec: expr=[5 as a, bb as b]
-12)--------------PlaceholderRowExec
-13)------------ProjectionExec: expr=[7 as a, bb as b]
-14)--------------PlaceholderRowExec
+03)----ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a]
+04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(d.a)]
+05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
+07)------------UnionExec
+08)--------------ProjectionExec: expr=[1 as a, aa as b]
+09)----------------PlaceholderRowExec
+10)--------------ProjectionExec: expr=[3 as a, aa as b]
+11)----------------PlaceholderRowExec
+12)--------------ProjectionExec: expr=[5 as a, bb as b]
+13)----------------PlaceholderRowExec
+14)--------------ProjectionExec: expr=[7 as a, bb as b]
+15)----------------PlaceholderRowExec
 
 # Check actual result:
 query TI
@@ -355,20 +356,21 @@ logical_plan
 18)----------------------EmptyRelation: rows=1
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
-02)--AggregateExec: mode=SinglePartitioned, gby=[b@2 as b], aggr=[max(d.a), max(d.seq)], ordering_mode=Sorted
-03)----ProjectionExec: expr=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as seq, a@0 as a, b@1 as b]
-04)------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-05)--------SortExec: expr=[b@1 ASC NULLS LAST, a@0 ASC NULLS LAST], preserve_partitioning=[true]
-06)----------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
-07)------------UnionExec
-08)--------------ProjectionExec: expr=[1 as a, aa as b]
-09)----------------PlaceholderRowExec
-10)--------------ProjectionExec: expr=[3 as a, aa as b]
-11)----------------PlaceholderRowExec
-12)--------------ProjectionExec: expr=[5 as a, bb as b]
-13)----------------PlaceholderRowExec
-14)--------------ProjectionExec: expr=[7 as a, bb as b]
-15)----------------PlaceholderRowExec
+02)--ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a, max(d.seq)@2 as max(d.seq)]
+03)----AggregateExec: mode=SinglePartitioned, gby=[b@2 as b], aggr=[max(d.a), max(d.seq)], ordering_mode=Sorted
+04)------ProjectionExec: expr=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as seq, a@0 as a, b@1 as b]
+05)--------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+06)----------SortExec: expr=[b@1 ASC NULLS LAST, a@0 ASC NULLS LAST], preserve_partitioning=[true]
+07)------------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
+08)--------------UnionExec
+09)----------------ProjectionExec: expr=[1 as a, aa as b]
+10)------------------PlaceholderRowExec
+11)----------------ProjectionExec: expr=[3 as a, aa as b]
+12)------------------PlaceholderRowExec
+13)----------------ProjectionExec: expr=[5 as a, bb as b]
+14)------------------PlaceholderRowExec
+15)----------------ProjectionExec: expr=[7 as a, bb as b]
+16)------------------PlaceholderRowExec
 
 
 # check actual result
@@ -1870,16 +1872,17 @@ logical_plan
 07)------------Filter: aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
 08)--------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
-02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-04)------ProjectionExec: expr=[]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
-06)----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-07)------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-08)--------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
+01)ProjectionExec: expr=[count(Int64(1))@0 as global_count]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------ProjectionExec: expr=[]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
+07)------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+08)--------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
+09)----------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
 
 
 query I
@@ -2128,12 +2131,13 @@ logical_plan
 03)----Sort: aggregate_test_100.c13 ASC NULLS LAST, fetch=1
 04)------TableScan: aggregate_test_100 projection=[c13]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
-02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
-05)--------SortExec: TopK(fetch=1), expr=[c13@0 ASC NULLS LAST], preserve_partitioning=[false]
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c13], file_type=csv, has_header=true
+01)ProjectionExec: expr=[array_agg(aggregate_test_100.c13)@0 as array_agg1]
+02)--AggregateExec: mode=Final, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+06)----------SortExec: TopK(fetch=1), expr=[c13@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c13], file_type=csv, has_header=true
 
 
 query ?
