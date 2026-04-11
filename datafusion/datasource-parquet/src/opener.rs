@@ -940,19 +940,26 @@ impl MetadataLoadedParquetOpen {
 
 impl MetadataLoadedParquetOpen {
     /// Returns true if the footer metadata contains page index locations for
-    /// every column chunk.
+    /// every file column referenced by the page pruning predicate.
     ///
     /// This is different from `metadata().offset_index()` /
     /// `metadata().column_index()`: the `*_offset()` accessors tell us where
     /// the page index payload lives in the file, while `offset_index()` and
     /// `column_index()` tell us whether the index has actually been fetched and
     /// decoded.
-    fn has_page_index_location(&self) -> bool {
+    fn has_page_index_location(
+        &self,
+        page_pruning_predicate: &PagePruningAccessPlanFilter,
+    ) -> bool {
+        let required_columns = page_pruning_predicate.required_column_names();
         self.reader_metadata
             .metadata()
             .row_groups()
             .iter()
             .flat_map(|row_group| row_group.columns())
+            .filter(|column| {
+                required_columns.contains(column.column_path().string().as_str())
+            })
             .all(|column| {
                 column.column_index_offset().is_some()
                     && column.offset_index_offset().is_some()
@@ -992,15 +999,16 @@ impl FiltersPreparedParquetOpen {
             return Ok(self);
         }
 
-        // If not all column chunks have page indexes, skip page pruning.
-        if !self.loaded.has_page_index_location() {
-            return Ok(self);
-        }
-
         // Build the predicate used for page pruning.
         self.page_pruning_predicate = self.loaded.prepared.build_page_pruning_predicate();
         // If there is no usable page pruning predicate, there is nothing to load.
-        if self.page_pruning_predicate.is_none() {
+        let Some(page_pruning_predicate) = self.page_pruning_predicate.as_ref() else {
+            return Ok(self);
+        };
+
+        // If the columns in the pruning predicate do not have page index
+        // locations, don't bother to load them as it won't be successful anyway
+        if !self.loaded.has_page_index_location(page_pruning_predicate) {
             return Ok(self);
         }
 

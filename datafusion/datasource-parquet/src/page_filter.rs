@@ -297,6 +297,15 @@ impl PagePruningAccessPlanFilter {
     pub fn filter_number(&self) -> usize {
         self.predicates.len()
     }
+
+    /// Returns the file columns referenced by the page pruning predicates.
+    pub fn required_column_names(&self) -> HashSet<&str> {
+        self.predicates
+            .iter()
+            .filter_map(|predicate| predicate.required_columns().single_column())
+            .map(|column| column.name())
+            .collect()
+    }
 }
 
 fn update_selection(
