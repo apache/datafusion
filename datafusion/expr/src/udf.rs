@@ -38,6 +38,25 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+/// Describes how a struct-producing UDF's output fields correspond to its
+/// input arguments. This enables the optimizer to propagate orderings
+/// through struct projections (e.g., so that sorting by a struct field
+/// can be recognized as equivalent to sorting by the source column).
+///
+/// See [`ScalarUDFImpl::struct_field_mapping`] for details.
+pub struct StructFieldMapping {
+    /// The UDF used to construct field access expressions on the output.
+    /// For example, the `get_field` UDF for accessing struct fields.
+    pub field_accessor: Arc<ScalarUDF>,
+    /// For each output field: the literal arguments to pass to the
+    /// `field_accessor` UDF (after the base expression), and the index
+    /// of the corresponding input argument that produces the field's value.
+    ///
+    /// For `named_struct('a', col1, 'b', col2)`, this would be:
+    /// `[(["a"], 1), (["b"], 3)]` — field `"a"` comes from arg index 1.
+    pub fields: Vec<(Vec<ScalarValue>, usize)>,
+}
+
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -303,6 +322,14 @@ impl ScalarUDF {
     /// then the output interval would be `[0, 3]`.
     pub fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
         self.inner.evaluate_bounds(inputs)
+    }
+
+    /// See [`ScalarUDFImpl::struct_field_mapping`] for more details.
+    pub fn struct_field_mapping(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        self.inner.struct_field_mapping(literal_args)
     }
 
     /// Updates bounds for child expressions, given a known interval for this
@@ -961,6 +988,25 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
+    /// For struct-producing functions, return how output fields map to input
+    /// arguments. This enables the optimizer to propagate orderings through
+    /// struct projections.
+    ///
+    /// `literal_args[i]` is `Some(value)` if argument `i` is a known literal,
+    /// allowing extraction of field names from arguments like
+    /// `named_struct('field_name', value, ...)`.
+    ///
+    /// For example, `named_struct('a', col1, 'b', col2)` would return a
+    /// mapping indicating that output field `'a'` (accessed via
+    /// `get_field(output, 'a')`) corresponds to input argument `col1` at
+    /// index 1, and field `'b'` corresponds to `col2` at index 3.
+    fn struct_field_mapping(
+        &self,
+        _literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        None
+    }
+
     /// Returns the documentation for this Scalar UDF.
     ///
     /// Documentation can be accessed programmatically as well as generating
@@ -1107,6 +1153,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         self.inner.propagate_constraints(interval, inputs)
+    }
+
+    fn struct_field_mapping(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        self.inner.struct_field_mapping(literal_args)
     }
 
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {

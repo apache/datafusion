@@ -382,30 +382,39 @@ fn get_exprs_except_skipped(
     }
 }
 
-/// For each column specified in the USING JOIN condition, the JOIN plan outputs it twice
-/// (once for each join side), but an unqualified wildcard should include it only once.
-/// This function returns the columns that should be excluded.
+/// When a JOIN has a USING clause, the join columns appear in the output
+/// schema once per side (for inner/outer joins) or once total (for semi/anti
+/// joins). An unqualified wildcard should include each USING column only once.
+/// This function returns the duplicate columns that should be excluded.
 fn exclude_using_columns(plan: &LogicalPlan) -> Result<HashSet<Column>> {
-    let using_columns = plan.using_columns()?;
-    let excluded = using_columns
-        .into_iter()
-        // For each USING JOIN condition, only expand to one of each join column in projection
-        .flat_map(|cols| {
-            let mut cols = cols.into_iter().collect::<Vec<_>>();
-            // sort join columns to make sure we consistently keep the same
-            // qualified column
-            cols.sort();
-            let mut out_column_names: HashSet<String> = HashSet::new();
-            cols.into_iter().filter_map(move |c| {
-                if out_column_names.contains(&c.name) {
-                    Some(c)
-                } else {
-                    out_column_names.insert(c.name);
-                    None
-                }
-            })
-        })
-        .collect::<HashSet<_>>();
+    let output_columns: HashSet<_> = plan.schema().columns().iter().cloned().collect();
+    let mut excluded = HashSet::new();
+    for cols in plan.using_columns()? {
+        // `using_columns()` returns join columns from both sides regardless of
+        // the join type. For semi/anti joins, only one side's columns appear in
+        // the output schema. Filter to output columns so that columns from the
+        // non-output side don't participate in the deduplication process below
+        // and displace real output columns.
+        let mut cols: Vec<_> = cols
+            .into_iter()
+            .filter(|c| output_columns.contains(c))
+            .collect();
+
+        // Sort so we keep the same qualified column, regardless of HashSet
+        // iteration order.
+        cols.sort();
+
+        // Keep only one column per name from the columns set, adding any
+        // duplicates to the excluded set.
+        let mut seen_names = HashSet::new();
+        for col in cols {
+            if seen_names.contains(col.name.as_str()) {
+                excluded.insert(col); // exclude columns with already seen name
+            } else {
+                seen_names.insert(col.name.clone()); // mark column name as seen
+            }
+        }
+    }
     Ok(excluded)
 }
 

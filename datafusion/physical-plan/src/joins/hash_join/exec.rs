@@ -2270,6 +2270,110 @@ mod tests {
         )
     }
 
+    fn empty_build_with_probe_error_inputs()
+    -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>, JoinOn) {
+        let left_batch =
+            build_table_i32(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
+        let left_schema = left_batch.schema();
+        let left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[vec![left_batch]],
+            Arc::clone(&left_schema),
+            None,
+        )
+        .unwrap();
+
+        let err = exec_err!("bad data error");
+        let right_batch =
+            build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+        let right_schema = right_batch.schema();
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left_schema).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right_schema).unwrap()) as _,
+        )];
+        let right: Arc<dyn ExecutionPlan> = Arc::new(
+            MockExec::new(vec![Ok(right_batch), err], right_schema).with_use_task(false),
+        );
+
+        (left, right, on)
+    }
+
+    async fn assert_empty_build_probe_behavior(
+        join_types: &[JoinType],
+        expect_probe_error: bool,
+        with_filter: bool,
+    ) {
+        let (left, right, on) = empty_build_with_probe_error_inputs();
+        let filter = prepare_join_filter();
+
+        for join_type in join_types {
+            let join = if with_filter {
+                join_with_filter(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    filter.clone(),
+                    join_type,
+                    NullEquality::NullEqualsNothing,
+                )
+                .unwrap()
+            } else {
+                join(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    join_type,
+                    NullEquality::NullEqualsNothing,
+                )
+                .unwrap()
+            };
+
+            let result = common::collect(
+                join.execute(0, Arc::new(TaskContext::default())).unwrap(),
+            )
+            .await;
+
+            if expect_probe_error {
+                let result_string = result.unwrap_err().to_string();
+                assert!(
+                    result_string.contains("bad data error"),
+                    "actual: {result_string}"
+                );
+            } else {
+                let batches = result.unwrap();
+                assert!(
+                    batches.is_empty(),
+                    "expected no output batches for {join_type}, got {batches:?}"
+                );
+            }
+        }
+    }
+
+    fn hash_join_with_dynamic_filter(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: JoinOn,
+        join_type: JoinType,
+    ) -> Result<(HashJoinExec, Arc<DynamicFilterPhysicalExpr>)> {
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &join_type,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            build_accumulator: OnceLock::new(),
+        });
+
+        Ok((join, dynamic_filter))
+    }
+
     async fn join_collect(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -4979,6 +5083,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn join_does_not_consume_probe_when_empty_build_fixes_output() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Inner,
+                JoinType::Left,
+                JoinType::LeftSemi,
+                JoinType::LeftAnti,
+                JoinType::LeftMark,
+                JoinType::RightSemi,
+            ],
+            false,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn join_does_not_consume_probe_when_empty_build_fixes_output_with_filter() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Inner,
+                JoinType::Left,
+                JoinType::LeftSemi,
+                JoinType::LeftAnti,
+                JoinType::LeftMark,
+                JoinType::RightSemi,
+            ],
+            false,
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn join_still_consumes_probe_when_empty_build_needs_probe_rows() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Right,
+                JoinType::Full,
+                JoinType::RightAnti,
+                JoinType::RightMark,
+            ],
+            true,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn join_still_consumes_probe_when_empty_build_needs_probe_rows_with_filter() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Right,
+                JoinType::Full,
+                JoinType::RightAnti,
+                JoinType::RightMark,
+            ],
+            true,
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn join_split_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3, 4]),
@@ -5421,26 +5589,8 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        // Create a dynamic filter manually
-        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
-        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
-
-        // Create HashJoinExec with the dynamic filter
-        let mut join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: dynamic_filter,
-            build_accumulator: OnceLock::new(),
-        });
+        let (join, dynamic_filter) =
+            hash_join_with_dynamic_filter(left, right, on, JoinType::Inner)?;
 
         // Execute the join
         let stream = join.execute(0, task_ctx)?;
@@ -5448,7 +5598,7 @@ mod tests {
 
         // After the join completes, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
-        dynamic_filter_clone.wait_complete().await;
+        dynamic_filter.wait_complete().await;
 
         Ok(())
     }
@@ -5470,26 +5620,8 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        // Create a dynamic filter manually
-        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
-        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
-
-        // Create HashJoinExec with the dynamic filter
-        let mut join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: dynamic_filter,
-            build_accumulator: OnceLock::new(),
-        });
+        let (join, dynamic_filter) =
+            hash_join_with_dynamic_filter(left, right, on, JoinType::Inner)?;
 
         // Execute the join
         let stream = join.execute(0, task_ctx)?;
@@ -5497,7 +5629,28 @@ mod tests {
 
         // Even with empty build side, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
-        dynamic_filter_clone.wait_complete().await;
+        dynamic_filter.wait_complete().await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hash_join_skips_probe_on_empty_build_after_partition_bounds_report()
+    -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let (left, right, on) = empty_build_with_probe_error_inputs();
+
+        // Keep an extra consumer reference so execute() enables dynamic filter pushdown
+        // and enters the WaitPartitionBoundsReport path before deciding whether to poll
+        // the probe side.
+        let (join, dynamic_filter) =
+            hash_join_with_dynamic_filter(left, right, on, JoinType::Inner)?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+        assert!(batches.is_empty());
+
+        dynamic_filter.wait_complete().await;
 
         Ok(())
     }
