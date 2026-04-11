@@ -44,7 +44,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll, Waker},
 };
@@ -138,11 +138,10 @@ impl<T> DistributionSender<T> {
 
     /// Returns `true` if the channel buffer is currently empty.
     ///
-    /// This can be used for load balancing: prefer sending to empty channels
-    /// to reduce buffering and improve throughput.
+    /// This is a lock-free read of an atomic flag updated during
+    /// send/recv, intended for heuristic use (e.g. load balancing).
     pub fn is_empty(&self) -> bool {
-        let state = self.channel.state.lock();
-        state.data.as_ref().map(|d| d.is_empty()).unwrap_or(true)
+        self.channel.empty.load(Ordering::Acquire)
     }
 }
 
@@ -242,6 +241,7 @@ impl<T> Future for SendFuture<'_, T> {
 
             let was_empty = data.is_empty();
             data.push_back(this.element.take().expect("just checked"));
+            this.channel.empty.store(false, Ordering::Release);
 
             if was_empty {
                 this.gate.decr_empty_channels();
@@ -317,6 +317,9 @@ impl<T> Future for RecvFuture<'_, T> {
 
         match data.pop_front() {
             Some(element) => {
+                if data.is_empty() {
+                    this.channel.empty.store(true, Ordering::Release);
+                }
                 // change "empty" signal for this channel?
                 if data.is_empty() && channel_state.recv_wakers.is_some() {
                     // update counter
@@ -372,6 +375,12 @@ struct Channel<T> {
     /// This is used to address [send wakers](Gate::send_wakers).
     id: usize,
 
+    /// Whether the channel buffer is currently empty.
+    ///
+    /// Updated under the state lock during send/recv, but readable
+    /// without the lock for heuristic checks (e.g. load balancing).
+    empty: AtomicBool,
+
     /// Mutable state.
     state: Mutex<ChannelState<T>>,
 }
@@ -382,6 +391,7 @@ impl<T> Channel<T> {
         Channel {
             n_senders: AtomicUsize::new(1),
             id,
+            empty: AtomicBool::new(true),
             state: Mutex::new(ChannelState {
                 data: Some(VecDeque::default()),
                 recv_wakers: Some(Vec::default()),
