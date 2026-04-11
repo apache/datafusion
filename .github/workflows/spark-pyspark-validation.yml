@@ -57,7 +57,7 @@ jobs:
           java-version: '17'
 
       - name: Install PySpark
-        run: pip install pyspark==4.1.1
+        run: pip install pyspark==4.0.2
 
       - name: Run PySpark validation
         run: python datafusion/spark/scripts/validate_slt.py

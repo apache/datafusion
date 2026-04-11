@@ -619,6 +619,11 @@ def translate_sql(sql: str) -> tuple[str, Optional[str]]:
     # bitwise_not is DataFusion's name; Spark uses bitnot() or ~ operator
     if "bitwise_not(" in sql.lower():
         return sql, "uses bitwise_not() (DataFusion-specific name)"
+    # Functions only available in Spark 4.0+
+    if spark_version() < (4, 0):
+        for func_name in ("try_parse_url", "try_url_decode"):
+            if func_name + "(" in sql.lower():
+                return sql, f"uses {func_name}() (requires Spark 4.0+)"
     # Skip DataFusion config statements
     if re.search(r"set\s+datafusion\.", sql, re.IGNORECASE):
         return sql, "DataFusion config statement"
@@ -658,11 +663,12 @@ def translate_sql(sql: str) -> tuple[str, Optional[str]]:
 # ---------------------------------------------------------------------------
 
 _spark_session = None
+_spark_version: Optional[tuple[int, ...]] = None
 
 
 def get_spark():
     """Create or return a local SparkSession."""
-    global _spark_session
+    global _spark_session, _spark_version
     if _spark_session is None:
         from pyspark.sql import SparkSession
 
@@ -678,7 +684,17 @@ def get_spark():
         )
         # Suppress Spark logging
         _spark_session.sparkContext.setLogLevel("WARN")
+        # Detect Spark version
+        ver_str = _spark_session.version  # e.g. "3.5.8" or "4.0.2"
+        _spark_version = tuple(int(x) for x in ver_str.split(".")[:2])
     return _spark_session
+
+
+def spark_version() -> tuple[int, ...]:
+    """Return the Spark major.minor version as a tuple, e.g. (4, 0)."""
+    if _spark_version is None:
+        get_spark()
+    return _spark_version
 
 
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$")
