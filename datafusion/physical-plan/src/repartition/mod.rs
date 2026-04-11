@@ -1394,7 +1394,28 @@ impl RepartitionExec {
             }
 
             for res in partitioner.partition_iter(batch)? {
-                let (partition, batch) = res?;
+                let (mut partition, batch) = res?;
+
+                // For round-robin, if the target channel already has
+                // buffered data, try to find an empty channel instead.
+                // This improves load balancing when some consumers are
+                // slower than others.
+                if let Partitioning::RoundRobinBatch(num_partitions) = &partitioning
+                    && let Some(ch) = output_channels.get(&partition)
+                    && !ch.sender.is_empty()
+                {
+                    let n = *num_partitions;
+                    for i in 1..n {
+                        let candidate = (partition + i) % n;
+                        if let Some(ch) = output_channels.get(&candidate)
+                            && ch.sender.is_empty()
+                        {
+                            partition = candidate;
+                            break;
+                        }
+                    }
+                }
+
                 let size = batch.get_array_memory_size();
 
                 let timer = metrics.send_time[partition].timer();
@@ -1797,13 +1818,15 @@ mod tests {
             repartition(&schema, partitions, Partitioning::RoundRobinBatch(4)).await?;
 
         assert_eq!(4, output_partitions.len());
+        let total_rows: usize = output_partitions
+            .iter()
+            .map(|p| p.iter().map(|b| b.num_rows()).sum::<usize>())
+            .sum();
+        assert_eq!(50 * 8, total_rows);
+        // Each partition should receive at least some data
         for partition in &output_partitions {
-            assert_eq!(1, partition.len());
+            assert!(!partition.is_empty());
         }
-        assert_eq!(13 * 8, output_partitions[0][0].num_rows());
-        assert_eq!(13 * 8, output_partitions[1][0].num_rows());
-        assert_eq!(12 * 8, output_partitions[2][0].num_rows());
-        assert_eq!(12 * 8, output_partitions[3][0].num_rows());
 
         Ok(())
     }
@@ -1836,11 +1859,15 @@ mod tests {
         let output_partitions =
             repartition(&schema, partitions, Partitioning::RoundRobinBatch(5)).await?;
 
-        let total_rows_per_partition = 8 * 50 * 3 / 5;
         assert_eq!(5, output_partitions.len());
-        for partition in output_partitions {
-            assert_eq!(1, partition.len());
-            assert_eq!(total_rows_per_partition, partition[0].num_rows());
+        let total_rows: usize = output_partitions
+            .iter()
+            .map(|p| p.iter().map(|b| b.num_rows()).sum::<usize>())
+            .sum();
+        assert_eq!(8 * 50 * 3, total_rows);
+        // Each partition should receive at least some data
+        for partition in &output_partitions {
+            assert!(!partition.is_empty());
         }
 
         Ok(())
@@ -1942,11 +1969,15 @@ mod tests {
 
         let output_partitions = handle.join().await.unwrap().unwrap();
 
-        let total_rows_per_partition = 8 * 50 * 3 / 5;
         assert_eq!(5, output_partitions.len());
-        for partition in output_partitions {
-            assert_eq!(1, partition.len());
-            assert_eq!(total_rows_per_partition, partition[0].num_rows());
+        let total_rows: usize = output_partitions
+            .iter()
+            .map(|p| p.iter().map(|b| b.num_rows()).sum::<usize>())
+            .sum();
+        assert_eq!(8 * 50 * 3, total_rows);
+        // Each partition should receive at least some data
+        for partition in &output_partitions {
+            assert!(!partition.is_empty());
         }
 
         Ok(())

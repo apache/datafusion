@@ -135,6 +135,15 @@ impl<T> DistributionSender<T> {
             element: Box::new(Some(element)),
         }
     }
+
+    /// Returns `true` if the channel buffer is currently empty.
+    ///
+    /// This can be used for load balancing: prefer sending to empty channels
+    /// to reduce buffering and improve throughput.
+    pub fn is_empty(&self) -> bool {
+        let state = self.channel.state.lock();
+        state.data.as_ref().map(|d| d.is_empty()).unwrap_or(true)
+    }
 }
 
 impl<T> Clone for DistributionSender<T> {
