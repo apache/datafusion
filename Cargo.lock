@@ -1737,7 +1737,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-benchmarks"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "clap",
@@ -1836,7 +1836,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1859,7 +1859,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog-listing"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1881,7 +1881,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1940,7 +1940,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "futures",
  "log",
@@ -1949,7 +1949,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-compression",
@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-arrow"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -2007,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-avro"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -2026,7 +2026,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-csv"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-json"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2069,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-parquet"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2101,11 +2101,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion-doc"
-version = "53.0.0"
+version = "53.1.0"
 
 [[package]]
 name = "datafusion-examples"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -2146,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -2169,7 +2169,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2193,7 +2193,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2204,7 +2204,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-ffi"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "abi_stable",
  "arrow",
@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -2272,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2294,7 +2294,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-nested"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "arrow-ord",
@@ -2332,7 +2332,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-table"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2346,7 +2346,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "criterion",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window-common"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-macros"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "datafusion-doc",
  "quote",
@@ -2380,7 +2380,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2407,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2434,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-adapter"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2447,7 +2447,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2462,7 +2462,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-optimizer"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2482,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2519,7 +2519,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2557,7 +2557,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto-common"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2569,7 +2569,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-pruning"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-session"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "async-trait",
  "datafusion-common",
@@ -2599,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-spark"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "bigdecimal",
@@ -2625,7 +2625,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "bigdecimal",
@@ -2651,7 +2651,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sqllogictest"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2682,7 +2682,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-substrait"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2703,7 +2703,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-wasmtest"
-version = "53.0.0"
+version = "53.1.0"
 dependencies = [
  "bytes",
  "chrono",
