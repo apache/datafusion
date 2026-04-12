@@ -35,8 +35,8 @@ use super::decimal::{apply_decimal_op, ceil_decimal_value};
 
 #[user_doc(
     doc_section(label = "Math Functions"),
-    description = "Returns the nearest integer greater than or equal to a number.",
-    syntax_example = "ceil(numeric_expression)",
+    description = "Returns the nearest integer greater than or equal to a number. When a scale parameter is provided, rounds up to that number of decimal places.",
+    syntax_example = "ceil(numeric_expression[, scale])",
     standard_argument(name = "numeric_expression", prefix = "Numeric"),
     sql_example = r#"```sql
 > SELECT ceil(3.14);
@@ -45,6 +45,13 @@ use super::decimal::{apply_decimal_op, ceil_decimal_value};
 +------------+
 | 4.0        |
 +------------+
+
+> SELECT ceil(3.145, 2);
++-----------------+
+| ceil(3.145, 2)  |
++-----------------+
+| 3.15            |
++-----------------+
 ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -66,6 +73,9 @@ impl CeilFunc {
                 vec![
                     TypeSignature::Coercible(vec![decimal_sig]),
                     TypeSignature::Uniform(1, vec![DataType::Float64, DataType::Float32]),
+                    // 2-argument form: ceil(value, scale) for Spark compatibility
+                    TypeSignature::Exact(vec![DataType::Float64, DataType::Int64]),
+                    TypeSignature::Exact(vec![DataType::Float32, DataType::Int64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -90,6 +100,11 @@ impl ScalarUDFImpl for CeilFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Handle 2-argument form: ceil(value, scale)
+        if args.args.len() == 2 {
+            return self.invoke_with_scale(&args);
+        }
+
         let arg = &args.args[0];
 
         // Scalar fast path for float types - avoid array conversion overhead entirely
@@ -197,5 +212,69 @@ impl ScalarUDFImpl for CeilFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+impl CeilFunc {
+    /// Handle 2-argument ceil(value, scale) for Spark compatibility.
+    /// ceil(value, scale) = ceil(value * 10^scale) / 10^scale
+    fn invoke_with_scale(&self, args: &ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let value_arg = &args.args[0];
+        let scale_arg = &args.args[1];
+
+        // Extract scale as i64
+        let scale = match scale_arg {
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(s))) => *s,
+            ColumnarValue::Scalar(ScalarValue::Int64(None)) => {
+                return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
+            }
+            _ => {
+                return exec_err!(
+                    "ceil(value, scale) requires scale to be a scalar Int64"
+                );
+            }
+        };
+
+        let factor = 10_f64.powi(scale as i32);
+
+        match value_arg {
+            ColumnarValue::Scalar(ScalarValue::Float64(v)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(
+                    v.map(|x| (x * factor).ceil() / factor),
+                )))
+            }
+            ColumnarValue::Scalar(ScalarValue::Float32(v)) => {
+                let factor_f32 = factor as f32;
+                Ok(ColumnarValue::Scalar(ScalarValue::Float32(
+                    v.map(|x| (x * factor_f32).ceil() / factor_f32),
+                )))
+            }
+            ColumnarValue::Scalar(ScalarValue::Null) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+            }
+            ColumnarValue::Array(array) => {
+                match array.data_type() {
+                    DataType::Float64 => {
+                        let arr = array.as_primitive::<Float64Type>();
+                        let result: ArrayRef = Arc::new(
+                            arr.unary::<_, Float64Type>(|x| (x * factor).ceil() / factor),
+                        );
+                        Ok(ColumnarValue::Array(result))
+                    }
+                    DataType::Float32 => {
+                        let factor_f32 = factor as f32;
+                        let arr = array.as_primitive::<Float32Type>();
+                        let result: ArrayRef = Arc::new(
+                            arr.unary::<_, Float32Type>(|x| (x * factor_f32).ceil() / factor_f32),
+                        );
+                        Ok(ColumnarValue::Array(result))
+                    }
+                    other => exec_err!(
+                        "Unsupported data type {other:?} for function ceil with scale"
+                    ),
+                }
+            }
+            _ => exec_err!("Unsupported argument type for ceil with scale"),
+        }
     }
 }
