@@ -1,4 +1,3 @@
-
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -47,7 +46,7 @@ pub struct DependentJoinRewriter {
     current_id: usize,
 
     subquery_depth: usize,
-    // each newly visted `LogicalPlan` is inserted inside this map for tracking
+    // each newly visited `LogicalPlan` is inserted inside this map for tracking
     nodes: IndexMap<usize, Node>,
     // all the node ids from root to the current node
     // this is mutated duriing traversal
@@ -74,7 +73,7 @@ struct ColumnAccess {
     field: FieldRef,
     subquery_depth: usize,
     // the reference to the delim scan node map
-    // this is usedful to construct delim scan operator later
+    // this is useful to construct delim scan operator later
     provider_node_id: usize,
 }
 
@@ -86,7 +85,7 @@ impl DependentJoinRewriter {
         dependent_join_node: &Node,
         current_subquery_depth: usize,
         mut current_plan: LogicalPlanBuilder,
-        subquery_alias_by_offset: HashMap<usize, String>,
+        subquery_alias_by_offset: &HashMap<usize, String>,
     ) -> Result<(LogicalPlanBuilder, Vec<Vec<Expr>>)> {
         // everytime we meet a subquery during traversal, we increment this by 1
         // we can use this offset to lookup the original subquery info
@@ -123,7 +122,7 @@ impl DependentJoinRewriter {
                             subquery_expr_by_offset.insert(*offset_ref, e);
                             *offset_ref += 1;
 
-                            Ok(Transformed::yes(col(format!("{alias}"))))
+                            Ok(Transformed::yes(col(alias.to_string())))
                         })?
                         .data)
                 })
@@ -153,7 +152,7 @@ impl DependentJoinRewriter {
                 .iter()
                 .map(|ac| CorrelatedColumnInfo {
                     col: ac.col.clone(),
-                    field: ac.field.clone(),
+                    field: Arc::clone(&ac.field),
                     depth: ac.subquery_depth,
                     delim_scan_node_id: ac.provider_node_id,
                 })
@@ -178,7 +177,7 @@ impl DependentJoinRewriter {
         dependent_join_node: &Node,
         current_subquery_depth: usize,
         current_plan: LogicalPlanBuilder,
-        subquery_alias_by_offset: HashMap<usize, String>,
+        subquery_alias_by_offset: &HashMap<usize, String>,
     ) -> Result<LogicalPlanBuilder> {
         // because dependent join may introduce extra columns
         // to evaluate the subquery, the final plan should
@@ -224,7 +223,7 @@ impl DependentJoinRewriter {
         dependent_join_node: &Node,
         current_subquery_depth: usize,
         current_plan: LogicalPlanBuilder,
-        subquery_alias_by_offset: HashMap<usize, String>,
+        subquery_alias_by_offset: &HashMap<usize, String>,
         preserve_original_column_names: bool,
     ) -> Result<LogicalPlanBuilder> {
         // Normalize negated subquries in projection expressions.
@@ -268,7 +267,7 @@ impl DependentJoinRewriter {
         dependent_join_node: &Node,
         current_subquery_depth: usize,
         current_plan: LogicalPlanBuilder,
-        subquery_alias_by_offset: HashMap<usize, String>,
+        subquery_alias_by_offset: &HashMap<usize, String>,
     ) -> Result<LogicalPlanBuilder> {
         // because dependent join may introduce extra columns
         // to evaluate the subquery, the final plan should
@@ -323,7 +322,7 @@ impl DependentJoinRewriter {
         dependent_join_node: &Node,
         current_subquery_depth: usize,
         current_plan: LogicalPlanBuilder,
-        subquery_alias_by_offset: HashMap<usize, String>,
+        subquery_alias_by_offset: &HashMap<usize, String>,
     ) -> Result<LogicalPlanBuilder> {
         // this is lateral join
         assert!(dependent_join_node.columns_accesses_by_subquery_id.len() == 1);
@@ -342,7 +341,7 @@ impl DependentJoinRewriter {
             .iter()
             .map(|ac| CorrelatedColumnInfo {
                 col: ac.col.clone(),
-                field: ac.field.clone(),
+                field: Arc::clone(&ac.field),
                 depth: ac.subquery_depth,
                 delim_scan_node_id: ac.provider_node_id,
             })
@@ -383,7 +382,7 @@ impl DependentJoinRewriter {
         join: &Join,
         dependent_join_node: &Node,
         current_subquery_depth: usize,
-        subquery_alias_by_offset: HashMap<usize, String>,
+        subquery_alias_by_offset: &HashMap<usize, String>,
     ) -> Result<LogicalPlanBuilder> {
         let mut new_join = join.clone();
         let filter = if let Some(ref filter) = join.filter {
@@ -446,9 +445,7 @@ impl DependentJoinRewriter {
         let min_len = stack_with_table_provider
             .len()
             .min(stack_with_subquery.len());
-        let mut cursor = 0;
         for i in 0..min_len {
-            cursor = i;
             let right_node = &stack_with_subquery[i];
             let left_node = &stack_with_table_provider[i];
 
@@ -459,12 +456,6 @@ impl DependentJoinRewriter {
             } else {
                 break;
             }
-        }
-        // check if from the cursor to the end of the table_provider there exist
-        // if so, return the node_id of the alias node
-        for i in cursor + 1..stack_with_table_provider.len() {
-            let _node = &stack_with_table_provider[i];
-            // This table provider cannot provide the given column
         }
 
         Some((lowest_common_ancestor, subquery_node_id))
@@ -498,7 +489,7 @@ impl DependentJoinRewriter {
                         col: col.clone(),
                         node_id: access.node_id,
                         stack: access.stack.clone(),
-                        field: access.field.clone(),
+                        field: Arc::clone(&access.field),
                         subquery_depth: access.subquery_depth,
                         provider_node_id,
                     });
@@ -506,10 +497,10 @@ impl DependentJoinRewriter {
                     // the access is resolved, remove from the list
                     return false;
                 }
-                return true;
+                true
             });
             // if all the accesses are resolved, remove the column from the map
-            if accesses.len() == 0 {
+            if accesses.is_empty() {
                 self.unresolved_outer_ref_columns.swap_remove(col);
             }
         }
@@ -531,7 +522,7 @@ impl DependentJoinRewriter {
                 stack: self.stack.clone(),
                 node_id: child_id,
                 col: col.clone(),
-                field: field.clone(),
+                field: Arc::clone(field),
                 subquery_depth: self.subquery_depth,
                 provider_node_id: 0,
             });
@@ -703,8 +694,8 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         // or even decorrelated? then node.clone() will only store the snapshot
         // we need some form of in place rewrite here
         // We skipping join node here because it is not a true provider of columns.
-        if !matches!(node, LogicalPlan::Join(_)) {
-            if node
+        if !matches!(node, LogicalPlan::Join(_))
+            && node
                 .schema()
                 .columns()
                 .iter()
@@ -712,21 +703,20 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 .collect::<Result<Vec<bool>>>()?
                 .iter()
                 .any(|b| *b)
-            {
-                self.domain_columns_provider_nodes
-                    .insert(new_id, node.clone());
-            };
-        }
+        {
+            self.domain_columns_provider_nodes
+                .insert(new_id, node.clone());
+        };
 
         match &node {
             LogicalPlan::Filter(f) => {
-                let ands = split_conjunction(&f.predicate);
+                let and = split_conjunction(&f.predicate);
                 let (predicates_with_subquery, predicates_without_subquery): (
                     Vec<_>,
                     Vec<_>,
-                ) = ands.into_iter().partition(|expr| {
+                ) = and.into_iter().partition(|expr| {
                     collect_subquery_types(
-                        *expr,
+                        expr,
                         &mut is_dependent_join_node,
                         &mut subquery_types,
                     )
@@ -736,11 +726,19 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 // all of these predicates
                 if is_dependent_join_node && !predicates_without_subquery.is_empty() {
                     let independent_predicate = conjunction(
-                        predicates_without_subquery.into_iter().cloned().collect::<Vec<_>>(),
-                    ).unwrap();
+                        predicates_without_subquery
+                            .into_iter()
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap();
                     let dependent_predicate = conjunction(
-                        predicates_with_subquery.into_iter().cloned().collect::<Vec<_>>(),
-                    ).unwrap();
+                        predicates_with_subquery
+                            .into_iter()
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap();
                     dependent_predicate
                         .apply(|expr| {
                             if let Expr::OuterReferenceColumn(data_type, col) = expr {
@@ -749,10 +747,11 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                             Ok(TreeNodeRecursion::Continue)
                         })
                         .expect("traversal is infallible");
-                    let new_plan_to_traverse = LogicalPlanBuilder::new(f.input.as_ref().clone())
-                        .filter(independent_predicate)?
-                        .filter(dependent_predicate)?
-                        .build()?;
+                    let new_plan_to_traverse =
+                        LogicalPlanBuilder::new(f.input.as_ref().clone())
+                            .filter(independent_predicate)?
+                            .filter(dependent_predicate)?
+                            .build()?;
 
                     self.subquery_depth += 1;
                     self.stack.push(new_id);
@@ -802,7 +801,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     .nodes
                     .get_mut(parent)
                     .ok_or(internal_datafusion_err!("node {} not found", parent))?;
-                
+
                 // the inserting sequence matter here
                 // when a parent has multiple children subquery at the same time
                 // we rely on the order in which subquery children are visited
@@ -858,12 +857,12 @@ impl TreeNodeRewriter for DependentJoinRewriter {
 
                 // Handle the case lateral join
                 if let LogicalPlan::Subquery(_) = join.right.as_ref() {
-                    if let Some(ref filter) = join.filter {
-                        if contains_subquery(filter) {
-                            return not_impl_err!(
-                                "subquery inside lateral join condition is not supported"
-                            );
-                        }
+                    if let Some(ref filter) = join.filter
+                        && contains_subquery(filter)
+                    {
+                        return not_impl_err!(
+                            "subquery inside lateral join condition is not supported"
+                        );
                     }
                     self.subquery_depth += 1;
                     self.stack.push(new_id);
@@ -972,7 +971,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         let current_node = self.stack.pop().ok_or(internal_datafusion_err!(
             "stack cannot be empty during upward traversal"
         ))?;
-        let is_top_node = self.stack.len() == 0;
+        let is_top_node = self.stack.is_empty();
         let node_info = if let Entry::Occupied(e) = self.nodes.entry(current_node) {
             let node_info = e.get();
             if !node_info.is_dependent_join_node {
@@ -1013,7 +1012,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     &node_info,
                     current_subquery_depth,
                     current_plan,
-                    subquery_alias_by_offset,
+                    &subquery_alias_by_offset,
                     is_top_node,
                 )?;
             }
@@ -1023,7 +1022,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     &node_info,
                     current_subquery_depth,
                     current_plan,
-                    subquery_alias_by_offset,
+                    &subquery_alias_by_offset,
                 )?;
             }
 
@@ -1034,7 +1033,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         &node_info,
                         current_subquery_depth,
                         current_plan,
-                        subquery_alias_by_offset,
+                        &subquery_alias_by_offset,
                     )?
                 } else {
                     // Correlated subquery in join filter.
@@ -1042,7 +1041,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         join,
                         &node_info,
                         current_subquery_depth,
-                        subquery_alias_by_offset,
+                        &subquery_alias_by_offset,
                     )?;
                 };
             }
@@ -1052,7 +1051,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     &node_info,
                     current_subquery_depth,
                     current_plan,
-                    subquery_alias_by_offset,
+                    &subquery_alias_by_offset,
                 )?;
             }
             _ => {
@@ -1129,7 +1128,7 @@ fn normalize_negated_subqueries(expr: &Expr) -> Result<Expr> {
 }
 
 /// Optimizer rule for rewriting subqueries to dependent join.
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug)]
 pub struct RewriteDependentJoin {}
 
@@ -1219,7 +1218,8 @@ mod tests {
             assert_snapshot!(
                 display,
                 @ $expected,
-            )
+            );
+            index
         }};
     }
 
@@ -1252,7 +1252,7 @@ mod tests {
         //     Filter: inner_table_lv1.c = outer_ref(outer_table.c)
         //       TableScan: inner_table_lv1
 
-        assert_dependent_join_rewrite!(plan, @r"
+        let rewriter = assert_dependent_join_rewrite!(plan, @r"
         DependentJoin on [] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
           TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
           Filter: inner_table_lv1.c = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
@@ -2558,6 +2558,10 @@ mod tests {
         "
         );
 
+        Ok(())
+    }
+
+    fn test_query_in_paper() -> Result<()> {
         Ok(())
     }
 }

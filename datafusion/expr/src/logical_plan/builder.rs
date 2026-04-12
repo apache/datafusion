@@ -44,7 +44,9 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    CorrelatedColumnInfo, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit
+    CorrelatedColumnInfo, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and,
+    binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -54,7 +56,10 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions, exec_err, get_target_functional_dependencies, internal_datafusion_err, internal_err, plan_datafusion_err, plan_err
+    Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions, exec_err,
+    get_target_functional_dependencies, internal_datafusion_err, internal_err,
+    plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -1553,13 +1558,12 @@ impl LogicalPlanBuilder {
         let metadata = schema.metadata().clone();
         let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
         let any_join = match subquery_expr {
-            Some(ref expr) => match expr {
-                Expr::Exists(_) | Expr::InSubquery(_) => true,
-                _ => false,
-            },
+            Some(ref expr) => matches!(expr, Expr::Exists(_) | Expr::InSubquery(_)),
             None => match lateral_join_condition {
                 None => {
-                    return internal_err!("at least lateral join or subquery expr must be set to build dependent join");
+                    return internal_err!(
+                        "at least lateral join or subquery expr must be set to build dependent join"
+                    );
                 }
                 Some(_) => false,
             },

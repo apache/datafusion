@@ -63,7 +63,10 @@ pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
     table_scan(Some(name), &schema, None)?.build()
 }
 
-pub fn test_table_with_columns(name: &str, columns: &[(&str, DataType)]) -> Result<LogicalPlan> {
+pub fn test_table_with_columns(
+    name: &str,
+    columns: &[(&str, DataType)],
+) -> Result<LogicalPlan> {
     let fields = columns
         .iter()
         .map(|(name, dt)| Field::new(*name, dt.clone(), true))

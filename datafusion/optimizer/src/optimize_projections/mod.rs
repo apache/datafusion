@@ -332,7 +332,8 @@ fn optimize_projections(
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =
                 split_join_requirements(left_len, indices, &join.join_type);
-            let left_indices = left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
+            let left_indices =
+                left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
             let right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
             vec![

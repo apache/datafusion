@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    Aggregate, DependentJoin, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join,
+    Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join,
     Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Sort,
     Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values,
     Window, expr_vec_fmt,

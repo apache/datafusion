@@ -39,9 +39,9 @@
 
 use crate::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, DependentJoin,
-    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter,
-    Join, Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery,
-    Repartition, Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
+    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
+    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
+    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
     UserDefinedLogicalNode, Values, Window, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
@@ -674,9 +674,7 @@ impl LogicalPlan {
                     LogicalPlan::Limit(Limit { skip, fetch, input })
                 })
             }
-            LogicalPlan::DependentJoin(DependentJoin {
-                ..
-            }) => {
+            LogicalPlan::DependentJoin(DependentJoin { .. }) => {
                 Transformed::no(self)
                 // let subquery_expr = subquery_expr.map_elements(&mut f)?;
                 // let join_type = match join_type {
