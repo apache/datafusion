@@ -37,7 +37,7 @@ use crate::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::utils::collect_columns;
 use parking_lot::Mutex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -396,6 +396,15 @@ impl PhysicalGroupBy {
         self.expr.len() + usize::from(self.has_grouping_set)
     }
 
+    /// Returns the Arrow data type of the `__grouping_id` column.
+    ///
+    /// The type is chosen to be wide enough to hold both the semantic bitmask
+    /// (in the low `n` bits, where `n` is the number of grouping expressions)
+    /// and the duplicate ordinal (in the high bits).
+    fn grouping_id_data_type(&self) -> DataType {
+        Aggregate::grouping_id_type(self.expr.len(), max_duplicate_ordinal(&self.groups))
+    }
+
     pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
         Ok(Arc::new(Schema::new(self.group_fields(schema)?)))
     }
@@ -420,7 +429,7 @@ impl PhysicalGroupBy {
             fields.push(
                 Field::new(
                     Aggregate::INTERNAL_GROUPING_ID,
-                    Aggregate::grouping_id_type(self.expr.len()),
+                    self.grouping_id_data_type(),
                     false,
                 )
                 .into(),
@@ -2039,25 +2048,70 @@ fn evaluate_optional(
         .collect()
 }
 
-fn group_id_array(group: &[bool], batch: &RecordBatch) -> Result<ArrayRef> {
-    if group.len() > 64 {
+/// Builds the internal `__grouping_id` array for a single grouping set.
+///
+/// The returned array packs two values into a single integer:
+///
+/// - Low `n` bits (positions 0 .. n-1): the semantic bitmask.  A `1` bit
+///   at position `i` means that the `i`-th grouping column (counting from the
+///   least significant bit, i.e. the *last* column in the `group` slice) is
+///   `NULL` for this grouping set.
+/// - High bits (positions n and above): the duplicate `ordinal`, which
+///   distinguishes multiple occurrences of the same grouping-set pattern.  The
+///   ordinal is `0` for the first occurrence, `1` for the second, and so on.
+///
+/// The integer type is chosen to be the smallest `UInt8 / UInt16 / UInt32 /
+/// UInt64` that can represent both parts.  It matches the type returned by
+/// [`Aggregate::grouping_id_type`].
+fn group_id_array(
+    group: &[bool],
+    ordinal: usize,
+    max_ordinal: usize,
+    batch: &RecordBatch,
+) -> Result<ArrayRef> {
+    let n = group.len();
+    if n > 64 {
         return not_impl_err!(
             "Grouping sets with more than 64 columns are not supported"
         );
     }
-    let group_id = group.iter().fold(0u64, |acc, &is_null| {
+    let ordinal_bits = usize::BITS as usize - max_ordinal.leading_zeros() as usize;
+    let total_bits = n + ordinal_bits;
+    if total_bits > 64 {
+        return not_impl_err!(
+            "Grouping sets with {n} columns and a maximum duplicate ordinal of \
+             {max_ordinal} require {total_bits} bits, which exceeds 64"
+        );
+    }
+    let semantic_id = group.iter().fold(0u64, |acc, &is_null| {
         (acc << 1) | if is_null { 1 } else { 0 }
     });
+    let full_id = semantic_id | ((ordinal as u64) << n);
     let num_rows = batch.num_rows();
-    if group.len() <= 8 {
-        Ok(Arc::new(UInt8Array::from(vec![group_id as u8; num_rows])))
-    } else if group.len() <= 16 {
-        Ok(Arc::new(UInt16Array::from(vec![group_id as u16; num_rows])))
-    } else if group.len() <= 32 {
-        Ok(Arc::new(UInt32Array::from(vec![group_id as u32; num_rows])))
+    if total_bits <= 8 {
+        Ok(Arc::new(UInt8Array::from(vec![full_id as u8; num_rows])))
+    } else if total_bits <= 16 {
+        Ok(Arc::new(UInt16Array::from(vec![full_id as u16; num_rows])))
+    } else if total_bits <= 32 {
+        Ok(Arc::new(UInt32Array::from(vec![full_id as u32; num_rows])))
     } else {
-        Ok(Arc::new(UInt64Array::from(vec![group_id; num_rows])))
+        Ok(Arc::new(UInt64Array::from(vec![full_id; num_rows])))
     }
+}
+
+/// Returns the highest duplicate ordinal across all grouping sets.
+///
+/// At the call-site, the ordinal is the 0-based index assigned to each
+/// occurrence of a repeated grouping-set pattern: the first occurrence gets
+/// ordinal 0, the second gets 1, and so on.  If the same `Vec<bool>` appears
+/// three times the ordinals are 0, 1, 2 and this function returns 2.
+/// Returns 0 when no grouping set is duplicated.
+fn max_duplicate_ordinal(groups: &[Vec<bool>]) -> usize {
+    let mut counts: HashMap<&[bool], usize> = HashMap::new();
+    for group in groups {
+        *counts.entry(group).or_insert(0) += 1;
+    }
+    counts.into_values().max().unwrap_or(0).saturating_sub(1)
 }
 
 /// Evaluate a group by expression against a `RecordBatch`
@@ -2074,6 +2128,8 @@ pub fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
+    let max_ordinal = max_duplicate_ordinal(&group_by.groups);
+    let mut ordinal_per_pattern: HashMap<&[bool], usize> = HashMap::new();
     let exprs = evaluate_expressions_to_arrays(
         group_by.expr.iter().map(|(expr, _)| expr),
         batch,
@@ -2087,6 +2143,10 @@ pub fn evaluate_group_by(
         .groups
         .iter()
         .map(|group| {
+            let ordinal = ordinal_per_pattern.entry(group).or_insert(0);
+            let current_ordinal = *ordinal;
+            *ordinal += 1;
+
             let mut group_values = Vec::with_capacity(group_by.num_group_exprs());
             group_values.extend(group.iter().enumerate().map(|(idx, is_null)| {
                 if *is_null {
@@ -2096,7 +2156,12 @@ pub fn evaluate_group_by(
                 }
             }));
             if !group_by.is_single() {
-                group_values.push(group_id_array(group, batch)?);
+                group_values.push(group_id_array(
+                    group,
+                    current_ordinal,
+                    max_ordinal,
+                    batch,
+                )?);
             }
             Ok(group_values)
         })
