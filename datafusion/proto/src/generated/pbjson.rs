@@ -975,6 +975,12 @@ impl serde::Serialize for AnalyzeExecNode {
         if self.schema.is_some() {
             len += 1;
         }
+        if self.has_metric_categories {
+            len += 1;
+        }
+        if !self.metric_categories.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AnalyzeExecNode", len)?;
         if self.verbose {
             struct_ser.serialize_field("verbose", &self.verbose)?;
@@ -987,6 +993,12 @@ impl serde::Serialize for AnalyzeExecNode {
         }
         if let Some(v) = self.schema.as_ref() {
             struct_ser.serialize_field("schema", v)?;
+        }
+        if self.has_metric_categories {
+            struct_ser.serialize_field("hasMetricCategories", &self.has_metric_categories)?;
+        }
+        if !self.metric_categories.is_empty() {
+            struct_ser.serialize_field("metricCategories", &self.metric_categories)?;
         }
         struct_ser.end()
     }
@@ -1003,6 +1015,10 @@ impl<'de> serde::Deserialize<'de> for AnalyzeExecNode {
             "showStatistics",
             "input",
             "schema",
+            "has_metric_categories",
+            "hasMetricCategories",
+            "metric_categories",
+            "metricCategories",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1011,6 +1027,8 @@ impl<'de> serde::Deserialize<'de> for AnalyzeExecNode {
             ShowStatistics,
             Input,
             Schema,
+            HasMetricCategories,
+            MetricCategories,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1036,6 +1054,8 @@ impl<'de> serde::Deserialize<'de> for AnalyzeExecNode {
                             "showStatistics" | "show_statistics" => Ok(GeneratedField::ShowStatistics),
                             "input" => Ok(GeneratedField::Input),
                             "schema" => Ok(GeneratedField::Schema),
+                            "hasMetricCategories" | "has_metric_categories" => Ok(GeneratedField::HasMetricCategories),
+                            "metricCategories" | "metric_categories" => Ok(GeneratedField::MetricCategories),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1059,6 +1079,8 @@ impl<'de> serde::Deserialize<'de> for AnalyzeExecNode {
                 let mut show_statistics__ = None;
                 let mut input__ = None;
                 let mut schema__ = None;
+                let mut has_metric_categories__ = None;
+                let mut metric_categories__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Verbose => {
@@ -1085,6 +1107,18 @@ impl<'de> serde::Deserialize<'de> for AnalyzeExecNode {
                             }
                             schema__ = map_.next_value()?;
                         }
+                        GeneratedField::HasMetricCategories => {
+                            if has_metric_categories__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hasMetricCategories"));
+                            }
+                            has_metric_categories__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::MetricCategories => {
+                            if metric_categories__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metricCategories"));
+                            }
+                            metric_categories__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(AnalyzeExecNode {
@@ -1092,6 +1126,8 @@ impl<'de> serde::Deserialize<'de> for AnalyzeExecNode {
                     show_statistics: show_statistics__.unwrap_or_default(),
                     input: input__,
                     schema: schema__,
+                    has_metric_categories: has_metric_categories__.unwrap_or_default(),
+                    metric_categories: metric_categories__.unwrap_or_default(),
                 })
             }
         }
@@ -17081,15 +17117,6 @@ impl serde::Serialize for PhysicalHashExprNode {
         if self.seed0 != 0 {
             len += 1;
         }
-        if self.seed1 != 0 {
-            len += 1;
-        }
-        if self.seed2 != 0 {
-            len += 1;
-        }
-        if self.seed3 != 0 {
-            len += 1;
-        }
         if !self.description.is_empty() {
             len += 1;
         }
@@ -17101,21 +17128,6 @@ impl serde::Serialize for PhysicalHashExprNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("seed0", ToString::to_string(&self.seed0).as_str())?;
-        }
-        if self.seed1 != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("seed1", ToString::to_string(&self.seed1).as_str())?;
-        }
-        if self.seed2 != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("seed2", ToString::to_string(&self.seed2).as_str())?;
-        }
-        if self.seed3 != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("seed3", ToString::to_string(&self.seed3).as_str())?;
         }
         if !self.description.is_empty() {
             struct_ser.serialize_field("description", &self.description)?;
@@ -17133,9 +17145,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashExprNode {
             "on_columns",
             "onColumns",
             "seed0",
-            "seed1",
-            "seed2",
-            "seed3",
             "description",
         ];
 
@@ -17143,9 +17152,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashExprNode {
         enum GeneratedField {
             OnColumns,
             Seed0,
-            Seed1,
-            Seed2,
-            Seed3,
             Description,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -17170,9 +17176,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashExprNode {
                         match value {
                             "onColumns" | "on_columns" => Ok(GeneratedField::OnColumns),
                             "seed0" => Ok(GeneratedField::Seed0),
-                            "seed1" => Ok(GeneratedField::Seed1),
-                            "seed2" => Ok(GeneratedField::Seed2),
-                            "seed3" => Ok(GeneratedField::Seed3),
                             "description" => Ok(GeneratedField::Description),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -17195,9 +17198,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashExprNode {
             {
                 let mut on_columns__ = None;
                 let mut seed0__ = None;
-                let mut seed1__ = None;
-                let mut seed2__ = None;
-                let mut seed3__ = None;
                 let mut description__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -17215,30 +17215,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashExprNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Seed1 => {
-                            if seed1__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("seed1"));
-                            }
-                            seed1__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::Seed2 => {
-                            if seed2__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("seed2"));
-                            }
-                            seed2__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::Seed3 => {
-                            if seed3__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("seed3"));
-                            }
-                            seed3__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
                         GeneratedField::Description => {
                             if description__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("description"));
@@ -17250,9 +17226,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashExprNode {
                 Ok(PhysicalHashExprNode {
                     on_columns: on_columns__.unwrap_or_default(),
                     seed0: seed0__.unwrap_or_default(),
-                    seed1: seed1__.unwrap_or_default(),
-                    seed2: seed2__.unwrap_or_default(),
-                    seed3: seed3__.unwrap_or_default(),
                     description: description__.unwrap_or_default(),
                 })
             }

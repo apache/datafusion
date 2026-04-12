@@ -17,7 +17,6 @@
 
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
-use std::any::Any;
 use std::fmt::Formatter;
 use std::ops::{BitOr, ControlFlow};
 use std::sync::Arc;
@@ -535,10 +534,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         "NestedLoopJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -923,7 +918,7 @@ impl NestedLoopJoinMetrics {
         Self {
             join_metrics: BuildProbeJoinMetrics::new(partition, metrics),
             selectivity: MetricBuilder::new(metrics)
-                .with_type(MetricType::SUMMARY)
+                .with_type(MetricType::Summary)
                 .ratio_metrics("selectivity", partition),
         }
     }
@@ -2335,8 +2330,8 @@ pub(crate) mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::assert_contains;
     use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_common::{ScalarValue, assert_contains};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};

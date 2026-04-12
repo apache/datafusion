@@ -270,6 +270,10 @@ pub struct PlannerContext {
     outer_from_schema: Option<DFSchemaRef>,
     /// The query schema defined by the table
     create_table_schema: Option<DFSchemaRef>,
+    /// When planning non-first queries in a set expression
+    /// (UNION/INTERSECT/EXCEPT), holds the schema of the left-most query.
+    /// Used to alias duplicate expressions to match the left side's field names.
+    set_expr_left_schema: Option<DFSchemaRef>,
 }
 
 impl Default for PlannerContext {
@@ -287,6 +291,7 @@ impl PlannerContext {
             outer_queries_schemas_stack: vec![],
             outer_from_schema: None,
             create_table_schema: None,
+            set_expr_left_schema: None,
         }
     }
 
@@ -399,6 +404,14 @@ impl PlannerContext {
     /// Remove the plan of CTE / Subquery for the specified name
     pub(super) fn remove_cte(&mut self, cte_name: &str) {
         self.ctes.remove(cte_name);
+    }
+
+    /// Sets the left-most set expression schema, returning the previous value
+    pub(super) fn set_set_expr_left_schema(
+        &mut self,
+        schema: Option<DFSchemaRef>,
+    ) -> Option<DFSchemaRef> {
+        std::mem::replace(&mut self.set_expr_left_schema, schema)
     }
 }
 

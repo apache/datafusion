@@ -19,9 +19,10 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Capacities, ListArray, MutableArrayData, StructArray, new_null_array,
+    Array, ArrayRef, Capacities, ListArray, MutableArrayData, NullBufferBuilder,
+    StructArray, new_null_array,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::cast::{
@@ -29,10 +30,10 @@ use datafusion_common::cast::{
 };
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Type-erased view of a list column (works for both List and LargeList).
@@ -42,38 +43,46 @@ struct ListColumnView {
     values: ArrayRef,
     /// Pre-computed per-row start offsets (length = num_rows + 1).
     offsets: Vec<usize>,
-    /// Pre-computed null bitmap: true means the row is null.
-    is_null: Vec<bool>,
+    /// Null bitmap from the input array (None means no nulls).
+    nulls: Option<arrow::buffer::NullBuffer>,
+}
+
+impl ListColumnView {
+    fn is_null(&self, idx: usize) -> bool {
+        self.nulls.as_ref().is_some_and(|n| n.is_null(idx))
+    }
 }
 
 make_udf_expr_and_func!(
     ArraysZip,
     arrays_zip,
-    "combines multiple arrays into a single array of structs.",
+    "combines one or multiple arrays into a single array of structs.",
     arrays_zip_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.",
-    syntax_example = "arrays_zip(array1, array2[, ..., array_n])",
+    syntax_example = "arrays_zip(array1[, ..., array_n])",
     sql_example = r#"```sql
-> select arrays_zip([1, 2, 3], ['a', 'b', 'c']);
+> select arrays_zip([1, 2, 3]);
 +---------------------------------------------------+
-| arrays_zip([1, 2, 3], ['a', 'b', 'c'])             |
+| arrays_zip([1, 2, 3])                             |
 +---------------------------------------------------+
-| [{c0: 1, c1: a}, {c0: 2, c1: b}, {c0: 3, c1: c}] |
+| [{1: 1}, {1: 2}, {1: 3}]                          |
 +---------------------------------------------------+
 > select arrays_zip([1, 2], [3, 4, 5]);
 +---------------------------------------------------+
-| arrays_zip([1, 2], [3, 4, 5])                       |
+| arrays_zip([1, 2], [3, 4, 5])                     |
 +---------------------------------------------------+
-| [{c0: 1, c1: 3}, {c0: 2, c1: 4}, {c0: , c1: 5}]  |
+| [{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]     |
 +---------------------------------------------------+
 ```"#,
     argument(name = "array1", description = "First array expression."),
-    argument(name = "array2", description = "Second array expression."),
-    argument(name = "array_n", description = "Subsequent array expressions.")
+    argument(
+        name = "array_n",
+        description = "Optional additional array expressions."
+    )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArraysZip {
@@ -97,10 +106,6 @@ impl ArraysZip {
 }
 
 impl ScalarUDFImpl for ArraysZip {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "arrays_zip"
     }
@@ -111,7 +116,7 @@ impl ScalarUDFImpl for ArraysZip {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.is_empty() {
-            return exec_err!("arrays_zip requires at least two arguments");
+            return exec_err!("arrays_zip requires at least one argument");
         }
 
         let mut fields = Vec::with_capacity(arg_types.len());
@@ -134,10 +139,7 @@ impl ScalarUDFImpl for ArraysZip {
         ))))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(arrays_zip_inner)(&args.args)
     }
 
@@ -157,8 +159,8 @@ impl ScalarUDFImpl for ArraysZip {
 /// lengths, shorter arrays are padded with NULLs.
 /// Supports List, LargeList, and Null input types.
 fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() < 2 {
-        return exec_err!("arrays_zip requires at least two arguments");
+    if args.is_empty() {
+        return exec_err!("arrays_zip requires at least one argument");
     }
 
     let num_rows = args[0].len();
@@ -175,12 +177,11 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let raw_offsets = arr.value_offsets();
                 let offsets: Vec<usize> =
                     raw_offsets.iter().map(|&o| o as usize).collect();
-                let is_null = (0..num_rows).map(|row| arr.is_null(row)).collect();
                 element_types.push(field.data_type().clone());
                 views.push(Some(ListColumnView {
                     values: Arc::clone(arr.values()),
                     offsets,
-                    is_null,
+                    nulls: arr.nulls().cloned(),
                 }));
             }
             LargeList(field) => {
@@ -188,24 +189,22 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let raw_offsets = arr.value_offsets();
                 let offsets: Vec<usize> =
                     raw_offsets.iter().map(|&o| o as usize).collect();
-                let is_null = (0..num_rows).map(|row| arr.is_null(row)).collect();
                 element_types.push(field.data_type().clone());
                 views.push(Some(ListColumnView {
                     values: Arc::clone(arr.values()),
                     offsets,
-                    is_null,
+                    nulls: arr.nulls().cloned(),
                 }));
             }
             FixedSizeList(field, size) => {
                 let arr = as_fixed_size_list_array(arg)?;
                 let size = *size as usize;
                 let offsets: Vec<usize> = (0..=num_rows).map(|row| row * size).collect();
-                let is_null = (0..num_rows).map(|row| arr.is_null(row)).collect();
                 element_types.push(field.data_type().clone());
                 views.push(Some(ListColumnView {
                     values: Arc::clone(arr.values()),
                     offsets,
-                    is_null,
+                    nulls: arr.nulls().cloned(),
                 }));
             }
             Null => {
@@ -244,7 +243,7 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
     offsets.push(0);
-    let mut null_mask: Vec<bool> = Vec::with_capacity(num_rows);
+    let mut null_builder = NullBufferBuilder::new(num_rows);
     let mut total_values: usize = 0;
 
     // Process each row: compute per-array lengths, then copy values
@@ -254,7 +253,7 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         let mut all_null = true;
 
         for view in views.iter().flatten() {
-            if !view.is_null[row_idx] {
+            if !view.is_null(row_idx) {
                 all_null = false;
                 let len = view.offsets[row_idx + 1] - view.offsets[row_idx];
                 max_len = max_len.max(len);
@@ -262,16 +261,16 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
 
         if all_null {
-            null_mask.push(true);
+            null_builder.append_null();
             offsets.push(*offsets.last().unwrap());
             continue;
         }
-        null_mask.push(false);
+        null_builder.append_non_null();
 
         // Extend each column builder for this row.
         for (col_idx, view) in views.iter().enumerate() {
             match view {
-                Some(v) if !v.is_null[row_idx] => {
+                Some(v) if !v.is_null(row_idx) => {
                     let start = v.offsets[row_idx];
                     let end = v.offsets[row_idx + 1];
                     let len = end - start;
@@ -314,13 +313,7 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let struct_array = StructArray::try_new(struct_fields, struct_columns, None)?;
 
-    let null_buffer = if null_mask.iter().any(|&v| v) {
-        Some(NullBuffer::from(
-            null_mask.iter().map(|v| !v).collect::<Vec<bool>>(),
-        ))
-    } else {
-        None
-    };
+    let null_buffer = null_builder.finish();
 
     let result = ListArray::try_new(
         Arc::new(Field::new_list_field(

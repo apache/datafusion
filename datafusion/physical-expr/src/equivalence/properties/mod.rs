@@ -33,7 +33,7 @@ use self::dependency::{
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{CastColumnExpr, CastExpr, Column, Literal, with_new_schema};
+use crate::expressions::{CastExpr, Column, Literal, with_new_schema};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -196,35 +196,23 @@ impl OrderingEquivalenceCache {
 
 impl EquivalenceProperties {
     /// Helper used by the ordering equivalence rule when considering whether a
-    /// cast-bearing expression can replace an existing sort key without invalidating
-    /// the ordering.
+    /// cast-bearing expression can replace an existing sort key without
+    /// invalidating the ordering.
     ///
-    /// This function handles *both* `CastExpr` (generic cast) and
-    /// `CastColumnExpr` (field-aware cast) because the planner may introduce either
-    /// form during rewrite steps; the core logic is the same in both cases.  The
-    /// substitution is only allowed when the cast wraps **the very same child
-    /// expression** that the original sort used (an exact-child-match invariant),
-    /// and the casted type must be a widening/order-preserving conversion
-    /// `CastExpr::check_bigger_cast(...)` ensures.  Without those restrictions the
-    /// existing sort order could be violated (e.g. a narrowing cast could collapse
-    /// distinct values together).
-    fn substitute_cast_like_ordering(
+    /// The substitution is only allowed when the cast wraps the very same child
+    /// expression that the original sort used and the casted type is a
+    /// widening/order-preserving conversion. Without those restrictions, a
+    /// narrowing cast could collapse distinct values and violate the existing
+    /// sort order.
+    fn substitute_cast_ordering(
         r_expr: Arc<dyn PhysicalExpr>,
         sort_expr: &PhysicalSortExpr,
         expr_type: &DataType,
     ) -> Option<PhysicalSortExpr> {
-        let (child_expr, cast_type) = if let Some(cast_expr) =
-            r_expr.as_any().downcast_ref::<CastExpr>()
-        {
-            (cast_expr.expr(), cast_expr.cast_type())
-        } else if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastColumnExpr>() {
-            (cast_expr.expr(), cast_expr.target_field().data_type())
-        } else {
-            return None;
-        };
+        let cast_expr = r_expr.as_any().downcast_ref::<CastExpr>()?;
 
-        (child_expr.eq(&sort_expr.expr)
-            && CastExpr::check_bigger_cast(cast_type, expr_type))
+        (cast_expr.expr().eq(&sort_expr.expr)
+            && CastExpr::check_bigger_cast(cast_expr.cast_type(), expr_type))
         .then(|| PhysicalSortExpr::new(r_expr, sort_expr.options))
     }
 
@@ -866,25 +854,25 @@ impl EquivalenceProperties {
             order
                 .into_iter()
                 .map(|sort_expr| {
-                    let referring_exprs = mapping
-                        .iter()
-                        .map(|(source, _target)| source)
-                        .filter(|source| expr_refers(source, &sort_expr.expr))
-                        .cloned();
-                    let mut result = vec![];
                     // The sort expression comes from this schema, so the
                     // following call to `unwrap` is safe.
                     let expr_type = sort_expr.expr.data_type(schema).unwrap();
+                    let original_sort_expr = sort_expr.clone();
                     // TODO: Add one-to-one analysis for ScalarFunctions.
-                    for r_expr in referring_exprs {
-                        if let Some(substituted) = Self::substitute_cast_like_ordering(
-                            r_expr, &sort_expr, &expr_type,
-                        ) {
-                            result.push(substituted);
-                        }
-                    }
-                    result.push(sort_expr);
-                    result
+                    mapping
+                        .iter()
+                        .map(|(source, _target)| source)
+                        .filter(|source| expr_refers(source, &original_sort_expr.expr))
+                        .cloned()
+                        .filter_map(|r_expr| {
+                            Self::substitute_cast_ordering(
+                                r_expr,
+                                &original_sort_expr,
+                                &expr_type,
+                            )
+                        })
+                        .chain(std::iter::once(sort_expr))
+                        .collect::<Vec<_>>()
                 })
                 // Generate all valid orderings given substituted expressions:
                 .multi_cartesian_product()

@@ -33,7 +33,6 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::hash::Hash;
@@ -43,6 +42,7 @@ use std::sync::{Arc, LazyLock};
 get_or_init_udwf!(
     Lag,
     lag,
+    lag_udwf,
     "Returns the row value that precedes the current row by a specified \
     offset within partition. If no such row exists, then returns the \
     default value.",
@@ -51,6 +51,7 @@ get_or_init_udwf!(
 get_or_init_udwf!(
     Lead,
     lead,
+    lead_udwf,
     "Returns the value from a row that follows the current row by a \
     specified offset within the partition. If no such row exists, then \
     returns the default value.",
@@ -235,10 +236,6 @@ fn get_lead_doc() -> &'static Documentation {
 }
 
 impl WindowUDFImpl for WindowShift {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.kind.name()
     }
@@ -678,7 +675,6 @@ mod tests {
     use arrow::array::*;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr::expressions::{Column, Literal};
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
     fn test_i32_result(
         expr: WindowShift,

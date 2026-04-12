@@ -30,13 +30,12 @@ use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl,
-    Signature, TypeSignature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use rand::rng;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng, seq::SliceRandom};
-use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -77,10 +76,6 @@ impl SparkShuffle {
 }
 
 impl ScalarUDFImpl for SparkShuffle {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "shuffle"
     }
@@ -101,10 +96,7 @@ impl ScalarUDFImpl for SparkShuffle {
         Ok(Arc::clone(&args.arg_fields[0]))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.is_empty() || args.args.len() > 2 {
             return exec_err!("shuffle expects 1 or 2 argument(s)");
         }

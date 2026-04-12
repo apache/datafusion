@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -157,10 +156,6 @@ impl ExecutionPlan for CustomExecutionPlan {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -230,10 +225,6 @@ impl ExecutionPlan for CustomExecutionPlan {
 
 #[async_trait]
 impl TableProvider for CustomTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         TEST_CUSTOM_SCHEMA_REF!()
     }
@@ -335,7 +326,7 @@ async fn optimizers_catch_all_statistics() {
 
 #[expect(clippy::needless_pass_by_value)]
 fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if plan.as_any().is::<PlaceholderRowExec>() {
+    if plan.is::<PlaceholderRowExec>() {
         true
     } else if plan.children().len() != 1 {
         false

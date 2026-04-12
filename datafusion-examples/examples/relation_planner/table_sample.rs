@@ -80,7 +80,6 @@
 //! ```
 
 use std::{
-    any::Any,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
     pin::Pin,
@@ -680,10 +679,6 @@ impl DisplayAs for SampleExec {
 impl ExecutionPlan for SampleExec {
     fn name(&self) -> &'static str {
         "SampleExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

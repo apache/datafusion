@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::datetime::common::*;
-use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::temporal_conversions::time_to_time64ns;
 use arrow::array::types::Time64NanosecondType;
@@ -26,10 +25,10 @@ use arrow::datatypes::DataType::*;
 use chrono::NaiveTime;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Default time formats to try when parsing without an explicit format
@@ -100,10 +99,6 @@ impl ToTimeFunc {
 }
 
 impl ScalarUDFImpl for ToTimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_time"
     }
@@ -116,10 +111,7 @@ impl ScalarUDFImpl for ToTimeFunc {
         Ok(Time64(arrow::datatypes::TimeUnit::Nanosecond))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         if args.is_empty() {
             return exec_err!("to_time function requires 1 or more arguments, got 0");
@@ -220,20 +212,15 @@ fn parse_time_array<'a, A: StringArrayType<'a>>(
     array: &A,
     formats: &[&str],
 ) -> Result<PrimitiveArray<Time64NanosecondType>> {
-    let mut builder: PrimitiveBuilder<Time64NanosecondType> =
-        PrimitiveArray::builder(array.len());
-
+    let mut values = Vec::with_capacity(array.len());
     for i in 0..array.len() {
         if array.is_null(i) {
-            builder.append_null();
+            values.push(0);
         } else {
-            let s = array.value(i);
-            let nanos = parse_time_with_formats(s, formats)?;
-            builder.append_value(nanos);
+            values.push(parse_time_with_formats(array.value(i), formats)?);
         }
     }
-
-    Ok(builder.finish())
+    Ok(PrimitiveArray::new(values.into(), array.nulls().cloned()))
 }
 
 /// Parse time string using provided formats

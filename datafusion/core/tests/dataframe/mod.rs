@@ -2458,9 +2458,8 @@ async fn cache_producer_test() -> Result<()> {
         @r"
     CacheNode
       Projection: aggregate_test_100.c2, aggregate_test_100.c3, CAST(CAST(aggregate_test_100.c2 AS Int64) + CAST(aggregate_test_100.c3 AS Int64) AS Int64) AS sum
-        Projection: aggregate_test_100.c2, aggregate_test_100.c3
-          Limit: skip=0, fetch=1
-            TableScan: aggregate_test_100, fetch=1
+        Limit: skip=0, fetch=1
+          TableScan: aggregate_test_100 projection=[c2, c3], fetch=1
     "
     );
     Ok(())
@@ -3429,31 +3428,30 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
         @r"
-    +---------------+----------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                       |
-    +---------------+----------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: t1.a, t1.b                                                                                                     |
-    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)           |
-    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                            |
-    |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                    |
-    |               |         TableScan: t1 projection=[a, b]                                                                                    |
-    |               |         SubqueryAlias: __scalar_sq_1                                                                                       |
-    |               |           Projection: count(Int64(1)) AS count(*), t2.a, Boolean(true) AS __always_true                                    |
-    |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1))]]                                                          |
-    |               |               TableScan: t2 projection=[a]                                                                                 |
-    | physical_plan | FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                        |
-    |               |   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                                     |
-    |               |     ProjectionExec: expr=[a@2 as a, b@3 as b, count(*)@0 as count(*), __always_true@1 as __always_true]                    |
-    |               |       HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@1, a@0)], projection=[count(*)@0, __always_true@2, a@3, b@4] |
-    |               |         CoalescePartitionsExec                                                                                             |
-    |               |           ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                            |
-    |               |             AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                   |
-    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
-    |               |                 AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                        |
-    |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
-    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
-    |               |                                                                                                                            |
-    +---------------+----------------------------------------------------------------------------------------------------------------------------+
+    +---------------+--------------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                     |
+    +---------------+--------------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | Projection: t1.a, t1.b                                                                                                   |
+    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)         |
+    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                          |
+    |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                  |
+    |               |         TableScan: t1 projection=[a, b]                                                                                  |
+    |               |         SubqueryAlias: __scalar_sq_1                                                                                     |
+    |               |           Projection: count(Int64(1)) AS count(*), t2.a, Boolean(true) AS __always_true                                  |
+    |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1))]]                                                        |
+    |               |               TableScan: t2 projection=[a]                                                                               |
+    | physical_plan | FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                      |
+    |               |   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                                   |
+    |               |     HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@1, a@0)], projection=[a@3, b@4, count(*)@0, __always_true@2] |
+    |               |       CoalescePartitionsExec                                                                                             |
+    |               |         ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                            |
+    |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                   |
+    |               |             RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
+    |               |               AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                        |
+    |               |                 DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
+    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
+    |               |                                                                                                                          |
+    +---------------+--------------------------------------------------------------------------------------------------------------------------+
     "
     );
 
@@ -3485,31 +3483,30 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
         @r"
-    +---------------+----------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                       |
-    +---------------+----------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: t1.a, t1.b                                                                                                     |
-    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)           |
-    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                            |
-    |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                    |
-    |               |         TableScan: t1 projection=[a, b]                                                                                    |
-    |               |         SubqueryAlias: __scalar_sq_1                                                                                       |
-    |               |           Projection: count(*), t2.a, Boolean(true) AS __always_true                                                       |
-    |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1)) AS count(*)]]                                              |
-    |               |               TableScan: t2 projection=[a]                                                                                 |
-    | physical_plan | FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                        |
-    |               |   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                                     |
-    |               |     ProjectionExec: expr=[a@2 as a, b@3 as b, count(*)@0 as count(*), __always_true@1 as __always_true]                    |
-    |               |       HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@1, a@0)], projection=[count(*)@0, __always_true@2, a@3, b@4] |
-    |               |         CoalescePartitionsExec                                                                                             |
-    |               |           ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                   |
-    |               |             AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                          |
-    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
-    |               |                 AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                               |
-    |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
-    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
-    |               |                                                                                                                            |
-    +---------------+----------------------------------------------------------------------------------------------------------------------------+
+    +---------------+--------------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                     |
+    +---------------+--------------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | Projection: t1.a, t1.b                                                                                                   |
+    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)         |
+    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                          |
+    |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                  |
+    |               |         TableScan: t1 projection=[a, b]                                                                                  |
+    |               |         SubqueryAlias: __scalar_sq_1                                                                                     |
+    |               |           Projection: count(*), t2.a, Boolean(true) AS __always_true                                                     |
+    |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1)) AS count(*)]]                                            |
+    |               |               TableScan: t2 projection=[a]                                                                               |
+    | physical_plan | FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                      |
+    |               |   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                                   |
+    |               |     HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@1, a@0)], projection=[a@3, b@4, count(*)@0, __always_true@2] |
+    |               |       CoalescePartitionsExec                                                                                             |
+    |               |         ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                   |
+    |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                          |
+    |               |             RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
+    |               |               AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                               |
+    |               |                 DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
+    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
+    |               |                                                                                                                          |
+    +---------------+--------------------------------------------------------------------------------------------------------------------------+
     "
     );
 
@@ -6851,6 +6848,53 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
         partial_agg_exec_schema.is_ok(),
         "Expected get AggregateExec schema to succeed with duplicate state fields"
     );
+
+    Ok(())
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/21411
+/// grouping() should work when wrapped in an alias via the DataFrame API.
+///
+/// This bug only manifests through the DataFrame API because `.alias()` wraps
+/// the `grouping()` call in an `Expr::Alias` node at the aggregate expression
+/// level. The SQL planner handles aliasing separately (via projection), so the
+/// `ResolveGroupingFunction` analyzer rule never sees an `Expr::Alias` wrapper
+/// around the aggregate function in SQL queries — making SQL-based tests
+/// insufficient to cover this case.
+#[tokio::test]
+async fn test_grouping_with_alias() -> Result<()> {
+    use datafusion_functions_aggregate::expr_fn::grouping;
+
+    let df = create_test_table("test")
+        .await?
+        .aggregate(vec![col("a")], vec![grouping(col("a")).alias("g")])?
+        .sort(vec![Sort::new(col("a"), true, false)])?;
+
+    let results = df.collect().await?;
+
+    let expected = [
+        "+-----------+---+",
+        "| a         | g |",
+        "+-----------+---+",
+        "| 123AbcDef | 0 |",
+        "| CBAdef    | 0 |",
+        "| abc123    | 0 |",
+        "| abcDEF    | 0 |",
+        "+-----------+---+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Also verify that nested aliases (e.g. .alias("x").alias("g")) work correctly
+    let df = create_test_table("test")
+        .await?
+        .aggregate(
+            vec![col("a")],
+            vec![grouping(col("a")).alias("x").alias("g")],
+        )?
+        .sort(vec![Sort::new(col("a"), true, false)])?;
+
+    let results = df.collect().await?;
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }

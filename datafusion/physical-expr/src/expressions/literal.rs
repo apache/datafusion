@@ -155,7 +155,6 @@ mod tests {
     use super::*;
 
     use arrow::array::Int32Array;
-    use arrow::datatypes::Field;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 

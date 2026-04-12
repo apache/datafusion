@@ -21,7 +21,6 @@ use crate::{SchemaProvider, TableProvider};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion_common::{DataFusionError, exec_err};
-use std::any::Any;
 use std::sync::Arc;
 
 /// Simple in-memory implementation of a schema.
@@ -47,10 +46,6 @@ impl Default for MemorySchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for MemorySchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.tables
             .iter()

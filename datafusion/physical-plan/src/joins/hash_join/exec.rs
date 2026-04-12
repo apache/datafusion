@@ -20,7 +20,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::{any::Any, vec};
+use std::vec;
 
 use crate::ExecutionPlanProperties;
 use crate::execution_plan::{
@@ -46,7 +46,7 @@ use crate::joins::utils::{
     swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
-use crate::metrics::{Count, MetricBuilder};
+use crate::metrics::{Count, MetricBuilder, MetricCategory};
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
@@ -89,7 +89,7 @@ use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, l
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
@@ -99,7 +99,7 @@ use super::partitioned_hash_eval::SeededRandomState;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 pub(crate) const HASH_JOIN_SEED: SeededRandomState =
-    SeededRandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
+    SeededRandomState::with_seed(12210250226015887276);
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
@@ -155,23 +155,23 @@ fn try_create_array_map(
 
     let range = ArrayMap::calculate_range(min_val, max_val);
     let num_row: usize = batches.iter().map(|x| x.num_rows()).sum();
-    let dense_ratio = (num_row as f64) / ((range + 1) as f64);
 
     // TODO: support create ArrayMap<u64>
     if num_row >= u32::MAX as usize {
         return Ok(None);
     }
 
-    if range >= perfect_hash_join_small_build_threshold as u64
-        && dense_ratio <= perfect_hash_join_min_key_density
-    {
+    // When the key range spans the full integer domain (e.g. i64::MIN to i64::MAX),
+    // range is u64::MAX and `range + 1` below would overflow.
+    if range == usize::MAX as u64 {
         return Ok(None);
     }
 
-    // If range equals usize::MAX, then range + 1 would overflow to 0, which would cause
-    // ArrayMap to allocate an invalid zero-sized array or cause indexing issues.
-    // This check prevents such overflow and ensures valid array allocation.
-    if range == usize::MAX as u64 {
+    let dense_ratio = (num_row as f64) / ((range + 1) as f64);
+
+    if range >= perfect_hash_join_small_build_threshold as u64
+        && dense_ratio <= perfect_hash_join_min_key_density
+    {
         return Ok(None);
     }
 
@@ -1179,10 +1179,6 @@ impl ExecutionPlan for HashJoinExec {
         "HashJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -1317,6 +1313,7 @@ impl ExecutionPlan for HashJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         let array_map_created_count = MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
         let left_fut = match self.mode {
@@ -2142,10 +2139,11 @@ mod tests {
         test::exec::MockExec,
     };
 
-    use arrow::array::{Date32Array, Int32Array, StructArray, UInt32Array, UInt64Array};
+    use arrow::array::{
+        Date32Array, Int32Array, Int64Array, StructArray, UInt32Array, UInt64Array,
+    };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
-    use arrow_schema::Schema;
     use datafusion_common::hash_utils::create_hashes;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
@@ -2155,7 +2153,6 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
@@ -2271,6 +2268,110 @@ mod tests {
             null_equality,
             false,
         )
+    }
+
+    fn empty_build_with_probe_error_inputs()
+    -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>, JoinOn) {
+        let left_batch =
+            build_table_i32(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
+        let left_schema = left_batch.schema();
+        let left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[vec![left_batch]],
+            Arc::clone(&left_schema),
+            None,
+        )
+        .unwrap();
+
+        let err = exec_err!("bad data error");
+        let right_batch =
+            build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+        let right_schema = right_batch.schema();
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left_schema).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right_schema).unwrap()) as _,
+        )];
+        let right: Arc<dyn ExecutionPlan> = Arc::new(
+            MockExec::new(vec![Ok(right_batch), err], right_schema).with_use_task(false),
+        );
+
+        (left, right, on)
+    }
+
+    async fn assert_empty_build_probe_behavior(
+        join_types: &[JoinType],
+        expect_probe_error: bool,
+        with_filter: bool,
+    ) {
+        let (left, right, on) = empty_build_with_probe_error_inputs();
+        let filter = prepare_join_filter();
+
+        for join_type in join_types {
+            let join = if with_filter {
+                join_with_filter(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    filter.clone(),
+                    join_type,
+                    NullEquality::NullEqualsNothing,
+                )
+                .unwrap()
+            } else {
+                join(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    join_type,
+                    NullEquality::NullEqualsNothing,
+                )
+                .unwrap()
+            };
+
+            let result = common::collect(
+                join.execute(0, Arc::new(TaskContext::default())).unwrap(),
+            )
+            .await;
+
+            if expect_probe_error {
+                let result_string = result.unwrap_err().to_string();
+                assert!(
+                    result_string.contains("bad data error"),
+                    "actual: {result_string}"
+                );
+            } else {
+                let batches = result.unwrap();
+                assert!(
+                    batches.is_empty(),
+                    "expected no output batches for {join_type}, got {batches:?}"
+                );
+            }
+        }
+    }
+
+    fn hash_join_with_dynamic_filter(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: JoinOn,
+        join_type: JoinType,
+    ) -> Result<(HashJoinExec, Arc<DynamicFilterPhysicalExpr>)> {
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &join_type,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            build_accumulator: OnceLock::new(),
+        });
+
+        Ok((join, dynamic_filter))
     }
 
     async fn join_collect(
@@ -4304,7 +4405,7 @@ mod tests {
             ("y", &vec![200, 300]),
         );
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let hashes_buff = &mut vec![0; left.num_rows()];
         let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 
@@ -4371,7 +4472,7 @@ mod tests {
             ("y", &vec![200, 300]),
         );
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let hashes_buff = &mut vec![0; left.num_rows()];
         let hashes = create_hashes([&left.columns()[0]], &random_state, hashes_buff)?;
 
@@ -4982,6 +5083,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn join_does_not_consume_probe_when_empty_build_fixes_output() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Inner,
+                JoinType::Left,
+                JoinType::LeftSemi,
+                JoinType::LeftAnti,
+                JoinType::LeftMark,
+                JoinType::RightSemi,
+            ],
+            false,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn join_does_not_consume_probe_when_empty_build_fixes_output_with_filter() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Inner,
+                JoinType::Left,
+                JoinType::LeftSemi,
+                JoinType::LeftAnti,
+                JoinType::LeftMark,
+                JoinType::RightSemi,
+            ],
+            false,
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn join_still_consumes_probe_when_empty_build_needs_probe_rows() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Right,
+                JoinType::Full,
+                JoinType::RightAnti,
+                JoinType::RightMark,
+            ],
+            true,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn join_still_consumes_probe_when_empty_build_needs_probe_rows_with_filter() {
+        assert_empty_build_probe_behavior(
+            &[
+                JoinType::Right,
+                JoinType::Full,
+                JoinType::RightAnti,
+                JoinType::RightMark,
+            ],
+            true,
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn join_split_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3, 4]),
@@ -5424,26 +5589,8 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        // Create a dynamic filter manually
-        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
-        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
-
-        // Create HashJoinExec with the dynamic filter
-        let mut join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: dynamic_filter,
-            build_accumulator: OnceLock::new(),
-        });
+        let (join, dynamic_filter) =
+            hash_join_with_dynamic_filter(left, right, on, JoinType::Inner)?;
 
         // Execute the join
         let stream = join.execute(0, task_ctx)?;
@@ -5451,7 +5598,7 @@ mod tests {
 
         // After the join completes, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
-        dynamic_filter_clone.wait_complete().await;
+        dynamic_filter.wait_complete().await;
 
         Ok(())
     }
@@ -5473,26 +5620,8 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        // Create a dynamic filter manually
-        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
-        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
-
-        // Create HashJoinExec with the dynamic filter
-        let mut join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: dynamic_filter,
-            build_accumulator: OnceLock::new(),
-        });
+        let (join, dynamic_filter) =
+            hash_join_with_dynamic_filter(left, right, on, JoinType::Inner)?;
 
         // Execute the join
         let stream = join.execute(0, task_ctx)?;
@@ -5500,7 +5629,28 @@ mod tests {
 
         // Even with empty build side, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
-        dynamic_filter_clone.wait_complete().await;
+        dynamic_filter.wait_complete().await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hash_join_skips_probe_on_empty_build_after_partition_bounds_report()
+    -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let (left, right, on) = empty_build_with_probe_error_inputs();
+
+        // Keep an extra consumer reference so execute() enables dynamic filter pushdown
+        // and enters the WaitPartitionBoundsReport path before deciding whether to poll
+        // the probe side.
+        let (join, dynamic_filter) =
+            hash_join_with_dynamic_filter(left, right, on, JoinType::Inner)?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+        assert!(batches.is_empty());
+
+        dynamic_filter.wait_complete().await;
 
         Ok(())
     }
@@ -5556,6 +5706,38 @@ mod tests {
 
         assert_phj_used(&metrics, true);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_perfect_hash_join_overflow_full_int64_range() -> Result<()> {
+        let task_ctx = prepare_task_ctx(8192, true);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![i64::MIN, i64::MAX]))],
+        )?;
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let right = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?;
+        let on: JoinOn = vec![(
+            Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+        )];
+        let (_columns, batches, _metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2);
         Ok(())
     }
 

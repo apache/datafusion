@@ -27,7 +27,9 @@ use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::nested_struct::validate_struct_compatibility;
+use datafusion_common::nested_struct::{
+    requires_nested_struct_cast, validate_data_type_compatibility,
+};
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -43,20 +45,14 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     format_options: DEFAULT_FORMAT_OPTIONS,
 };
 
-/// Check if struct-to-struct casting is allowed by validating field compatibility.
+/// Check if name-based struct casting is allowed by validating field compatibility.
 ///
 /// This function applies the same validation rules as execution time to ensure
 /// planning-time validation matches runtime validation, enabling fail-fast behavior
-/// instead of deferring errors to execution.
-fn can_cast_struct_types(source: &DataType, target: &DataType) -> bool {
-    match (source, target) {
-        (Struct(source_fields), Struct(target_fields)) => {
-            // Apply the same struct compatibility rules as at execution time.
-            // This ensures planning-time validation matches execution-time validation.
-            validate_struct_compatibility(source_fields, target_fields).is_ok()
-        }
-        _ => false,
-    }
+/// instead of deferring errors to execution. Handles structs at any nesting level
+/// (e.g., `List<Struct>`, `Dictionary<_, Struct>`).
+fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> bool {
+    validate_data_type_compatibility("", source, target).is_ok()
 }
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
@@ -155,14 +151,8 @@ impl CastExpr {
         &self.cast_options
     }
 
-    fn is_default_target_field(&self) -> bool {
-        self.target_field.name().is_empty()
-            && self.target_field.is_nullable()
-            && self.target_field.metadata().is_empty()
-    }
-
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        if self.is_default_target_field() {
+        if is_default_target_field(&self.target_field) {
             self.expr.return_field(input_schema).map(|field| {
                 Arc::new(
                     field
@@ -203,6 +193,12 @@ impl CastExpr {
     pub fn is_bigger_cast(&self, src: &DataType) -> bool {
         Self::check_bigger_cast(self.cast_type(), src)
     }
+}
+
+fn is_default_target_field(target_field: &FieldRef) -> bool {
+    target_field.name().is_empty()
+        && target_field.is_nullable()
+        && target_field.metadata().is_empty()
 }
 
 pub(crate) fn is_order_preserving_cast_family(
@@ -320,24 +316,54 @@ pub fn cast_with_options(
     cast_type: DataType,
     cast_options: Option<CastOptions<'static>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    cast_with_target_field(
+        expr,
+        input_schema,
+        cast_type.into_nullable_field_ref(),
+        cast_options,
+    )
+}
+
+/// Return a PhysicalExpression representing `expr` casted to `target_field`,
+/// preserving any explicit field semantics such as name, nullability, and
+/// metadata.
+///
+/// If the input expression already has the same data type, this helper still
+/// preserves an explicit `target_field` by constructing a field-aware
+/// [`CastExpr`]. Only the default synthesized field created by the legacy
+/// type-only API is elided back to the original child expression.
+pub fn cast_with_target_field(
+    expr: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+    target_field: FieldRef,
+    cast_options: Option<CastOptions<'static>>,
+) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
-    if expr_type == cast_type {
-        Ok(Arc::clone(&expr))
-    } else if matches!((&expr_type, &cast_type), (Struct(_), Struct(_))) {
-        if can_cast_struct_types(&expr_type, &cast_type) {
-            // Allow struct-to-struct casts that pass name-based compatibility validation.
-            // This validation is applied at planning time (now) to fail fast, rather than
-            // deferring errors to execution time. The name-based casting logic will be
-            // executed at runtime via ColumnarValue::cast_to.
-            Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
-        } else {
-            not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
-        }
-    } else if can_cast_types(&expr_type, &cast_type) {
-        Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
-    } else {
-        not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
+    let cast_type = target_field.data_type();
+    if expr_type == *cast_type && is_default_target_field(&target_field) {
+        return Ok(Arc::clone(&expr));
     }
+
+    let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
+        // Allow casts involving structs (including nested inside Lists, Dictionaries,
+        // etc.) that pass name-based compatibility validation. This validation is
+        // applied at planning time (now) to fail fast, rather than deferring errors
+        // to execution time. The name-based casting logic will be executed at runtime
+        // via ColumnarValue::cast_to.
+        can_cast_named_struct_types(&expr_type, cast_type)
+    } else {
+        can_cast_types(&expr_type, cast_type)
+    };
+
+    if !can_build_cast {
+        return not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}");
+    }
+
+    Ok(Arc::new(CastExpr::new_with_target_field(
+        expr,
+        target_field,
+        cast_options,
+    )))
 }
 
 /// Return a PhysicalExpression representing `expr` casted to

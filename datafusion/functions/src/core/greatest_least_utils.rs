@@ -20,7 +20,7 @@ use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue, assert_or_internal_err, plan_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
-use datafusion_expr_common::type_coercion::binary::type_union_resolution;
+use datafusion_expr_common::type_coercion::binary::comparison_coercion;
 use std::sync::Arc;
 
 pub(super) trait GreatestLeastOperator {
@@ -120,13 +120,17 @@ pub(super) fn find_coerced_type<Op: GreatestLeastOperator>(
     data_types: &[DataType],
 ) -> Result<DataType> {
     if data_types.is_empty() {
-        plan_err!(
+        return plan_err!(
             "{} was called without any arguments. It requires at least 1.",
             Op::NAME
-        )
-    } else if let Some(coerced_type) = type_union_resolution(data_types) {
-        Ok(coerced_type)
-    } else {
-        plan_err!("Cannot find a common type for arguments")
+        );
     }
+    let mut coerced = data_types[0].clone();
+    for dt in &data_types[1..] {
+        let Some(next) = comparison_coercion(&coerced, dt) else {
+            return plan_err!("Cannot find a common type for arguments to {}", Op::NAME);
+        };
+        coerced = next;
+    }
+    Ok(coerced)
 }

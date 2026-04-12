@@ -37,6 +37,18 @@
 
 This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find
 
+- **2026-04-04** [Video: Generalized Consensus & Native Top-K Joins in ParadeDB](https://www.youtube.com/watch?v=TeFsBVIYBis)
+
+- **2026-03-31** [Blog: Writing Custom Table Providers in Apache DataFusion](https://datafusion.apache.org/blog/2026/03/31/custom-table-providers/)
+
+- **2026-03-24** [Podcast: The Data Fusion Secret & Why Custom Query Engines Fail with Nikita Lapkov](https://www.youtube.com/watch?v=HkYF2So6nHQ)
+
+- **2026-03-20** [Blog: Turning LIMIT into an I/O Optimization: Inside DataFusion’s Multi-Layer Pruning Stack](https://datafusion.apache.org/blog/2026/03/20/multi-layer-pruning/)
+
+- **2026-02-09** [Blog: Vector search using only Parquet and DataFusion](https://blog.xiangpeng.systems/posts/vector-search-with-parquet-datafusion/)
+
+- **2026-02-02** [Blog: Optimizing SQL CASE Expression Evaluation](https://datafusion.apache.org/blog/2026/02/02/case-expression/)
+
 - **2026-01-12** [Blog: Extending SQL in DataFusion: from ->> to TABLESAMPLE](https://datafusion.apache.org/blog/2026/01/12/extending-sql)
 
 - **2025-12-15** [Blog: Optimizing Repartitions in DataFusion: How I Went From Database Noob to Core Contribution](https://datafusion.apache.org/blog/2025/12/15/avoid-consecutive-repartitions)
@@ -164,6 +176,8 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 ## 📅 Release Notes & Updates
 
+- **2026-04-02** [Apache DataFusion 53.0.0 Released](https://datafusion.apache.org/blog/2026/04/02/datafusion-53.0.0)
+- **2026-03-18** [Apache DataFusion Comet 0.14.0 Release](https://datafusion.apache.org/blog/2026/03/18/datafusion-comet-0.14.0)
 - **2026-01-30** [Apache DataFusion Comet 0.13.0 Release](https://datafusion.apache.org/blog/2026/01/30/datafusion-comet-0.13.0)
 - **2026-01-12** [Apache DataFusion 52.0.0 Released](https://datafusion.apache.org/blog/2026/01/12/datafusion-52.0.0)
 - **2025-12-04** [Apache DataFusion Comet 0.12.0 Release](https://datafusion.apache.org/blog/2025/12/04/datafusion-comet-0.12.0)
@@ -189,7 +203,8 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 - **2026-07-22** [Denver Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18428) - [RSVP](https://luma.com/jsu6faie)
 - **2026-05-12** [New York City Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/20030) - [RSVP](https://luma.com/adhshv92)
 - **2026-04-23** [Seattle Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/13500) - [RSVP](https://luma.com/hxshbp0m)
-- **2026-03-05** [Stockholm Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18429) - [RSVP](https://luma.com/ctqtiqap)
+- **2026-04-22** [Portland Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/19817) - [RSVP](https://luma.com/dsp3ud82)
+- **2026-03-05** [Stockholm Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18429) - [RSVP](https://luma.com/ctqtiqap), [Recording](https://youtu.be/9u4cNmL14Xs)
 - **2026-02-19** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/19859) - [RSVP](https://luma.com/p7r6fp2z), [Recording](https://www.youtube.com/playlist?list=PL42Ljm2tTt5peGUWMBN7WFkASq73j8PoU)
 - **2025-11-12** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/16703) - [Recording](https://youtu.be/wCAud478Dg8), [Slides](https://drive.google.com/file/d/18KGH_wGHkgdAfjy5sQVKFhnN1GyYXSzU)
 - **2025-09-15** [New York City Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/16265) - [RSVP](https://lu.ma/qkcyycg0), [Recording](https://youtu.be/ElAiN_1fX_4)

@@ -394,7 +394,7 @@ mod tests {
         from_substrait_type_without_names,
     };
     use crate::logical_plan::producer::DefaultSubstraitProducer;
-    use datafusion::arrow::datatypes::{Field, Fields, Schema, TimeUnit};
+    use datafusion::arrow::datatypes::{Fields, Schema, TimeUnit};
     use datafusion::common::{DFSchema, Result};
     use datafusion::prelude::SessionContext;
     use std::sync::Arc;

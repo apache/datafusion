@@ -26,6 +26,7 @@ pub mod ilike;
 pub mod length;
 pub mod like;
 pub mod luhn_check;
+pub mod soundex;
 pub mod space;
 pub mod substring;
 
@@ -47,6 +48,7 @@ make_udf_function!(format_string::FormatStringFunc, format_string);
 make_udf_function!(space::SparkSpace, space);
 make_udf_function!(substring::SparkSubstring, substring);
 make_udf_function!(base64::SparkUnBase64, unbase64);
+make_udf_function!(soundex::SparkSoundex, soundex);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -117,6 +119,7 @@ pub mod expr_fn {
         "Decodes the input string `str` from a base64 string into binary data.",
         str
     ));
+    export_functions!((soundex, "Returns Soundex code of the string.", str));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -135,5 +138,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         space(),
         substring(),
         unbase64(),
+        soundex(),
     ]
 }

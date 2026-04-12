@@ -106,11 +106,7 @@ mod test {
             .await
             .unwrap();
         let table = ctx.table_provider(table_name.as_str()).await.unwrap();
-        let listing_table = table
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap()
-            .clone();
+        let listing_table = table.downcast_ref::<ListingTable>().unwrap().clone();
         listing_table
             .scan(&ctx.state(), None, &[], None)
             .await
@@ -154,13 +150,15 @@ mod test {
             // - null_count = 0 (partition values from paths are never null)
             // - min/max are the merged partition values across files in the group
             // - byte_size = num_rows * 4 (Date32 is 4 bytes per row)
+            // - distinct_count = Inexact(1) per partition file (single partition value per file),
+            //   preserved via max() when merging stats across partitions
             let date32_byte_size = num_rows * 4;
             column_stats.push(ColumnStatistics {
                 null_count: Precision::Exact(0),
                 max_value: Precision::Exact(ScalarValue::Date32(Some(max_date))),
                 min_value: Precision::Exact(ScalarValue::Date32(Some(min_date))),
                 sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
+                distinct_count: Precision::Inexact(1),
                 byte_size: Precision::Exact(date32_byte_size),
             });
         }
@@ -581,7 +579,7 @@ mod test {
                     max_value: Precision::Exact(ScalarValue::Date32(Some(20151))),
                     min_value: Precision::Exact(ScalarValue::Date32(Some(20148))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 0: ids [3,4]
@@ -615,7 +613,7 @@ mod test {
                     max_value: Precision::Exact(ScalarValue::Date32(Some(20151))),
                     min_value: Precision::Exact(ScalarValue::Date32(Some(20148))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 1: ids [1,2]
@@ -933,7 +931,10 @@ mod test {
             num_rows: Precision::Exact(0),
             total_byte_size: Precision::Absent,
             column_statistics: vec![
-                ColumnStatistics::new_unknown(),
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(0),
+                    ..ColumnStatistics::new_unknown()
+                },
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
@@ -1251,7 +1252,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
                 },
                 ColumnStatistics::new_unknown(), // window column
@@ -1279,7 +1280,7 @@ mod test {
                         DATE_2025_03_03,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
                 },
                 ColumnStatistics::new_unknown(), // window column
@@ -1416,6 +1417,8 @@ mod test {
                     byte_size: Precision::Exact(16),
                 },
                 // Left date column: all partitions (2025-03-01..2025-03-04)
+                // NDV is Inexact(1) because each Hive partition has exactly 1 distinct date value,
+                // and merging takes max as a conservative lower bound
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Date32(Some(
@@ -1425,7 +1428,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(16),
                 },
                 // Right id column: partition 0 only (id 3..4)
@@ -1438,6 +1441,7 @@ mod test {
                     byte_size: Precision::Exact(8),
                 },
                 // Right date column: partition 0 only (2025-03-01..2025-03-02)
+                // NDV is Inexact(1) from the single Hive partition's date value
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Date32(Some(
@@ -1447,7 +1451,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
                 },
             ],
@@ -1499,7 +1503,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
                 },
                 // Right id column: partition 0 only (id 3..4)
@@ -1521,7 +1525,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
                 },
             ],
@@ -1573,7 +1577,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(16),
                 },
                 // Right id column: all partitions (id 1..4)
@@ -1595,7 +1599,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(16),
                 },
             ],

@@ -25,7 +25,7 @@ use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_functions_aggregate::array_agg::{
     ArrayAggAccumulator, DistinctArrayAggAccumulator,
 };
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 // Spark implementation of collect_list/collect_set aggregate function.
 // Differs from DataFusion ArrayAgg in the following ways:
@@ -54,10 +54,6 @@ impl SparkCollectList {
 }
 
 impl AggregateUDFImpl for SparkCollectList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "collect_list"
     }
@@ -116,10 +112,6 @@ impl SparkCollectSet {
 }
 
 impl AggregateUDFImpl for SparkCollectSet {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "collect_set"
     }
