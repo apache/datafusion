@@ -28,43 +28,27 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-/// Attempts `rem(left, right)` with per-element divide-by-zero handling.
+/// Computes `rem(left, right)` with divide-by-zero handling.
 /// In ANSI mode, any zero divisor causes an error.
-/// In legacy mode (ANSI off), positions where the divisor is zero return NULL
-/// while other positions compute normally.
+/// In legacy mode (ANSI off), zero divisors are replaced with NULL before
+/// computing the remainder, so those positions return NULL while others
+/// compute normally.
 fn try_rem(
     left: &arrow::array::ArrayRef,
     right: &arrow::array::ArrayRef,
     enable_ansi_mode: bool,
 ) -> Result<arrow::array::ArrayRef> {
-    match rem(left, right) {
-        Ok(result) => {
-            if !enable_ansi_mode
-                && matches!(
-                    right.data_type(),
-                    DataType::Float16 | DataType::Float32 | DataType::Float64
-                )
-            {
-                let zero = ScalarValue::new_zero(right.data_type())?.to_array()?;
-                let zero = Scalar::new(zero);
-                let null = Scalar::new(new_null_array(right.data_type(), 1));
-                let is_zero = eq(right, &zero)?;
-                Ok(zip(&is_zero, &null, &result)?)
-            } else {
-                Ok(result)
-            }
-        }
-        Err(arrow::error::ArrowError::DivideByZero) if !enable_ansi_mode => {
-            // Integer rem fails when ANY divisor element is zero.
-            // Handle per-element: null out zero divisors
-            let zero = ScalarValue::new_zero(right.data_type())?.to_array()?;
-            let zero = Scalar::new(zero);
-            let null = Scalar::new(new_null_array(right.data_type(), 1));
-            let is_zero = eq(right, &zero)?;
-            let safe_right = zip(&is_zero, &null, right)?;
-            Ok(rem(left, &safe_right)?)
-        }
-        Err(e) => Err(e.into()),
+    if enable_ansi_mode {
+        Ok(rem(left, right)?)
+    } else {
+        // In legacy mode, null out zero divisors so that division by zero
+        // returns NULL instead of erroring (integers) or returning NaN (floats).
+        let zero = ScalarValue::new_zero(right.data_type())?.to_array()?;
+        let zero = Scalar::new(zero);
+        let null = Scalar::new(new_null_array(right.data_type(), 1));
+        let is_zero = eq(right, &zero)?;
+        let safe_right = zip(&is_zero, &null, right)?;
+        Ok(rem(left, &safe_right)?)
     }
 }
 
