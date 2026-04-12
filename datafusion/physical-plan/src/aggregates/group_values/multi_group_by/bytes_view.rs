@@ -199,55 +199,107 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         let input_views = arr.views();
 
+        // Pre-calculate total non-inline bytes so we can allocate once
+        let total_non_inline_bytes: usize = rows
+            .iter()
+            .map(|&row| {
+                let len = unsafe { *input_views.get_unchecked(row) } as u32;
+                if len <= 12 { 0 } else { len as usize }
+            })
+            .sum();
+
         match all_null_or_non_null {
             Nulls::Some => {
-                let Self {
-                    views,
-                    in_progress,
-                    completed,
-                    nulls,
-                    max_block_size,
-                    ..
-                } = self;
-                views.extend(rows.iter().map(|&row| {
-                    if arr.is_null(row) {
-                        nulls.append(true);
-                        0u128
-                    } else {
-                        nulls.append(false);
-                        let input_view = unsafe { *input_views.get_unchecked(row) };
-                        Self::copy_from_view(
-                            input_view,
-                            arr,
-                            row,
-                            in_progress,
-                            completed,
-                            *max_block_size,
-                        )
+                if total_non_inline_bytes == 0 {
+                    let Self { views, nulls, .. } = self;
+                    views.extend(rows.iter().map(|&row| {
+                        if arr.is_null(row) {
+                            nulls.append(true);
+                            0u128
+                        } else {
+                            nulls.append(false);
+                            unsafe { *input_views.get_unchecked(row) }
+                        }
+                    }));
+                } else {
+                    // Flush in_progress, allocate a single compacted buffer
+                    if !self.in_progress.is_empty() {
+                        let flushed = replace(
+                            &mut self.in_progress,
+                            Vec::with_capacity(self.max_block_size),
+                        );
+                        self.completed.push(Buffer::from_vec(flushed));
                     }
-                }));
+                    let buffer_index = self.completed.len() as u32;
+                    let mut buffer = Vec::with_capacity(total_non_inline_bytes);
+
+                    let Self { views, nulls, .. } = self;
+                    views.extend(rows.iter().map(|&row| {
+                        if arr.is_null(row) {
+                            nulls.append(true);
+                            0u128
+                        } else {
+                            nulls.append(false);
+                            let input_view = unsafe { *input_views.get_unchecked(row) };
+                            let len = input_view as u32;
+                            if len <= 12 {
+                                input_view
+                            } else {
+                                let value: &[u8] =
+                                    unsafe { arr.value_unchecked(row).as_ref() };
+                                let offset = buffer.len() as u32;
+                                buffer.extend_from_slice(value);
+                                ByteView::from(input_view)
+                                    .with_buffer_index(buffer_index)
+                                    .with_offset(offset)
+                                    .as_u128()
+                            }
+                        }
+                    }));
+
+                    self.completed.push(Buffer::from_vec(buffer));
+                }
             }
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
-                let Self {
-                    views,
-                    in_progress,
-                    completed,
-                    max_block_size,
-                    ..
-                } = self;
-                views.extend(rows.iter().map(|&row| {
-                    let input_view = unsafe { *input_views.get_unchecked(row) };
-                    Self::copy_from_view(
-                        input_view,
-                        arr,
-                        row,
-                        in_progress,
-                        completed,
-                        *max_block_size,
-                    )
-                }));
+                if total_non_inline_bytes == 0 {
+                    // All inline - just copy views directly
+                    self.views.extend(
+                        rows.iter()
+                            .map(|&row| unsafe { *input_views.get_unchecked(row) }),
+                    );
+                } else {
+                    // Flush in_progress, allocate a single compacted buffer
+                    if !self.in_progress.is_empty() {
+                        let flushed = replace(
+                            &mut self.in_progress,
+                            Vec::with_capacity(self.max_block_size),
+                        );
+                        self.completed.push(Buffer::from_vec(flushed));
+                    }
+                    let buffer_index = self.completed.len() as u32;
+                    let mut buffer = Vec::with_capacity(total_non_inline_bytes);
+
+                    self.views.extend(rows.iter().map(|&row| {
+                        let input_view = unsafe { *input_views.get_unchecked(row) };
+                        let len = input_view as u32;
+                        if len <= 12 {
+                            input_view
+                        } else {
+                            let value: &[u8] =
+                                unsafe { arr.value_unchecked(row).as_ref() };
+                            let offset = buffer.len() as u32;
+                            buffer.extend_from_slice(value);
+                            ByteView::from(input_view)
+                                .with_buffer_index(buffer_index)
+                                .with_offset(offset)
+                                .as_u128()
+                        }
+                    }));
+
+                    self.completed.push(Buffer::from_vec(buffer));
+                }
             }
 
             Nulls::All => {
