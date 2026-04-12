@@ -100,6 +100,12 @@ pub trait Dialect: Send + Sync {
         ast::DataType::BigInt(None)
     }
 
+    /// The SQL type to use for Arrow Int8 unparsing
+    /// Most dialects use TinyInt, but PostgreSQL prefers SmallInt
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::TinyInt(None)
+    }
+
     /// The SQL type to use for Arrow Int32 unparsing
     /// Most dialects use Integer, but some, like MySQL, require SIGNED
     fn int32_cast_dtype(&self) -> ast::DataType {
@@ -343,6 +349,10 @@ impl Dialect for PostgreSqlDialect {
 
     fn float64_ast_dtype(&self) -> ast::DataType {
         ast::DataType::DoublePrecision
+    }
+
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::SmallInt(None)
     }
 
     fn scalar_function_to_sql_overrides(
@@ -664,6 +674,7 @@ pub struct CustomDialect {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
+    int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
@@ -689,6 +700,7 @@ impl Default for CustomDialect {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
+            int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
@@ -746,6 +758,10 @@ impl Dialect for CustomDialect {
 
     fn int64_cast_dtype(&self) -> ast::DataType {
         self.int64_cast_dtype.clone()
+    }
+
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        self.int8_cast_dtype.clone()
     }
 
     fn int32_cast_dtype(&self) -> ast::DataType {
@@ -839,6 +855,7 @@ pub struct CustomDialectBuilder {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
+    int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
@@ -870,6 +887,7 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
+            int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
@@ -898,6 +916,7 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
             date_field_extract_style: self.date_field_extract_style,
             character_length_style: self.character_length_style,
+            int8_cast_dtype: self.int8_cast_dtype,
             int64_cast_dtype: self.int64_cast_dtype,
             int32_cast_dtype: self.int32_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
@@ -949,6 +968,12 @@ impl CustomDialectBuilder {
         character_length_style: CharacterLengthStyle,
     ) -> Self {
         self.character_length_style = character_length_style;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for Int8 casting: TinyInt, SmallInt, etc.
+    pub fn with_int8_cast_dtype(mut self, int8_cast_dtype: ast::DataType) -> Self {
+        self.int8_cast_dtype = int8_cast_dtype;
         self
     }
 

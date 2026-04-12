@@ -4601,6 +4601,7 @@ impl ScalarValue {
     /// Estimates [size](Self::size) of [`HashSet`] in bytes.
     ///
     /// Includes the size of the [`HashSet`] container itself.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     pub fn size_of_hashset<S>(set: &HashSet<Self, S>) -> usize {
         size_of_val(set)
             + (size_of::<ScalarValue>() * set.capacity())
@@ -7263,6 +7264,8 @@ mod tests {
             size_of::<Vec<ScalarValue>>() + (9 * size_of::<ScalarValue>()) + sv_size,
         );
 
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+        // ScalarValue has interior mutability but is intentionally used as hash key
         let mut s = HashSet::with_capacity(0);
         // do NOT clone `sv` here because this may shrink the vector capacity
         s.insert(v.pop().unwrap());

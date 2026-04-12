@@ -81,6 +81,10 @@ name = "array_expression"
 
 [[bench]]
 harness = false
+name = "arrays_zip"
+
+[[bench]]
+harness = false
 name = "array_has"
 
 [[bench]]

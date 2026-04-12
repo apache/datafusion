@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::datetime::common::*;
-use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::temporal_conversions::time_to_time64ns;
 use arrow::array::types::Time64NanosecondType;
@@ -213,20 +212,15 @@ fn parse_time_array<'a, A: StringArrayType<'a>>(
     array: &A,
     formats: &[&str],
 ) -> Result<PrimitiveArray<Time64NanosecondType>> {
-    let mut builder: PrimitiveBuilder<Time64NanosecondType> =
-        PrimitiveArray::builder(array.len());
-
+    let mut values = Vec::with_capacity(array.len());
     for i in 0..array.len() {
         if array.is_null(i) {
-            builder.append_null();
+            values.push(0);
         } else {
-            let s = array.value(i);
-            let nanos = parse_time_with_formats(s, formats)?;
-            builder.append_value(nanos);
+            values.push(parse_time_with_formats(array.value(i), formats)?);
         }
     }
-
-    Ok(builder.finish())
+    Ok(PrimitiveArray::new(values.into(), array.nulls().cloned()))
 }
 
 /// Parse time string using provided formats
