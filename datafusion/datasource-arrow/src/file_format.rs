@@ -98,10 +98,6 @@ impl FileFormatFactory for ArrowFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ArrowFormat)
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 impl GetExt for ArrowFormatFactory {
@@ -117,10 +113,6 @@ pub struct ArrowFormat;
 
 #[async_trait]
 impl FileFormat for ArrowFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         ArrowFormatFactory::new().get_ext()
     }

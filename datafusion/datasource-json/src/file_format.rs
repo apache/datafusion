@@ -112,10 +112,6 @@ impl FileFormatFactory for JsonFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(JsonFormat::default())
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 impl GetExt for JsonFormatFactory {
@@ -241,10 +237,6 @@ fn infer_schema_from_json_array<R: Read>(
 
 #[async_trait]
 impl FileFormat for JsonFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         JsonFormatFactory::new().get_ext()
     }

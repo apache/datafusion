@@ -122,10 +122,6 @@ impl FileFormatFactory for CsvFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(CsvFormat::default())
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 impl GetExt for CsvFormatFactory {
@@ -362,10 +358,6 @@ impl Debug for CsvSerializer {
 
 #[async_trait]
 impl FileFormat for CsvFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         CsvFormatFactory::new().get_ext()
     }
