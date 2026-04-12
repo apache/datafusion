@@ -911,43 +911,30 @@ mod tests {
     }
 
     #[test]
-    fn field_aware_cast_return_field_preserves_target_metadata() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
-        let expr = CastExpr::new_with_target_field(
-            col("a", &schema)?,
-            Arc::new(Field::new("cast_target", Int64, true).with_metadata(
-                HashMap::from([("target_meta".to_string(), "1".to_string())]),
-            )),
-            None,
-        );
+    fn field_aware_cast_preserves_target_field_semantics() -> Result<()> {
+        let metadata = HashMap::from([("target_meta".to_string(), "1".to_string())]);
 
-        let field = expr.return_field(&schema)?;
+        for (child_nullable, target_nullable) in [(true, false), (false, true)] {
+            let schema = Schema::new(vec![Field::new("a", Int32, child_nullable)]);
+            let expr = CastExpr::new_with_target_field(
+                col("a", &schema)?,
+                Arc::new(
+                    Field::new("cast_target", Int64, target_nullable)
+                        .with_metadata(metadata.clone()),
+                ),
+                None,
+            );
 
-        assert_eq!(field.name(), "cast_target");
-        assert_eq!(field.data_type(), &Int64);
-        assert!(field.is_nullable());
-        assert_eq!(
-            field.metadata().get("target_meta").map(String::as_str),
-            Some("1")
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn field_aware_cast_nullable_prefers_child_nullability() -> Result<()> {
-        // When the child expression is nullable the cast must be treated as
-        // nullable even if the explicitly supplied target field is marked
-        // non-nullable.  return_field() still reflects the target metadata.
-        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
-        let expr = CastExpr::new_with_target_field(
-            col("a", &schema)?,
-            Arc::new(Field::new("cast_target", Int64, false)),
-            None,
-        );
-
-        assert!(expr.nullable(&schema)?);
-        assert!(!expr.return_field(&schema)?.is_nullable());
+            let field = expr.return_field(&schema)?;
+            assert_eq!(field.name(), "cast_target");
+            assert_eq!(field.data_type(), &Int64);
+            assert_eq!(field.is_nullable(), target_nullable);
+            assert_eq!(
+                field.metadata().get("target_meta").map(String::as_str),
+                Some("1")
+            );
+            assert_eq!(expr.nullable(&schema)?, child_nullable || target_nullable);
+        }
 
         Ok(())
     }
@@ -963,23 +950,6 @@ mod tests {
         assert_eq!(field.data_type(), &Int64);
         assert!(!field.is_nullable());
         assert!(!expr.nullable(&schema)?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn field_aware_cast_nullable_child_nonnullable_targets_nullable() -> Result<()> {
-        // child is non-nullable but the target field is marked nullable; the
-        // nullable() result should still be true because the field allows nulls.
-        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
-        let expr = CastExpr::new_with_target_field(
-            col("a", &schema)?,
-            Arc::new(Field::new("cast_target", Int64, true)),
-            None,
-        );
-
-        assert!(expr.nullable(&schema)?);
-        assert!(expr.return_field(&schema)?.is_nullable());
 
         Ok(())
     }
