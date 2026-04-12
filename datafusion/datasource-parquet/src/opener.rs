@@ -39,7 +39,7 @@ use std::fmt;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 
 use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
@@ -173,10 +173,10 @@ impl fmt::Debug for ParquetMorselizer {
 /// with the same adapted expression inputs and physical schema.
 #[derive(Debug, Default)]
 pub(super) struct ParquetPruningSetupCache {
-    entries: Mutex<Vec<(ParquetPruningSetupCacheKey, ParquetPruningSetup)>>,
+    entries: Mutex<HashMap<ParquetPruningSetupCacheKey, ParquetPruningSetup>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParquetPruningSetupCacheKey {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
@@ -211,24 +211,29 @@ struct ParquetPruningSetup {
 }
 
 impl ParquetPruningSetupCache {
+    fn entries(
+        &self,
+    ) -> Result<MutexGuard<'_, HashMap<ParquetPruningSetupCacheKey, ParquetPruningSetup>>>
+    {
+        self.entries.lock().map_err(|e| {
+            DataFusionError::External(Box::new(std::io::Error::other(format!(
+                "Parquet pruning setup cache lock poisoned: {e}"
+            ))))
+        })
+    }
+
     fn get_or_insert_with(
         &self,
         key: ParquetPruningSetupCacheKey,
         make_setup: impl FnOnce() -> Result<ParquetPruningSetup>,
     ) -> Result<ParquetPruningSetup> {
-        let mut entries = self.entries.lock().map_err(|e| {
-            DataFusionError::External(Box::new(std::io::Error::other(format!(
-                "Parquet pruning setup cache lock poisoned: {e}"
-            ))))
-        })?;
-        if let Some((_, setup)) = entries.iter().find(|(entry_key, _)| *entry_key == key)
-        {
+        if let Some(setup) = self.entries()?.get(&key) {
             return Ok(setup.clone());
         }
 
         let setup = make_setup()?;
-        entries.push((key, setup.clone()));
-        Ok(setup)
+        let mut entries = self.entries()?;
+        Ok(entries.entry(key).or_insert(setup).clone())
     }
 }
 
@@ -2038,21 +2043,33 @@ mod test {
     }
 
     #[derive(Debug)]
-    struct CountingReusablePhysicalExprAdapterFactory(Arc<AtomicUsize>);
+    struct CountingPhysicalExprAdapterFactory {
+        create_count: Arc<AtomicUsize>,
+        reusable: bool,
+    }
 
-    impl PhysicalExprAdapterFactory for CountingReusablePhysicalExprAdapterFactory {
+    impl CountingPhysicalExprAdapterFactory {
+        fn new(create_count: Arc<AtomicUsize>, reusable: bool) -> Self {
+            Self {
+                create_count,
+                reusable,
+            }
+        }
+    }
+
+    impl PhysicalExprAdapterFactory for CountingPhysicalExprAdapterFactory {
         fn create(
             &self,
             logical_file_schema: SchemaRef,
             physical_file_schema: SchemaRef,
         ) -> Result<Arc<dyn PhysicalExprAdapter>> {
-            self.0.fetch_add(1, Ordering::SeqCst);
+            self.create_count.fetch_add(1, Ordering::SeqCst);
             DefaultPhysicalExprAdapterFactory
                 .create(logical_file_schema, physical_file_schema)
         }
 
         fn supports_reusable_rewrites(&self) -> bool {
-            true
+            self.reusable
         }
     }
 
@@ -2234,7 +2251,7 @@ mod test {
 
         let create_count = Arc::new(AtomicUsize::new(0));
         let factory: Arc<dyn PhysicalExprAdapterFactory> = Arc::new(
-            CountingReusablePhysicalExprAdapterFactory(Arc::clone(&create_count)),
+            CountingPhysicalExprAdapterFactory::new(Arc::clone(&create_count), true),
         );
         let predicate = logical2physical(&col("a").gt(lit(0i64)), &table_schema);
 
@@ -2261,6 +2278,96 @@ mod test {
             create_count.load(Ordering::SeqCst),
             1,
             "same-schema files should reuse the cached pruning setup"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pruning_setup_cache_skips_non_reusable_adapter() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let data_size1 = write_parquet(Arc::clone(&store), "file1.parquet", batch1).await;
+        let data_size2 = write_parquet(Arc::clone(&store), "file2.parquet", batch2).await;
+
+        let create_count = Arc::new(AtomicUsize::new(0));
+        let factory: Arc<dyn PhysicalExprAdapterFactory> = Arc::new(
+            CountingPhysicalExprAdapterFactory::new(Arc::clone(&create_count), false),
+        );
+        let predicate = logical2physical(&col("a").gt(lit(0i64)), &table_schema);
+
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(table_schema)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_expr_adapter_factory(factory)
+            .build();
+
+        let files = [
+            PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+            PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+        ];
+        for file in files {
+            let stream = opener.open(file).unwrap().await.unwrap();
+            let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+            assert_eq!(num_batches, 1);
+            assert_eq!(num_rows, 3);
+        }
+
+        assert_eq!(
+            create_count.load(Ordering::SeqCst),
+            2,
+            "non-cache-safe adapters should not reuse pruning setup"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pruning_setup_cache_isolated_by_physical_schema() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int16, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let data_size1 = write_parquet(Arc::clone(&store), "file1.parquet", batch1).await;
+        let data_size2 = write_parquet(Arc::clone(&store), "file2.parquet", batch2).await;
+
+        let create_count = Arc::new(AtomicUsize::new(0));
+        let factory: Arc<dyn PhysicalExprAdapterFactory> = Arc::new(
+            CountingPhysicalExprAdapterFactory::new(Arc::clone(&create_count), true),
+        );
+        let predicate = logical2physical(&col("a").gt(lit(0i64)), &table_schema);
+
+        let opener = ParquetOpenerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(table_schema)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_expr_adapter_factory(factory)
+            .build();
+
+        let files = [
+            PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+            PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+        ];
+        for file in files {
+            let stream = opener.open(file).unwrap().await.unwrap();
+            let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+            assert_eq!(num_batches, 1);
+            assert_eq!(num_rows, 3);
+        }
+
+        assert_eq!(
+            create_count.load(Ordering::SeqCst),
+            2,
+            "files with different physical schemas should not share pruning setup"
         );
     }
 

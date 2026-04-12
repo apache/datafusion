@@ -179,7 +179,8 @@ pub trait PhysicalExprAdapterFactory: Send + Sync + std::fmt::Debug {
         physical_file_schema: SchemaRef,
     ) -> Result<Arc<dyn PhysicalExprAdapter>>;
 
-    /// Return true when same-schema rewrites from this factory can be reused.
+    /// Return true when rewrites for the same logical and physical schema
+    /// inputs from this factory can be reused.
     ///
     /// Custom factories default to non-reusable because they may depend on
     /// factory-local state.
