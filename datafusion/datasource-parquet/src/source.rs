@@ -650,6 +650,7 @@ impl FileSource for ParquetSource {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
+            pruning_setup_cache: Arc::default(),
         }))
     }
 
