@@ -1091,6 +1091,9 @@ config_namespace! {
         /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
         /// PartitionedTopKExec that maintains per-partition heaps, avoiding
         /// a full sort of the input.
+        /// When the window partition key has low cardinality, enabling this optimization
+        /// can improve performance. However, for high cardinality keys, it may
+        /// cause regressions in both memory usage and runtime.
         pub enable_window_topn: bool, default = false
 
         /// When set to true, the optimizer will push TopK (Sort with fetch)

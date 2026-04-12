@@ -32,7 +32,7 @@ use std::fmt::{self, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{RecordBatch, UInt32Array};
-use arrow::compute::take_record_batch;
+use arrow::compute::{BatchCoalescer, take_record_batch};
 use arrow::datatypes::SchemaRef;
 use arrow::row::{OwnedRow, RowConverter};
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -139,9 +139,10 @@ use crate::{
 /// - Only activated when the window function is `ROW_NUMBER` with a
 ///   `PARTITION BY` clause. Global top-K (no `PARTITION BY`) is already
 ///   handled efficiently by `SortExec` with `fetch`.
-/// - Memory usage is proportional to `K × P`. For very high cardinality
-///   partition keys (millions of distinct values), this may use significant
-///   memory.
+/// - For very high cardinality partition keys (millions of distinct values),
+///   both memory usage and runtime overhead can become significant. In such
+///   cases, the sort-based plan is more robust. Therefore, this optimization
+///   is currently controlled by a configuration flag.
 #[derive(Debug, Clone)]
 pub struct PartitionedTopKExec {
     /// Input execution plan (reads unsorted data)
@@ -493,16 +494,21 @@ async fn do_partitioned_topk(
     let mut sorted_pks: Vec<OwnedRow> = partitions.keys().cloned().collect();
     sorted_pks.sort();
 
-    let mut output_batches: Vec<RecordBatch> = Vec::new();
+    let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
 
     for pk in sorted_pks {
         if let Some(topk) = partitions.remove(&pk) {
             // TopK::emit() returns a stream of sorted batches
             let mut stream = topk.emit()?;
             while let Some(batch) = stream.next().await {
-                output_batches.push(batch?);
+                coalescer.push_batch(batch?)?;
             }
         }
+    }
+    coalescer.finish_buffered_batch()?;
+    let mut output_batches: Vec<RecordBatch> = Vec::new();
+    while let Some(batch) = coalescer.next_completed_batch() {
+        output_batches.push(batch);
     }
 
     Ok(Box::pin(RecordBatchStreamAdapter::new(
