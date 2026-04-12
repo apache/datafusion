@@ -97,15 +97,15 @@ fn replace_grouping_exprs(
         .into_iter()
         .zip(columns.into_iter().skip(group_expr_len + grouping_id_len))
     {
+        let grouping_id_type = is_grouping_set
+            .then(|| {
+                schema
+                    .field_with_name(None, Aggregate::INTERNAL_GROUPING_ID)
+                    .map(|f| f.data_type().clone())
+            })
+            .transpose()?;
         match expr {
             Expr::AggregateFunction(ref function) if is_grouping_function(&expr) => {
-                let grouping_id_type = is_grouping_set
-                    .then(|| {
-                        schema
-                            .field_with_name(None, Aggregate::INTERNAL_GROUPING_ID)
-                            .map(|f| f.data_type().clone())
-                    })
-                    .transpose()?;
                 let grouping_expr = grouping_function_on_id(
                     function,
                     &group_expr_to_bitmap_index,
@@ -117,12 +117,16 @@ fn replace_grouping_exprs(
                     column.name,
                 )));
             }
-            Expr::Alias(Alias { relation, name, .. }) if is_grouping_function(&expr) => {
+            Expr::Alias(Alias {
+                ref relation,
+                ref name,
+                ..
+            }) if is_grouping_function(&expr) => {
                 let function = unwrap_alias_to_grouping_function(&expr)?;
                 let grouping_expr = grouping_function_on_id(
                     function,
                     &group_expr_to_bitmap_index,
-                    is_grouping_set,
+                    grouping_id_type,
                 )?;
                 // Preserve the outermost user-provided alias
                 projection_exprs.push(Expr::Alias(Alias::new(
