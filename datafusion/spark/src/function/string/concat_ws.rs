@@ -291,6 +291,7 @@ fn collect_parts_from_list<O: OffsetSizeTrait>(
 /// Extract non-null string elements from an array.
 fn collect_string_elements(values: &ArrayRef, parts: &mut Vec<String>) -> Result<()> {
     match values.data_type() {
+        DataType::Null => {}
         DataType::Utf8 => {
             let str_arr = as_generic_string_array::<i32>(values)?;
             for i in 0..str_arr.len() {

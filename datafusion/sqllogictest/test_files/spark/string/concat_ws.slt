@@ -137,3 +137,73 @@ SELECT concat_ws(',', 'a', 'b') AS result FROM VALUES (1), (2), (3) AS t(x);
 a,b
 a,b
 a,b
+
+## ── Additional edge cases ───────────────────────────────────
+
+## Empty separator — values concatenated with nothing between
+query T
+SELECT concat_ws('', 'a', 'b', 'c');
+----
+abc
+
+## Empty-string values are NOT skipped (only NULLs are)
+query T
+SELECT concat_ws(',', '', 'a', '', 'b');
+----
+,a,,b
+
+## Multi-character separator
+query T
+SELECT concat_ws(' - ', 'a', 'b', 'c');
+----
+a - b - c
+
+## Utf8View separator
+query TT
+SELECT concat_ws(arrow_cast(',', 'Utf8View'), 'a', 'b'), arrow_typeof(concat_ws(arrow_cast(',', 'Utf8View'), 'a', 'b'));
+----
+a,b Utf8
+
+## LargeUtf8 separator
+query TT
+SELECT concat_ws(arrow_cast(',', 'LargeUtf8'), 'a', 'b'), arrow_typeof(concat_ws(arrow_cast(',', 'LargeUtf8'), 'a', 'b'));
+----
+a,b Utf8
+
+## Empty array → empty string
+query T
+SELECT concat_ws(',', array());
+----
+(empty)
+
+## Scalar + array + array mix
+query T
+SELECT concat_ws(',', array('a', 'b'), 'c', array('d', 'e'));
+----
+a,b,c,d,e
+
+## All-NULL row mixed with non-NULL rows
+query T
+SELECT concat_ws(',', a, b, c) AS result FROM VALUES
+  ('a', 'b', 'c'),
+  (CAST(NULL AS STRING), 'b', 'c'),
+  ('a', CAST(NULL AS STRING), CAST(NULL AS STRING)),
+  (CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING))
+  AS t(a, b, c);
+----
+a,b,c
+b,c
+a
+(empty)
+
+## Separator from column (per-row separator), with NULL rows
+query T
+SELECT concat_ws(sep, a, b) AS result FROM VALUES
+  (',', 'a', 'b'),
+  (CAST(NULL AS STRING), 'a', 'b'),
+  ('|', 'x', 'y')
+  AS t(sep, a, b);
+----
+a,b
+NULL
+x|y
