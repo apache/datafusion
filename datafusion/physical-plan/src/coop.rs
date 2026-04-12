@@ -75,7 +75,6 @@ use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::PhysicalExpr;
 #[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -260,10 +259,6 @@ impl DisplayAs for CooperativeExec {
 impl ExecutionPlan for CooperativeExec {
     fn name(&self) -> &str {
         "CooperativeExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> Arc<Schema> {

@@ -669,58 +669,41 @@ impl Statistics {
     where
         I: IntoIterator<Item = &'a Statistics>,
     {
-        let items: Vec<&Statistics> = items.into_iter().collect();
-
-        if items.is_empty() {
+        let mut items = items.into_iter();
+        let Some(first) = items.next() else {
             return Ok(Statistics::new_unknown(schema));
-        }
-        if items.len() == 1 {
-            return Ok(items[0].clone());
+        };
+        let Some(second) = items.next() else {
+            return Ok(first.clone());
+        };
+
+        let num_cols = first.column_statistics.len();
+        let mut num_rows = first.num_rows;
+        let mut total_byte_size = first.total_byte_size;
+        let mut column_statistics = first.column_statistics.clone();
+        for col_stats in &mut column_statistics {
+            cast_sum_value_to_sum_type_in_place(&mut col_stats.sum_value);
         }
 
-        let num_cols = items[0].column_statistics.len();
-        // Validate all items have the same number of columns
-        for (i, stat) in items.iter().enumerate().skip(1) {
+        // Merge the remaining items in a single pass.
+        for (i, stat) in std::iter::once(second).chain(items).enumerate() {
             if stat.column_statistics.len() != num_cols {
                 return _plan_err!(
                     "Cannot merge statistics with different number of columns: {} vs {} (item {})",
                     num_cols,
                     stat.column_statistics.len(),
-                    i
+                    i + 1
                 );
             }
-        }
-
-        // Aggregate usize fields (cheap arithmetic)
-        let mut num_rows = Precision::Exact(0usize);
-        let mut total_byte_size = Precision::Exact(0usize);
-        for stat in &items {
             num_rows = num_rows.add(&stat.num_rows);
             total_byte_size = total_byte_size.add(&stat.total_byte_size);
-        }
 
-        let first = items[0];
-        let mut column_statistics: Vec<ColumnStatistics> = first
-            .column_statistics
-            .iter()
-            .map(|cs| ColumnStatistics {
-                null_count: cs.null_count,
-                max_value: cs.max_value.clone(),
-                min_value: cs.min_value.clone(),
-                sum_value: cs.sum_value.cast_to_sum_type(),
-                distinct_count: cs.distinct_count,
-                byte_size: cs.byte_size,
-            })
-            .collect();
-
-        // Accumulate all statistics in a single pass.
-        // Uses precision_add for sum (reuses the lhs accumulator for
-        // direct numeric addition), while preserving the NDV update
-        // ordering required by estimate_ndv_with_overlap.
-        for stat in items.iter().skip(1) {
-            for (col_idx, col_stats) in column_statistics.iter_mut().enumerate() {
-                let item_cs = &stat.column_statistics[col_idx];
-
+            // Uses precision_add for sum (reuses the lhs accumulator for
+            // direct numeric addition), while preserving the NDV update
+            // ordering required by estimate_ndv_with_overlap.
+            for (col_stats, item_cs) in
+                column_statistics.iter_mut().zip(&stat.column_statistics)
+            {
                 col_stats.null_count = col_stats.null_count.add(&item_cs.null_count);
 
                 // NDV must be computed before min/max update (needs pre-merge ranges)
@@ -734,10 +717,12 @@ impl Statistics {
                     ),
                     _ => Precision::Absent,
                 };
-                col_stats.min_value = col_stats.min_value.min(&item_cs.min_value);
-                col_stats.max_value = col_stats.max_value.max(&item_cs.max_value);
-                let item_sum_value = item_cs.sum_value.cast_to_sum_type();
-                precision_add(&mut col_stats.sum_value, &item_sum_value);
+                precision_min(&mut col_stats.min_value, &item_cs.min_value);
+                precision_max(&mut col_stats.max_value, &item_cs.max_value);
+                precision_add_for_sum_in_place(
+                    &mut col_stats.sum_value,
+                    &item_cs.sum_value,
+                );
                 col_stats.byte_size = col_stats.byte_size.add(&item_cs.byte_size);
             }
         }
@@ -838,6 +823,115 @@ pub fn estimate_ndv_with_overlap(
     let only_right = (1.0 - overlap_right) * ndv_right as f64;
 
     Some((intersection + only_left + only_right).round() as usize)
+}
+
+/// Returns the minimum precision while not allocating a new value,
+/// mirrors the semantics of `PartialOrd`.
+#[inline]
+fn precision_min<T>(lhs: &mut Precision<T>, rhs: &Precision<T>)
+where
+    T: Debug + Clone + PartialEq + Eq + PartialOrd,
+{
+    *lhs = match (std::mem::take(lhs), rhs) {
+        (Precision::Exact(left), Precision::Exact(right)) => {
+            if left <= *right {
+                Precision::Exact(left)
+            } else {
+                Precision::Exact(right.clone())
+            }
+        }
+        (Precision::Exact(left), Precision::Inexact(right))
+        | (Precision::Inexact(left), Precision::Exact(right))
+        | (Precision::Inexact(left), Precision::Inexact(right)) => {
+            if left <= *right {
+                Precision::Inexact(left)
+            } else {
+                Precision::Inexact(right.clone())
+            }
+        }
+        (_, _) => Precision::Absent,
+    };
+}
+
+/// Returns the maximum precision while not allocating a new value,
+/// mirrors the semantics of `PartialOrd`.
+#[inline]
+fn precision_max<T>(lhs: &mut Precision<T>, rhs: &Precision<T>)
+where
+    T: Debug + Clone + PartialEq + Eq + PartialOrd,
+{
+    *lhs = match (std::mem::take(lhs), rhs) {
+        (Precision::Exact(left), Precision::Exact(right)) => {
+            if left >= *right {
+                Precision::Exact(left)
+            } else {
+                Precision::Exact(right.clone())
+            }
+        }
+        (Precision::Exact(left), Precision::Inexact(right))
+        | (Precision::Inexact(left), Precision::Exact(right))
+        | (Precision::Inexact(left), Precision::Inexact(right)) => {
+            if left >= *right {
+                Precision::Inexact(left)
+            } else {
+                Precision::Inexact(right.clone())
+            }
+        }
+        (_, _) => Precision::Absent,
+    };
+}
+
+#[inline]
+fn cast_sum_value_to_sum_type_in_place(value: &mut Precision<ScalarValue>) {
+    let (is_exact, inner) = match std::mem::take(value) {
+        Precision::Exact(v) => (true, v),
+        Precision::Inexact(v) => (false, v),
+        Precision::Absent => return,
+    };
+    let source_type = inner.data_type();
+    let target_type = Precision::<ScalarValue>::sum_data_type(&source_type);
+
+    let wrap_precision_fn: fn(ScalarValue) -> Precision<ScalarValue> = if is_exact {
+        Precision::Exact
+    } else {
+        Precision::Inexact
+    };
+
+    *value = if source_type == target_type {
+        wrap_precision_fn(inner)
+    } else {
+        inner
+            .cast_to(&target_type)
+            .map(wrap_precision_fn)
+            .unwrap_or(Precision::Absent)
+    };
+}
+
+#[inline]
+fn precision_add_for_sum_in_place(
+    lhs: &mut Precision<ScalarValue>,
+    rhs: &Precision<ScalarValue>,
+) {
+    let (value, wrap_fn): (&ScalarValue, fn(ScalarValue) -> Precision<ScalarValue>) =
+        match rhs {
+            Precision::Exact(v) => (v, Precision::Exact),
+            Precision::Inexact(v) => (v, Precision::Inexact),
+            Precision::Absent => {
+                *lhs = Precision::Absent;
+                return;
+            }
+        };
+    let source_type = value.data_type();
+    let target_type = Precision::<ScalarValue>::sum_data_type(&source_type);
+    if source_type == target_type {
+        precision_add(lhs, rhs);
+    } else {
+        let rhs = value
+            .cast_to(&target_type)
+            .map(wrap_fn)
+            .unwrap_or(Precision::Absent);
+        precision_add(lhs, &rhs);
+    }
 }
 
 /// Creates an estimate of the number of rows in the output using the given
@@ -2623,5 +2717,147 @@ mod tests {
             col_stats.sum_value,
             Precision::Inexact(ScalarValue::Int64(Some(1500)))
         );
+    }
+
+    #[test]
+    fn test_precision_min_in_place() {
+        // Exact vs Exact: keeps the smaller
+        let mut lhs = Precision::Exact(10);
+        precision_min(&mut lhs, &Precision::Exact(20));
+        assert_eq!(lhs, Precision::Exact(10));
+
+        let mut lhs = Precision::Exact(20);
+        precision_min(&mut lhs, &Precision::Exact(10));
+        assert_eq!(lhs, Precision::Exact(10));
+
+        // Equal exact values
+        let mut lhs = Precision::Exact(5);
+        precision_min(&mut lhs, &Precision::Exact(5));
+        assert_eq!(lhs, Precision::Exact(5));
+
+        // Mixed exact/inexact: result is Inexact with smaller value
+        let mut lhs = Precision::Exact(10);
+        precision_min(&mut lhs, &Precision::Inexact(20));
+        assert_eq!(lhs, Precision::Inexact(10));
+
+        let mut lhs = Precision::Inexact(10);
+        precision_min(&mut lhs, &Precision::Exact(5));
+        assert_eq!(lhs, Precision::Inexact(5));
+
+        // Inexact vs Inexact
+        let mut lhs = Precision::Inexact(30);
+        precision_min(&mut lhs, &Precision::Inexact(20));
+        assert_eq!(lhs, Precision::Inexact(20));
+
+        // Absent makes result Absent
+        let mut lhs = Precision::Exact(10);
+        precision_min(&mut lhs, &Precision::Absent);
+        assert_eq!(lhs, Precision::Absent);
+
+        let mut lhs = Precision::<i32>::Absent;
+        precision_min(&mut lhs, &Precision::Exact(10));
+        assert_eq!(lhs, Precision::Absent);
+    }
+
+    #[test]
+    fn test_precision_max_in_place() {
+        // Exact vs Exact: keeps the larger
+        let mut lhs = Precision::Exact(10);
+        precision_max(&mut lhs, &Precision::Exact(20));
+        assert_eq!(lhs, Precision::Exact(20));
+
+        let mut lhs = Precision::Exact(20);
+        precision_max(&mut lhs, &Precision::Exact(10));
+        assert_eq!(lhs, Precision::Exact(20));
+
+        // Equal exact values
+        let mut lhs = Precision::Exact(5);
+        precision_max(&mut lhs, &Precision::Exact(5));
+        assert_eq!(lhs, Precision::Exact(5));
+
+        // Mixed exact/inexact: result is Inexact with larger value
+        let mut lhs = Precision::Exact(10);
+        precision_max(&mut lhs, &Precision::Inexact(20));
+        assert_eq!(lhs, Precision::Inexact(20));
+
+        let mut lhs = Precision::Inexact(10);
+        precision_max(&mut lhs, &Precision::Exact(5));
+        assert_eq!(lhs, Precision::Inexact(10));
+
+        // Inexact vs Inexact
+        let mut lhs = Precision::Inexact(20);
+        precision_max(&mut lhs, &Precision::Inexact(30));
+        assert_eq!(lhs, Precision::Inexact(30));
+
+        // Absent makes result Absent
+        let mut lhs = Precision::Exact(10);
+        precision_max(&mut lhs, &Precision::Absent);
+        assert_eq!(lhs, Precision::Absent);
+
+        let mut lhs = Precision::<i32>::Absent;
+        precision_max(&mut lhs, &Precision::Exact(10));
+        assert_eq!(lhs, Precision::Absent);
+    }
+
+    #[test]
+    fn test_cast_sum_value_to_sum_type_in_place_widens_int32() {
+        let mut value = Precision::Exact(ScalarValue::Int32(Some(42)));
+        cast_sum_value_to_sum_type_in_place(&mut value);
+        assert_eq!(value, Precision::Exact(ScalarValue::Int64(Some(42))));
+    }
+
+    #[test]
+    fn test_cast_sum_value_to_sum_type_in_place_preserves_int64() {
+        // Int64 is already the sum type for Int64, no widening needed
+        let mut value = Precision::Exact(ScalarValue::Int64(Some(100)));
+        cast_sum_value_to_sum_type_in_place(&mut value);
+        assert_eq!(value, Precision::Exact(ScalarValue::Int64(Some(100))));
+    }
+
+    #[test]
+    fn test_cast_sum_value_to_sum_type_in_place_inexact() {
+        let mut value = Precision::Inexact(ScalarValue::Int32(Some(42)));
+        cast_sum_value_to_sum_type_in_place(&mut value);
+        assert_eq!(value, Precision::Inexact(ScalarValue::Int64(Some(42))));
+    }
+
+    #[test]
+    fn test_cast_sum_value_to_sum_type_in_place_absent() {
+        let mut value = Precision::<ScalarValue>::Absent;
+        cast_sum_value_to_sum_type_in_place(&mut value);
+        assert_eq!(value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_precision_add_for_sum_in_place_same_type() {
+        // Int64 + Int64: no widening needed, straight add
+        let mut lhs = Precision::Exact(ScalarValue::Int64(Some(10)));
+        let rhs = Precision::Exact(ScalarValue::Int64(Some(20)));
+        precision_add_for_sum_in_place(&mut lhs, &rhs);
+        assert_eq!(lhs, Precision::Exact(ScalarValue::Int64(Some(30))));
+    }
+
+    #[test]
+    fn test_precision_add_for_sum_in_place_widens_rhs() {
+        // lhs is already Int64 (widened), rhs is Int32 -> gets cast to Int64
+        let mut lhs = Precision::Exact(ScalarValue::Int64(Some(10)));
+        let rhs = Precision::Exact(ScalarValue::Int32(Some(5)));
+        precision_add_for_sum_in_place(&mut lhs, &rhs);
+        assert_eq!(lhs, Precision::Exact(ScalarValue::Int64(Some(15))));
+    }
+
+    #[test]
+    fn test_precision_add_for_sum_in_place_inexact() {
+        let mut lhs = Precision::Inexact(ScalarValue::Int64(Some(10)));
+        let rhs = Precision::Inexact(ScalarValue::Int32(Some(5)));
+        precision_add_for_sum_in_place(&mut lhs, &rhs);
+        assert_eq!(lhs, Precision::Inexact(ScalarValue::Int64(Some(15))));
+    }
+
+    #[test]
+    fn test_precision_add_for_sum_in_place_absent_rhs() {
+        let mut lhs = Precision::Exact(ScalarValue::Int64(Some(10)));
+        precision_add_for_sum_in_place(&mut lhs, &Precision::Absent);
+        assert_eq!(lhs, Precision::Absent);
     }
 }

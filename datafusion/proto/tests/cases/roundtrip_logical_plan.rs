@@ -215,8 +215,6 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         buf: &mut Vec<u8>,
     ) -> Result<()> {
         let table = node
-            .as_ref()
-            .as_any()
             .downcast_ref::<TestTableProvider>()
             .expect("Can't encode non-test tables");
         let msg = TestTableProto {
@@ -1499,7 +1497,9 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        let udf = binding.as_any().downcast_ref::<MyRegexUdf>().unwrap();
+        let udf = (binding.as_ref() as &dyn Any)
+            .downcast_ref::<MyRegexUdf>()
+            .unwrap();
         let proto = MyRegexUdfNode {
             pattern: udf.pattern.clone(),
         };
@@ -1525,7 +1525,9 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        let udf = binding.as_any().downcast_ref::<MyAggregateUDF>().unwrap();
+        let udf = (binding.as_ref() as &dyn Any)
+            .downcast_ref::<MyAggregateUDF>()
+            .unwrap();
         let proto = MyAggregateUdfNode {
             result: udf.result.clone(),
         };
@@ -2777,10 +2779,6 @@ fn roundtrip_window() {
     }
 
     impl WindowUDFImpl for SimpleWindowUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "dummy_udwf"
         }

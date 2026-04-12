@@ -30,7 +30,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 use std::vec;
 
@@ -91,9 +90,6 @@ impl MapExtract {
 }
 
 impl ScalarUDFImpl for MapExtract {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "map_extract"
     }

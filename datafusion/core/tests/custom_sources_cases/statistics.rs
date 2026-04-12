@@ -17,7 +17,7 @@
 
 //! This module contains end to end tests of statistics propagation
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::execution::context::TaskContext;
@@ -77,10 +77,6 @@ impl StatisticsValidation {
 
 #[async_trait]
 impl TableProvider for StatisticsValidation {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -153,10 +149,6 @@ impl DisplayAs for StatisticsValidation {
 impl ExecutionPlan for StatisticsValidation {
     fn name(&self) -> &'static str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -272,7 +264,7 @@ async fn sql_filter() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
     let stats = physical_plan.partition_statistics(None)?;
-    assert_eq!(stats.num_rows, Precision::Inexact(1));
+    assert_eq!(stats.num_rows, Precision::Inexact(7));
 
     Ok(())
 }

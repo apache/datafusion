@@ -17,7 +17,6 @@
 
 //! Test utilities for physical optimizer tests
 
-use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, LazyLock};
 
@@ -450,10 +449,6 @@ impl DisplayAs for RequirementsTestExec {
 impl ExecutionPlan for RequirementsTestExec {
     fn name(&self) -> &str {
         "RequiredInputOrderingExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -925,10 +920,6 @@ impl DisplayAs for TestScan {
 impl ExecutionPlan for TestScan {
     fn name(&self) -> &str {
         "TestScan"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
