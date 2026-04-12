@@ -231,19 +231,23 @@ fn collect_parts(arr: &ArrayRef, row_idx: usize, parts: &mut Vec<String>) -> Res
             parts.push(str_arr.value(row_idx).to_string());
         }
         DataType::Binary => {
-            let bin_arr = arr.as_any().downcast_ref::<BinaryArray>().ok_or_else(
-                || datafusion_common::DataFusionError::Execution(
-                    "failed to downcast to BinaryArray".to_string(),
-                ),
-            )?;
+            let bin_arr =
+                arr.as_any().downcast_ref::<BinaryArray>().ok_or_else(|| {
+                    datafusion_common::DataFusionError::Execution(
+                        "failed to downcast to BinaryArray".to_string(),
+                    )
+                })?;
             parts.push(binary_to_utf8(bin_arr.value(row_idx))?);
         }
         DataType::LargeBinary => {
-            let bin_arr = arr.as_any().downcast_ref::<LargeBinaryArray>().ok_or_else(
-                || datafusion_common::DataFusionError::Execution(
-                    "failed to downcast to LargeBinaryArray".to_string(),
-                ),
-            )?;
+            let bin_arr =
+                arr.as_any()
+                    .downcast_ref::<LargeBinaryArray>()
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Execution(
+                            "failed to downcast to LargeBinaryArray".to_string(),
+                        )
+                    })?;
             parts.push(binary_to_utf8(bin_arr.value(row_idx))?);
         }
         DataType::List(_) => {
