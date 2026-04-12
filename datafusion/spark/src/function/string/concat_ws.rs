@@ -25,7 +25,8 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericListArray, OffsetSizeTrait, StringBuilder,
+    Array, ArrayRef, AsArray, BinaryArray, GenericListArray, LargeBinaryArray,
+    OffsetSizeTrait, StringBuilder,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_generic_string_array;
@@ -120,7 +121,11 @@ impl ScalarUDFImpl for SparkConcatWs {
 
         for dt in &arg_types[1..] {
             match dt {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary => {
                     coerced.push(dt.clone());
                 }
                 DataType::List(_) | DataType::LargeList(_) => {
@@ -225,6 +230,22 @@ fn collect_parts(arr: &ArrayRef, row_idx: usize, parts: &mut Vec<String>) -> Res
             let str_arr = arr.as_string_view();
             parts.push(str_arr.value(row_idx).to_string());
         }
+        DataType::Binary => {
+            let bin_arr = arr.as_any().downcast_ref::<BinaryArray>().ok_or_else(
+                || datafusion_common::DataFusionError::Execution(
+                    "failed to downcast to BinaryArray".to_string(),
+                ),
+            )?;
+            parts.push(binary_to_utf8(bin_arr.value(row_idx))?);
+        }
+        DataType::LargeBinary => {
+            let bin_arr = arr.as_any().downcast_ref::<LargeBinaryArray>().ok_or_else(
+                || datafusion_common::DataFusionError::Execution(
+                    "failed to downcast to LargeBinaryArray".to_string(),
+                ),
+            )?;
+            parts.push(binary_to_utf8(bin_arr.value(row_idx))?);
+        }
         DataType::List(_) => {
             collect_parts_from_list::<i32>(arr.as_list::<i32>(), row_idx, parts)?;
         }
@@ -236,6 +257,17 @@ fn collect_parts(arr: &ArrayRef, row_idx: usize, parts: &mut Vec<String>) -> Res
         }
     }
     Ok(())
+}
+
+/// Convert binary bytes to UTF-8 string, matching core `concat`/`concat_ws` behavior.
+fn binary_to_utf8(bytes: &[u8]) -> Result<String> {
+    std::str::from_utf8(bytes)
+        .map(|s| s.to_string())
+        .map_err(|_| {
+            datafusion_common::DataFusionError::Execution(
+                "invalid UTF-8 in binary literal".to_string(),
+            )
+        })
 }
 
 /// Collect string parts from a list array at a given row index.
