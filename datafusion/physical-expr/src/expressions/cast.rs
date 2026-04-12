@@ -386,8 +386,8 @@ mod tests {
 
     use arrow::{
         array::{
-            Array, ArrayRef, Decimal128Array, Float32Array, Float64Array, Int8Array,
-            Int16Array, Int32Array, Int64Array, StringArray, StructArray,
+            Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array,
+            Int8Array, Int16Array, Int32Array, Int64Array, StringArray, StructArray,
             Time64NanosecondArray, TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
@@ -1060,6 +1060,70 @@ mod tests {
         let cast_c = as_string_array(struct_array.column_by_name("c").unwrap().as_ref())?;
         assert!(cast_c.is_null(0));
         assert!(cast_c.is_null(1));
+        Ok(())
+    }
+
+    #[test]
+    fn field_aware_cast_nested_struct_array() -> Result<()> {
+        let inner_source = Field::new(
+            "inner",
+            Struct(vec![Arc::new(Field::new("x", Int32, true))].into()),
+            true,
+        );
+        let input_field = Field::new(
+            "root",
+            Struct(vec![Arc::new(inner_source.clone())].into()),
+            true,
+        );
+        let inner_target = Field::new(
+            "inner",
+            Struct(
+                vec![
+                    Arc::new(Field::new("x", Int64, true)),
+                    Arc::new(Field::new("y", Boolean, true)),
+                ]
+                .into(),
+            ),
+            true,
+        );
+        let target_field =
+            Field::new("root", Struct(vec![Arc::new(inner_target)].into()), true);
+
+        let schema = Arc::new(Schema::new(vec![input_field]));
+        let inner_struct = make_struct_array(
+            vec![Arc::new(Field::new("x", Int32, true))].into(),
+            vec![Arc::new(Int32Array::from(vec![Some(7), None])) as ArrayRef],
+        );
+        let outer_struct = make_struct_array(
+            vec![Arc::new(inner_source)].into(),
+            vec![Arc::new(inner_struct) as ArrayRef],
+        );
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(outer_struct) as ArrayRef],
+        )?;
+
+        let expr = CastExpr::new_with_target_field(
+            col("root", schema.as_ref())?,
+            Arc::new(target_field),
+            None,
+        );
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let struct_array = as_struct_array(result.as_ref())?;
+        let inner =
+            as_struct_array(struct_array.column_by_name("inner").unwrap().as_ref())?;
+        let x = as_int64_array(inner.column_by_name("x").unwrap().as_ref())?;
+        assert_eq!(x.value(0), 7);
+        assert!(x.is_null(1));
+        let y = inner
+            .column_by_name("y")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("boolean array");
+        assert!(y.is_null(0));
+        assert!(y.is_null(1));
         Ok(())
     }
 
