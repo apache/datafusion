@@ -22,7 +22,6 @@
 //! - Allows zero value arguments: `concat_ws(',')` → `""`
 //! - Null array elements are skipped (same as null scalars)
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -61,10 +60,6 @@ impl SparkConcatWs {
 }
 
 impl ScalarUDFImpl for SparkConcatWs {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "concat_ws"
     }
