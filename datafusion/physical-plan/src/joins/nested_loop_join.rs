@@ -1383,6 +1383,7 @@ impl NestedLoopJoinStream {
                     if batch.num_rows() == 0 {
                         continue;
                     }
+                    let batch_rows = batch.num_rows();
                     let batch_size = batch.get_array_memory_size();
                     let can_grow = reservation.try_grow(batch_size).is_ok();
 
@@ -1402,10 +1403,7 @@ impl NestedLoopJoinStream {
 
                     self.metrics.join_metrics.build_mem_used.add(batch_size);
                     self.metrics.join_metrics.build_input_batches.add(1);
-                    self.metrics
-                        .join_metrics
-                        .build_input_rows
-                        .add(batch.num_rows());
+                    self.metrics.join_metrics.build_input_rows.add(batch_rows);
                     self.left_pending_batches.push(batch);
                 }
                 Poll::Ready(Some(Err(e))) => {
@@ -1702,6 +1700,14 @@ impl NestedLoopJoinStream {
             // We have finished processing all unmatched rows for this chunk
             Ok(false) => match self.output_buffer.finish_buffered_batch() {
                 Ok(()) => {
+                    // Flush any completed batch before transitioning.
+                    // This is critical for the memory-limited path: the
+                    // ProbeRight results must be emitted before we discard
+                    // the current chunk and load the next one.
+                    if let Some(poll) = self.maybe_flush_ready_batch() {
+                        return ControlFlow::Break(poll);
+                    }
+
                     if !self.left_exhausted && self.is_memory_limited() {
                         // More left data to process — free current chunk and
                         // go back to BufferingLeft for the next chunk
