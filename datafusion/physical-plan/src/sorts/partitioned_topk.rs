@@ -99,7 +99,14 @@ use crate::{
 ///
 /// Cost: O(N log K) time instead of O(N log N), and O(K × P × row_size)
 /// memory where K = fetch, P = number of distinct partitions.
+/// ## Why maintaining partition key order in output
+/// Window functions do not require partition keys to be globally sorted, and
+/// enforcing such ordering in the output can introduce unnecessary overhead.
+/// However, the physical optimizer framework currently cannot express an
+/// ordering that is only grouped by some keys while ordered by others. For
+/// example:
 ///
+/// 
 /// # Example
 ///
 /// For the query above with `fetch=3` and input:
