@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example custom_data_source -- [all|adapter_serialization|csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_format|default_column_values|file_stream_provider]
+//! cargo run --example custom_data_source -- [all|adapter_serialization|csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|default_column_values|file_stream_provider]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -39,6 +39,9 @@
 //! - `custom_datasource`  
 //!   (file: custom_datasource.rs, desc: Query a custom TableProvider)
 //!
+//! - `custom_file_casts`
+//!   (file: custom_file_casts.rs, desc: Implement custom casting rules)
+//!
 //! - `custom_file_format`
 //!   (file: custom_file_format.rs, desc: Write to a custom file format)
 //!
@@ -52,6 +55,7 @@ mod adapter_serialization;
 mod csv_json_opener;
 mod csv_sql_streaming;
 mod custom_datasource;
+mod custom_file_casts;
 mod custom_file_format;
 mod default_column_values;
 mod file_stream_provider;
@@ -68,6 +72,7 @@ enum ExampleKind {
     CsvJsonOpener,
     CsvSqlStreaming,
     CustomDatasource,
+    CustomFileCasts,
     CustomFileFormat,
     DefaultColumnValues,
     FileStreamProvider,
@@ -97,6 +102,9 @@ impl ExampleKind {
             }
             ExampleKind::CustomDatasource => {
                 custom_datasource::custom_datasource().await?
+            }
+            ExampleKind::CustomFileCasts => {
+                custom_file_casts::custom_file_casts().await?
             }
             ExampleKind::CustomFileFormat => {
                 custom_file_format::custom_file_format().await?
