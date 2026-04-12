@@ -409,12 +409,12 @@ impl ParquetPruningSetupCache {
 
     fn get_or_insert_with(
         &self,
-        key: ParquetPruningSetupCacheKey,
+        key: &ParquetPruningSetupCacheKey,
         make_setup: impl FnOnce() -> Result<ParquetPruningSetup>,
     ) -> Result<ParquetPruningSetup> {
         let (entry, should_compute) = {
             let mut entries = self.entries()?;
-            if let Some(entry) = entries.get(&key) {
+            if let Some(entry) = entries.get(key) {
                 (Arc::clone(entry), false)
             } else {
                 let entry = Arc::new(ParquetPruningSetupCacheEntry::pending());
@@ -439,7 +439,7 @@ impl ParquetPruningSetupCache {
                     ));
                     entry.ready.notify_all();
                     drop(state);
-                    self.entries()?.remove(&key);
+                    self.entries()?.remove(key);
                     Err(DataFusionError::from(&shared_error))
                 }
             }
@@ -1791,7 +1791,7 @@ fn build_or_get_pruning_setup(
             &prepared.projection,
             prepared.predicate.as_ref(),
         );
-        prepared.pruning_setup_cache.get_or_insert_with(key, || {
+        prepared.pruning_setup_cache.get_or_insert_with(&key, || {
             build_pruning_setup(prepared, physical_file_schema)
         })
     } else {
