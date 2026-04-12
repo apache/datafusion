@@ -70,9 +70,9 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     /// Nulls
     nulls: MaybeNullBufferBuilder,
 
-    /// Total bytes in `completed` buffers that came from input array buffer
+    /// Number of `completed` buffers that came from input array buffer
     /// reuse (not owned copies). Used to decide when to trigger GC.
-    reused_buffer_bytes: usize,
+    reused_buffer_count: usize,
 
     /// phantom data so the type requires `<B>`
     _phantom: PhantomData<B>,
@@ -92,7 +92,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             completed: Vec::new(),
             max_block_size: BYTE_VIEW_INITIAL_BLOCK_SIZE,
             nulls: MaybeNullBufferBuilder::new(),
-            reused_buffer_bytes: 0,
+            reused_buffer_count: 0,
             _phantom: PhantomData {},
         }
     }
@@ -272,7 +272,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         self.completed = new_completed;
         self.in_progress = new_in_progress;
-        self.reused_buffer_bytes = 0;
+        self.reused_buffer_count = 0;
 
         // Double block size for future allocations (up to max)
         self.max_block_size = (self.max_block_size * 2).min(BYTE_VIEW_MAX_BLOCK_SIZE);
@@ -329,9 +329,9 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             self.completed.push(Buffer::from_vec(flushed));
         }
         let base = self.completed.len() as u32;
-        let reused: usize = arr.data_buffers().iter().map(|b| b.len()).sum();
-        self.completed.extend(arr.data_buffers().iter().cloned());
-        self.reused_buffer_bytes += reused;
+        let data_buffers = arr.data_buffers();
+        self.reused_buffer_count += data_buffers.len();
+        self.completed.extend(data_buffers.iter().cloned());
 
         match all_null_or_non_null {
             Nulls::Some => {
@@ -381,9 +381,9 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             }
         }
 
-        // GC when reused buffer bytes exceed threshold to prevent
+        // GC when we've accumulated many reused buffers to prevent
         // unbounded memory growth from holding entire input buffers.
-        if self.reused_buffer_bytes > self.max_block_size * 2 {
+        if self.reused_buffer_count > 10 {
             self.gc_buffers();
         }
     }
