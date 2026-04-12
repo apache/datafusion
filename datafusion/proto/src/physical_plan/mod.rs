@@ -2868,7 +2868,7 @@ impl protobuf::PhysicalPlanNode {
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<Self>> {
         let data_source = data_source_exec.data_source();
-        if let Some(maybe_csv) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(maybe_csv) = data_source.downcast_ref::<FileScanConfig>() {
             let source = maybe_csv.file_source();
             if let Some(csv_config) = source.downcast_ref::<CsvSource>() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
@@ -2910,7 +2910,7 @@ impl protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(scan_conf) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
             let source = scan_conf.file_source();
             if let Some(_json_source) = source.downcast_ref::<JsonSource>() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
@@ -2927,7 +2927,7 @@ impl protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(scan_conf) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
             let source = scan_conf.file_source();
             if let Some(_arrow_source) = source.downcast_ref::<ArrowSource>() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
@@ -2968,7 +2968,7 @@ impl protobuf::PhysicalPlanNode {
         }
 
         #[cfg(feature = "avro")]
-        if let Some(maybe_avro) = data_source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(maybe_avro) = data_source.downcast_ref::<FileScanConfig>() {
             let source = maybe_avro.file_source();
             if source.downcast_ref::<AvroSource>().is_some() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
@@ -2985,9 +2985,7 @@ impl protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(source_conf) =
-            data_source.as_any().downcast_ref::<MemorySourceConfig>()
-        {
+        if let Some(source_conf) = data_source.downcast_ref::<MemorySourceConfig>() {
             let proto_partitions = source_conf
                 .partitions()
                 .iter()

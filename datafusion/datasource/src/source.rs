@@ -123,13 +123,12 @@ use datafusion_physical_plan::filter_pushdown::{
 ///    │                     │
 ///    └─────────────────────┘
 /// ```
-pub trait DataSource: Send + Sync + Debug {
+pub trait DataSource: Any + Send + Sync + Debug {
     fn open(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream>;
-    fn as_any(&self) -> &dyn Any;
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
@@ -249,6 +248,16 @@ pub trait DataSource: Send + Sync + Debug {
     }
 }
 
+impl dyn DataSource {
+    pub fn is<T: DataSource>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    pub fn downcast_ref<T: DataSource>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// [`ExecutionPlan`] that reads one or more files
 ///
 /// `DataSourceExec` implements common functionality such as applying
@@ -359,8 +368,7 @@ impl ExecutionPlan for DataSourceExec {
 
         // Add `output_rows_skew` metric to the metrics set.
         // Done here because it's a derived metric from output_rows metric.
-        if let Some(file_scan_config) =
-            self.data_source.as_any().downcast_ref::<FileScanConfig>()
+        if let Some(file_scan_config) = self.data_source.downcast_ref::<FileScanConfig>()
             && file_scan_config.file_source().file_type() == "parquet"
             && let Some(output_rows_skew) =
                 BaselineMetrics::output_rows_skew_metric(&metrics)
@@ -530,7 +538,6 @@ impl DataSourceExec {
         &self,
     ) -> Option<(&FileScanConfig, &T)> {
         self.data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .and_then(|file_scan_conf| {
                 file_scan_conf

@@ -974,7 +974,6 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
         })?;
     let file_scan = data_source
         .data_source()
-        .as_any()
         .downcast_ref::<FileScanConfig>()
         .ok_or_else(|| {
             internal_datafusion_err!("Expected FileScanConfig after roundtrip")

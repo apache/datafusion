@@ -55,7 +55,7 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
-use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
+use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// [`FileScanConfig`] represents scanning data from a group of files
 ///
@@ -593,10 +593,6 @@ impl DataSource for FileScanConfig {
             .with_metrics(source.metrics())
             .build()?;
         Ok(Box::pin(cooperative(stream)))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
@@ -2411,7 +2407,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let pushed_files = pushed_config.file_groups[0].files();
@@ -2424,7 +2419,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let pushed_files = pushed_config.file_groups[0].files();
@@ -2532,7 +2526,6 @@ mod tests {
             panic!("Expected Inexact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2597,7 +2590,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2635,7 +2627,6 @@ mod tests {
             panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(!pushed_config.output_ordering.is_empty());
@@ -2670,7 +2661,6 @@ mod tests {
             panic!("Expected Inexact (downgraded), got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(pushed_config.output_ordering.is_empty());
@@ -2705,7 +2695,6 @@ mod tests {
             panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2771,7 +2760,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files0 = pushed_config.file_groups[0].files();
@@ -2812,7 +2800,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files0 = pushed_config.file_groups[0].files();
@@ -2847,7 +2834,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2898,7 +2884,6 @@ mod tests {
             panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
 
@@ -2951,7 +2936,6 @@ mod tests {
             panic!("Expected Inexact for reverse scan, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
 
