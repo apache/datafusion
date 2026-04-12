@@ -158,9 +158,10 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             .as_u128()
     }
 
-    /// Copy non-inline data for the last `new_views_count` views from the
-    /// temporary `reused_buffers` into `in_progress`/`completed`, giving
-    /// perfect locality. Inline views are left unchanged.
+    /// Compact non-inline data from reused input buffers into owned
+    /// `in_progress`/`completed` buffers. Buffers that are >=90%
+    /// referenced are kept as-is (already good locality); the rest
+    /// are compacted by copying only referenced data.
     fn compact_new_views(
         views: &mut [u128],
         reused_buffers: &[Buffer],
@@ -169,40 +170,81 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         completed: &mut Vec<Buffer>,
         max_block_size: usize,
     ) {
+        // Count referenced bytes per reused buffer
+        let mut referenced = vec![0usize; reused_buffers.len()];
+        for view in views.iter() {
+            let len = *view as u32;
+            if len <= 12 {
+                continue;
+            }
+            let bv = ByteView::from(*view);
+            if bv.buffer_index >= base {
+                let idx = (bv.buffer_index - base) as usize;
+                referenced[idx] += bv.length as usize;
+            }
+        }
+
+        // Decide per buffer: keep (>=90% referenced) or compact.
+        // For kept buffers, flush in_progress first so buffer indices
+        // stay ordered, then add to completed.
+        let mut reused_to_new = vec![u32::MAX; reused_buffers.len()];
+        for (idx, buf) in reused_buffers.iter().enumerate() {
+            let total = buf.len();
+            if total > 0 && referenced[idx] * 10 >= total * 9 {
+                if !in_progress.is_empty() {
+                    let flushed =
+                        replace(in_progress, Vec::with_capacity(max_block_size));
+                    completed.push(Buffer::from_vec(flushed));
+                }
+                reused_to_new[idx] = completed.len() as u32;
+                completed.push(buf.clone());
+            }
+        }
+
+        // Remap/compact views
         for view in views.iter_mut() {
             let len = *view as u32;
             if len <= 12 {
                 continue;
             }
             let bv = ByteView::from(*view);
-            // Only compact views that reference the reused buffers
             if bv.buffer_index < base {
                 continue;
             }
             let reused_idx = (bv.buffer_index - base) as usize;
-            let offset = bv.offset as usize;
-            let length = bv.length as usize;
-            let value = unsafe {
-                reused_buffers
-                    .get_unchecked(reused_idx)
-                    .as_slice()
-                    .get_unchecked(offset..offset + length)
-            };
 
-            let require_cap = in_progress.len() + length;
-            if require_cap > max_block_size {
-                let flushed = replace(in_progress, Vec::with_capacity(max_block_size));
-                completed.push(Buffer::from_vec(flushed));
+            if reused_to_new[reused_idx] != u32::MAX {
+                // Buffer kept, just remap index
+                *view = ByteView::from(*view)
+                    .with_buffer_index(reused_to_new[reused_idx])
+                    .as_u128();
+            } else {
+                // Compact: copy data into in_progress
+                let offset = bv.offset as usize;
+                let length = bv.length as usize;
+                let value = unsafe {
+                    reused_buffers
+                        .get_unchecked(reused_idx)
+                        .as_slice()
+                        .get_unchecked(offset..offset + length)
+                };
+
+                let require_cap = in_progress.len() + length;
+                if require_cap > max_block_size {
+                    let flushed =
+                        replace(in_progress, Vec::with_capacity(max_block_size));
+                    completed.push(Buffer::from_vec(flushed));
+                }
+
+                let new_buffer_index = completed.len() as u32;
+                let new_offset = in_progress.len() as u32;
+                in_progress.extend_from_slice(value);
+
+                *view = ByteView::from(*view)
+                    .with_buffer_index(new_buffer_index)
+                    .with_offset(new_offset)
+                    .as_u128();
             }
-
-            let new_buffer_index = completed.len() as u32;
-            let new_offset = in_progress.len() as u32;
-            in_progress.extend_from_slice(value);
-
-            *view = ByteView::from(*view)
-                .with_buffer_index(new_buffer_index)
-                .with_offset(new_offset)
-                .as_u128();
         }
     }
 
