@@ -473,24 +473,21 @@ mod playground {
 
     #[tokio::test]
     async fn test_trivial_group_by_dictionary() -> Result<()> {
+        use crate::aggregates::RecordBatch;
+        use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+        use crate::common::collect;
+        use crate::test::TestMemoryExec;
         use arrow::array::DictionaryArray;
         use arrow::datatypes::{DataType, Field, Schema};
         use datafusion_functions_aggregate::count::count_udaf;
         use datafusion_physical_expr::aggregate::AggregateExprBuilder;
         use datafusion_physical_expr::expressions::col;
-        use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-        use crate::test::TestMemoryExec;
-        use crate::aggregates::RecordBatch;
-        use crate::common::collect;
 
         // Create schema with dictionary column and value column
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "color",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt8),
-                    Box::new(DataType::Utf8),
-                ),
+                DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
                 false,
             ),
             Field::new("amount", DataType::UInt32, false),
@@ -499,11 +496,9 @@ mod playground {
         // Create dictionary array
         let values = StringArray::from(vec!["red", "blue", "green"]);
         let keys = arrow::array::UInt8Array::from(vec![0, 1, 0, 2, 1]);
-        let dict_array: ArrayRef =
-            Arc::new(DictionaryArray::<arrow::datatypes::UInt8Type>::try_new(
-                keys,
-                Arc::new(values),
-            )?);
+        let dict_array: ArrayRef = Arc::new(DictionaryArray::<
+            arrow::datatypes::UInt8Type,
+        >::try_new(keys, Arc::new(values))?);
 
         // Create value column
         let amount_array: ArrayRef =
@@ -514,7 +509,8 @@ mod playground {
             RecordBatch::try_new(Arc::clone(&schema), vec![dict_array, amount_array])?;
 
         // Create in-memory source with the batch
-        let source = TestMemoryExec::try_new(&vec![vec![batch]], Arc::clone(&schema), None)?;
+        let source =
+            TestMemoryExec::try_new(&vec![vec![batch]], Arc::clone(&schema), None)?;
 
         // Create GROUP BY expression
         let group_expr = vec![(col("color", &schema)?, "color".to_string())];
@@ -537,11 +533,9 @@ mod playground {
             Arc::clone(&schema),
         )?;
 
-
         let output =
             collect(aggregate_exec.execute(0, Arc::new(TaskContext::default()))?).await?;
         println!("Output batch: {:#?}", output);
         Ok(())
     }
-
 }

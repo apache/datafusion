@@ -950,11 +950,17 @@ impl GroupedHashAggregateStream {
 
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            println!("pre group_values.intern() call to self.current_group_indices: {:#?}", self.current_group_indices);
+            println!(
+                "pre group_values.intern() call to self.current_group_indices: {:#?}",
+                self.current_group_indices
+            );
             self.group_values
                 .intern(group_values, &mut self.current_group_indices)?;
             let group_indices = &self.current_group_indices;
-            println!("post group_values.intern() call to self.current_group_indices: {:#?}", self.current_group_indices);
+            println!(
+                "post group_values.intern() call to self.current_group_indices: {:#?}",
+                self.current_group_indices
+            );
 
             // Update ordering information if necessary
             let total_num_groups = self.group_values.len();

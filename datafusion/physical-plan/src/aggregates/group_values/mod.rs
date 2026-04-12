@@ -41,10 +41,13 @@ pub(crate) use single_group_by::primitive::HashValue;
 use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive, dictionary::GroupValuesDictionary,
+        bytes_view::GroupValuesBytesView, dictionary::GroupValuesDictionary,
+        primitive::GroupValuesPrimitive,
     },
     order::GroupOrdering,
 };
+use arrow::array::*;
+use std::sync::Arc;
 
 mod metrics;
 mod null_builder;
@@ -199,11 +202,24 @@ pub fn new_group_values(
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new()));
             }
-            /*DataType::Dictionary(_, _) => {
-                println!("dictionary type detected, using SingleDictionaryGroupValues");
-                return Ok(Box::new(SingleDictionaryGroupValues::new()));
-
-            }*/
+            DataType::Dictionary(key_type, value_type) => {
+                if supported_single_dictionary_value(value_type) {
+                    println!("dictionary type detected, using GroupValuesDictionary");
+                    return match key_type.as_ref() { // TODO: turn this into a macro
+                        DataType::Int8 => Ok(Box::new(GroupValuesDictionary::<arrow::datatypes::Int8Type>::new(value_type))),
+                        DataType::Int16 => Ok(Box::new(GroupValuesDictionary::<arrow::datatypes::Int16Type>::new(value_type))),
+                        DataType::Int32 => Ok(Box::new(GroupValuesDictionary::<arrow::datatypes::Int32Type>::new(value_type))),
+                        DataType::Int64 => Ok(Box::new(GroupValuesDictionary::<arrow::datatypes::Int64Type>::new(value_type))),
+                        DataType::UInt8 => Ok(Box::new(GroupValuesDictionary::<arrow::datatypes::UInt8Type>::new(value_type))),
+                        DataType::UInt16 => Ok(Box::new(GroupValuesDictionary::<arrow::datatypes::UInt16Type>::new(value_type))),
+                        DataType::UInt32 => Ok(Box::new(GroupValuesDictionary::<arrow::datatypes::UInt32Type>::new(value_type))),
+                        DataType::UInt64 => Ok(Box::new(GroupValuesDictionary::<arrow::datatypes::UInt64Type>::new(value_type))),
+                        _ => Err(datafusion_common::DataFusionError::NotImplemented(
+                            format!("Unsupported dictionary key type: {:?}", key_type)
+                        )),
+                    };
+                }
+            }
             _ => {}
         }
     }
@@ -219,3 +235,24 @@ pub fn new_group_values(
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
     }
 }
+
+fn supported_single_dictionary_value(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::Utf8View
+            | DataType::BinaryView
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+    )
+}
+
