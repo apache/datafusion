@@ -28,7 +28,8 @@ use std::marker::PhantomData;
 use std::mem::{replace, size_of};
 use std::sync::Arc;
 
-const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
+const BYTE_VIEW_INITIAL_BLOCK_SIZE: usize = 2 * 1024 * 1024;
+const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 16 * 1024 * 1024;
 
 /// An implementation of [`GroupColumn`] for binary view and utf8 view types.
 ///
@@ -89,7 +90,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
-            max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
+            max_block_size: BYTE_VIEW_INITIAL_BLOCK_SIZE,
             nulls: MaybeNullBufferBuilder::new(),
             reused_buffer_bytes: 0,
             _phantom: PhantomData {},
@@ -163,57 +164,118 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             .as_u128()
     }
 
-    /// Compact buffers by copying only referenced non-inline data into
-    /// fresh `in_progress`/`completed` buffers, then dropping the old ones.
+    /// Compact buffers that have low utilization.
+    ///
+    /// For each buffer, compute how many bytes are actually referenced by
+    /// views. If ≥90% is referenced, keep the buffer as-is (good locality
+    /// already). Otherwise, copy the referenced data into a new compacted
+    /// buffer for better locality. Also grows `max_block_size` (doubling)
+    /// up to `BYTE_VIEW_MAX_BLOCK_SIZE`.
     fn gc_buffers(&mut self) {
-        let mut new_in_progress = Vec::with_capacity(self.max_block_size);
-        let mut new_completed: Vec<Buffer> = Vec::new();
+        // Flush in_progress so all data is in completed
+        if !self.in_progress.is_empty() {
+            let flushed = replace(
+                &mut self.in_progress,
+                Vec::with_capacity(self.max_block_size),
+            );
+            self.completed.push(Buffer::from_vec(flushed));
+        }
 
+        // Count referenced bytes per buffer
+        let num_buffers = self.completed.len();
+        let mut referenced_per_buffer = vec![0usize; num_buffers];
+        for view in self.views.iter() {
+            let len = *view as u32;
+            if len <= 12 {
+                continue;
+            }
+            let bv = ByteView::from(*view);
+            let idx = bv.buffer_index as usize;
+            if idx < num_buffers {
+                referenced_per_buffer[idx] += bv.length as usize;
+            }
+        }
+
+        // Decide per buffer: keep (≥90% referenced) or compact
+        // Build a mapping from old buffer index to new buffer index
+        let mut old_to_new = vec![0u32; num_buffers];
+        let mut new_completed: Vec<Buffer> = Vec::new();
+        // For compacted buffers, we accumulate into new_in_progress
+        let mut new_in_progress = Vec::with_capacity(self.max_block_size);
+
+        for (old_idx, buffer) in self.completed.iter().enumerate() {
+            let referenced = referenced_per_buffer[old_idx];
+            let total = buffer.len();
+
+            if total > 0 && referenced * 10 >= total * 9 {
+                // ≥90% referenced: keep buffer as-is, assign new index
+                // First flush any in-progress compaction data
+                if !new_in_progress.is_empty() {
+                    let flushed = replace(
+                        &mut new_in_progress,
+                        Vec::with_capacity(self.max_block_size),
+                    );
+                    new_completed.push(Buffer::from_vec(flushed));
+                }
+                old_to_new[old_idx] = new_completed.len() as u32;
+                new_completed.push(buffer.clone());
+            } else {
+                // <90% referenced: will compact views from this buffer
+                // Mark with sentinel; views will be updated below
+                old_to_new[old_idx] = u32::MAX;
+            }
+        }
+
+        // Second pass: compact views that reference low-utilization buffers
         for view in self.views.iter_mut() {
             let len = *view as u32;
             if len <= 12 {
                 continue;
             }
+            let bv = ByteView::from(*view);
+            let old_idx = bv.buffer_index as usize;
 
-            let byte_view = ByteView::from(*view);
-            let buffer_index = byte_view.buffer_index as usize;
-            let offset = byte_view.offset as usize;
-            let length = byte_view.length as usize;
-
-            // Read value from old buffers
-            let value = if buffer_index < self.completed.len() {
-                unsafe {
+            if old_to_new[old_idx] != u32::MAX {
+                // Buffer was kept, just remap index
+                *view = ByteView::from(*view)
+                    .with_buffer_index(old_to_new[old_idx])
+                    .as_u128();
+            } else {
+                // Buffer is being compacted, copy data
+                let offset = bv.offset as usize;
+                let length = bv.length as usize;
+                let value = unsafe {
                     self.completed
-                        .get_unchecked(buffer_index)
+                        .get_unchecked(old_idx)
                         .as_slice()
                         .get_unchecked(offset..offset + length)
+                };
+
+                if new_in_progress.len() + length > self.max_block_size {
+                    let flushed = replace(
+                        &mut new_in_progress,
+                        Vec::with_capacity(self.max_block_size),
+                    );
+                    new_completed.push(Buffer::from_vec(flushed));
                 }
-            } else {
-                unsafe { self.in_progress.get_unchecked(offset..offset + length) }
-            };
 
-            // Rotate buffer if needed
-            if new_in_progress.len() + length > self.max_block_size {
-                let flushed = replace(
-                    &mut new_in_progress,
-                    Vec::with_capacity(self.max_block_size),
-                );
-                new_completed.push(Buffer::from_vec(flushed));
+                let new_buffer_index = new_completed.len() as u32;
+                let new_offset = new_in_progress.len() as u32;
+                new_in_progress.extend_from_slice(value);
+
+                *view = ByteView::from(*view)
+                    .with_buffer_index(new_buffer_index)
+                    .with_offset(new_offset)
+                    .as_u128();
             }
-
-            let new_buffer_index = new_completed.len() as u32;
-            let new_offset = new_in_progress.len() as u32;
-            new_in_progress.extend_from_slice(value);
-
-            *view = ByteView::from(*view)
-                .with_buffer_index(new_buffer_index)
-                .with_offset(new_offset)
-                .as_u128();
         }
 
         self.completed = new_completed;
         self.in_progress = new_in_progress;
         self.reused_buffer_bytes = 0;
+
+        // Double block size for future allocations (up to max)
+        self.max_block_size = (self.max_block_size * 2).min(BYTE_VIEW_MAX_BLOCK_SIZE);
     }
 
     // Don't inline to keep the code small and give LLVM the best chance of
