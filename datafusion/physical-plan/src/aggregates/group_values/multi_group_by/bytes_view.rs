@@ -69,6 +69,10 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     /// Nulls
     nulls: MaybeNullBufferBuilder,
 
+    /// Total bytes in `completed` buffers that came from input array buffer
+    /// reuse (not owned copies). Used to decide when to trigger GC.
+    reused_buffer_bytes: usize,
+
     /// phantom data so the type requires `<B>`
     _phantom: PhantomData<B>,
 }
@@ -87,6 +91,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             completed: Vec::new(),
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
             nulls: MaybeNullBufferBuilder::new(),
+            reused_buffer_bytes: 0,
             _phantom: PhantomData {},
         }
     }
@@ -158,6 +163,59 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             .as_u128()
     }
 
+    /// Compact buffers by copying only referenced non-inline data into
+    /// fresh `in_progress`/`completed` buffers, then dropping the old ones.
+    fn gc_buffers(&mut self) {
+        let mut new_in_progress = Vec::with_capacity(self.max_block_size);
+        let mut new_completed: Vec<Buffer> = Vec::new();
+
+        for view in self.views.iter_mut() {
+            let len = *view as u32;
+            if len <= 12 {
+                continue;
+            }
+
+            let byte_view = ByteView::from(*view);
+            let buffer_index = byte_view.buffer_index as usize;
+            let offset = byte_view.offset as usize;
+            let length = byte_view.length as usize;
+
+            // Read value from old buffers
+            let value = if buffer_index < self.completed.len() {
+                unsafe {
+                    self.completed
+                        .get_unchecked(buffer_index)
+                        .as_slice()
+                        .get_unchecked(offset..offset + length)
+                }
+            } else {
+                unsafe { self.in_progress.get_unchecked(offset..offset + length) }
+            };
+
+            // Rotate buffer if needed
+            if new_in_progress.len() + length > self.max_block_size {
+                let flushed = replace(
+                    &mut new_in_progress,
+                    Vec::with_capacity(self.max_block_size),
+                );
+                new_completed.push(Buffer::from_vec(flushed));
+            }
+
+            let new_buffer_index = new_completed.len() as u32;
+            let new_offset = new_in_progress.len() as u32;
+            new_in_progress.extend_from_slice(value);
+
+            *view = ByteView::from(*view)
+                .with_buffer_index(new_buffer_index)
+                .with_offset(new_offset)
+                .as_u128();
+        }
+
+        self.completed = new_completed;
+        self.in_progress = new_in_progress;
+        self.reused_buffer_bytes = 0;
+    }
+
     // Don't inline to keep the code small and give LLVM the best chance of
     // vectorizing the inner loop
     #[inline(never)]
@@ -199,113 +257,59 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         let input_views = arr.views();
 
-        // Pre-calculate total non-inline bytes so we can allocate once
-        let total_non_inline_bytes: usize = rows
-            .iter()
-            .map(|&row| {
-                let len = unsafe { *input_views.get_unchecked(row) } as u32;
-                if len <= 12 { 0 } else { len as usize }
-            })
-            .sum();
+        // Reuse input buffers: flush in_progress, add input data buffers
+        // to completed, then remap non-inline views' buffer_index.
+        if !self.in_progress.is_empty() {
+            let flushed = replace(
+                &mut self.in_progress,
+                Vec::with_capacity(self.max_block_size),
+            );
+            self.completed.push(Buffer::from_vec(flushed));
+        }
+        let base = self.completed.len() as u32;
+        let reused: usize = arr.data_buffers().iter().map(|b| b.len()).sum();
+        self.completed.extend(arr.data_buffers().iter().cloned());
+        self.reused_buffer_bytes += reused;
 
         match all_null_or_non_null {
             Nulls::Some => {
-                if total_non_inline_bytes == 0 {
-                    let Self { views, nulls, .. } = self;
-                    views.extend(rows.iter().map(|&row| {
-                        if arr.is_null(row) {
-                            nulls.append(true);
-                            0u128
-                        } else {
-                            nulls.append(false);
-                            unsafe { *input_views.get_unchecked(row) }
-                        }
-                    }));
-                } else {
-                    let Self {
-                        views,
-                        in_progress,
-                        completed,
-                        nulls,
-                        max_block_size,
-                        ..
-                    } = self;
-                    views.extend(rows.iter().map(|&row| {
-                        if arr.is_null(row) {
-                            nulls.append(true);
-                            0u128
-                        } else {
-                            nulls.append(false);
-                            let input_view = unsafe { *input_views.get_unchecked(row) };
-                            let len = input_view as u32;
-                            if len <= 12 {
-                                input_view
-                            } else {
-                                let value: &[u8] =
-                                    unsafe { arr.value_unchecked(row).as_ref() };
-                                let require_cap = in_progress.len() + value.len();
-                                if require_cap > *max_block_size {
-                                    let flushed_block = replace(
-                                        in_progress,
-                                        Vec::with_capacity(*max_block_size),
-                                    );
-                                    completed.push(Buffer::from_vec(flushed_block));
-                                }
-                                let buffer_index = completed.len() as u32;
-                                let offset = in_progress.len() as u32;
-                                in_progress.extend_from_slice(value);
-                                ByteView::from(input_view)
-                                    .with_buffer_index(buffer_index)
-                                    .with_offset(offset)
-                                    .as_u128()
-                            }
-                        }
-                    }));
-                }
-            }
-
-            Nulls::None => {
-                self.nulls.append_n(rows.len(), false);
-                if total_non_inline_bytes == 0 {
-                    // All inline - just copy views directly
-                    self.views.extend(
-                        rows.iter()
-                            .map(|&row| unsafe { *input_views.get_unchecked(row) }),
-                    );
-                } else {
-                    let Self {
-                        views,
-                        in_progress,
-                        completed,
-                        max_block_size,
-                        ..
-                    } = self;
-                    views.extend(rows.iter().map(|&row| {
+                let Self { views, nulls, .. } = self;
+                views.extend(rows.iter().map(|&row| {
+                    if arr.is_null(row) {
+                        nulls.append(true);
+                        0u128
+                    } else {
+                        nulls.append(false);
                         let input_view = unsafe { *input_views.get_unchecked(row) };
                         let len = input_view as u32;
                         if len <= 12 {
                             input_view
                         } else {
-                            let value: &[u8] =
-                                unsafe { arr.value_unchecked(row).as_ref() };
-                            let require_cap = in_progress.len() + value.len();
-                            if require_cap > *max_block_size {
-                                let flushed_block = replace(
-                                    in_progress,
-                                    Vec::with_capacity(*max_block_size),
-                                );
-                                completed.push(Buffer::from_vec(flushed_block));
-                            }
-                            let buffer_index = completed.len() as u32;
-                            let offset = in_progress.len() as u32;
-                            in_progress.extend_from_slice(value);
                             ByteView::from(input_view)
-                                .with_buffer_index(buffer_index)
-                                .with_offset(offset)
+                                .with_buffer_index(
+                                    ByteView::from(input_view).buffer_index + base,
+                                )
                                 .as_u128()
                         }
-                    }));
-                }
+                    }
+                }));
+            }
+
+            Nulls::None => {
+                self.nulls.append_n(rows.len(), false);
+                self.views.extend(rows.iter().map(|&row| {
+                    let input_view = unsafe { *input_views.get_unchecked(row) };
+                    let len = input_view as u32;
+                    if len <= 12 {
+                        input_view
+                    } else {
+                        ByteView::from(input_view)
+                            .with_buffer_index(
+                                ByteView::from(input_view).buffer_index + base,
+                            )
+                            .as_u128()
+                    }
+                }));
             }
 
             Nulls::All => {
@@ -313,6 +317,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                 let new_len = self.views.len() + rows.len();
                 self.views.resize(new_len, 0);
             }
+        }
+
+        // GC when reused buffer bytes exceed threshold to prevent
+        // unbounded memory growth from holding entire input buffers.
+        if self.reused_buffer_bytes > self.max_block_size * 2 {
+            self.gc_buffers();
         }
     }
 
