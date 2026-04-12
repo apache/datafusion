@@ -222,18 +222,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                         }
                     }));
                 } else {
-                    // Flush in_progress, allocate a single compacted buffer
-                    if !self.in_progress.is_empty() {
-                        let flushed = replace(
-                            &mut self.in_progress,
-                            Vec::with_capacity(self.max_block_size),
-                        );
-                        self.completed.push(Buffer::from_vec(flushed));
-                    }
-                    let buffer_index = self.completed.len() as u32;
-                    let mut buffer = Vec::with_capacity(total_non_inline_bytes);
-
-                    let Self { views, nulls, .. } = self;
+                    let Self {
+                        views,
+                        in_progress,
+                        completed,
+                        nulls,
+                        max_block_size,
+                        ..
+                    } = self;
                     views.extend(rows.iter().map(|&row| {
                         if arr.is_null(row) {
                             nulls.append(true);
@@ -247,8 +243,17 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                             } else {
                                 let value: &[u8] =
                                     unsafe { arr.value_unchecked(row).as_ref() };
-                                let offset = buffer.len() as u32;
-                                buffer.extend_from_slice(value);
+                                let require_cap = in_progress.len() + value.len();
+                                if require_cap > *max_block_size {
+                                    let flushed_block = replace(
+                                        in_progress,
+                                        Vec::with_capacity(*max_block_size),
+                                    );
+                                    completed.push(Buffer::from_vec(flushed_block));
+                                }
+                                let buffer_index = completed.len() as u32;
+                                let offset = in_progress.len() as u32;
+                                in_progress.extend_from_slice(value);
                                 ByteView::from(input_view)
                                     .with_buffer_index(buffer_index)
                                     .with_offset(offset)
@@ -256,8 +261,6 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                             }
                         }
                     }));
-
-                    self.completed.push(Buffer::from_vec(buffer));
                 }
             }
 
@@ -270,18 +273,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                             .map(|&row| unsafe { *input_views.get_unchecked(row) }),
                     );
                 } else {
-                    // Flush in_progress, allocate a single compacted buffer
-                    if !self.in_progress.is_empty() {
-                        let flushed = replace(
-                            &mut self.in_progress,
-                            Vec::with_capacity(self.max_block_size),
-                        );
-                        self.completed.push(Buffer::from_vec(flushed));
-                    }
-                    let buffer_index = self.completed.len() as u32;
-                    let mut buffer = Vec::with_capacity(total_non_inline_bytes);
-
-                    self.views.extend(rows.iter().map(|&row| {
+                    let Self {
+                        views,
+                        in_progress,
+                        completed,
+                        max_block_size,
+                        ..
+                    } = self;
+                    views.extend(rows.iter().map(|&row| {
                         let input_view = unsafe { *input_views.get_unchecked(row) };
                         let len = input_view as u32;
                         if len <= 12 {
@@ -289,16 +288,23 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                         } else {
                             let value: &[u8] =
                                 unsafe { arr.value_unchecked(row).as_ref() };
-                            let offset = buffer.len() as u32;
-                            buffer.extend_from_slice(value);
+                            let require_cap = in_progress.len() + value.len();
+                            if require_cap > *max_block_size {
+                                let flushed_block = replace(
+                                    in_progress,
+                                    Vec::with_capacity(*max_block_size),
+                                );
+                                completed.push(Buffer::from_vec(flushed_block));
+                            }
+                            let buffer_index = completed.len() as u32;
+                            let offset = in_progress.len() as u32;
+                            in_progress.extend_from_slice(value);
                             ByteView::from(input_view)
                                 .with_buffer_index(buffer_index)
                                 .with_offset(offset)
                                 .as_u128()
                         }
                     }));
-
-                    self.completed.push(Buffer::from_vec(buffer));
                 }
             }
 
