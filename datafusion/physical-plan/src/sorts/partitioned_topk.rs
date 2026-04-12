@@ -106,7 +106,7 @@ use crate::{
 /// ordering that is only grouped by some keys while ordered by others. For
 /// example:
 ///
-/// 
+///
 /// # Example
 ///
 /// For the query above with `fetch=3` and input:
