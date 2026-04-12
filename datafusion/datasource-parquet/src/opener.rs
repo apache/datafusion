@@ -39,7 +39,7 @@ use std::fmt;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 
 use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
@@ -173,14 +173,22 @@ impl fmt::Debug for ParquetMorselizer {
 /// with the same adapted expression inputs and physical schema.
 #[derive(Debug, Default)]
 pub(super) struct ParquetPruningSetupCache {
-    entries: Mutex<HashMap<ParquetPruningSetupCacheKey, ParquetPruningSetup>>,
+    entries:
+        Mutex<HashMap<ParquetPruningSetupCacheKey, Arc<ParquetPruningSetupCacheEntry>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParquetPruningSetupCacheKey {
+    // Schema coercions such as INT96 resolution and file-schema type coercions
+    // are included through the final physical schema used for adaptation.
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
+    // Page-index options are intentionally not part of this key because page
+    // pruning predicates are built after this cache entry is applied.
     predicate_ptr: Option<usize>,
+    // The projection and predicate are scan-level inputs once literal column
+    // replacement has been ruled out, so pointer identity is stable within the
+    // scan and avoids structural expression hashing.
     projection_expr_ptrs: Vec<usize>,
 }
 
@@ -210,11 +218,45 @@ struct ParquetPruningSetup {
     pruning_predicate: Option<Arc<PruningPredicate>>,
 }
 
+#[derive(Debug)]
+struct ParquetPruningSetupCacheEntry {
+    state: Mutex<ParquetPruningSetupCacheEntryState>,
+    ready: Condvar,
+}
+
+#[derive(Debug)]
+enum ParquetPruningSetupCacheEntryState {
+    Pending,
+    Ready(ParquetPruningSetup),
+    Failed(Arc<DataFusionError>),
+}
+
+impl ParquetPruningSetupCacheEntry {
+    fn pending() -> Self {
+        Self {
+            state: Mutex::new(ParquetPruningSetupCacheEntryState::Pending),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn state(&self) -> Result<MutexGuard<'_, ParquetPruningSetupCacheEntryState>> {
+        self.state.lock().map_err(|e| {
+            DataFusionError::External(Box::new(std::io::Error::other(format!(
+                "Parquet pruning setup cache entry lock poisoned: {e}"
+            ))))
+        })
+    }
+}
+
 impl ParquetPruningSetupCache {
     fn entries(
         &self,
-    ) -> Result<MutexGuard<'_, HashMap<ParquetPruningSetupCacheKey, ParquetPruningSetup>>>
-    {
+    ) -> Result<
+        MutexGuard<
+            '_,
+            HashMap<ParquetPruningSetupCacheKey, Arc<ParquetPruningSetupCacheEntry>>,
+        >,
+    > {
         self.entries.lock().map_err(|e| {
             DataFusionError::External(Box::new(std::io::Error::other(format!(
                 "Parquet pruning setup cache lock poisoned: {e}"
@@ -227,13 +269,59 @@ impl ParquetPruningSetupCache {
         key: ParquetPruningSetupCacheKey,
         make_setup: impl FnOnce() -> Result<ParquetPruningSetup>,
     ) -> Result<ParquetPruningSetup> {
-        if let Some(setup) = self.entries()?.get(&key) {
-            return Ok(setup.clone());
-        }
+        let (entry, should_compute) = {
+            let mut entries = self.entries()?;
+            if let Some(entry) = entries.get(&key) {
+                (Arc::clone(entry), false)
+            } else {
+                let entry = Arc::new(ParquetPruningSetupCacheEntry::pending());
+                entries.insert(key.clone(), Arc::clone(&entry));
+                (entry, true)
+            }
+        };
 
-        let setup = make_setup()?;
-        let mut entries = self.entries()?;
-        Ok(entries.entry(key).or_insert(setup).clone())
+        if should_compute {
+            let setup_result = make_setup();
+            let mut state = entry.state()?;
+            match setup_result {
+                Ok(setup) => {
+                    *state = ParquetPruningSetupCacheEntryState::Ready(setup.clone());
+                    entry.ready.notify_all();
+                    Ok(setup)
+                }
+                Err(e) => {
+                    let shared_error = Arc::new(e);
+                    *state = ParquetPruningSetupCacheEntryState::Failed(Arc::clone(
+                        &shared_error,
+                    ));
+                    entry.ready.notify_all();
+                    drop(state);
+                    self.entries()?.remove(&key);
+                    Err(DataFusionError::from(&shared_error))
+                }
+            }
+        } else {
+            let mut state = entry.state()?;
+            loop {
+                match &*state {
+                    ParquetPruningSetupCacheEntryState::Pending => {
+                        state = entry.ready.wait(state).map_err(|e| {
+                            DataFusionError::External(Box::new(std::io::Error::other(
+                                format!(
+                                    "Parquet pruning setup cache entry lock poisoned: {e}"
+                                ),
+                            )))
+                        })?;
+                    }
+                    ParquetPruningSetupCacheEntryState::Ready(setup) => {
+                        return Ok(setup.clone());
+                    }
+                    ParquetPruningSetupCacheEntryState::Failed(e) => {
+                        return Err(DataFusionError::from(e));
+                    }
+                }
+            }
+        }
     }
 }
 
