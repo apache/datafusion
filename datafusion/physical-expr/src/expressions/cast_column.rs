@@ -30,7 +30,6 @@ use datafusion_common::{
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::sort_properties::ExprProperties;
 use std::{
-    any::Any,
     fmt::{self, Display},
     hash::Hash,
     sync::Arc,
@@ -124,10 +123,6 @@ impl Display for CastColumnExpr {
 }
 
 impl PhysicalExpr for CastColumnExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.target_field.data_type().clone())
     }

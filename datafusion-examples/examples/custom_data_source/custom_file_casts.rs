@@ -182,7 +182,7 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
         // Now we can apply custom casting rules or even swap out all CastExprs for a custom cast kernel / expression
         // For example, [DataFusion Comet](https://github.com/apache/datafusion-comet) has a [custom cast kernel](https://github.com/apache/datafusion-comet/blob/b4ac876ab420ed403ac7fc8e1b29f42f1f442566/native/spark-expr/src/conversion_funcs/cast.rs#L133-L138).
         expr.transform(|expr| {
-            if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
+            if let Some(cast) = expr.downcast_ref::<CastExpr>() {
                 let input_data_type =
                     cast.expr().data_type(&self.physical_file_schema)?;
                 let output_data_type = cast.data_type(&self.physical_file_schema)?;
@@ -192,7 +192,7 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
                     );
                 }
             }
-            if let Some(cast) = expr.as_any().downcast_ref::<CastColumnExpr>() {
+            if let Some(cast) = expr.downcast_ref::<CastColumnExpr>() {
                 let input_data_type =
                     cast.expr().data_type(&self.physical_file_schema)?;
                 let output_data_type = cast.data_type(&self.physical_file_schema)?;

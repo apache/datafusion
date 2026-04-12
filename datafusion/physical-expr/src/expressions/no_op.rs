@@ -17,7 +17,6 @@
 
 //! NoOp placeholder for physical operations
 
-use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -49,11 +48,6 @@ impl std::fmt::Display for NoOp {
 }
 
 impl PhysicalExpr for NoOp {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(DataType::Null)
     }
