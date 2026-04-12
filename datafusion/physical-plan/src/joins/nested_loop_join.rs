@@ -949,9 +949,6 @@ pub(crate) struct NestedLoopJoinStream {
     left_stream: Option<SendableRecordBatchStream>,
     /// Memory reservation for left-side buffering in memory-limited mode
     left_reservation: Option<MemoryReservation>,
-    /// A batch that couldn't be added to the current chunk due to memory limit.
-    /// It will be the first batch in the next chunk.
-    left_stashed_batch: Option<RecordBatch>,
     /// Accumulated left batches for the current chunk (memory-limited mode)
     left_pending_batches: Vec<RecordBatch>,
     /// Left-side schema (for concat_batches in memory-limited mode)
@@ -1234,7 +1231,6 @@ impl NestedLoopJoinStream {
             // Memory-limited fields (inactive until OOM fallback)
             left_stream: None,
             left_reservation: None,
-            left_stashed_batch: None,
             left_pending_batches: Vec::new(),
             left_schema: None,
             spill_manager: None,
@@ -1302,7 +1298,6 @@ impl NestedLoopJoinStream {
         self.left_stream = Some(left_stream);
         self.left_schema = Some(left_schema);
         self.left_reservation = Some(reservation);
-        self.left_stashed_batch = None;
         self.left_pending_batches = Vec::new();
         self.spill_manager = Some(spill_manager);
         self.right_spill_in_progress = None;
@@ -1374,25 +1369,9 @@ impl NestedLoopJoinStream {
             .as_ref()
             .expect("left_reservation must be set in memory-limited mode");
 
-        // First, try to re-insert the stashed batch from a previous iteration
-        if let Some(stashed) = self.left_stashed_batch.take() {
-            let batch_size = stashed.get_array_memory_size();
-            if reservation.try_grow(batch_size).is_err() {
-                // Still can't fit even after freeing the previous chunk.
-                // This batch alone exceeds the memory budget.
-                // Buffer it anyway (we must make progress) using infallible grow.
-                reservation.grow(batch_size);
-            }
-            self.metrics.join_metrics.build_mem_used.add(batch_size);
-            self.metrics.join_metrics.build_input_batches.add(1);
-            self.metrics
-                .join_metrics
-                .build_input_rows
-                .add(stashed.num_rows());
-            self.left_pending_batches.push(stashed);
-        }
-
-        // Poll left stream for more batches
+        // Poll left stream for more batches.
+        // Note: left_pending_batches may already contain a batch from the
+        // previous chunk iteration (the batch that triggered the memory limit).
         loop {
             let left_stream = self
                 .left_stream
@@ -1407,15 +1386,15 @@ impl NestedLoopJoinStream {
                     let batch_size = batch.get_array_memory_size();
                     let can_grow = reservation.try_grow(batch_size).is_ok();
 
-                    if !can_grow {
-                        if !self.left_pending_batches.is_empty() {
-                            // Memory limit reached and we already have data.
-                            // Stash this batch for the next chunk.
-                            self.left_stashed_batch = Some(batch);
-                            self.left_exhausted = false;
-                            self.left_buffered_in_one_pass = false;
-                            break;
-                        }
+                    if !can_grow && !self.left_pending_batches.is_empty() {
+                        // Memory limit reached and we already have data.
+                        // Push this batch into pending (it's already in memory)
+                        // and stop buffering for this chunk.
+                        self.left_pending_batches.push(batch);
+                        self.left_exhausted = false;
+                        self.left_buffered_in_one_pass = false;
+                        break;
+                    } else if !can_grow {
                         // No pending batches yet — we must accept this batch
                         // to make progress, even if it exceeds the budget.
                         reservation.grow(batch_size);
