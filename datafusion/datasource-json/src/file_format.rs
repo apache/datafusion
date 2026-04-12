@@ -17,7 +17,6 @@
 
 //! [`JsonFormat`]: Line delimited and array JSON [`FileFormat`] abstractions
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
@@ -480,10 +479,6 @@ impl FileSink for JsonSink {
 
 #[async_trait]
 impl DataSink for JsonSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }

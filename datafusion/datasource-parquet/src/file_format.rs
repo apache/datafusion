@@ -17,7 +17,6 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -1465,10 +1464,6 @@ impl FileSink for ParquetSink {
 
 #[async_trait]
 impl DataSink for ParquetSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }

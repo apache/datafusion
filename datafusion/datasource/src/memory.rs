@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -768,10 +767,6 @@ impl MemSink {
 
 #[async_trait]
 impl DataSink for MemSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }

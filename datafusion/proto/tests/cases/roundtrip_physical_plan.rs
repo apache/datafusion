@@ -1645,11 +1645,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     )?;
 
     let roundtrip_plan = roundtrip_plan.downcast_ref::<DataSinkExec>().unwrap();
-    let csv_sink = roundtrip_plan
-        .sink()
-        .as_any()
-        .downcast_ref::<CsvSink>()
-        .unwrap();
+    let csv_sink = roundtrip_plan.sink().downcast_ref::<CsvSink>().unwrap();
     assert_eq!(
         CompressionTypeVariant::ZSTD,
         csv_sink.writer_options().compression

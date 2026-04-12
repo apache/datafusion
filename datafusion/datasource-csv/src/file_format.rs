@@ -17,7 +17,6 @@
 
 //! [`CsvFormat`], Comma Separated Value (CSV) [`FileFormat`] abstractions
 
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -816,10 +815,6 @@ impl FileSink for CsvSink {
 
 #[async_trait]
 impl DataSink for CsvSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }

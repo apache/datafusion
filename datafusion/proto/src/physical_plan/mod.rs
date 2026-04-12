@@ -3378,7 +3378,7 @@ impl protobuf::PhysicalPlanNode {
             None => None,
         };
 
-        if let Some(sink) = exec.sink().as_any().downcast_ref::<JsonSink>() {
+        if let Some(sink) = exec.sink().downcast_ref::<JsonSink>() {
             return Ok(Some(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(
                     protobuf::JsonSinkExecNode {
@@ -3391,7 +3391,7 @@ impl protobuf::PhysicalPlanNode {
             }));
         }
 
-        if let Some(sink) = exec.sink().as_any().downcast_ref::<CsvSink>() {
+        if let Some(sink) = exec.sink().downcast_ref::<CsvSink>() {
             return Ok(Some(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(
                     protobuf::CsvSinkExecNode {
@@ -3405,7 +3405,7 @@ impl protobuf::PhysicalPlanNode {
         }
 
         #[cfg(feature = "parquet")]
-        if let Some(sink) = exec.sink().as_any().downcast_ref::<ParquetSink>() {
+        if let Some(sink) = exec.sink().downcast_ref::<ParquetSink>() {
             return Ok(Some(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
                     protobuf::ParquetSinkExecNode {

@@ -19,7 +19,6 @@
 //!
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::{Seek, SeekFrom};
@@ -366,10 +365,6 @@ impl DisplayAs for ArrowFileSink {
 
 #[async_trait]
 impl DataSink for ArrowFileSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }
@@ -540,6 +535,8 @@ async fn is_object_in_arrow_ipc_file_format(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::any::Any;
 
     use chrono::DateTime;
     use datafusion_common::DFSchema;
