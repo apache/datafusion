@@ -16,7 +16,6 @@
 // under the License.
 
 //! ParquetSource implementation for reading parquet files
-use std::any::Any;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -582,10 +581,6 @@ impl FileSource for ParquetSource {
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
         }))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn table_schema(&self) -> &TableSchema {

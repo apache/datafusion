@@ -37,6 +37,7 @@ use datafusion_physical_plan::{
 };
 use itertools::Itertools;
 
+use crate::file::FileSource;
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -525,14 +526,15 @@ impl DataSourceExec {
     /// Returns `None` if
     /// 1. the datasource is not scanning files (`FileScanConfig`)
     /// 2. The [`FileScanConfig::file_source`] is not of type `T`
-    pub fn downcast_to_file_source<T: 'static>(&self) -> Option<(&FileScanConfig, &T)> {
+    pub fn downcast_to_file_source<T: FileSource>(
+        &self,
+    ) -> Option<(&FileScanConfig, &T)> {
         self.data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .and_then(|file_scan_conf| {
                 file_scan_conf
                     .file_source()
-                    .as_any()
                     .downcast_ref::<T>()
                     .map(|source| (file_scan_conf, source))
             })

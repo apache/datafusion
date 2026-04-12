@@ -63,7 +63,7 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
 /// * [`ParquetSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ParquetSource.html)
 ///
 /// [`DataSource`]: crate::source::DataSource
-pub trait FileSource: Send + Sync {
+pub trait FileSource: Any + Send + Sync {
     /// Creates a `dyn FileOpener` based on given parameters.
     ///
     /// Note: File sources with a native morsel implementation should return an
@@ -91,8 +91,6 @@ pub trait FileSource: Send + Sync {
         let opener = self.create_file_opener(object_store, base_config, partition)?;
         Ok(Box::new(FileOpenerMorselizer::new(opener)))
     }
-    /// Any
-    fn as_any(&self) -> &dyn Any;
 
     /// Returns the table schema for the overall table (including partition columns, if any)
     ///
@@ -362,4 +360,16 @@ pub trait FileSource: Send + Sync {
         &self,
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
+}
+
+impl dyn FileSource {
+    /// Returns `true` if this source is of type `T`.
+    pub fn is<T: FileSource>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this source to a concrete type `T`.
+    pub fn downcast_ref<T: FileSource>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }

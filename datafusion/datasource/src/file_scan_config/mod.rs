@@ -75,7 +75,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 ///
 /// # Example
 /// ```
-/// # use std::any::Any;
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
@@ -106,7 +105,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
-/// #  fn as_any(&self) -> &dyn Any { self  }
 /// #  fn table_schema(&self) -> &TableSchema { &self.table_schema }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
@@ -1407,10 +1405,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn table_schema(&self) -> &TableSchema {
             &self.table_schema
         }
@@ -2478,10 +2472,6 @@ mod tests {
             _partition: usize,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             unimplemented!()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn table_schema(&self) -> &TableSchema {

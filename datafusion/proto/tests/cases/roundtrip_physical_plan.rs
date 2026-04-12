@@ -981,7 +981,6 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
         })?;
     let parquet_source = file_scan
         .file_source()
-        .as_any()
         .downcast_ref::<ParquetSource>()
         .ok_or_else(|| {
             internal_datafusion_err!("Expected ParquetSource after roundtrip")

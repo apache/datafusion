@@ -2870,7 +2870,7 @@ impl protobuf::PhysicalPlanNode {
         let data_source = data_source_exec.data_source();
         if let Some(maybe_csv) = data_source.as_any().downcast_ref::<FileScanConfig>() {
             let source = maybe_csv.file_source();
-            if let Some(csv_config) = source.as_any().downcast_ref::<CsvSource>() {
+            if let Some(csv_config) = source.downcast_ref::<CsvSource>() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::CsvScan(
                         protobuf::CsvScanExecNode {
@@ -2912,7 +2912,7 @@ impl protobuf::PhysicalPlanNode {
 
         if let Some(scan_conf) = data_source.as_any().downcast_ref::<FileScanConfig>() {
             let source = scan_conf.file_source();
-            if let Some(_json_source) = source.as_any().downcast_ref::<JsonSource>() {
+            if let Some(_json_source) = source.downcast_ref::<JsonSource>() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::JsonScan(
                         protobuf::JsonScanExecNode {
@@ -2929,7 +2929,7 @@ impl protobuf::PhysicalPlanNode {
 
         if let Some(scan_conf) = data_source.as_any().downcast_ref::<FileScanConfig>() {
             let source = scan_conf.file_source();
-            if let Some(_arrow_source) = source.as_any().downcast_ref::<ArrowSource>() {
+            if let Some(_arrow_source) = source.downcast_ref::<ArrowSource>() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::ArrowScan(
                         protobuf::ArrowScanExecNode {
@@ -2970,7 +2970,7 @@ impl protobuf::PhysicalPlanNode {
         #[cfg(feature = "avro")]
         if let Some(maybe_avro) = data_source.as_any().downcast_ref::<FileScanConfig>() {
             let source = maybe_avro.file_source();
-            if source.as_any().downcast_ref::<AvroSource>().is_some() {
+            if source.downcast_ref::<AvroSource>().is_some() {
                 return Ok(Some(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::AvroScan(
                         protobuf::AvroScanExecNode {

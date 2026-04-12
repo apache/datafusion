@@ -450,7 +450,6 @@ impl FileFormat for CsvFormat {
         // We need to preserve the table_schema from the original source (which includes partition columns)
         let csv_source = conf
             .file_source
-            .as_any()
             .downcast_ref::<CsvSource>()
             .expect("file_source should be a CsvSource");
         let source = Arc::new(csv_source.clone().with_csv_options(csv_options));

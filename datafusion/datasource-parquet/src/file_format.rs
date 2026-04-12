@@ -516,7 +516,6 @@ impl FileFormat for ParquetFormat {
 
         let mut source = conf
             .file_source()
-            .as_any()
             .downcast_ref::<ParquetSource>()
             .cloned()
             .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
