@@ -19,7 +19,7 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray, make_view};
+use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
@@ -115,7 +115,47 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // Not null row case
         self.nulls.append(false);
-        self.do_append_val_inner(arr, row);
+        let input_view = unsafe { *arr.views().get_unchecked(row) };
+        let view = Self::copy_from_view(
+            input_view,
+            arr,
+            row,
+            &mut self.in_progress,
+            &mut self.completed,
+            self.max_block_size,
+        );
+        self.views.push(view);
+    }
+
+    /// Copy a non-null value from `arr[row]` into our buffers, reusing the
+    /// input view. For inline values (len <= 12) the view is returned as-is.
+    /// For non-inline values the data is copied and the view is updated with
+    /// our buffer_index/offset.
+    fn copy_from_view(
+        input_view: u128,
+        arr: &GenericByteViewArray<B>,
+        row: usize,
+        in_progress: &mut Vec<u8>,
+        completed: &mut Vec<Buffer>,
+        max_block_size: usize,
+    ) -> u128 {
+        let len = input_view as u32;
+        if len <= 12 {
+            return input_view;
+        }
+        let value: &[u8] = unsafe { arr.value_unchecked(row).as_ref() };
+        let require_cap = in_progress.len() + value.len();
+        if require_cap > max_block_size {
+            let flushed_block = replace(in_progress, Vec::with_capacity(max_block_size));
+            completed.push(Buffer::from_vec(flushed_block));
+        }
+        let buffer_index = completed.len() as u32;
+        let offset = in_progress.len() as u32;
+        in_progress.extend_from_slice(value);
+        ByteView::from(input_view)
+            .with_buffer_index(buffer_index)
+            .with_offset(offset)
+            .as_u128()
     }
 
     // Don't inline to keep the code small and give LLVM the best chance of
@@ -157,18 +197,57 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             Nulls::Some
         };
 
+        let input_views = arr.views();
+
         match all_null_or_non_null {
             Nulls::Some => {
-                for &row in rows {
-                    self.append_val_inner(array, row);
-                }
+                let Self {
+                    views,
+                    in_progress,
+                    completed,
+                    nulls,
+                    max_block_size,
+                    ..
+                } = self;
+                views.extend(rows.iter().map(|&row| {
+                    if arr.is_null(row) {
+                        nulls.append(true);
+                        0u128
+                    } else {
+                        nulls.append(false);
+                        let input_view = unsafe { *input_views.get_unchecked(row) };
+                        Self::copy_from_view(
+                            input_view,
+                            arr,
+                            row,
+                            in_progress,
+                            completed,
+                            *max_block_size,
+                        )
+                    }
+                }));
             }
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
-                }
+                let Self {
+                    views,
+                    in_progress,
+                    completed,
+                    max_block_size,
+                    ..
+                } = self;
+                views.extend(rows.iter().map(|&row| {
+                    let input_view = unsafe { *input_views.get_unchecked(row) };
+                    Self::copy_from_view(
+                        input_view,
+                        arr,
+                        row,
+                        in_progress,
+                        completed,
+                        *max_block_size,
+                    )
+                }));
             }
 
             Nulls::All => {
@@ -176,46 +255,6 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                 let new_len = self.views.len() + rows.len();
                 self.views.resize(new_len, 0);
             }
-        }
-    }
-
-    fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
-    where
-        B: ByteViewType,
-    {
-        let value: &[u8] = array.value(row).as_ref();
-
-        let value_len = value.len();
-        let view = if value_len <= 12 {
-            make_view(value, 0, 0)
-        } else {
-            // Ensure big enough block to hold the value firstly
-            self.ensure_in_progress_big_enough(value_len);
-
-            // Append value
-            let buffer_index = self.completed.len();
-            let offset = self.in_progress.len();
-            self.in_progress.extend_from_slice(value);
-
-            make_view(value, buffer_index as u32, offset as u32)
-        };
-
-        // Append view
-        self.views.push(view);
-    }
-
-    fn ensure_in_progress_big_enough(&mut self, value_len: usize) {
-        debug_assert!(value_len > 12);
-        let require_cap = self.in_progress.len() + value_len;
-
-        // If current block isn't big enough, flush it and create a new in progress block
-        if require_cap > self.max_block_size {
-            let flushed_block = replace(
-                &mut self.in_progress,
-                Vec::with_capacity(self.max_block_size),
-            );
-            let buffer = Buffer::from_vec(flushed_block);
-            self.completed.push(buffer);
         }
     }
 
