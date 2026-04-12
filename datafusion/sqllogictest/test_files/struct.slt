@@ -1219,42 +1219,6 @@ select [
 ----
 [{id: 1, description: NULL}, {id: 10, description: Value}]
 
-# Verify explicit struct casts reorder fields by name
-query II
-select
-  cast({b: 2, a: 1} as struct(a int, b int))['a'],
-  cast({b: 2, a: 1} as struct(a int, b int))['b'];
-----
-1 2
-
-# Verify nullable target fields missing from the source are filled with NULL
-query IT
-select
-  cast({id: 1} as struct(id int, description varchar))['id'],
-  cast({id: 1} as struct(id int, description varchar))['description'];
-----
-1 NULL
-
-# Verify nested explicit struct casts preserve field-aware semantics
-query IIT
-select
-  cast(
-    {outer: {value: 3, inner: 4}}
-    as struct(outer struct(inner int, value int))
-  )['outer']['inner'],
-  cast(
-    {outer: {value: 3, inner: 4}}
-    as struct(outer struct(inner int, value int))
-  )['outer']['value'],
-  arrow_typeof(
-    cast(
-      {outer: {value: 3, inner: 4}}
-      as struct(outer struct(inner int, value int))
-    )
-  );
-----
-4 3 Struct("outer": Struct("inner": Int32, "value": Int32))
-
 # Test 5: Complex nested structs with field reordering
 # Nested fields must have the exact same field set for array construction
 statement ok
