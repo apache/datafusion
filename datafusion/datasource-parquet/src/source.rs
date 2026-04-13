@@ -55,7 +55,7 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
 use object_store::ObjectStore;
 #[cfg(feature = "parquet_encryption")]
@@ -294,6 +294,8 @@ pub struct ParquetSource {
     /// so we still need to sort them after reading, so the reverse scan is inexact.
     /// Used to optimize ORDER BY ... DESC on sorted data.
     reverse_row_groups: bool,
+    /// Optional sort order used to reorder row groups by min/max statistics.
+    sort_order_for_reorder: Option<LexOrdering>,
 }
 
 impl ParquetSource {
@@ -319,6 +321,7 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            sort_order_for_reorder: None,
         }
     }
 
@@ -570,6 +573,7 @@ impl FileSource for ParquetSource {
                 encryption_factory: self.get_encryption_factory_with_config(),
                 max_predicate_cache_size: self.max_predicate_cache_size(),
                 reverse_row_groups: self.reverse_row_groups,
+                sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             },
         });
         Ok(opener)
@@ -817,7 +821,9 @@ impl FileSource for ParquetSource {
 
         // Return Inexact because we're only reversing row group order,
         // not guaranteeing perfect row-level ordering
-        let new_source = self.clone().with_reverse_row_groups(true);
+        let sort_order = LexOrdering::new(order.iter().cloned());
+        let mut new_source = self.clone().with_reverse_row_groups(true);
+        new_source.sort_order_for_reorder = sort_order;
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
