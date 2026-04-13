@@ -106,13 +106,14 @@ impl StringArrayBuilder {
         }
     }
 
-    pub fn append_offset(&mut self) {
+    pub fn append_offset(&mut self) -> Result<()> {
         let next_offset: i32 = self
             .value_buffer
             .len()
             .try_into()
-            .expect("byte array offset overflow");
+            .map_err(|_| exec_datafusion_err!("byte array offset overflow"))?;
         self.offsets_buffer.push(next_offset);
+        Ok(())
     }
 
     /// Finalize the builder into a concrete [`StringArray`].
@@ -231,9 +232,11 @@ impl StringViewArrayBuilder {
 
         let v = &self.block;
         if v.len() > 12 {
-            let offset: u32 = self.data.len().try_into().map_err(|_| {
-                exec_datafusion_err!("StringView data buffer overflow")
-            })?;
+            let offset: u32 = self
+                .data
+                .len()
+                .try_into()
+                .map_err(|_| exec_datafusion_err!("byte array offset overflow"))?;
             self.data.extend_from_slice(v);
             self.views.push(make_view(v, 0, offset));
         } else {
@@ -360,13 +363,14 @@ impl LargeStringArrayBuilder {
         }
     }
 
-    pub fn append_offset(&mut self) {
+    pub fn append_offset(&mut self) -> Result<()> {
         let next_offset: i64 = self
             .value_buffer
             .len()
             .try_into()
-            .expect("byte array offset overflow");
+            .map_err(|_| exec_datafusion_err!("byte array offset overflow"))?;
         self.offsets_buffer.push(next_offset);
+        Ok(())
     }
 
     /// Finalize the builder into a concrete [`LargeStringArray`].
