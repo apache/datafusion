@@ -87,7 +87,7 @@ logical_plan
 01)Projection: array_transform(make_array(t.number), (v) -> CAST(v AS Float64) + Float64(3))
 02)--TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> CAST(v@ AS Float64) + 3) as array_transform(make_array(t.number),(v) -> v + Float64(3))]
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> CAST(v@0 AS Float64) + 3) as array_transform(make_array(t.number),(v) -> v + Float64(3))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 #cse should not eliminate subtrees containing lambdas
@@ -110,7 +110,7 @@ logical_plan
 02)--Projection: make_array(t.number) AS __common_expr_1
 03)----TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[array_transform(__common_expr_1@0, (v) -> CAST(v@ AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(__common_expr_1@0, (v) -> CAST(v@ AS Int64) * 2 - 1) as array_transform(make_array(t.number),(v) -> v * Int64(2) - Int64(1))]
+01)ProjectionExec: expr=[array_transform(__common_expr_1@0, (v) -> CAST(v@0 AS Int64) * 2) as array_transform(make_array(t.number),(v) -> v * Int64(2)), array_transform(__common_expr_1@0, (v) -> CAST(v@0 AS Int64) * 2 - 1) as array_transform(make_array(t.number),(v) -> v * Int64(2) - Int64(1))]
 02)--ProjectionExec: expr=[make_array(number@0) as __common_expr_1]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -130,7 +130,7 @@ logical_plan
 01)Projection: array_transform(make_array(t.number), (v) -> v IS NOT NULL OR Boolean(NULL)) AS array_transform(make_array(t.number),(v) -> v = v)
 02)--TableScan: t projection=[number]
 physical_plan
-01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> v@ IS NOT NULL OR NULL) as array_transform(make_array(t.number),(v) -> v = v)]
+01)ProjectionExec: expr=[array_transform(make_array(number@0), (v) -> v@0 IS NOT NULL OR NULL) as array_transform(make_array(t.number),(v) -> v = v)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -142,7 +142,7 @@ logical_plan
 01)Projection: array_transform(CAST(CAST(t.list AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a AS Int64) + Int64(1)) AS array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))
 02)--TableScan: t projection=[list]
 physical_plan
-01)ProjectionExec: expr=[array_transform(CAST(CAST(list@0 AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a@ AS Int64) + 1) as array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))]
+01)ProjectionExec: expr=[array_transform(CAST(CAST(list@0 AS ListView(Int32)) AS List(Int32)), (a) -> CAST(a@0 AS Int64) + 1) as array_transform(arrow_cast(t.list,Utf8("ListView(Int32)")),(a) -> a + Int64(1))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ?

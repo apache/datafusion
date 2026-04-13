@@ -78,7 +78,7 @@ impl LambdaVariable {
 
 impl std::fmt::Display for LambdaVariable {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}@", self.name)
+        write!(f, "{}@{}", self.name(), self.index)
     }
 }
 
@@ -130,7 +130,7 @@ impl PhysicalExpr for LambdaVariable {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
+        write!(f, "{}@{}", self.name(), self.index)
     }
 }
 
