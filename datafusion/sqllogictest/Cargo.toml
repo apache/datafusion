@@ -93,3 +93,8 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 harness = false
 name = "sqllogictests"
 path = "bin/sqllogictests.rs"
+
+# Required because we pull serde_json with a feature to get consistent pg display,
+# but its not directly used.
+[package.metadata.cargo-machete]
+ignored = "serde_json"
