@@ -645,7 +645,7 @@ config_namespace! {
         /// improving performance for high-cardinality GROUP BY queries.
         /// A value of 0 disables early emission. Only applies to Partial
         /// aggregation mode with unordered input.
-        pub partial_aggregation_group_count_emit_threshold: usize, default = 10000
+        pub partial_aggregation_group_count_emit_threshold: usize, default = 100000
 
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
