@@ -43,9 +43,9 @@ use std::sync::Arc;
 
 /// Result of sorting files within groups by their min/max statistics.
 pub(crate) struct SortedFileGroups {
-    file_groups: Vec<FileGroup>,
-    any_reordered: bool,
-    all_non_overlapping: bool,
+    pub(crate) file_groups: Vec<FileGroup>,
+    pub(crate) any_reordered: bool,
+    pub(crate) all_non_overlapping: bool,
 }
 
 impl FileScanConfig {

@@ -976,14 +976,53 @@ impl DataSource for FileScanConfig {
         &self,
         group_exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Option<Arc<dyn DataSource>>> {
-        match self.file_source.try_pushdown_groupby_order(group_exprs)? {
-            Some(new_source) => {
-                let mut new_config = self.clone();
-                new_config.file_source = new_source;
-                Ok(Some(Arc::new(new_config)))
-            }
-            None => Ok(None),
+        use sort_pushdown::{
+            ordered_column_indices_from_projection,
+            sort_files_within_groups_by_statistics,
+        };
+
+        // Build a LexOrdering from the first grouping key (ASC).
+        let first_expr = match group_exprs.first() {
+            Some(expr) => Arc::clone(expr),
+            None => return Ok(None),
+        };
+        let sort_order =
+            match LexOrdering::new(vec![PhysicalSortExpr::new_default(first_expr)]) {
+                Some(order) => order,
+                None => return Ok(None),
+            };
+
+        // Sort files within each partition by grouping key statistics.
+        let projected_schema = self.projected_schema()?;
+        let projection_indices = self
+            .file_source
+            .projection()
+            .as_ref()
+            .and_then(|p| ordered_column_indices_from_projection(p));
+        let result = sort_files_within_groups_by_statistics(
+            &self.file_groups,
+            &sort_order,
+            &projected_schema,
+            projection_indices.as_deref(),
+        );
+
+        // Also push down to the file source (e.g. ParquetSource) for
+        // intra-file row group reordering.
+        let new_source = self.file_source.try_pushdown_groupby_order(group_exprs)?;
+
+        // Apply if either files were reordered or the file source accepted.
+        if !result.any_reordered && new_source.is_none() {
+            return Ok(None);
         }
+
+        let mut new_config = self.clone();
+        if result.any_reordered {
+            new_config.file_groups = result.file_groups;
+        }
+        if let Some(source) = new_source {
+            new_config.file_source = source;
+        }
+        Ok(Some(Arc::new(new_config)))
     }
 
     fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
