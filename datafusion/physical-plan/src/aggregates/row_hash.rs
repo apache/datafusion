@@ -502,10 +502,8 @@ impl GroupedHashAggregateStream {
             .iter()
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
-        println!("aggregation input schema: {:#?}", agg.input().schema());
 
         let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
-        println!("(group_schema): {group_schema:#?}");
 
         // fix https://github.com/apache/datafusion/issues/13949
         // Builds a **partial aggregation** schema by combining the group columns and
@@ -943,24 +941,15 @@ impl GroupedHashAggregateStream {
         } else {
             evaluate_optional(&self.filter_expressions, batch)?
         };
-        println!("group_by_values: {:#?}", group_by_values);
 
         for group_values in &group_by_values {
             let groups_start_time = Instant::now();
 
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            println!(
-                "pre group_values.intern() call to self.current_group_indices: {:#?}",
-                self.current_group_indices
-            );
             self.group_values
                 .intern(group_values, &mut self.current_group_indices)?;
             let group_indices = &self.current_group_indices;
-            println!(
-                "post group_values.intern() call to self.current_group_indices: {:#?}",
-                self.current_group_indices
-            );
 
             // Update ordering information if necessary
             let total_num_groups = self.group_values.len();
@@ -1793,24 +1782,8 @@ mod dictionary_aggregation {
         // verify we got 3 groups - one per distinct region
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
-        println!("record batches: {:#?}", batches);
+        dbg!("record batches: {:#?}", batches);
 
-        Ok(())
-    }
-    #[test]
-    fn test_new_group_values_hits_dictionary() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "region",
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
-            false,
-        )]));
-
-        // this is the call that routes to new_group_values internally
-        let group_values = new_group_values(schema, &GroupOrdering::None)?;
-
-        // currently falls through to GroupValuesRows
-        // this is where your Dictionary arm would intercept it
-        assert_eq!(group_values.len(), 0);
         Ok(())
     }
 }
