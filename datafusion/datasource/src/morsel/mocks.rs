@@ -251,6 +251,12 @@ pub(crate) struct MockPlanBuilder {
     pending_planner: Option<MockPendingPlanner>,
 }
 
+impl From<MockPlanBuilder> for PlannerStep {
+    fn from(builder: MockPlanBuilder) -> Self {
+        builder.build()
+    }
+}
+
 impl MockPlanBuilder {
     /// Create an empty mock plan.
     pub(crate) fn new() -> Self {
@@ -276,16 +282,6 @@ impl MockPlanBuilder {
             morsel_id,
             batch_ids,
         });
-        self
-    }
-
-    /// Add ready planners produced by this planning step.
-    #[allow(dead_code)]
-    pub(crate) fn with_ready_planners(
-        mut self,
-        ready_planners: Vec<MockPlanner>,
-    ) -> Self {
-        self.ready_planners.extend(ready_planners);
         self
     }
 
@@ -320,6 +316,12 @@ pub(crate) struct PendingPlannerBuilder {
     io_future_id: IoFutureId,
     polls_to_resolve: PollsToResolve,
     result: std::result::Result<(), MockError>,
+}
+
+impl From<PendingPlannerBuilder> for MockPlanBuilder {
+    fn from(builder: PendingPlannerBuilder) -> Self {
+        builder.build()
+    }
 }
 
 impl PendingPlannerBuilder {
@@ -364,9 +366,16 @@ pub(crate) struct MockPlannerBuilder {
     steps: Vec<PlannerStep>,
 }
 
+impl From<MockPlannerBuilder> for MockPlanner {
+    fn from(value: MockPlannerBuilder) -> Self {
+        value.build()
+    }
+}
+
 impl MockPlannerBuilder {
-    pub(crate) fn add_plan_step(mut self, plan: MockPlanBuilder) -> Self {
-        self.steps.push(plan.build());
+    pub(crate) fn add_plan(mut self, builder: impl Into<MockPlanBuilder>) -> Self {
+        let builder = builder.into();
+        self.steps.push(builder.build());
         self
     }
 

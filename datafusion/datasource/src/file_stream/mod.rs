@@ -690,9 +690,8 @@ mod tests {
     async fn morsel_no_io() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(10), 42))
-                .return_none()
-                .build(),
+                .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 42))
+                .return_none(),
         );
 
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
@@ -718,17 +717,15 @@ mod tests {
     async fn morsel_single_io_two_batches() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .add_plan_step(
+                .add_plan(
                     PendingPlannerBuilder::new(IoFutureId(1))
-                        .with_polls_to_resolve(PollsToResolve(1))
-                        .build(),
+                        .with_polls_to_resolve(PollsToResolve(1)),
                 )
-                .add_plan_step(
+                .add_plan(
                     MockPlanBuilder::new()
                         .with_morsel_batches(MorselId(10), vec![42, 43]),
                 )
-                .return_none()
-                .build(),
+                .return_none(),
         );
 
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
@@ -761,11 +758,10 @@ mod tests {
     async fn morsel_two_ios_one_batch() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .add_plan_step(PendingPlannerBuilder::new(IoFutureId(1)).build())
-                .add_plan_step(PendingPlannerBuilder::new(IoFutureId(2)).build())
-                .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(10), 42))
-                .return_none()
-                .build(),
+                .add_plan(PendingPlannerBuilder::new(IoFutureId(1)).build())
+                .add_plan(PendingPlannerBuilder::new(IoFutureId(2)).build())
+                .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 42))
+                .return_none(),
         );
 
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
@@ -797,13 +793,10 @@ mod tests {
     #[tokio::test]
     async fn morsel_io_error() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
-            MockPlanner::builder("file1.parquet")
-                .add_plan_step(
-                    PendingPlannerBuilder::new(IoFutureId(1))
-                        .with_error("io failed while opening file")
-                        .build(),
-                )
-                .build(),
+            MockPlanner::builder("file1.parquet").add_plan(
+                PendingPlannerBuilder::new(IoFutureId(1))
+                    .with_error("io failed while opening file"),
+            ),
         );
 
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
@@ -828,14 +821,13 @@ mod tests {
     async fn morsel_pending_planner_does_not_block_active_reader() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .add_plan_step(
+                .add_plan(
                     MockPlanBuilder::new()
                         .with_morsel_batches(MorselId(10), vec![41, 42])
                         .with_pending_planner(IoFutureId(1), PollsToResolve(3), Ok(())),
                 )
-                .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(11), 43))
-                .return_none()
-                .build(),
+                .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 43))
+                .return_none(),
         );
 
         // The key events are:
@@ -878,9 +870,8 @@ mod tests {
     async fn morsel_plan_error_after_io() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .add_plan_step(PendingPlannerBuilder::new(IoFutureId(1)).build())
-                .return_error("planner failed after io")
-                .build(),
+                .add_plan(PendingPlannerBuilder::new(IoFutureId(1)))
+                .return_error("planner failed after io"),
         );
 
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
@@ -906,15 +897,13 @@ mod tests {
         let test = FileStreamMorselTest::new()
             .with_file(
                 MockPlanner::builder("file1.parquet")
-                    .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(10), 41))
-                    .return_none()
-                    .build(),
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 41))
+                    .return_none(),
             )
             .with_file(
                 MockPlanner::builder("file2.parquet")
-                    .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(11), 42))
-                    .return_none()
-                    .build(),
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 42))
+                    .return_none(),
             );
 
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
@@ -948,18 +937,16 @@ mod tests {
         let test = FileStreamMorselTest::new()
             .with_file(
                 MockPlanner::builder("file1.parquet")
-                    .add_plan_step(
+                    .add_plan(
                         MockPlanBuilder::new()
                             .with_morsel_batches(MorselId(10), vec![41, 42]),
                     )
-                    .return_none()
-                    .build(),
+                    .return_none(),
             )
             .with_file(
                 MockPlanner::builder("file2.parquet")
-                    .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(11), 43))
-                    .return_none()
-                    .build(),
+                    .add_plan(MockPlanBuilder::new().with_morsel(MorselId(11), 43))
+                    .return_none(),
             )
             .with_limit(1);
 
@@ -999,7 +986,8 @@ mod tests {
         }
 
         /// Adds one file and its root planner to the test input.
-        fn with_file(mut self, planner: MockPlanner) -> Self {
+        fn with_file(mut self, planner: impl Into<MockPlanner>) -> Self {
+            let planner = planner.into();
             self.file_names.push(planner.file_path().to_string());
             self.morselizer = self.morselizer.with_file(planner);
             self
