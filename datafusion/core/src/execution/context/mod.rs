@@ -320,7 +320,7 @@ impl SessionContext {
                 let schema = cat
                     .schema(schema_name.as_str())
                     .ok_or_else(|| internal_datafusion_err!("Schema not found!"))?;
-                let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
+                let lister = schema.downcast_ref::<ListingSchemaProvider>();
                 if let Some(lister) = lister {
                     lister.refresh(&self.state()).await?;
                 }

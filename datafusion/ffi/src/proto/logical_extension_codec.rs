@@ -562,7 +562,7 @@ mod tests {
         ) -> Result<()> {
             buf.push(Self::MAGIC_NUMBER);
 
-            if !node.as_any().is::<MemTable>() {
+            if !node.is::<MemTable>() {
                 return exec_err!("TestExtensionCodec only expects MemTable");
             };
 
@@ -637,7 +637,7 @@ mod tests {
             ctx.task_ctx().as_ref(),
         )?;
 
-        assert!(returned_table.as_any().is::<MemTable>());
+        assert!(returned_table.is::<MemTable>());
 
         Ok(())
     }

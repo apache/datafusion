@@ -629,17 +629,17 @@ impl FileSource for ParquetSource {
                     write!(f, ", reverse_row_groups=true")?;
                 }
 
-                // Try to build a the pruning predicates.
+                // Try to build the pruning predicates.
                 // These are only generated here because it's useful to have *some*
                 // idea of what pushdown is happening when viewing plans.
-                // However it is important to note that these predicates are *not*
+                // However, it is important to note that these predicates are *not*
                 // necessarily the predicates that are actually evaluated:
                 // the actual predicates are built in reference to the physical schema of
                 // each file, which we do not have at this point and hence cannot use.
-                // Instead we use the logical schema of the file (the table schema without partition columns).
+                // Instead, we use the logical schema of the file (the table schema without partition columns).
                 if let Some(predicate) = &self.predicate {
                     let predicate_creation_errors = Count::new();
-                    if let (Some(pruning_predicate), _) = build_pruning_predicates(
+                    if let Some(pruning_predicate) = build_pruning_predicates(
                         Some(predicate),
                         self.table_schema.table_schema(),
                         &predicate_creation_errors,
