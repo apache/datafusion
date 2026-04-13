@@ -210,6 +210,23 @@ fn criterion_benchmark(c: &mut Criterion) {
         );
     }
 
+    // Utf8View, very long parts (256 bytes), position 1
+    {
+        let strings = gen_string_array(N_ROWS, 5, 256, ".", true);
+        let delimiter = ColumnarValue::Scalar(ScalarValue::Utf8View(Some(".".into())));
+        let position = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
+        bench_split_part(
+            &mut group,
+            &split_part_func,
+            &config_options,
+            "scalar_utf8view_very_long_parts",
+            "pos_first",
+            strings,
+            delimiter,
+            position,
+        );
+    }
+
     // ── Array delimiter and position ─────────────────
 
     // Utf8, single-char delimiter, array args

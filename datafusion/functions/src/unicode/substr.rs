@@ -17,13 +17,13 @@
 
 use std::sync::Arc;
 
-use crate::strings::make_and_append_view;
+use crate::strings::append_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, AsArray, Int64Array, NullBufferBuilder, StringArrayType,
-    StringViewArray, StringViewBuilder,
+    Array, ArrayRef, AsArray, Int64Array, StringArrayType, StringViewArray,
+    StringViewBuilder,
 };
-use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
@@ -278,15 +278,16 @@ fn string_view_substr(
     let enable_ascii_fast_path =
         enable_ascii_fast_path(&string_view_array, start_array, count_array_opt);
 
-    let mut views_buf = Vec::with_capacity(string_view_array.len());
-    let mut null_builder = NullBufferBuilder::new(string_view_array.len());
+    // Combine null bitmaps from all inputs in bulk.
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_view_array.nulls(), start_array.nulls()).as_ref(),
+        count_array_opt.and_then(|a| a.nulls()),
+    );
 
-    for i in 0..string_view_array.len() {
-        if string_view_array.is_null(i)
-            || start_array.is_null(i)
-            || count_array_opt.map(|a| a.is_null(i)).unwrap_or(false)
-        {
-            null_builder.append_null();
+    let mut views_buf = Vec::with_capacity(string_view_array.len());
+
+    for (i, raw_view) in string_view_array.views().iter().enumerate() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
             views_buf.push(0);
             continue;
         }
@@ -294,23 +295,15 @@ fn string_view_substr(
         let string = string_view_array.value(i);
         let start = start_array.value(i);
         let count = count_array_opt.map(|a| a.value(i));
-        let raw_view = string_view_array.views()[i];
 
         let (start, end) =
             get_true_start_end(string, start, count, enable_ascii_fast_path)?;
         let substr = &string[start..end];
 
-        make_and_append_view(
-            &mut views_buf,
-            &mut null_builder,
-            &raw_view,
-            substr,
-            start as u32,
-        );
+        append_view(&mut views_buf, raw_view, substr, start as u32);
     }
 
     let views_buf = ScalarBuffer::from(views_buf);
-    let nulls_buf = null_builder.finish();
 
     // Safety:
     // (1) The blocks of the given views are all provided
@@ -320,7 +313,7 @@ fn string_view_substr(
         let array = StringViewArray::new_unchecked(
             views_buf,
             string_view_array.data_buffers().to_vec(),
-            nulls_buf,
+            nulls,
         );
         Ok(Arc::new(array) as ArrayRef)
     }
@@ -336,13 +329,16 @@ where
     let enable_ascii_fast_path =
         enable_ascii_fast_path(&string_array, start_array, count_array_opt);
 
+    // Combine null bitmaps from all inputs in bulk.
+    let nulls = NullBuffer::union(
+        NullBuffer::union(string_array.nulls(), start_array.nulls()).as_ref(),
+        count_array_opt.and_then(|a| a.nulls()),
+    );
+
     let mut result_builder = StringViewBuilder::new();
 
     for i in 0..string_array.len() {
-        if string_array.is_null(i)
-            || start_array.is_null(i)
-            || count_array_opt.map(|a| a.is_null(i)).unwrap_or(false)
-        {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
             result_builder.append_null();
             continue;
         }

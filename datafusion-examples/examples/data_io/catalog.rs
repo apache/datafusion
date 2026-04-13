@@ -32,7 +32,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use std::sync::RwLock;
-use std::{any::Any, collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 use std::{fs::File, io::Write};
 use tempfile::TempDir;
 
@@ -178,10 +178,6 @@ impl DirSchema {
 
 #[async_trait]
 impl SchemaProvider for DirSchema {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         let tables = self.tables.read().unwrap();
         tables.keys().cloned().collect::<Vec<_>>()
@@ -231,10 +227,6 @@ impl DirCatalog {
 }
 
 impl CatalogProvider for DirCatalog {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_schema(
         &self,
         name: &str,
@@ -277,10 +269,6 @@ impl CustomCatalogProviderList {
 }
 
 impl CatalogProviderList for CustomCatalogProviderList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,

@@ -21,7 +21,7 @@ use datafusion_common::{Result, exec_datafusion_err, internal_err};
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, BinaryArray, ByteView, LargeStringArray,
-    NullBufferBuilder, StringArray, StringViewArray, StringViewBuilder, make_view,
+    StringArray, StringViewArray, StringViewBuilder, make_view,
 };
 use arrow::buffer::{MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
@@ -372,7 +372,9 @@ impl LargeStringArrayBuilder {
     }
 }
 
-/// Append a new view to the views buffer with the given substr
+/// Append a new view to the views buffer with the given substr.
+///
+/// Callers are responsible for their own null tracking.
 ///
 /// # Safety
 ///
@@ -381,13 +383,15 @@ impl LargeStringArrayBuilder {
 ///
 /// # Arguments
 /// - views_buffer: The buffer to append the new view to
-/// - null_builder: The buffer to append the null value to
 /// - original_view: The original view value
 /// - substr: The substring to append. Must be a valid substring of the original view
 /// - start_offset: The start offset of the substring in the view
-pub fn make_and_append_view(
+///
+/// LLVM is apparently overly eager to inline this function into some hot loops,
+/// which bloats them and regresses performance, so we disable inling for now.
+#[inline(never)]
+pub fn append_view(
     views_buffer: &mut Vec<u128>,
-    null_builder: &mut NullBufferBuilder,
     original_view: &u128,
     substr: &str,
     start_offset: u32,
@@ -401,11 +405,9 @@ pub fn make_and_append_view(
             view.offset + start_offset,
         )
     } else {
-        // inline value does not need block id or offset
         make_view(substr.as_bytes(), 0, 0)
     };
     views_buffer.push(sub_view);
-    null_builder.append_non_null();
 }
 
 #[derive(Debug)]

@@ -26,7 +26,7 @@ use std::vec;
 
 use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
-use datafusion_common::{DataFusionError, Result, assert_contains};
+use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
     ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, col, logical_plan::LogicalPlan,
@@ -35,7 +35,7 @@ use datafusion_expr::{
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{NullOrdering, ParserOptions, SqlToRel},
+    planner::{NullOrdering, ParserOptions, PlannerContext, SqlToRel},
 };
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
@@ -52,6 +52,7 @@ use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+use sqlparser::parser::Parser;
 
 mod cases;
 mod common;
@@ -252,6 +253,25 @@ fn within_group_rejected_for_non_ordered_set_udaf() {
         err,
         "WITHIN GROUP is only supported for ordered-set aggregate functions"
     );
+}
+
+#[test]
+fn typed_literal_without_string_payload_returns_error() {
+    let sql_expr = Parser::new(&GenericDialect {})
+        .try_with_sql("time 17542368000000000")
+        .unwrap()
+        .parse_expr()
+        .unwrap();
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+
+    let err = sql_to_rel
+        .sql_to_expr(sql_expr, &DFSchema::empty(), &mut PlannerContext::new())
+        .expect_err("planning invalid typed literals should return an error");
+
+    assert_contains!(err.to_string(), "Typed literal requires a string payload");
 }
 
 #[test]
@@ -2650,6 +2670,106 @@ fn union_all_by_name_same_column_names() {
       Projection: order_id
         Projection: orders.order_id
           TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn union_all_with_duplicate_expressions() {
+    let sql = "\
+        SELECT 0 a, 0 b \
+        UNION ALL SELECT 1, 1 \
+        UNION ALL SELECT count(*), count(*) FROM orders";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Union
+      Union
+        Projection: Int64(0) AS a, Int64(0) AS b
+          EmptyRelation: rows=1
+        Projection: Int64(1) AS a, Int64(1) AS b
+          EmptyRelation: rows=1
+      Projection: count(*) AS a, count(*) AS b
+        Aggregate: groupBy=[[]], aggr=[[count(*)]]
+          TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn union_with_qualified_and_duplicate_expressions() {
+    let sql = "\
+        SELECT 0 a, id b, price c, 0 d FROM test_decimal \
+        UNION SELECT 1, *, 1 FROM test_decimal";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @"
+    Distinct:
+      Union
+        Projection: Int64(0) AS a, test_decimal.id AS b, test_decimal.price AS c, Int64(0) AS d
+          TableScan: test_decimal
+        Projection: Int64(1) AS a, test_decimal.id, test_decimal.price, Int64(1) AS d
+          TableScan: test_decimal
+    "
+    );
+}
+
+#[test]
+fn intersect_with_duplicate_expressions() {
+    let sql = "\
+        SELECT 0 a, 0 b \
+        INTERSECT SELECT 1, 1 \
+        INTERSECT SELECT count(*), count(*) FROM orders";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    LeftSemi Join: left.a = right.a, left.b = right.b
+      Distinct:
+        SubqueryAlias: left
+          LeftSemi Join: left.a = right.a, left.b = right.b
+            Distinct:
+              SubqueryAlias: left
+                Projection: Int64(0) AS a, Int64(0) AS b
+                  EmptyRelation: rows=1
+            SubqueryAlias: right
+              Projection: Int64(1) AS a, Int64(1) AS b
+                EmptyRelation: rows=1
+      SubqueryAlias: right
+        Projection: count(*) AS a, count(*) AS b
+          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn except_with_duplicate_expressions() {
+    let sql = "\
+        SELECT 0 a, 0 b \
+        EXCEPT SELECT 1, 1 \
+        EXCEPT SELECT count(*), count(*) FROM orders";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    LeftAnti Join: left.a = right.a, left.b = right.b
+      Distinct:
+        SubqueryAlias: left
+          LeftAnti Join: left.a = right.a, left.b = right.b
+            Distinct:
+              SubqueryAlias: left
+                Projection: Int64(0) AS a, Int64(0) AS b
+                  EmptyRelation: rows=1
+            SubqueryAlias: right
+              Projection: Int64(1) AS a, Int64(1) AS b
+                EmptyRelation: rows=1
+      SubqueryAlias: right
+        Projection: count(*) AS a, count(*) AS b
+          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+            TableScan: orders
     "
     );
 }
