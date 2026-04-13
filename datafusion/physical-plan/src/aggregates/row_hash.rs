@@ -461,6 +461,10 @@ pub(crate) struct GroupedHashAggregateStream {
     /// is emitted at end-of-input.
     overflow_passthrough: bool,
 
+    /// Maximum table size for emit+reset strategy (used for distinct
+    /// aggregates where overflow passthrough is not applicable).
+    emit_reset_max_table_size: usize,
+
     // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
@@ -673,21 +677,36 @@ impl GroupedHashAggregateStream {
             None
         };
 
-        // Overflow passthrough requires convert_to_state support
-        // (same requirement as skip_aggregation_probe) and no distinct
-        // aggregates (convert_to_state for distinct produces per-row
-        // state objects that are catastrophically expensive to merge).
+        // Two strategies for keeping the hash table cache-friendly:
+        //
+        // 1. Overflow passthrough (non-distinct): convert overflow
+        //    batches to state via convert_to_state. Fast, no
+        //    serialization of accumulated groups.
+        //
+        // 2. Emit+reset (distinct): emit accumulated state via state()
+        //    and reset the hash table. Works for distinct aggregates
+        //    where convert_to_state produces catastrophically expensive
+        //    per-row state.
         let has_distinct = aggregate_exprs.iter().any(|e| e.is_distinct());
-        let overflow_passthrough_max_table_size = if agg.mode == AggregateMode::Partial
+        let max_table_size = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
-            && skip_aggregation_probe.is_some()
-            && !has_distinct
         {
             context
                 .session_config()
                 .options()
                 .execution
                 .partial_aggregation_max_table_size
+        } else {
+            0
+        };
+        let overflow_passthrough_max_table_size =
+            if max_table_size > 0 && skip_aggregation_probe.is_some() && !has_distinct {
+                max_table_size
+            } else {
+                0
+            };
+        let emit_reset_max_table_size = if max_table_size > 0 && has_distinct {
+            max_table_size
         } else {
             0
         };
@@ -725,6 +744,7 @@ impl GroupedHashAggregateStream {
             skip_aggregation_probe,
             overflow_passthrough_max_table_size,
             overflow_passthrough: false,
+            emit_reset_max_table_size,
             reduction_factor,
         })
     }
@@ -869,6 +889,29 @@ impl Stream for GroupedHashAggregateStream {
                                 if table_size >= self.overflow_passthrough_max_table_size
                                 {
                                     self.overflow_passthrough = true;
+                                }
+                            }
+
+                            // Emit+reset: for distinct aggregates, emit all
+                            // accumulated state and reset the hash table.
+                            // Uses state() which compactly serializes distinct
+                            // HashSets, unlike convert_to_state which explodes.
+                            if self.emit_reset_max_table_size > 0 {
+                                let table_size = self.group_values.size()
+                                    + self
+                                        .accumulators
+                                        .iter()
+                                        .map(|x| x.size())
+                                        .sum::<usize>();
+                                if table_size >= self.emit_reset_max_table_size {
+                                    let batch_size = self.batch_size;
+                                    if let Some(batch) = self.emit(EmitTo::All, false)? {
+                                        self.clear_shrink(batch_size);
+                                        timer.done();
+                                        self.exec_state =
+                                            ExecutionState::ProducingOutput(batch);
+                                        break 'reading_input;
+                                    }
                                 }
                             }
 
