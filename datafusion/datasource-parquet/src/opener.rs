@@ -50,6 +50,7 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
     MetricCategory, PruningMetrics,
@@ -136,6 +137,10 @@ pub(super) struct ParquetMorselizer {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Optional sort order used to reorder row groups by their min/max statistics.
+    /// When set, row groups are reordered before reading so that row groups likely
+    /// to contain optimal values (for TopK queries) are read first.
+    pub sort_order_for_reorder: Option<LexOrdering>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -286,6 +291,7 @@ struct PreparedParquetOpen {
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
     reverse_row_groups: bool,
+    sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -655,6 +661,7 @@ impl ParquetMorselizer {
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
             reverse_row_groups: self.reverse_row_groups,
+            sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
@@ -1125,6 +1132,16 @@ impl RowGroupsPrunedParquetOpen {
 
         // Prepare the access plan (extract row groups and row selection)
         let mut prepared_plan = access_plan.prepare(rg_metadata)?;
+
+        // Reorder row groups by statistics if sort order is known.
+        // This helps TopK queries find optimal values first.
+        if let Some(sort_order) = &prepared.sort_order_for_reorder {
+            prepared_plan = prepared_plan.reorder_by_statistics(
+                sort_order,
+                file_metadata.as_ref(),
+                &prepared.physical_file_schema,
+            )?;
+        }
 
         // Potentially reverse the access plan for performance.
         // See `ParquetSource::try_pushdown_sort` for the rationale.
@@ -1644,6 +1661,7 @@ mod test {
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::StreamExt;
     use futures::stream::BoxStream;
@@ -1675,6 +1693,7 @@ mod test {
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
+        sort_order_for_reorder: Option<LexOrdering>,
         preserve_order: bool,
     }
 
@@ -1701,6 +1720,7 @@ mod test {
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
+                sort_order_for_reorder: None,
                 preserve_order: false,
             }
         }
@@ -1816,6 +1836,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                sort_order_for_reorder: self.sort_order_for_reorder,
             }
         }
     }
@@ -1840,7 +1861,6 @@ mod test {
 
             let Some(planner) = planners.pop_front() else {
                 return Ok(Box::pin(futures::stream::empty()));
-            };
 
             if let Some(mut plan) = planner.plan()? {
                 morsels.extend(plan.take_morsels());
