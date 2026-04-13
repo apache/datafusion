@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -228,10 +227,6 @@ struct StrictOrdersSchema {
 
 #[async_trait]
 impl SchemaProvider for StrictOrdersSchema {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         vec!["orders".to_string()]
     }
@@ -359,10 +354,6 @@ pub async fn register_temp_table(ctx: &SessionContext) {
 
     #[async_trait]
     impl TableProvider for TestTable {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn schema(&self) -> SchemaRef {
             unimplemented!()
         }

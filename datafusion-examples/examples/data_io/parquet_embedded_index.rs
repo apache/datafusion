@@ -393,9 +393,6 @@ fn get_key_value<'a>(file_meta_data: &'a FileMetaData, key: &'_ str) -> Option<&
 /// Implement TableProvider for DistinctIndexTable, using the distinct index to prune files
 #[async_trait]
 impl TableProvider for DistinctIndexTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

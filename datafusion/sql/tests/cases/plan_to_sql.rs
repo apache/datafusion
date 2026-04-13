@@ -1938,6 +1938,28 @@ fn test_without_offset() {
 }
 
 #[test]
+fn test_cast_to_tinyint() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(3 as tinyint)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT CAST(3 AS SMALLINT)",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_tinyint_default_dialect() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(3 as tinyint)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT CAST(3 AS TINYINT)",
+    );
+    Ok(())
+}
+
+#[test]
 fn test_with_offset0() {
     let statement = generate_round_trip_statement(MySqlDialect {}, "select 1 offset 0");
     assert_snapshot!(
@@ -2725,6 +2747,17 @@ fn test_unparse_window() -> Result<()> {
         @r#"SELECT "k", "v", "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "k" AS "k", "v" AS "v", rank() OVER (PARTITION BY "k" ORDER BY "v" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "test"."k" AS "k", "test"."v" AS "v" FROM "test") AS "derived_projection") AS "__qualify_subquery" WHERE ("rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" = 1)"#
     );
 
+    Ok(())
+}
+
+#[test]
+fn test_array_to_sql_postgres() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT [1, 2, 3, 4, 5]",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT ARRAY[1, 2, 3, 4, 5]",
+    );
     Ok(())
 }
 

@@ -134,6 +134,11 @@ required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
+name = "lcm"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "nanvl"
 required-features = ["math_expressions"]
 
@@ -179,6 +184,16 @@ required-features = ["datetime_expressions"]
 [[bench]]
 harness = false
 name = "to_char"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "to_local_time"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "to_time"
 required-features = ["datetime_expressions"]
 
 [[bench]]

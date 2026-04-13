@@ -95,7 +95,7 @@ const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
 ///
 /// See the [table on `AggregateMode`](AggregateMode#variants-and-their-inputoutput-modes)
 /// for how this relates to aggregate modes.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum AggregateInputMode {
     /// The stage consumes raw, unaggregated input data and calls
     /// [`Accumulator::update_batch`].
@@ -110,7 +110,7 @@ pub enum AggregateInputMode {
 ///
 /// See the [table on `AggregateMode`](AggregateMode#variants-and-their-inputoutput-modes)
 /// for how this relates to aggregate modes.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum AggregateOutputMode {
     /// The stage produces intermediate accumulator state, serialized via
     /// [`Accumulator::state`].
@@ -138,7 +138,7 @@ pub enum AggregateOutputMode {
 ///
 /// Use [`AggregateMode::input_mode`] and [`AggregateMode::output_mode`]
 /// to query these properties.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum AggregateMode {
     /// One of multiple layers of aggregation, any input partitioning
     ///
