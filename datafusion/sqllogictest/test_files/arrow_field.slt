@@ -120,3 +120,16 @@ true
 
 statement ok
 DROP TABLE arrow_field_test;
+
+# arrow_field on a column that carries field metadata
+# (table_with_metadata is registered by the Rust test harness)
+query ?
+SELECT arrow_field(id) FROM table_with_metadata LIMIT 1
+----
+{name: id, data_type: Int32, nullable: true, metadata: {metadata_key: the id field}}
+
+# arrow_field metadata field access
+query ?
+SELECT arrow_field(id)['metadata'] FROM table_with_metadata LIMIT 1
+----
+{metadata_key: the id field}
