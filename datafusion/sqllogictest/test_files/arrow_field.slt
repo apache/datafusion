@@ -133,3 +133,14 @@ query ?
 SELECT arrow_field(id)['metadata'] FROM table_with_metadata LIMIT 1
 ----
 {metadata_key: the id field}
+
+# arrow_field nullability field access
+query I
+SELECT count(*) FROM table_with_metadata WHERE NOT arrow_field(id)['nullable']
+----
+0
+
+query I
+SELECT count(*) FROM table_with_metadata WHERE arrow_field(id)['nullable']
+----
+3
