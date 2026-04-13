@@ -16,16 +16,68 @@
 # under the License.
 
 query T
-SELECT make_valid_utf8(NULL);
-----
-NULL
-
-query T
 SELECT make_valid_utf8('Spark'::string);
 ----
 Spark
 
 query T
-SELECT make_valid_utf8('61'::bytea);
+SELECT make_valid_utf8(''::string);
 ----
-a
+(empty)
+
+query T
+SELECT make_valid_utf64(NULL::string);
+----
+NULL
+
+query T
+SELECT make_valid_utf8(x'C3A9'::string);  -- é
+----
+é
+
+query T
+SELECT make_valid_utf8(x'F0908C80'::string);
+----
+𐌀
+
+query T
+SELECT make_valid_utf8(x'ED9FBF'::string);
+----
+�
+
+query T
+SELECT make_valid_utf8(x'FF'::string);
+----
+
+query T
+SELECT make_valid_utf8(x'C0AF'::string);
+----
+��
+
+query T
+SELECT make_valid_utf8(x'F4808080'::string);
+----
+���
+
+query T
+SELECT make_valid_utf8(x'ED A0 BD ED B2 A9'::string);
+----
+���
+
+query T
+SELECT make_valid_utf8(repeat(x'80'::string, 100));
+----
+
+query T
+SELECT make_valid_utf8(x'F0'::string);
+----
+
+query T
+SELECT make_valid_utf8(x'E0'::string);
+----
+(empty)
+
+query T
+SELECT make_valid_utf8(x'F0808080'::string);
+----
+���
