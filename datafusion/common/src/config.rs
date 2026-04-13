@@ -639,6 +639,14 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
+        /// Maximum number of groups to accumulate in partial aggregation
+        /// before emitting intermediate state and resetting the hash table.
+        /// This keeps the hash table small enough to fit in CPU cache,
+        /// improving performance for high-cardinality GROUP BY queries.
+        /// A value of 0 disables early emission. Only applies to Partial
+        /// aggregation mode with unordered input.
+        pub partial_aggregation_group_count_emit_threshold: usize, default = 10000
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.

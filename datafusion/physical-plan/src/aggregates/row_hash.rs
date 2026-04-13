@@ -437,6 +437,12 @@ pub(crate) struct GroupedHashAggregateStream {
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
+    /// Threshold for early emission during partial aggregation.
+    /// When the number of groups exceeds this threshold, emit all
+    /// accumulated state and reset the hash table to maintain cache locality.
+    /// A value of 0 means early emission is disabled.
+    early_emit_group_threshold: usize,
+
     // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
@@ -649,6 +655,18 @@ impl GroupedHashAggregateStream {
             None
         };
 
+        let early_emit_group_threshold = if agg.mode == AggregateMode::Partial
+            && matches!(group_ordering, GroupOrdering::None)
+        {
+            context
+                .session_config()
+                .options()
+                .execution
+                .partial_aggregation_group_count_emit_threshold
+        } else {
+            0
+        };
+
         let reduction_factor = if agg.mode == AggregateMode::Partial {
             Some(
                 MetricBuilder::new(&agg.metrics)
@@ -680,6 +698,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
+            early_emit_group_threshold,
             reduction_factor,
         })
     }
@@ -776,6 +795,25 @@ impl Stream for GroupedHashAggregateStream {
                                 {
                                     timer.done();
                                     self.exec_state = new_state;
+                                    break 'reading_input;
+                                }
+                            }
+
+                            // Early emission: when the hash table exceeds the
+                            // configured group threshold, emit accumulated state
+                            // and reset. This keeps the hash table small enough
+                            // to fit in CPU cache for better performance on
+                            // high-cardinality GROUP BY queries.
+                            if self.early_emit_group_threshold > 0
+                                && self.group_values.len()
+                                    >= self.early_emit_group_threshold
+                            {
+                                let batch_size = self.batch_size;
+                                if let Some(batch) = self.emit(EmitTo::All, false)? {
+                                    self.clear_shrink(batch_size);
+                                    timer.done();
+                                    self.exec_state =
+                                        ExecutionState::ProducingOutput(batch);
                                     break 'reading_input;
                                 }
                             }
