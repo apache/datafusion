@@ -104,12 +104,13 @@ impl<K:ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K>  
             // A. if it has grab the corresponding initail group integer assigned to it
             // B. if it has not its group integer is self.seen_elements.len - 1 and then store this mapping
         for i in 0..key_array.len() {
-            if key_array.is_null(i){
-                // Null case -> skip!
-                continue;
-            }
-            let key = key_array.value(i).as_usize();
-            let scalar_value = ScalarValue::try_from_array(values, key)?;
+            let scalar_value = match key_array.is_null(i) {
+                true => ScalarValue::try_from(&self.value_dt)?,
+                false => {
+                    let key = key_array.value(i).to_usize().unwrap();
+                    ScalarValue::try_from_array(values, key)?},
+                
+            };
             let group_id = if let Some(group_id) = self.unique_dict_value_mapping.get(&scalar_value) {
                 *group_id
             } else {
@@ -680,6 +681,7 @@ mod group_values_trait_test {
 
     mod data_correctness {
         use super::*;
+        use arrow::array::Int32Array;
 
         pub fn test_group_assignment_order(group_values_trait_obj: &mut dyn GroupValues) {
             let dict_array =
@@ -842,5 +844,55 @@ mod group_values_trait_test {
             let mut group_values = GroupValuesDictionary::<arrow::datatypes::UInt8Type>::new(&DataType::Utf8);
             test_emit_restores_intern_ability(&mut group_values);
         }
+        fn test_null_keys_form_single_group(group_values: &mut dyn GroupValues) -> Result<()> {
+        // keys: [0, null, 1, null, 0]
+        // values: ["a", "b"]
+        // null keys should all map to the same group
+        let keys = Int32Array::from(vec![Some(0), None, Some(1), None, Some(0)]);
+        let values = StringArray::from(vec!["a", "b"]);
+        let dict = Arc::new(DictionaryArray::new(keys, Arc::new(values))) as ArrayRef;
+
+        let mut groups = Vec::new();
+        group_values.intern(&[dict], &mut groups)?;
+
+        // should have 3 groups: "a", "b", null
+        assert_eq!(group_values.len(), 3);
+        // null rows (index 1 and 3) should map to same group
+        assert_eq!(groups[1], groups[3]);
+        // non null rows should map to correct groups
+        assert_eq!(groups[0], groups[4]); // both "a"
+        assert_ne!(groups[0], groups[2]); // "a" != "b"
+        Ok(())
     }
+    #[test]
+    fn run_test_null_keys_form_single_group() {
+        let mut group_values = GroupValuesDictionary::<arrow::datatypes::Int32Type>::new(&DataType::Utf8);
+        test_null_keys_form_single_group(&mut group_values).unwrap();
+    }
+
+    fn test_null_values_in_dictionary_form_single_group(group_values: &mut dyn GroupValues) -> Result<()> {
+        // keys: [0, 1, 2, 1, 0]
+        // values: ["a", null, "b"]
+        // keys pointing to null value should all map to same group
+        let keys = Int32Array::from(vec![0, 1, 2, 1, 0]);
+        let values = StringArray::from(vec![Some("a"), None, Some("b")]);
+        let dict = Arc::new(DictionaryArray::new(keys, Arc::new(values))) as ArrayRef;
+
+        let mut groups = Vec::new();
+        group_values.intern(&[dict], &mut groups)?;
+
+        // should have 3 groups: "a", null, "b"
+        assert_eq!(group_values.len(), 3);
+        // rows pointing to null value (index 1 and 3) should map to same group
+        assert_eq!(groups[1], groups[3]);
+        // non null rows should map correctly
+        assert_eq!(groups[0], groups[4]); // both "a"
+        assert_ne!(groups[0], groups[2]); // "a" != "b"
+        Ok(())
+    }
+    #[test]
+    fn run_test_null_values_in_dictionary_form_single_group() {
+        let mut group_values = GroupValuesDictionary::<arrow::datatypes::Int32Type>::new(&DataType::Utf8);
+        test_null_values_in_dictionary_form_single_group(&mut group_values).unwrap();
+    }}
 }
