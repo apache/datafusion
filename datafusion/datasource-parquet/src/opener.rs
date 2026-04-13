@@ -2681,8 +2681,8 @@ mod test {
         // predicate: a > 90 — should allow page index to prune first 9 pages
         let predicate = logical2physical(&col("a").gt(lit(90i32)), &schema);
 
-        let make_opener = |enable_page_index| {
-            ParquetOpenerBuilder::new()
+        let make_morselizer = |enable_page_index| {
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_predicate(Arc::clone(&predicate))
@@ -2693,12 +2693,15 @@ mod test {
                 .build()
         };
         let (_, rows_with_page_index) = count_batches_and_rows(
-            make_opener(true).open(file.clone()).unwrap().await.unwrap(),
+            open_file(&make_morselizer(true), file.clone())
+                .await
+                .unwrap(),
         )
         .await;
-        let (_, rows_without_page_index) =
-            count_batches_and_rows(make_opener(false).open(file).unwrap().await.unwrap())
-                .await;
+        let (_, rows_without_page_index) = count_batches_and_rows(
+            open_file(&make_morselizer(false), file).await.unwrap(),
+        )
+        .await;
 
         assert_eq!(
             rows_with_page_index, 10,
