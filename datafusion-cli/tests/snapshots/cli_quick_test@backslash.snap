@@ -12,6 +12,6 @@ info:
 success: true
 exit_code: 0
 ----- stdout -----
-[{"Utf8(\"\\\")":"\\","Utf8(\"\\\\\")":"\\\\","Utf8(\"\\\\\\\\\\\")":"\\\\\\\\\\","Utf8(\"dsdsds\\\\\\\\\")":"dsdsds\\\\\\\\","Utf8(\"\\t\")":"\\t","Utf8(\"\\0\")":"\\0","Utf8(\"\\n\")":"\\n"}]
+[{"backslash1":"\\","backslash2":"\\","backslash3":"\\\\\\","text_backslashes":"dsdsds\\\\","tab_char":"\t","null_char":"\u0000","newline_char":"\n"}]
 
 ----- stderr -----

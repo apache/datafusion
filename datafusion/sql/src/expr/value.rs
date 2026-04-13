@@ -49,7 +49,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
-            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
+            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => {
+                Ok(lit(unescape_string_literal(&s)?))
+            }
             Value::Null => Ok(Expr::Literal(ScalarValue::Null, None)),
             Value::Boolean(n) => Ok(lit(n)),
             Value::Placeholder(param) => {
@@ -63,7 +65,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
             Value::DollarQuotedString(s) => Ok(lit(s.value)),
-            Value::EscapedStringLiteral(s) => Ok(lit(s)),
+            Value::EscapedStringLiteral(s) => Ok(lit(unescape_string_literal(&s)?)),
             _ => plan_err!("Unsupported Value '{value:?}'"),
         }
     }
@@ -305,6 +307,62 @@ fn interval_literal(interval_value: SQLExpr, negative: bool) -> Result<String> {
     if negative { Ok(format!("-{s}")) } else { Ok(s) }
 }
 
+fn unescape_string_literal(s: &str) -> Result<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+
+        let Some(next) = chars.next() else {
+            out.push('\\');
+            break;
+        };
+
+        match next {
+            '0' => out.push('\0'),
+            'b' => out.push('\u{0008}'),
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'Z' => out.push('\u{001A}'),
+            '\\' => out.push('\\'),
+            '\'' => out.push('\''),
+            '"' => out.push('"'),
+            '%' => out.push('%'),
+            '_' => out.push('_'),
+
+            '0'..='7' => {
+                let mut octal = String::new();
+                octal.push(next);
+
+                for _ in 0..2 {
+                    match chars.peek() {
+                        Some('0'..='7') => {
+                            octal.push(chars.next().unwrap());
+                        }
+                        _ => break,
+                    }
+                }
+
+                let value = u8::from_str_radix(&octal, 8).map_err(|_| {
+                    DataFusionError::from(ParserError(format!(
+                        "Invalid octal escape sequence: \\{octal}"
+                    )))
+                })?;
+                out.push(value as char);
+            }
+
+            other => out.push(other),
+        }
+    }
+
+    Ok(out)
+}
+
 /// Try to decode bytes from hex literal string.
 ///
 /// None will be returned if the input literal is hex-invalid.
@@ -421,6 +479,34 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unescape_string_literal_basic_escapes() {
+        assert_eq!(unescape_string_literal(r"\t hello").unwrap(), "\t hello");
+        assert_eq!(unescape_string_literal(r"\n hello").unwrap(), "\n hello");
+        assert_eq!(unescape_string_literal(r"\r hello").unwrap(), "\r hello");
+        assert_eq!(unescape_string_literal(r"\\").unwrap(), "\\");
+        assert_eq!(unescape_string_literal(r"it\'s").unwrap(), "it's");
+        assert_eq!(unescape_string_literal(r#"a\"b"#).unwrap(), "a\"b");
+    }
+
+    #[test]
+    fn test_unescape_string_literal_octal() {
+        assert_eq!(unescape_string_literal(r"\101").unwrap(), "A");
+        assert_eq!(unescape_string_literal(r"\141").unwrap(), "a");
+        assert_eq!(unescape_string_literal(r"\7").unwrap(), "\x07");
+    }
+
+    #[test]
+    fn test_unescape_string_literal_unknown_escape() {
+        assert_eq!(unescape_string_literal(r"\x").unwrap(), "x");
+        assert_eq!(unescape_string_literal(r"abc\qdef").unwrap(), "abcqdef");
+    }
+
+    #[test]
+    fn test_unescape_string_literal_trailing_backslash() {
+        assert_eq!(unescape_string_literal("abc\\").unwrap(), "abc\\");
+    }
 
     #[test]
     fn test_decode_hex_literal() {
