@@ -261,6 +261,20 @@ pub trait FileSource: Send + Sync {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
+    /// Try to optimize this file source for grouping by the given expressions.
+    ///
+    /// When a file source can reorder its internal data (e.g., row groups in
+    /// Parquet) to improve locality for grouping operations, it should return
+    /// a modified file source.
+    ///
+    /// Default implementation returns `Ok(None)`.
+    fn try_pushdown_groupby_order(
+        &self,
+        _group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        Ok(None)
+    }
+
     /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should

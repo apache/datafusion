@@ -829,6 +829,33 @@ impl FileSource for ParquetSource {
         })
     }
 
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        // If sort pushdown already set the reorder, don't overwrite it
+        if self.sort_order_for_reorder.is_some() {
+            return Ok(None);
+        }
+
+        // Take the first group expression
+        let first_expr = match group_exprs.first() {
+            Some(expr) => Arc::clone(expr),
+            None => return Ok(None),
+        };
+
+        // Create ASC sort order from the first grouping key.
+        // This causes row groups to be reordered by the grouping key's
+        // min statistics, which clusters similar group values together
+        // for better aggregation hash table locality.
+        let sort_expr = PhysicalSortExpr::new_default(first_expr);
+        let sort_order = LexOrdering::new(vec![sort_expr]);
+
+        let mut new_source = self.clone();
+        new_source.sort_order_for_reorder = sort_order;
+        Ok(Some(Arc::new(new_source)))
+    }
+
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(

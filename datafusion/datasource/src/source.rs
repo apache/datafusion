@@ -210,6 +210,24 @@ pub trait DataSource: Send + Sync + Debug {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
+    /// Try to optimize this data source for grouping by the given expressions.
+    ///
+    /// When a data source can reorder its internal data (e.g., row groups in
+    /// Parquet) to improve locality for grouping operations, it should return
+    /// a modified data source. This reduces the active cardinality of
+    /// aggregation hash tables and improves CPU cache locality.
+    ///
+    /// Returns `Ok(Some(source))` with the optimized source, or `Ok(None)` if
+    /// this source cannot optimize for grouping.
+    ///
+    /// Default implementation returns `Ok(None)`.
+    fn try_pushdown_groupby_order(
+        &self,
+        _group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        Ok(None)
+    }
+
     /// Returns a variant of this `DataSource` that is aware of order-sensitivity.
     fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
         None
@@ -446,6 +464,19 @@ impl ExecutionPlan for DataSourceExec {
                 let new_exec = self.clone().with_data_source(new_data_source);
                 Ok(Arc::new(new_exec) as Arc<dyn ExecutionPlan>)
             })
+    }
+
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        match self.data_source.try_pushdown_groupby_order(group_exprs)? {
+            Some(new_data_source) => {
+                let new_exec = self.clone().with_data_source(new_data_source);
+                Ok(Some(Arc::new(new_exec) as Arc<dyn ExecutionPlan>))
+            }
+            None => Ok(None),
+        }
     }
 
     fn with_preserve_order(

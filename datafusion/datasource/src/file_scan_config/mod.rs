@@ -972,6 +972,20 @@ impl DataSource for FileScanConfig {
         }
     }
 
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        match self.file_source.try_pushdown_groupby_order(group_exprs)? {
+            Some(new_source) => {
+                let mut new_config = self.clone();
+                new_config.file_source = new_source;
+                Ok(Some(Arc::new(new_config)))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
         if self.preserve_order == preserve_order {
             return Some(Arc::new(self.clone()));

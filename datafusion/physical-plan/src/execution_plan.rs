@@ -777,6 +777,25 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
+    /// Try to optimize this plan for grouping by the given expressions.
+    ///
+    /// When a data source can reorder its internal data (e.g., row groups in
+    /// Parquet) to improve locality for grouping operations, it should return
+    /// a modified plan. Reordering row groups by grouping key statistics
+    /// reduces the active cardinality of aggregation hash tables and improves
+    /// CPU cache locality.
+    ///
+    /// Returns `Ok(Some(plan))` with the optimized plan, or `Ok(None)` if
+    /// this node cannot optimize for grouping.
+    ///
+    /// Default implementation returns `Ok(None)`.
+    fn try_pushdown_groupby_order(
+        &self,
+        _group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
+
     /// Returns a variant of this `ExecutionPlan` that is aware of order-sensitivity.
     ///
     /// This is used to signal to data sources that the output ordering must be

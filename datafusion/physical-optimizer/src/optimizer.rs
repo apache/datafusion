@@ -39,6 +39,7 @@ use crate::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
+use crate::reorder_by_group_keys::ReorderByGroupKeys;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
@@ -217,6 +218,11 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // ReorderByGroupKeys: Reorder data source row groups by grouping
+            // key statistics for better aggregation hash table locality.
+            // Must run before PushdownSort so that sort pushdown can override
+            // the reorder hint when a sort requirement is present.
+            Arc::new(ReorderByGroupKeys::new()),
             // PushdownSort: Detect sorts that can be pushed down to data sources.
             Arc::new(PushdownSort::new()),
             Arc::new(EnsureCooperative::new()),

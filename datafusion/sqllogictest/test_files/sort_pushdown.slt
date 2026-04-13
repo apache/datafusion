@@ -2376,6 +2376,58 @@ DROP TABLE th_mixed;
 statement ok
 DROP TABLE th_reorder;
 
+# ===========================================================
+# Test I: Row group reorder by GROUP BY keys.
+# When aggregating over parquet data, row groups should be
+# reordered by the first grouping key's statistics. This
+# reduces the active cardinality of the aggregation hash
+# table and improves CPU cache locality.
+# ===========================================================
+
+# Reuse th_mixed data layout: 3 row groups with interleaved ranges
+statement ok
+CREATE TABLE ti_mixed(category INT, value INT) AS VALUES
+  (3, 30), (1, 10), (3, 31),
+  (2, 20), (1, 11), (2, 21),
+  (1, 12), (3, 32), (2, 22);
+
+statement ok
+COPY (SELECT * FROM ti_mixed)
+TO 'test_files/scratch/sort_pushdown/ti_groupby/data.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '3');
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE ti_groupby(category INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/ti_groupby/data.parquet';
+
+# Test I.1: GROUP BY with SUM — results must be correct
+query II rowsort
+SELECT category, SUM(value) FROM ti_groupby GROUP BY category;
+----
+1 33
+2 63
+3 93
+
+# Test I.2: GROUP BY with COUNT — results must be correct
+query II rowsort
+SELECT category, COUNT(*) FROM ti_groupby GROUP BY category;
+----
+1 3
+2 3
+3 3
+
+# Cleanup Test I
+statement ok
+DROP TABLE ti_mixed;
+
+statement ok
+DROP TABLE ti_groupby;
+
 # Reset settings (SLT runner uses target_partitions=4, not system default)
 statement ok
 SET datafusion.execution.target_partitions = 4;
