@@ -156,12 +156,9 @@ impl HigherOrderFunctionExpr {
     }
 
     pub fn with_nullable(mut self, nullable: bool) -> Self {
-        self.return_field = self
-            .return_field
-            .as_ref()
-            .clone()
-            .with_nullable(nullable)
-            .into();
+        if self.return_field.is_nullable() != nullable {
+            Arc::make_mut(&mut self.return_field).set_nullable(nullable);
+        }
         self
     }
 
