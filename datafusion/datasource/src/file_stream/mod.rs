@@ -173,7 +173,7 @@ mod tests {
     use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
     use crate::morsel::mocks::{
         IoFutureId, MockMorselizer, MockPlanBuilder, MockPlanner, MorselId,
-        PollsToResolve,
+        PendingPlannerBuilder, PollsToResolve,
     };
     use crate::tests::make_partition;
     use crate::{PartitionedFile, TableSchema};
@@ -690,7 +690,7 @@ mod tests {
     async fn morsel_no_io() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .return_morsel(MorselId(10), 42)
+                .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(10), 42))
                 .return_none()
                 .build(),
         );
@@ -718,8 +718,15 @@ mod tests {
     async fn morsel_single_io_two_batches() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .return_io(IoFutureId(1), PollsToResolve(1))
-                .return_morsel_batches(MorselId(10), vec![42, 43])
+                .add_plan_step(
+                    PendingPlannerBuilder::new(IoFutureId(1))
+                        .with_polls_to_resolve(PollsToResolve(1))
+                        .build(),
+                )
+                .add_plan_step(
+                    MockPlanBuilder::new()
+                        .with_morsel_batches(MorselId(10), vec![42, 43]),
+                )
                 .return_none()
                 .build(),
         );
@@ -754,9 +761,9 @@ mod tests {
     async fn morsel_two_ios_one_batch() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .return_io(IoFutureId(1), PollsToResolve(0))
-                .return_io(IoFutureId(2), PollsToResolve(0))
-                .return_morsel(MorselId(10), 42)
+                .add_plan_step(PendingPlannerBuilder::new(IoFutureId(1)).build())
+                .add_plan_step(PendingPlannerBuilder::new(IoFutureId(2)).build())
+                .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(10), 42))
                 .return_none()
                 .build(),
         );
@@ -791,10 +798,10 @@ mod tests {
     async fn morsel_io_error() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .return_io_error(
-                    IoFutureId(1),
-                    PollsToResolve(0),
-                    "io failed while opening file",
+                .add_plan_step(
+                    PendingPlannerBuilder::new(IoFutureId(1))
+                        .with_error("io failed while opening file")
+                        .build(),
                 )
                 .build(),
         );
@@ -826,7 +833,7 @@ mod tests {
                         .with_morsel_batches(MorselId(10), vec![41, 42])
                         .with_pending_planner(IoFutureId(1), PollsToResolve(3), Ok(())),
                 )
-                .return_morsel(MorselId(11), 43)
+                .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(11), 43))
                 .return_none()
                 .build(),
         );
@@ -871,7 +878,7 @@ mod tests {
     async fn morsel_plan_error_after_io() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .return_io(IoFutureId(1), PollsToResolve(0))
+                .add_plan_step(PendingPlannerBuilder::new(IoFutureId(1)).build())
                 .return_error("planner failed after io")
                 .build(),
         );
@@ -899,13 +906,13 @@ mod tests {
         let test = FileStreamMorselTest::new()
             .with_file(
                 MockPlanner::builder("file1.parquet")
-                    .return_morsel(MorselId(10), 41)
+                    .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(10), 41))
                     .return_none()
                     .build(),
             )
             .with_file(
                 MockPlanner::builder("file2.parquet")
-                    .return_morsel(MorselId(11), 42)
+                    .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(11), 42))
                     .return_none()
                     .build(),
             );
@@ -941,13 +948,16 @@ mod tests {
         let test = FileStreamMorselTest::new()
             .with_file(
                 MockPlanner::builder("file1.parquet")
-                    .return_morsel_batches(MorselId(10), vec![41, 42])
+                    .add_plan_step(
+                        MockPlanBuilder::new()
+                            .with_morsel_batches(MorselId(10), vec![41, 42]),
+                    )
                     .return_none()
                     .build(),
             )
             .with_file(
                 MockPlanner::builder("file2.parquet")
-                    .return_morsel(MorselId(11), 43)
+                    .add_plan_step(MockPlanBuilder::new().with_morsel(MorselId(11), 43))
                     .return_none()
                     .build(),
             )
