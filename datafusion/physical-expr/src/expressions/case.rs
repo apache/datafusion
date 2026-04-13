@@ -185,7 +185,6 @@ impl CaseBody {
                         let projected = *column_index_map.get(&original).unwrap();
                         if projected != original {
                             return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
-                                lambda_variable.name().to_owned(),
                                 projected,
                                 Arc::clone(lambda_variable.field()),
                             ))));

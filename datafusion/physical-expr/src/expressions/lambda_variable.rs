@@ -28,13 +28,12 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::ColumnarValue;
 
-/// Represents the lambda variable with a given name and field
+/// Represents the lambda variable with a given index and field
 #[derive(Debug, Clone)]
 pub struct LambdaVariable {
-    name: String,
     index: usize,
     field: FieldRef,
 }
@@ -43,26 +42,26 @@ impl Eq for LambdaVariable {}
 
 impl PartialEq for LambdaVariable {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.field == other.field
+        self.index == other.index && self.field == other.field
     }
 }
 
 impl Hash for LambdaVariable {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
+        self.index.hash(state);
         self.field.hash(state);
     }
 }
 
 impl LambdaVariable {
     /// Create a new lambda variable expression
-    pub fn new(name: String, index: usize, field: FieldRef) -> Self {
-        Self { name, index, field }
+    pub fn new(index: usize, field: FieldRef) -> Self {
+        Self { index, field }
     }
 
     /// Get the variable's name
     pub fn name(&self) -> &str {
-        &self.name
+        self.field.name()
     }
 
     /// Get the variable's index
@@ -99,7 +98,7 @@ impl PhysicalExpr for LambdaVariable {
         if self.index >= batch.num_columns() {
             return internal_err!(
                 "PhysicalExpr LambdaVariable references column '{}' at index {} (zero-based) but batch only has {} columns: {:?}",
-                self.name,
+                self.name(),
                 self.index,
                 batch.num_columns(),
                 batch
@@ -108,6 +107,14 @@ impl PhysicalExpr for LambdaVariable {
                     .iter()
                     .map(|f| f.name())
                     .collect::<Vec<_>>()
+            );
+        }
+
+        if self.field.as_ref() != batch.schema_ref().field(self.index) {
+            return exec_err!(
+                "Physical LambdaVariable field doesn't match batch field during evaluation {} != {}",
+                self.field,
+                batch.schema_ref().field(self.index)
             );
         }
 
@@ -135,21 +142,9 @@ impl PhysicalExpr for LambdaVariable {
 }
 
 /// Create a lambda variable expression
-pub fn lambda_variable(
-    name: impl Into<String>,
-    field: FieldRef,
-    schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let name = name.into();
-    let index = schema.index_of(&name)?;
+pub fn lambda_variable(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
+    let index = schema.index_of(name)?;
+    let field = Arc::clone(&schema.fields()[index]);
 
-    let schema_field = schema.field(index);
-
-    if field.as_ref() != schema_field {
-        return plan_err!(
-            "LambdaVariable owned field differ from schema field {field} != {schema_field}"
-        );
-    }
-
-    Ok(Arc::new(LambdaVariable::new(name, index, field)))
+    Ok(Arc::new(LambdaVariable::new(index, field)))
 }

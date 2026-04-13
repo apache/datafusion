@@ -487,11 +487,30 @@ pub fn create_physical_expr(
             name,
             field,
             spans: _,
-        }) => expressions::lambda_variable(
-            name,
-            Arc::clone(field),
-            input_dfschema.as_arrow(),
-        ),
+        }) => {
+            let index = input_dfschema.inner().index_of(name)?;
+            let schema_field = input_dfschema.field(index);
+
+            // LambdaVariable.field will be made optional as in Expr::Placeholder
+            // and only LambdaVariable.name used, and field.name ignored,
+            // so they're not enforced to match for logical expressions
+            if field.data_type() != schema_field.data_type()
+                || field.is_nullable() != schema_field.is_nullable()
+                || field.metadata() != schema_field.metadata()
+                || field.dict_is_ordered() != schema_field.dict_is_ordered()
+            {
+                return plan_err!(
+                    "LambdaVariable field and schema field mismatch (names ignored) {} != {}",
+                    field,
+                    schema_field
+                );
+            }
+
+            Ok(Arc::new(expressions::LambdaVariable::new(
+                index,
+                Arc::clone(schema_field),
+            )))
+        }
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }
