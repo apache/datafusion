@@ -35,15 +35,9 @@ performed:
  - removing all references to mysql, mssql and postgresql
  - adds in a new 'control resultmode valuewise' statement at the top of all files
  - updates the files to change 'AS REAL' to 'AS FLOAT8'
-- Replace the sqllogictest-rs dependency in the Cargo.toml with a version to
-  a git repository that has been custom written to properly complete the files
-  with comparison of datafusion results with postgresql
-- Replace the sqllogictest.rs file with a customized version that will work with
-  the customized sqllogictest-rs dependency
 - Run the sqlite test with completion (takes > 1 hr)
 - Update a few results to ignore known issues
 - Run sqlite test to verify results
-- Perform cleanup to revert changes to the Cargo.toml & sqllogictest.rs files
 - Delete backup files and the /tmp/sqlitetesting directory
 "
 read -r -p "Do you understand and accept the risk? (yes/no): " acknowledgement
@@ -160,16 +154,7 @@ find ./ -type f -name "*.slt" -exec sd -f i 'skipif mssql # not compatible\n' ''
 # change REAL datatype to FLOAT8
 find ./ -type f -name "*.slt" -exec sd -f i 'AS REAL' 'AS FLOAT8' {} \;
 
-echo "Updating the datafusion/sqllogictest/Cargo.toml file with an updated sqllogictest dependency"
-
-# update the sqllogictest Cargo.toml with the new repo for sqllogictest-rs (tied to a specific hash)
 cd "$DF_HOME" || exit;
-sd -f i '^sqllogictest.*' 'sqllogictest = { git = "https://github.com/Omega359/sqllogictest-rs.git", rev = "73c47cf7" }' datafusion/sqllogictest/Cargo.toml
-
-echo "Replacing the datafusion/sqllogictest/bin/sqllogictests.rs file with a custom version required for running completion"
-
-# replace the sqllogictest.rs with a customized version.
-cp datafusion/sqllogictest/regenerate/sqllogictests.rs datafusion/sqllogictest/bin/sqllogictests.rs
 
 echo "Running the sqllogictests with sqlite completion. This will take approximately an hour to run"
 
@@ -200,6 +185,4 @@ echo "Cleaning up source code changes and temporary files and directories"
 cd "$DF_HOME" || exit;
 find ./datafusion-testing/data/sqlite/ -type f -name "*.bak" -exec rm {} \;
 find ./datafusion/sqllogictest/test_files/pg_compat/ -type f -name "*.bak" -exec rm {} \;
-git checkout datafusion/sqllogictest/Cargo.toml
-git checkout datafusion/sqllogictest/bin/sqllogictests.rs
 rm -rf /tmp/sqlitetesting
