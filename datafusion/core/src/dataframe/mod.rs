@@ -41,7 +41,6 @@ use crate::physical_plan::{
     execute_stream, execute_stream_partitioned,
 };
 use crate::prelude::SessionContext;
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -295,8 +294,11 @@ impl DataFrame {
         self.session_state.create_logical_expr(sql, df_schema)
     }
 
-    /// Consume the DataFrame and produce a physical plan
-    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
+    /// Create a physical plan from this DataFrame.
+    ///
+    /// The `DataFrame` remains accessible after this call, so you can inspect
+    /// the plan and still call [`DataFrame::collect`] or other execution methods.
+    pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -2398,7 +2400,7 @@ impl DataFrame {
         } else {
             let context = SessionContext::new_with_state((*self.session_state).clone());
             // The schema is consistent with the output
-            let plan = self.clone().create_physical_plan().await?;
+            let plan = self.create_physical_plan().await?;
             let schema = plan.schema();
             let task_ctx = Arc::new(self.task_ctx());
             let partitions = collect_partitioned(plan, task_ctx).await?;
@@ -2645,10 +2647,6 @@ struct DataFrameTableProvider {
 
 #[async_trait]
 impl TableProvider for DataFrameTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.plan))
     }

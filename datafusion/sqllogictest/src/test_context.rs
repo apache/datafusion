@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -28,7 +27,9 @@ use arrow::array::{
     LargeStringArray, StringArray, TimestampNanosecondArray, UnionArray,
 };
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
+use arrow::datatypes::{
+    DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit, UnionFields,
+};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
@@ -36,6 +37,7 @@ use datafusion::catalog::{
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
+use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
@@ -54,6 +56,7 @@ use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use log::info;
+use sqlparser::ast;
 use tempfile::TempDir;
 
 /// Context for running tests
@@ -62,6 +65,23 @@ pub struct TestContext {
     ctx: SessionContext,
     /// Temporary directory created and cleared at the end of the test
     test_dir: Option<TempDir>,
+}
+
+#[derive(Debug)]
+struct SqlLogicTestTypePlanner;
+
+impl TypePlanner for SqlLogicTestTypePlanner {
+    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
+        match sql_type {
+            ast::DataType::Uuid => Ok(Some(Arc::new(
+                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
+                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
+                        .into(),
+                ),
+            ))),
+            _ => Ok(None),
+        }
+    }
 }
 
 impl TestContext {
@@ -90,6 +110,14 @@ impl TestContext {
 
         if is_spark_path(relative_path) {
             state_builder = state_builder.with_spark_features();
+        }
+
+        if matches!(
+            relative_path.file_name().and_then(|name| name.to_str()),
+            Some("cast_extension_type_metadata.slt")
+        ) {
+            state_builder =
+                state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
         }
 
         let state = state_builder.build();
@@ -199,10 +227,6 @@ struct StrictOrdersSchema {
 
 #[async_trait]
 impl SchemaProvider for StrictOrdersSchema {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         vec!["orders".to_string()]
     }
@@ -330,10 +354,6 @@ pub async fn register_temp_table(ctx: &SessionContext) {
 
     #[async_trait]
     impl TableProvider for TestTable {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn schema(&self) -> SchemaRef {
             unimplemented!()
         }

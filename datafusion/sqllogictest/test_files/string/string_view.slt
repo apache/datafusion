@@ -954,6 +954,97 @@ SELECT arrow_typeof(split_part(arrow_cast('a.b.c', 'Utf8View'), '.', 2));
 ----
 Utf8View
 
+# SPLIT_PART with Utf8View column (exercises the array fast path)
+query T
+SELECT split_part(column1_utf8view, 'ph', 1) FROM test;
+----
+Andrew
+Xiangpeng
+Ra
+(empty)
+NULL
+
+query T
+SELECT split_part(column1_utf8view, 'ph', 2) FROM test;
+----
+(empty)
+(empty)
+ael
+(empty)
+NULL
+
+# Negative position
+query T
+SELECT split_part(column1_utf8view, 'ph', -1) FROM test;
+----
+Andrew
+Xiangpeng
+ael
+(empty)
+NULL
+
+# Delimiter not found returns full string
+query T
+SELECT split_part(column1_utf8view, 'ZZZ', 1) FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+(empty)
+NULL
+
+# Empty delimiter with column
+query T
+SELECT split_part(column1_utf8view, '', 1) FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+(empty)
+NULL
+
+# Single-char delimiter with column
+query T
+SELECT split_part(column1_utf8view, 'a', 1) FROM test;
+----
+Andrew
+Xi
+R
+(empty)
+NULL
+
+# Verify array path also returns Utf8View
+query T
+SELECT arrow_typeof(split_part(column1_utf8view, '.', 1)) FROM test LIMIT 1;
+----
+Utf8View
+
+# Long strings (>12 bytes) exercise out-of-line StringView construction in split_part
+query T
+SELECT split_part(arrow_cast(column1, 'Utf8View'), '.', 1) FROM
+  (VALUES ('this_is_over_12.suffix'), ('short.val'), (NULL)) AS t(column1);
+----
+this_is_over_12
+short
+NULL
+
+query T
+SELECT split_part(arrow_cast(column1, 'Utf8View'), '.', -1) FROM
+  (VALUES ('prefix.this_is_over_12'), ('a.short'), (NULL)) AS t(column1);
+----
+this_is_over_12
+short
+NULL
+
+# Results at the 12-byte inline/out-of-line boundary
+query T
+SELECT split_part(arrow_cast(column1, 'Utf8View'), '.', 1) FROM
+  (VALUES ('exactly12byt.rest'), ('thirteen_byte.rest'), ('twelve_bytes.rest')) AS t(column1);
+----
+exactly12byt
+thirteen_byte
+twelve_bytes
+
 ## Ensure no casts for STRPOS
 query TT
 EXPLAIN SELECT

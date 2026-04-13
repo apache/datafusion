@@ -1633,11 +1633,67 @@ physical_plan
 01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
+# Sort elimination through named_struct projections
+#
+# When data is sorted by a column and that column is wrapped into a struct
+# via named_struct, sorting by the struct field should NOT require a
+# separate SortExec because the optimizer can track that the struct field
+# preserves the original ordering.
+
+# Wrapping the ordered expression (a + b) into a struct field — sort eliminated
+# Reuses the `ordered` table above which has WITH ORDER (a + b).
+query TT
+EXPLAIN SELECT named_struct('sum', a + b) AS s FROM ordered ORDER BY s['sum'];
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[named_struct(sum, a@0 + b@1) as s], file_type=csv, has_header=true
+
+# Wrapping a non-ordered column into a struct — SortExec required
+# Reuses the `ordered` table above which has WITH ORDER (a + b).
+query TT
+EXPLAIN SELECT named_struct('a', a, 'b', b) AS s FROM ordered ORDER BY s['a'];
+----
+physical_plan
+01)ProjectionExec: expr=[s@0 as s]
+02)--SortExec: expr=[__datafusion_extracted_1@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[named_struct(a, a@0, b, b@1) as s, get_field(named_struct(a, a@0, b, b@1), a) as __datafusion_extracted_1], file_type=csv, has_header=true
+
+# Simple column ordering tests using a table ordered by (a)
+statement ok
+CREATE EXTERNAL TABLE ordered_by_a (
+  a  BIGINT NOT NULL,
+  b  BIGINT NOT NULL
+)
+STORED AS CSV
+LOCATION 'data/composite_order.csv'
+OPTIONS ('format.has_header' 'true')
+WITH ORDER (a);
+
+# Single struct field matching source ordering -- sort eliminated
+query TT
+EXPLAIN SELECT named_struct('a', a, 'b', b) AS s FROM ordered_by_a ORDER BY s['a'];
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[named_struct(a, a@0, b, b@1) as s], file_type=csv, has_header=true
+
+# Struct field not matching source ordering -- SortExec required
+query TT
+EXPLAIN SELECT named_struct('a', a, 'b', b) AS s FROM ordered_by_a ORDER BY s['b'];
+----
+physical_plan
+01)ProjectionExec: expr=[s@0 as s]
+02)--SortExec: expr=[__datafusion_extracted_1@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[named_struct(a, a@0, b, b@1) as s, get_field(named_struct(a, a@0, b, b@1), b) as __datafusion_extracted_1], file_type=csv, has_header=true
+
+# Mixed projection: top-level column alongside struct, order by struct field
+query TT
+EXPLAIN SELECT a, named_struct('a', a, 'b', b) AS s FROM ordered_by_a ORDER BY s['a'];
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, named_struct(a, a@0, b, b@1) as s], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
+
 # Config reset
 statement ok
 reset datafusion.catalog.information_schema;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
