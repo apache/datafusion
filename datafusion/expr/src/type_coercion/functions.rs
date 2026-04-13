@@ -1019,7 +1019,10 @@ fn coerced_from<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::Volatility;
+    use crate::{
+        HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+        Volatility,
+    };
 
     use super::*;
     use arrow::datatypes::IntervalUnit;
@@ -1027,7 +1030,10 @@ mod tests {
         assert_contains,
         types::{logical_binary, logical_int64},
     };
-    use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+    use datafusion_expr_common::{
+        columnar_value::ColumnarValue,
+        signature::{Coercion, TypeSignatureClass},
+    };
 
     #[test]
     fn test_string_conversion() {
@@ -1677,5 +1683,154 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MockHigherOrderUDF {
+        signature: HigherOrderSignature,
+        coerced_value_types: Vec<DataType>,
+    }
+
+    impl HigherOrderUDF for MockHigherOrderUDF {
+        fn name(&self) -> &str {
+            "mock_udhof"
+        }
+
+        fn signature(&self) -> &HigherOrderSignature {
+            &self.signature
+        }
+
+        fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            if arg_types.len() != 1 {
+                return plan_err!(
+                    "mock_udhof expects 1 value arguments, got {}",
+                    arg_types.len()
+                );
+            }
+            Ok(self.coerced_value_types.clone())
+        }
+
+        fn lambda_parameters(
+            &self,
+            _value_fields: &[FieldRef],
+        ) -> Result<Vec<Vec<Field>>> {
+            unimplemented!("mock udhof")
+        }
+
+        fn return_field_from_args(
+            &self,
+            _args: HigherOrderReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            unimplemented!("mock udhof")
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unimplemented!("mock udhof")
+        }
+    }
+
+    #[test]
+    fn test_higher_order_function_user_defined_type_coercion() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+            coerced_value_types: vec![DataType::new_large_list(DataType::Int32, false)],
+        };
+
+        let new_fields = value_fields_with_higher_order_udf(
+            &[
+                ValueOrLambda::Value(Arc::new(Field::new_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false,
+                ))),
+                ValueOrLambda::Lambda(()),
+            ],
+            &fun,
+        )
+        .unwrap();
+
+        // from List(Int32) to LargeList(Int32)
+        assert_eq!(
+            new_fields,
+            vec![
+                ValueOrLambda::Value(Arc::new(Field::new_large_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false
+                ))),
+                ValueOrLambda::Lambda(()),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_higher_order_function_user_defined_type_coercion_bad_args() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+            coerced_value_types: vec![DataType::Int32],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(&[], &fun).unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "mock_udhof expects 1 value arguments, got 0"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_faulty_user_defined_type_coercion() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+            coerced_value_types: vec![DataType::Int32, DataType::Int32],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(
+            &[ValueOrLambda::Value(Arc::new(Field::new(
+                "",
+                DataType::Int32,
+                false,
+            )))],
+            &fun,
+        )
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "mock_udhof coerce_value_types should have returned 1 items but returned 2"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_any_signature() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::any(1, Volatility::Immutable),
+            coerced_value_types: vec![],
+        };
+
+        let new_fields =
+            value_fields_with_higher_order_udf(&[ValueOrLambda::Lambda(())], &fun)
+                .unwrap();
+
+        // no coercion, just number of args checked
+        assert_eq!(new_fields, vec![ValueOrLambda::Lambda(())])
+    }
+
+    #[test]
+    fn test_higher_order_function_any_signature_bad_args() {
+        let fun = MockHigherOrderUDF {
+            signature: HigherOrderSignature::any(1, Volatility::Immutable),
+            coerced_value_types: vec![],
+        };
+
+        let err = value_fields_with_higher_order_udf::<()>(&[], &fun).unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "The function 'mock_udhof' expected 1 arguments but received 0"
+        );
     }
 }
