@@ -31,7 +31,7 @@ on:
 jobs:
   process:
     name: Process
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # only run for users whose permissions allow them to update PRs
     # otherwise labeler is failing:
     # https://github.com/apache/datafusion/issues/3743

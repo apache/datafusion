@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
     DataFusionError, Diagnostic, Result, Span, not_impl_err, plan_err,
@@ -42,7 +44,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let left_span = Span::try_from_sqlparser_span(left.span());
                 let right_span = Span::try_from_sqlparser_span(right.span());
                 let left_plan = self.set_expr_to_plan(*left, planner_context);
+                // Store the left plan's schema so that the right side can
+                // alias duplicate expressions to match. Skip for BY NAME
+                // operations since those match columns by name, not position.
+                if let Ok(plan) = &left_plan
+                    && plan.schema().fields().len() > 1
+                    && !matches!(
+                        set_quantifier,
+                        SetQuantifier::ByName
+                            | SetQuantifier::AllByName
+                            | SetQuantifier::DistinctByName
+                    )
+                {
+                    planner_context
+                        .set_set_expr_left_schema(Some(Arc::clone(plan.schema())));
+                }
                 let right_plan = self.set_expr_to_plan(*right, planner_context);
+                planner_context.set_set_expr_left_schema(None);
                 let (left_plan, right_plan) = match (left_plan, right_plan) {
                     (Ok(left_plan), Ok(right_plan)) => (left_plan, right_plan),
                     (Err(left_err), Err(right_err)) => {

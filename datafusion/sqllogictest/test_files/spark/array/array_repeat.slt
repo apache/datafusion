@@ -59,7 +59,17 @@ SELECT array_repeat(['123'], 2);
 query ?
 SELECT array_repeat(NULL, 2);
 ----
-NULL
+[NULL, NULL]
+
+query ?
+SELECT array_repeat(NULL, 1);
+----
+[NULL]
+
+query ?
+SELECT array_repeat(NULL, 0);
+----
+[]
 
 query ?
 SELECT array_repeat([NULL], 2);
@@ -88,7 +98,7 @@ FROM VALUES
 [123, 123]
 []
 []
-NULL
+[NULL]
 NULL
 
 

@@ -26,7 +26,6 @@ use datafusion_catalog::memory::*;
 use datafusion_catalog::{SchemaProvider, TableProvider};
 use datafusion_common::test_util::batches_to_string;
 use insta::assert_snapshot;
-use std::any::Any;
 use std::sync::Arc;
 
 #[test]
@@ -83,10 +82,6 @@ fn default_register_schema_not_supported() {
     #[derive(Debug)]
     struct TestProvider {}
     impl CatalogProvider for TestProvider {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn schema_names(&self) -> Vec<String> {
             unimplemented!()
         }

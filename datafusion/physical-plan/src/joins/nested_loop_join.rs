@@ -17,7 +17,6 @@
 
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
-use std::any::Any;
 use std::fmt::Formatter;
 use std::ops::{BitOr, ControlFlow};
 use std::sync::Arc;
@@ -535,10 +534,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         "NestedLoopJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -923,7 +918,7 @@ impl NestedLoopJoinMetrics {
         Self {
             join_metrics: BuildProbeJoinMetrics::new(partition, metrics),
             selectivity: MetricBuilder::new(metrics)
-                .with_type(MetricType::SUMMARY)
+                .with_type(MetricType::Summary)
                 .ratio_metrics("selectivity", partition),
         }
     }

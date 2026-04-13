@@ -17,7 +17,6 @@
 
 //! Defines the EXPLAIN operator
 
-use std::any::Any;
 use std::sync::Arc;
 
 use super::{DisplayAs, PlanProperties, SendableRecordBatchStream};
@@ -109,10 +108,6 @@ impl ExecutionPlan for ExplainExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }

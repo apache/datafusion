@@ -24,7 +24,7 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -98,6 +98,12 @@ pub trait Dialect: Send + Sync {
     /// Most dialects use BigInt, but some, like MySQL, require SIGNED
     fn int64_cast_dtype(&self) -> ast::DataType {
         ast::DataType::BigInt(None)
+    }
+
+    /// The SQL type to use for Arrow Int8 unparsing
+    /// Most dialects use TinyInt, but PostgreSQL prefers SmallInt
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::TinyInt(None)
     }
 
     /// The SQL type to use for Arrow Int32 unparsing
@@ -216,7 +222,7 @@ pub trait Dialect: Send + Sync {
 
     /// Allows the dialect to override logic of formatting datetime with tz into string.
     fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, _unit: TimeUnit) -> String {
-        dt.to_string()
+        dt.to_rfc3339()
     }
 
     /// Whether the dialect supports an empty select list such as `SELECT FROM table`.
@@ -345,12 +351,20 @@ impl Dialect for PostgreSqlDialect {
         ast::DataType::DoublePrecision
     }
 
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::SmallInt(None)
+    }
+
     fn scalar_function_to_sql_overrides(
         &self,
         unparser: &Unparser,
         func_name: &str,
         args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
+        if func_name == "array_has" {
+            return self.array_has_to_sql_any(unparser, args);
+        }
+
         if func_name == "round" {
             return Ok(Some(
                 self.round_to_sql_enforce_numeric(unparser, func_name, args)?,
@@ -362,6 +376,23 @@ impl Dialect for PostgreSqlDialect {
 }
 
 impl PostgreSqlDialect {
+    fn array_has_to_sql_any(
+        &self,
+        unparser: &Unparser,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        let [haystack, needle] = args else {
+            return internal_err!("array_has expected 2 arguments, got {}", args.len());
+        };
+
+        Ok(Some(ast::Expr::AnyOp {
+            left: Box::new(unparser.expr_to_sql(needle)?),
+            compare_op: BinaryOperator::Eq,
+            right: Box::new(unparser.expr_to_sql(haystack)?),
+            is_some: false,
+        }))
+    }
+
     fn round_to_sql_enforce_numeric(
         &self,
         unparser: &Unparser,
@@ -467,17 +498,6 @@ impl Dialect for DuckDBDialect {
         }
 
         Ok(None)
-    }
-
-    fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, unit: TimeUnit) -> String {
-        let format = match unit {
-            TimeUnit::Second => "%Y-%m-%d %H:%M:%S%:z",
-            TimeUnit::Millisecond => "%Y-%m-%d %H:%M:%S%.3f%:z",
-            TimeUnit::Microsecond => "%Y-%m-%d %H:%M:%S%.6f%:z",
-            TimeUnit::Nanosecond => "%Y-%m-%d %H:%M:%S%.9f%:z",
-        };
-
-        dt.format(format).to_string()
     }
 }
 
@@ -654,6 +674,7 @@ pub struct CustomDialect {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
+    int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
@@ -679,6 +700,7 @@ impl Default for CustomDialect {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
+            int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
@@ -736,6 +758,10 @@ impl Dialect for CustomDialect {
 
     fn int64_cast_dtype(&self) -> ast::DataType {
         self.int64_cast_dtype.clone()
+    }
+
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        self.int8_cast_dtype.clone()
     }
 
     fn int32_cast_dtype(&self) -> ast::DataType {
@@ -829,6 +855,7 @@ pub struct CustomDialectBuilder {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
+    int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
@@ -860,6 +887,7 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
+            int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
@@ -888,6 +916,7 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
             date_field_extract_style: self.date_field_extract_style,
             character_length_style: self.character_length_style,
+            int8_cast_dtype: self.int8_cast_dtype,
             int64_cast_dtype: self.int64_cast_dtype,
             int32_cast_dtype: self.int32_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
@@ -939,6 +968,12 @@ impl CustomDialectBuilder {
         character_length_style: CharacterLengthStyle,
     ) -> Self {
         self.character_length_style = character_length_style;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for Int8 casting: TinyInt, SmallInt, etc.
+    pub fn with_int8_cast_dtype(mut self, int8_cast_dtype: ast::DataType) -> Self {
+        self.int8_cast_dtype = int8_cast_dtype;
         self
     }
 

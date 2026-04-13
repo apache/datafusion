@@ -93,7 +93,7 @@ impl TopKAggregation {
     }
 
     fn transform_sort(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
-        let sort = plan.as_any().downcast_ref::<SortExec>()?;
+        let sort = plan.downcast_ref::<SortExec>()?;
 
         let children = sort.children();
         let child = children.into_iter().exactly_one().ok()?;
@@ -109,13 +109,13 @@ impl TopKAggregation {
             if !cardinality_preserved {
                 return Ok(Transformed::no(plan));
             }
-            if let Some(aggr) = plan.as_any().downcast_ref::<AggregateExec>() {
+            if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
                 // either we run into an Aggregate and transform it
                 match Self::transform_agg(aggr, &cur_col_name, order_desc, limit) {
                     None => cardinality_preserved = false,
                     Some(plan) => return Ok(Transformed::yes(plan)),
                 }
-            } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
+            } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
                 // track renames due to successive projections
                 for proj_expr in proj.expr() {
                     let Some(src_col) = proj_expr.expr.as_any().downcast_ref::<Column>()

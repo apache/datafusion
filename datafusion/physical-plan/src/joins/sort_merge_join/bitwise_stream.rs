@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Sort-merge join stream specialized for semi/anti joins.
+//! Sort-merge join stream specialized for semi/anti/mark joins.
 //!
 //! Instantiated by [`SortMergeJoinExec`](crate::joins::sort_merge_join::SortMergeJoinExec)
-//! when the join type is `LeftSemi`, `LeftAnti`, `RightSemi`, or `RightAnti`.
+//! when the join type is `LeftSemi`, `LeftAnti`, `RightSemi`, `RightAnti`,
+//! `LeftMark`, or `RightMark`.
 //!
 //! # Motivation
 //!
-//! The general-purpose `SortMergeJoinStream`
+//! The general-purpose `MaterializingSortMergeJoinStream`
 //! handles semi/anti joins by materializing `(outer, inner)` row pairs,
 //! applying a filter, then using a "corrected filter mask" to deduplicate.
 //! Semi/anti joins only need a boolean per outer row (does a match exist?),
@@ -36,7 +37,8 @@
 //!
 //! For `Left*` join types, left is outer and right is inner.
 //! For `Right*` join types, right is outer and left is inner.
-//! The output schema always equals the outer side's schema.
+//! The output schema always equals the outer side's schema (for semi/anti)
+//! or the outer side's schema plus a boolean mark column (for mark joins).
 //!
 //! # Algorithm
 //!
@@ -75,6 +77,7 @@
 //!   On emit:
 //!     Semi  → filter_record_batch(outer_batch, &matched)
 //!     Anti  → filter_record_batch(outer_batch, &NOT(matched))
+//!     Mark  → outer_batch + matched as boolean column
 //! ```
 //!
 //! ## Batch boundaries
@@ -123,7 +126,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::RecordBatchStream;
-use crate::joins::utils::{JoinFilter, compare_join_arrays};
+use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
 };
@@ -159,48 +162,26 @@ fn evaluate_join_keys(
 }
 
 /// Find the first index in `key_arrays` starting from `from` where the key
-/// differs from the key at `from`. Uses `compare_join_arrays` for zero-alloc
-/// ordinal comparison.
+/// differs from the key at `from`. Uses a pre-built `JoinKeyComparator` for
+/// zero-alloc ordinal comparison without per-row type dispatch.
 ///
 /// Optimized for join workloads: checks adjacent and boundary keys before
 /// falling back to binary search, since most key groups are small (often 1).
-fn find_key_group_end(
-    key_arrays: &[ArrayRef],
-    from: usize,
-    len: usize,
-    sort_options: &[SortOptions],
-    null_equality: NullEquality,
-) -> Result<usize> {
+fn find_key_group_end(cmp: &JoinKeyComparator, from: usize, len: usize) -> usize {
     let next = from + 1;
     if next >= len {
-        return Ok(len);
+        return len;
     }
 
     // Fast path: single-row group (common with unique keys).
-    if compare_join_arrays(
-        key_arrays,
-        from,
-        key_arrays,
-        next,
-        sort_options,
-        null_equality,
-    )? != Ordering::Equal
-    {
-        return Ok(next);
+    if cmp.compare(from, next) != Ordering::Equal {
+        return next;
     }
 
     // Check if the entire remaining batch shares this key.
     let last = len - 1;
-    if compare_join_arrays(
-        key_arrays,
-        from,
-        key_arrays,
-        last,
-        sort_options,
-        null_equality,
-    )? == Ordering::Equal
-    {
-        return Ok(len);
+    if cmp.compare(from, last) == Ordering::Equal {
+        return len;
     }
 
     // Binary search the interior: key at `next` matches, key at `last` doesn't.
@@ -208,21 +189,13 @@ fn find_key_group_end(
     let mut hi = last;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        if compare_join_arrays(
-            key_arrays,
-            from,
-            key_arrays,
-            mid,
-            sort_options,
-            null_equality,
-        )? == Ordering::Equal
-        {
+        if cmp.compare(from, mid) == Ordering::Equal {
             lo = mid + 1;
         } else {
             hi = mid;
         }
     }
-    Ok(lo)
+    lo
 }
 
 /// When an outer key group spans a batch boundary, the boundary loop emits
@@ -245,14 +218,18 @@ enum PendingBoundary {
     Filtered { saved_keys: Vec<ArrayRef> },
 }
 
-pub(crate) struct SemiAntiSortMergeJoinStream {
-    // Decomposed from JoinType to avoid matching on 4 variants in hot paths.
-    // true for semi (emit matched), false for anti (emit unmatched).
-    is_semi: bool,
+/// Sort-Merge join stream for Semi/Anti/Mark joins.
+///
+/// Named "bitwise" because it tracks outer-row matches via a per-batch
+/// boolean bitset (`BooleanBufferBuilder`) rather than materializing
+/// `(outer, inner)` row pairs. Filter results are OR'd into the bitset
+/// in `u64` chunks, and emitting applies the bitset directly.
+pub(crate) struct BitwiseSortMergeJoinStream {
+    join_type: JoinType,
 
     // Input streams — in the nested-loop model that sort-merge join
     // implements, "outer" is the driving loop and "inner" is probed for
-    // matches. The existing SortMergeJoinStream calls these "streamed"
+    // matches. The existing MaterializingSortMergeJoinStream calls these "streamed"
     // and "buffered" respectively. For Left* joins, outer=left; for
     // Right* joins, outer=right. Output schema equals the outer side.
     outer: SendableRecordBatchStream,
@@ -321,6 +298,14 @@ pub(crate) struct SemiAntiSortMergeJoinStream {
     runtime_env: Arc<datafusion_execution::runtime_env::RuntimeEnv>,
     inner_buffer_size: usize,
 
+    // Cached comparators — pre-built to avoid per-row type dispatch.
+    /// Comparator for outer vs inner key comparison
+    outer_inner_cmp: Option<JoinKeyComparator>,
+    /// Comparator for outer self-comparison (find_key_group_end on outer)
+    outer_self_cmp: Option<JoinKeyComparator>,
+    /// Comparator for inner self-comparison (find_key_group_end on inner)
+    inner_self_cmp: Option<JoinKeyComparator>,
+
     // True once the current outer batch has been emitted. The Equal
     // branch's inner loops call emit then `ready!(poll_next_outer_batch)`.
     // If that poll returns Pending, poll_join re-enters from the top
@@ -330,7 +315,7 @@ pub(crate) struct SemiAntiSortMergeJoinStream {
     batch_emitted: bool,
 }
 
-impl SemiAntiSortMergeJoinStream {
+impl BitwiseSortMergeJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         schema: SchemaRef,
@@ -346,21 +331,35 @@ impl SemiAntiSortMergeJoinStream {
         partition: usize,
         metrics: &ExecutionPlanMetricsSet,
         reservation: MemoryReservation,
-        peak_mem_used: Gauge,
         spill_manager: SpillManager,
         runtime_env: Arc<datafusion_execution::runtime_env::RuntimeEnv>,
     ) -> Result<Self> {
-        let is_semi = matches!(join_type, JoinType::LeftSemi | JoinType::RightSemi);
-        let outer_is_left = matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti);
+        debug_assert!(
+            matches!(
+                join_type,
+                JoinType::LeftSemi
+                    | JoinType::RightSemi
+                    | JoinType::LeftAnti
+                    | JoinType::RightAnti
+                    | JoinType::LeftMark
+                    | JoinType::RightMark
+            ),
+            "BitwiseSortMergeJoinStream does not handle {join_type:?}"
+        );
+        let outer_is_left = matches!(
+            join_type,
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+        );
 
         let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
         let input_batches =
             MetricBuilder::new(metrics).counter("input_batches", partition);
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
+        let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
 
         Ok(Self {
-            is_semi,
+            join_type,
             outer,
             inner,
             outer_batch: None,
@@ -392,6 +391,9 @@ impl SemiAntiSortMergeJoinStream {
             spill_manager,
             runtime_env,
             inner_buffer_size: 0,
+            outer_inner_cmp: None,
+            outer_self_cmp: None,
+            inner_self_cmp: None,
             batch_emitted: false,
         })
     }
@@ -402,6 +404,45 @@ impl SemiAntiSortMergeJoinStream {
         self.reservation.try_resize(needed)?;
         self.peak_mem_used.set_max(self.reservation.size());
         Ok(())
+    }
+
+    /// Get or build the outer vs inner key comparator.
+    fn get_outer_inner_cmp(&mut self) -> Result<&JoinKeyComparator> {
+        if self.outer_inner_cmp.is_none() {
+            self.outer_inner_cmp = Some(JoinKeyComparator::new(
+                &self.outer_key_arrays,
+                &self.inner_key_arrays,
+                &self.sort_options,
+                self.null_equality,
+            )?);
+        }
+        Ok(self.outer_inner_cmp.as_ref().unwrap())
+    }
+
+    /// Get or build the outer self-comparison comparator.
+    fn get_outer_self_cmp(&mut self) -> Result<&JoinKeyComparator> {
+        if self.outer_self_cmp.is_none() {
+            self.outer_self_cmp = Some(JoinKeyComparator::new(
+                &self.outer_key_arrays,
+                &self.outer_key_arrays,
+                &self.sort_options,
+                self.null_equality,
+            )?);
+        }
+        Ok(self.outer_self_cmp.as_ref().unwrap())
+    }
+
+    /// Get or build the inner self-comparison comparator.
+    fn get_inner_self_cmp(&mut self) -> Result<&JoinKeyComparator> {
+        if self.inner_self_cmp.is_none() {
+            self.inner_self_cmp = Some(JoinKeyComparator::new(
+                &self.inner_key_arrays,
+                &self.inner_key_arrays,
+                &self.sort_options,
+                self.null_equality,
+            )?);
+        }
+        Ok(self.inner_self_cmp.as_ref().unwrap())
     }
 
     /// Spill the in-memory inner key buffer to disk and clear it.
@@ -447,6 +488,8 @@ impl SemiAntiSortMergeJoinStream {
                     self.outer_batch = Some(batch);
                     self.outer_offset = 0;
                     self.outer_key_arrays = keys;
+                    self.outer_inner_cmp = None;
+                    self.outer_self_cmp = None;
                     self.batch_emitted = false;
                     self.matched = BooleanBufferBuilder::new(batch_num_rows);
                     self.matched.append_n(batch_num_rows, false);
@@ -473,6 +516,8 @@ impl SemiAntiSortMergeJoinStream {
                     self.inner_batch = Some(batch);
                     self.inner_offset = 0;
                     self.inner_key_arrays = keys;
+                    self.outer_inner_cmp = None;
+                    self.inner_self_cmp = None;
                     return Poll::Ready(Ok(true));
                 }
             }
@@ -492,17 +537,38 @@ impl SemiAntiSortMergeJoinStream {
 
         // finish() converts the bit-packed builder directly to a
         // BooleanBuffer — no iteration or repacking needed.
-        let selection = BooleanArray::new(self.matched.finish(), None);
+        let matched_buf = self.matched.finish();
 
-        let selection = if self.is_semi {
-            selection
-        } else {
-            not(&selection)?
-        };
-
-        let filtered = filter_record_batch(batch, &selection)?;
-        if filtered.num_rows() > 0 {
-            self.coalescer.push_batch(filtered)?;
+        match self.join_type {
+            JoinType::LeftMark | JoinType::RightMark => {
+                // Mark joins emit ALL outer rows with a boolean match column appended.
+                debug_assert_eq!(
+                    self.schema.fields().len(),
+                    batch.num_columns() + 1,
+                    "Mark join output schema should be outer schema + 1 mark column"
+                );
+                let mark_col = Arc::new(BooleanArray::new(matched_buf, None)) as ArrayRef;
+                let mut columns = Vec::with_capacity(batch.num_columns() + 1);
+                columns.extend_from_slice(batch.columns());
+                columns.push(mark_col);
+                let output = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+                self.coalescer.push_batch(output)?;
+            }
+            JoinType::LeftSemi | JoinType::RightSemi => {
+                let selection = BooleanArray::new(matched_buf, None);
+                let filtered = filter_record_batch(batch, &selection)?;
+                if filtered.num_rows() > 0 {
+                    self.coalescer.push_batch(filtered)?;
+                }
+            }
+            JoinType::LeftAnti | JoinType::RightAnti => {
+                let selection = not(&BooleanArray::new(matched_buf, None))?;
+                let filtered = filter_record_batch(batch, &selection)?;
+                if filtered.num_rows() > 0 {
+                    self.coalescer.push_batch(filtered)?;
+                }
+            }
+            _ => unreachable!(),
         }
         Ok(())
     }
@@ -513,13 +579,12 @@ impl SemiAntiSortMergeJoinStream {
         let outer_batch = self.outer_batch.as_ref().unwrap();
         let num_outer = outer_batch.num_rows();
 
+        self.get_outer_self_cmp()?;
         let outer_group_end = find_key_group_end(
-            &self.outer_key_arrays,
+            self.outer_self_cmp.as_ref().unwrap(),
             self.outer_offset,
             num_outer,
-            &self.sort_options,
-            self.null_equality,
-        )?;
+        );
 
         for i in self.outer_offset..outer_group_end {
             self.matched.set_bit(i, true);
@@ -542,13 +607,12 @@ impl SemiAntiSortMergeJoinStream {
             };
             let num_inner = inner_batch.num_rows();
 
+            self.get_inner_self_cmp()?;
             let group_end = find_key_group_end(
-                &self.inner_key_arrays,
+                self.inner_self_cmp.as_ref().unwrap(),
                 self.inner_offset,
                 num_inner,
-                &self.sort_options,
-                self.null_equality,
-            )?;
+            );
 
             if group_end < num_inner {
                 self.inner_offset = group_end;
@@ -600,20 +664,19 @@ impl SemiAntiSortMergeJoinStream {
         }
 
         loop {
-            let inner_batch = match &self.inner_batch {
-                Some(b) => b,
-                None => return Poll::Ready(Ok(true)),
-            };
-            let num_inner = inner_batch.num_rows();
+            if self.inner_batch.is_none() {
+                return Poll::Ready(Ok(true));
+            }
+            let num_inner = self.inner_batch.as_ref().unwrap().num_rows();
+            self.get_inner_self_cmp()?;
             let group_end = find_key_group_end(
-                &self.inner_key_arrays,
+                self.inner_self_cmp.as_ref().unwrap(),
                 self.inner_offset,
                 num_inner,
-                &self.sort_options,
-                self.null_equality,
-            )?;
+            );
 
             if !resume_from_poll {
+                let inner_batch = self.inner_batch.as_ref().unwrap();
                 let slice =
                     inner_batch.slice(self.inner_offset, group_end - self.inner_offset);
                 self.inner_buffer_size += slice.get_array_memory_size();
@@ -677,6 +740,7 @@ impl SemiAntiSortMergeJoinStream {
     /// key group, evaluates the filter against the outer key group and ORs
     /// the results into the matched bitset using u64-chunked bitwise ops.
     fn process_key_match_with_filter(&mut self) -> Result<()> {
+        self.get_outer_self_cmp()?;
         let filter = self.filter.as_ref().unwrap();
         let outer_batch = self.outer_batch.as_ref().unwrap();
         let num_outer = outer_batch.num_rows();
@@ -696,12 +760,10 @@ impl SemiAntiSortMergeJoinStream {
         );
 
         let outer_group_end = find_key_group_end(
-            &self.outer_key_arrays,
+            self.outer_self_cmp.as_ref().unwrap(),
             self.outer_offset,
             num_outer,
-            &self.sort_options,
-            self.null_equality,
-        )?;
+        );
         let outer_group_len = outer_group_end - self.outer_offset;
         let outer_slice = outer_batch.slice(self.outer_offset, outer_group_len);
 
@@ -917,34 +979,30 @@ impl SemiAntiSortMergeJoinStream {
             }
 
             // 4. Compare keys at current positions
-            let cmp = compare_join_arrays(
-                &self.outer_key_arrays,
-                self.outer_offset,
-                &self.inner_key_arrays,
-                self.inner_offset,
-                &self.sort_options,
-                self.null_equality,
-            )?;
+            self.get_outer_inner_cmp()?;
+            let cmp = self
+                .outer_inner_cmp
+                .as_ref()
+                .unwrap()
+                .compare(self.outer_offset, self.inner_offset);
 
             match cmp {
                 Ordering::Less => {
+                    self.get_outer_self_cmp()?;
                     let group_end = find_key_group_end(
-                        &self.outer_key_arrays,
+                        self.outer_self_cmp.as_ref().unwrap(),
                         self.outer_offset,
                         num_outer,
-                        &self.sort_options,
-                        self.null_equality,
-                    )?;
+                    );
                     self.outer_offset = group_end;
                 }
                 Ordering::Greater => {
+                    self.get_inner_self_cmp()?;
                     let group_end = find_key_group_end(
-                        &self.inner_key_arrays,
+                        self.inner_self_cmp.as_ref().unwrap(),
                         self.inner_offset,
                         num_inner,
-                        &self.sort_options,
-                        self.null_equality,
-                    )?;
+                    );
                     if group_end >= num_inner {
                         let saved_keys =
                             slice_keys(&self.inner_key_arrays, num_inner - 1);
@@ -1184,7 +1242,7 @@ fn keys_match(
 
 /// Evaluate the join filter for one inner row against a slice of outer rows.
 ///
-/// Free function (not a method on SemiAntiSortMergeJoinStream) so that Rust
+/// Free function (not a method on BitwiseSortMergeJoinStream) so that Rust
 /// can split the struct borrow in process_key_match_with_filter: the caller
 /// holds &mut self.matched and &self.inner_key_buffer simultaneously, which
 /// is impossible if this borrows all of &self.
@@ -1257,7 +1315,7 @@ fn evaluate_filter_for_inner_row(
     }
 }
 
-impl Stream for SemiAntiSortMergeJoinStream {
+impl Stream for BitwiseSortMergeJoinStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -1269,7 +1327,7 @@ impl Stream for SemiAntiSortMergeJoinStream {
     }
 }
 
-impl RecordBatchStream for SemiAntiSortMergeJoinStream {
+impl RecordBatchStream for BitwiseSortMergeJoinStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

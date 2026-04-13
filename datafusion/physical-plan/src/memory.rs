@@ -300,10 +300,6 @@ impl ExecutionPlan for LazyMemoryExec {
         "LazyMemoryExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
