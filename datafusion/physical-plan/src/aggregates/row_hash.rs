@@ -674,10 +674,14 @@ impl GroupedHashAggregateStream {
         };
 
         // Overflow passthrough requires convert_to_state support
-        // (same requirement as skip_aggregation_probe)
+        // (same requirement as skip_aggregation_probe) and no distinct
+        // aggregates (convert_to_state for distinct produces per-row
+        // state objects that are catastrophically expensive to merge).
+        let has_distinct = aggregate_exprs.iter().any(|e| e.is_distinct());
         let overflow_passthrough_max_table_size = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
             && skip_aggregation_probe.is_some()
+            && !has_distinct
         {
             context
                 .session_config()
