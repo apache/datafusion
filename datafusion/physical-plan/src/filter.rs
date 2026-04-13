@@ -748,6 +748,21 @@ impl ExecutionPlan for FilterExec {
                     .ok()
             })
     }
+
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // FilterExec preserves schema — delegate straight through
+        match self.input.try_pushdown_groupby_order(group_exprs)? {
+            Some(new_input) => {
+                let new_exec =
+                    Arc::new(self.clone()).with_new_children(vec![new_input])?;
+                Ok(Some(new_exec))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 impl EmbeddedProjection for FilterExec {
