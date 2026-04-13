@@ -242,7 +242,7 @@ pub fn new_group_values(
                             >::new(value_type)))
                         }
                         _ => Err(datafusion_common::DataFusionError::NotImplemented(
-                            format!("Unsupported dictionary key type: {:?}", key_type),
+                            format!("Unsupported dictionary key type: {key_type:?}",),
                         )),
                     };
                 }

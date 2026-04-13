@@ -24,6 +24,7 @@ use datafusion_expr::EmitTo;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::mem;
+use std::sync::Arc;
 pub struct GroupValuesDictionary<K: ArrowDictionaryKeyType + Send> {
     /*
     We know that every single &[ArrayRef] that is passed in is a dictionary array
@@ -91,7 +92,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
                 "GroupValuesDictionary only supports single column group by".to_string(),
             ));
         }
-        let array = cols[0].clone();
+        let array = Arc::clone(&cols[0]);
         groups.clear(); // zero out buffer
         let dict_array = array
             .as_any()
@@ -169,7 +170,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
         let values = ScalarValue::iter_to_array(columns.into_iter())?;
 
         let dict_array = DictionaryArray::<K>::try_new(keys, values)?;
-        Ok(vec![std::sync::Arc::new(dict_array)])
+        Ok(vec![Arc::new(dict_array)])
     }
     fn clear_shrink(&mut self, num_rows: usize) {
         self.seen_elements.clear();
@@ -214,26 +215,21 @@ mod group_values_trait_test {
         assert_eq!(result.len(), 1, "Expected exactly one array in emit result");
         let array = &result[0];
 
-        // Check the data type explicitly
         match array.data_type() {
             DataType::Dictionary(key_type, value_type) => {
                 // Verify it's the expected key type (UInt8 in our tests)
                 match key_type.as_ref() {
-                    DataType::UInt8 => {
-                        println!("Dictionary key type is UInt8");
-                    }
-                    other => panic!("Expected UInt8 key type, got {:?}", other),
+                    DataType::UInt8 => {}
+                    other => panic!("Expected UInt8 key type, got {other:?}"),
                 }
 
                 // Verify it's the expected value type (Utf8 in our tests)
                 match value_type.as_ref() {
-                    DataType::Utf8 => {
-                        println!("Dictionary value type is Utf8");
-                    }
-                    other => panic!("Expected Utf8 value type, got {:?}", other),
+                    DataType::Utf8 => {}
+                    other => panic!("Expected Utf8 value type, got {other:?}"),
                 }
             }
-            other => panic!("Expected DictionaryArray, got {:?}", other),
+            other => panic!("Expected DictionaryArray, got {other:?}"),
         }
 
         // Now verify we can actually downcast to the expected types
@@ -247,47 +243,7 @@ mod group_values_trait_test {
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("Dictionary values should be StringArray");
-
-        println!(
-            "Emitted array has correct composite type: Dictionary<UInt8, Utf8(StringArray)>"
-        );
     }
-
-    /*
-    cargo test --package datafusion-physical-plan --lib -- aggregates::group_values::single_group_by::dictionary::group_values_trait_test::test_group_values_dictionary --exact --nocapture --include-ignored
-
-    fn run_groupvalue_test_suite() -> Result<()> {
-        let tests: Vec<(&str, fn(&mut dyn GroupValues))> = vec![
-            ("test_single_group_all_same_values", basic_functionality::test_single_group_all_same_values),
-            ("test_multiple_groups", basic_functionality::test_multiple_groups),
-            ("test_all_different_values", basic_functionality::test_all_different_values),
-            ("test_empty_batch", edge_cases::test_empty_batch),
-            ("test_single_row", edge_cases::test_single_row),
-            ("test_repeated_pattern", edge_cases::test_repeated_pattern),
-            ("test_multiple_columns_passed", multi_column::test_multiple_columns_passed),
-            ("test_consecutive_batches_then_emit", consecutive_batches::test_consecutive_batches_then_emit),
-            ("test_three_consecutive_batches_with_partial_emit", consecutive_batches::test_three_consecutive_batches_with_partial_emit),
-            ("test_size_grows_after_intern", state_management::test_size_grows_after_intern),
-            ("test_complex_emit_flow_with_multiple_internS", state_management::test_complex_emit_flow_with_multiple_internS),
-            ("test_clear_shrink_resets_state", state_management::test_clear_shrink_resets_state),
-            ("test_clear_shrink_with_zero", state_management::test_clear_shrink_with_zero),
-            ("test_emit_all_clears_state", state_management::test_emit_all_clears_state),
-            ("test_emit_first_n", state_management::test_emit_first_n),
-            ("test_group_assignment_order", data_correctness::test_group_assignment_order),
-            ("test_groups_vector_correctness_first_appearance", data_correctness::test_groups_vector_correctness_first_appearance),
-            ("test_groups_vector_sequential_assignment", data_correctness::test_groups_vector_sequential_assignment),
-            ("test_emit_partial_preserves_state", data_correctness::test_emit_partial_preserves_state),
-            ("test_emit_restores_intern_ability", data_correctness::test_emit_restores_intern_ability),
-        ];
-        for (name, test_function) in tests {
-            let mut group_values = GroupValuesDictionary::<arrow::datatypes::UInt8Type>::new(&DataType::Utf8);
-            println!("Running test: {name}");
-            test_function(&mut group_values);
-        }
-
-        Ok(())
-    }
-    */
 
     mod basic_functionality {
         use super::*;
@@ -547,8 +503,7 @@ mod group_values_trait_test {
                     .collect();
                 assert!(
                     unexpected_values.is_empty(),
-                    "Emitted unexpected values: {:#?}",
-                    unexpected_values
+                    "Emitted unexpected values: {unexpected_values:#?}"
                 );
             });
         }
@@ -761,7 +716,7 @@ mod group_values_trait_test {
             assert_eq!(
                 group_values_trait_obj.len(),
                 2,
-                "After emitting 2, should have 2 left"
+                "After emitting 2, should have 2 left (c, d)"
             );
 
             let batch2 = create_dict_array(vec![0, 1, 2], vec!["a", "b", "e"]);
@@ -771,29 +726,31 @@ mod group_values_trait_test {
                 .unwrap();
             assert_eq!(
                 group_values_trait_obj.len(),
-                3,
-                "After second intern, should have 3 groups"
+                5,
+                "After second intern: 2 remaining (c,d) + 3 new from batch2 (a,b,e) = 5 groups"
             );
 
-            let _result = group_values_trait_obj.emit(EmitTo::First(1)).unwrap();
+            let result = group_values_trait_obj.emit(EmitTo::First(1)).unwrap();
+            assert_emitted_is_dict_array(&result);
             assert_eq!(
                 group_values_trait_obj.len(),
-                2,
-                "After emitting 1 more, should have 2 left"
+                4,
+                "After emitting 1 more (c), should have 4 left (d,a,b,e)"
             );
 
-            let batch3 = create_dict_array(vec![2, 5, 6], vec!["a", "f", "g"]);
+            let batch3 = create_dict_array(vec![0, 1, 2], vec!["a", "f", "g"]);
             let mut groups_vector3 = Vec::new();
             group_values_trait_obj
                 .intern(&[batch3], &mut groups_vector3)
                 .unwrap();
             assert_eq!(
                 group_values_trait_obj.len(),
-                4,
-                "After third intern, should have 4 groups"
+                6,
+                "After third intern: 4 remaining (d,a,b,e) + 2 new from batch3 (f,g) = 6 groups (a already exists)"
             );
 
-            let _result = group_values_trait_obj.emit(EmitTo::All).unwrap();
+            let result = group_values_trait_obj.emit(EmitTo::All).unwrap();
+            assert_emitted_is_dict_array(&result);
             assert!(
                 group_values_trait_obj.is_empty(),
                 "After emitting all, should be empty"

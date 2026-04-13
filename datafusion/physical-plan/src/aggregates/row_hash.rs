@@ -1744,11 +1744,12 @@ mod dictionary_aggregation {
             Field::new("event_id", DataType::Int64, false),
         ]));
 
-        let batch = RecordBatch::try_new(schema.clone(), vec![region_col, event_id_col])?;
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![region_col, event_id_col])?;
 
         let exec = Arc::new(TestMemoryExec::try_new(
             &[vec![batch]],
-            schema.clone(),
+            Arc::clone(&schema),
             None,
         )?);
 
@@ -1766,7 +1767,7 @@ mod dictionary_aggregation {
             )],
             vec![None],
             exec,
-            schema,
+            Arc::clone(&schema),
         )?;
 
         let task_ctx = Arc::new(TaskContext::default());
@@ -1782,7 +1783,7 @@ mod dictionary_aggregation {
         // verify we got 3 groups - one per distinct region
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
-        dbg!("record batches: {:#?}", batches);
+        dbg!("record batches: {batches:#?}");
 
         Ok(())
     }
