@@ -437,6 +437,18 @@ pub(crate) struct GroupedHashAggregateStream {
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
+    /// Maximum size (in bytes) of the hash table before emitting
+    /// intermediate state and resetting during partial aggregation.
+    /// 0 means disabled.
+    early_emit_max_table_size: usize,
+
+    /// Two-generation early emission: the previous generation's partial
+    /// state batch. When the hot hash table fills up, we emit this cold
+    /// batch (if any), then store the hot table's state as the new cold
+    /// batch. Groups appearing across multiple generations get merged
+    /// locally before being sent downstream.
+    early_emit_cold_batch: Option<RecordBatch>,
+
     // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
@@ -649,6 +661,18 @@ impl GroupedHashAggregateStream {
             None
         };
 
+        let early_emit_max_table_size = if agg.mode == AggregateMode::Partial
+            && matches!(group_ordering, GroupOrdering::None)
+        {
+            context
+                .session_config()
+                .options()
+                .execution
+                .partial_aggregation_max_table_size
+        } else {
+            0
+        };
+
         let reduction_factor = if agg.mode == AggregateMode::Partial {
             Some(
                 MetricBuilder::new(&agg.metrics)
@@ -680,6 +704,8 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
+            early_emit_max_table_size,
+            early_emit_cold_batch: None,
             reduction_factor,
         })
     }
@@ -780,6 +806,39 @@ impl Stream for GroupedHashAggregateStream {
                                 }
                             }
 
+                            // Two-generation early emission: keeps the hash table
+                            // small enough to fit in CPU cache while giving
+                            // recurring groups a second chance to be merged locally.
+                            //
+                            // When the hot table fills:
+                            // 1. Emit the cold batch (previous generation) if any
+                            // 2. Promote current hot table state → cold batch
+                            // 3. Reset hot table and continue reading
+                            if self.early_emit_max_table_size > 0 {
+                                let table_size = self.group_values.size()
+                                    + self
+                                        .accumulators
+                                        .iter()
+                                        .map(|x| x.size())
+                                        .sum::<usize>();
+                                if table_size >= self.early_emit_max_table_size {
+                                    // Take the cold batch to emit
+                                    let to_emit = self.early_emit_cold_batch.take();
+                                    // Promote hot → cold
+                                    let batch_size = self.batch_size;
+                                    self.early_emit_cold_batch =
+                                        self.emit(EmitTo::All, false)?;
+                                    self.clear_shrink(batch_size);
+                                    // Emit the previous cold batch if we had one
+                                    if let Some(batch) = to_emit {
+                                        timer.done();
+                                        self.exec_state =
+                                            ExecutionState::ProducingOutput(batch);
+                                        break 'reading_input;
+                                    }
+                                }
+                            }
+
                             // If we reach this point, try to update the memory reservation
                             // handling out-of-memory conditions as determined by the OOM mode.
                             if let Some(new_state) =
@@ -834,7 +893,12 @@ impl Stream for GroupedHashAggregateStream {
                                     self.group_values.len()
                                 )));
                             }
-                            self.exec_state = ExecutionState::Done;
+                            // Emit any remaining cold batch from early emission
+                            if let Some(batch) = self.early_emit_cold_batch.take() {
+                                self.exec_state = ExecutionState::ProducingOutput(batch);
+                            } else {
+                                self.exec_state = ExecutionState::Done;
+                            }
                         }
                     }
                 }
@@ -843,22 +907,31 @@ impl Stream for GroupedHashAggregateStream {
                     // slice off a part of the batch, if needed
                     let output_batch;
                     let size = self.batch_size;
+                    let batch = batch.clone();
                     (self.exec_state, output_batch) = if batch.num_rows() <= size {
-                        (
-                            if self.input_done {
+                        let next_state = if self.input_done {
+                            // Emit remaining cold batch before finishing
+                            if let Some(cold) = self.early_emit_cold_batch.take() {
+                                ExecutionState::ProducingOutput(cold)
+                            } else {
                                 ExecutionState::Done
                             }
-                            // In Partial aggregation, we also need to check
-                            // if we should trigger partial skipping
-                            else if self.mode == AggregateMode::Partial
-                                && self.should_skip_aggregation()
-                            {
-                                ExecutionState::SkippingAggregation
+                        }
+                        // In Partial aggregation, we also need to check
+                        // if we should trigger partial skipping
+                        else if self.mode == AggregateMode::Partial
+                            && self.should_skip_aggregation()
+                        {
+                            // Flush cold batch before switching to skip mode
+                            if let Some(cold) = self.early_emit_cold_batch.take() {
+                                ExecutionState::ProducingOutput(cold)
                             } else {
-                                ExecutionState::ReadingInput
-                            },
-                            batch.clone(),
-                        )
+                                ExecutionState::SkippingAggregation
+                            }
+                        } else {
+                            ExecutionState::ReadingInput
+                        };
+                        (next_state, batch)
                     } else {
                         // output first batch_size rows
                         let size = self.batch_size;
@@ -1221,14 +1294,25 @@ impl GroupedHashAggregateStream {
         self.group_ordering.input_done();
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
+
         self.exec_state = if self.spill_state.spills.is_empty() {
             // Input has been entirely processed without spilling to disk.
 
-            // Flush any remaining group values.
+            // Flush any remaining group values from the hot table.
+            // The cold batch (if any) remains in early_emit_cold_batch
+            // and will be emitted when ProducingOutput transitions to Done.
             let batch = self.emit(EmitTo::All, false)?;
 
-            // If there are none, we're done; otherwise switch to emitting them
-            batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
+            // If there are none but we have a cold batch, emit that instead
+            match (batch, self.early_emit_cold_batch.take()) {
+                (Some(hot), Some(cold)) => {
+                    // Emit hot first; store cold for next poll
+                    self.early_emit_cold_batch = Some(cold);
+                    ExecutionState::ProducingOutput(hot)
+                }
+                (Some(b), None) | (None, Some(b)) => ExecutionState::ProducingOutput(b),
+                (None, None) => ExecutionState::Done,
+            }
         } else {
             // Spill any remaining data to disk. There is some performance overhead in
             // writing out this last chunk of data and reading it back. The benefit of
