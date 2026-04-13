@@ -825,14 +825,11 @@ impl Stream for GroupedHashAggregateStream {
                             // prevents early emission from interfering with
                             // very-high-cardinality queries (ratio >= 0.8)
                             // where the skip probe should take over entirely.
-                            let early_emit_enabled =
-                                self.early_emit_max_table_size > 0
-                                    && match &self.skip_aggregation_probe {
-                                        None => true,
-                                        Some(p) => {
-                                            p.ratio().is_some() && !p.should_skip()
-                                        }
-                                    };
+                            let early_emit_enabled = self.early_emit_max_table_size > 0
+                                && match &self.skip_aggregation_probe {
+                                    None => true,
+                                    Some(p) => p.ratio().is_some() && !p.should_skip(),
+                                };
                             if early_emit_enabled {
                                 let table_size = self.group_values.size()
                                     + self
