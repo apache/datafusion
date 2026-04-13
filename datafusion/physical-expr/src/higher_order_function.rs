@@ -348,7 +348,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                 ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
             } else {
                 internal_err!(
-                    "UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
+                    "UDHOF {} returned a different number of rows than expected. Expected: {}, Got: {}",
                     self.name,
                     batch.num_rows(),
                     array.len()
