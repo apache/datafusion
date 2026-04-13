@@ -439,37 +439,51 @@ impl PreparedAccessPlan {
             }
         };
 
-        // Get min values for the selected row groups
+        // Get the relevant statistics for the selected row groups.
+        // For ASC sort: use min values — we want the RG with the smallest min
+        //   to come first (best candidate for "smallest values").
+        // For DESC sort: use max values — we want the RG with the largest max
+        //   to come first (best candidate for "largest values"). Using min for
+        //   DESC can pick a worse first RG when ranges overlap (e.g., RG0 50-60
+        //   vs RG1 40-100 — RG1 has larger values but smaller min).
         let rg_metadata: Vec<&RowGroupMetaData> = self
             .row_group_indexes
             .iter()
             .map(|&idx| file_metadata.row_group(idx))
             .collect();
 
-        let min_values = match converter.row_group_mins(rg_metadata.iter().copied()) {
-            Ok(vals) => vals,
-            Err(e) => {
-                debug!("Skipping RG reorder: cannot get min values: {e}");
-                return Ok(self);
+        let stat_values = if descending {
+            match converter.row_group_maxes(rg_metadata.iter().copied()) {
+                Ok(vals) => vals,
+                Err(e) => {
+                    debug!("Skipping RG reorder: cannot get max values: {e}");
+                    return Ok(self);
+                }
+            }
+        } else {
+            match converter.row_group_mins(rg_metadata.iter().copied()) {
+                Ok(vals) => vals,
+                Err(e) => {
+                    debug!("Skipping RG reorder: cannot get min values: {e}");
+                    return Ok(self);
+                }
             }
         };
 
-        // Sort indices by min values
+        // Sort indices by statistic values (min for ASC, max for DESC)
         let sort_options = arrow::compute::SortOptions {
             descending,
             nulls_first: first_sort_expr.options.nulls_first,
         };
-        let sorted_indices = match arrow::compute::sort_to_indices(
-            &min_values,
-            Some(sort_options),
-            None,
-        ) {
-            Ok(indices) => indices,
-            Err(e) => {
-                debug!("Skipping RG reorder: sort failed: {e}");
-                return Ok(self);
-            }
-        };
+        let sorted_indices =
+            match arrow::compute::sort_to_indices(&stat_values, Some(sort_options), None)
+            {
+                Ok(indices) => indices,
+                Err(e) => {
+                    debug!("Skipping RG reorder: sort failed: {e}");
+                    return Ok(self);
+                }
+            };
 
         // Apply the reordering
         let original_indexes = self.row_group_indexes.clone();
@@ -821,7 +835,7 @@ mod test {
             .reorder_by_statistics(&sort_order, &metadata, &schema)
             .unwrap();
 
-        // DESC: largest min first: RG1(200-299), RG0(50-99), RG2(1-30)
+        // DESC: largest max first: RG1(max=299), RG0(max=99), RG2(max=30)
         assert_eq!(plan.row_group_indexes, vec![1, 0, 2]);
     }
 
@@ -920,6 +934,31 @@ mod test {
 
         // Should NOT reorder because sort expr is not a simple column
         assert_eq!(plan.row_group_indexes, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_reorder_by_statistics_desc_uses_max_for_overlapping_rgs() {
+        // Overlapping ranges where min DESC would pick worse RG than max DESC:
+        //   RG0: 50-60 (small range, moderate max)
+        //   RG1: 40-100 (wide range, high max but lower min)
+        //   RG2: 20-30 (low max)
+        //
+        // For ORDER BY DESC LIMIT N:
+        //   Using min DESC: [RG0(50), RG1(40), RG2(20)] → reads RG0 first (max=60 only)
+        //   Using max DESC: [RG1(100), RG0(60), RG2(30)] → reads RG1 first (max=100)
+        //
+        // RG1 is the better first choice for DESC because it contains the largest values.
+        let metadata = make_metadata_with_stats(&[(50, 60), (40, 100), (20, 30)]);
+        let schema = make_arrow_schema();
+        let sort_order = make_sort_order_desc();
+
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = plan
+            .reorder_by_statistics(&sort_order, &metadata, &schema)
+            .unwrap();
+
+        // Expected: RG1 (max=100) first, then RG0 (max=60), then RG2 (max=30)
+        assert_eq!(plan.row_group_indexes, vec![1, 0, 2]);
     }
 
     #[test]
