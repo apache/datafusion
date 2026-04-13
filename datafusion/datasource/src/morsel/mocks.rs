@@ -243,6 +243,77 @@ struct MockPendingPlanner {
     result: std::result::Result<(), MockError>,
 }
 
+/// Builder for one mock `PlannerStep::Plan`.
+#[derive(Debug, Default)]
+pub(crate) struct MockPlanBuilder {
+    morsels: Vec<MockMorselSpec>,
+    ready_planners: Vec<MockPlanner>,
+    pending_planner: Option<MockPendingPlanner>,
+}
+
+impl MockPlanBuilder {
+    /// Create an empty mock plan.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add one ready morsel with a single batch.
+    pub(crate) fn with_morsel(mut self, morsel_id: MorselId, batch_id: i32) -> Self {
+        self.morsels.push(MockMorselSpec {
+            morsel_id,
+            batch_ids: vec![batch_id],
+        });
+        self
+    }
+
+    /// Add one ready morsel with multiple batches.
+    pub(crate) fn with_morsel_batches(
+        mut self,
+        morsel_id: MorselId,
+        batch_ids: Vec<i32>,
+    ) -> Self {
+        self.morsels.push(MockMorselSpec {
+            morsel_id,
+            batch_ids,
+        });
+        self
+    }
+
+    /// Add ready planners produced by this planning step.
+    #[allow(dead_code)]
+    pub(crate) fn with_ready_planners(
+        mut self,
+        ready_planners: Vec<MockPlanner>,
+    ) -> Self {
+        self.ready_planners.extend(ready_planners);
+        self
+    }
+
+    /// Add a pending planner I/O future produced by this planning step.
+    pub(crate) fn with_pending_planner(
+        mut self,
+        io_future_id: IoFutureId,
+        polls_to_resolve: PollsToResolve,
+        result: std::result::Result<(), MockError>,
+    ) -> Self {
+        self.pending_planner = Some(MockPendingPlanner {
+            io_future_id,
+            polls_to_resolve,
+            result,
+        });
+        self
+    }
+
+    /// Build the planner step.
+    fn build(self) -> PlannerStep {
+        PlannerStep::Plan {
+            morsels: self.morsels,
+            ready_planners: self.ready_planners,
+            pending_planner: self.pending_planner,
+        }
+    }
+}
+
 /// Fluent builder for [`MockPlanner`] test specs.
 #[derive(Debug, Default)]
 pub(crate) struct MockPlannerBuilder {
@@ -251,21 +322,14 @@ pub(crate) struct MockPlannerBuilder {
 }
 
 impl MockPlannerBuilder {
-    fn add_plan_step(mut self, step: PlannerStep) -> Self {
-        self.steps.push(step);
+    pub(crate) fn add_plan_step(mut self, plan: MockPlanBuilder) -> Self {
+        self.steps.push(plan.build());
         self
     }
 
     /// Adds one planning step that returns a single ready morsel.
     pub(crate) fn return_morsel(self, morsel_id: MorselId, batch_id: i32) -> Self {
-        self.add_plan_step(PlannerStep::Plan {
-            morsels: vec![MockMorselSpec {
-                morsel_id,
-                batch_ids: vec![batch_id],
-            }],
-            ready_planners: vec![],
-            pending_planner: None,
-        })
+        self.add_plan_step(MockPlanBuilder::new().with_morsel(morsel_id, batch_id))
     }
 
     /// Adds one planning step that returns a morsel with multiple ready batches.
@@ -274,14 +338,9 @@ impl MockPlannerBuilder {
         morsel_id: MorselId,
         batch_ids: Vec<i32>,
     ) -> Self {
-        self.add_plan_step(PlannerStep::Plan {
-            morsels: vec![MockMorselSpec {
-                morsel_id,
-                batch_ids,
-            }],
-            ready_planners: vec![],
-            pending_planner: None,
-        })
+        self.add_plan_step(
+            MockPlanBuilder::new().with_morsel_batches(morsel_id, batch_ids),
+        )
     }
 
     /// Adds one planning step that returns a single outstanding I/O future.
@@ -290,15 +349,11 @@ impl MockPlannerBuilder {
         io_future_id: IoFutureId,
         polls_to_resolve: PollsToResolve,
     ) -> Self {
-        self.add_plan_step(PlannerStep::Plan {
-            morsels: vec![],
-            ready_planners: vec![],
-            pending_planner: Some(MockPendingPlanner {
-                io_future_id,
-                polls_to_resolve,
-                result: Ok(()),
-            }),
-        })
+        self.add_plan_step(MockPlanBuilder::new().with_pending_planner(
+            io_future_id,
+            polls_to_resolve,
+            Ok(()),
+        ))
     }
 
     /// Adds one planning step that returns a failing I/O future.
@@ -308,37 +363,11 @@ impl MockPlannerBuilder {
         polls_to_resolve: PollsToResolve,
         message: impl Into<String>,
     ) -> Self {
-        self.add_plan_step(PlannerStep::Plan {
-            morsels: vec![],
-            ready_planners: vec![],
-            pending_planner: Some(MockPendingPlanner {
-                io_future_id,
-                polls_to_resolve,
-                result: Err(MockError(message.into())),
-            }),
-        })
-    }
-
-    /// Adds one planning step that returns ready morsels and then parks on I/O.
-    pub(crate) fn return_morsel_batches_and_io(
-        self,
-        morsel_id: MorselId,
-        batch_ids: Vec<i32>,
-        io_future_id: IoFutureId,
-        polls_to_resolve: PollsToResolve,
-    ) -> Self {
-        self.add_plan_step(PlannerStep::Plan {
-            morsels: vec![MockMorselSpec {
-                morsel_id,
-                batch_ids,
-            }],
-            ready_planners: vec![],
-            pending_planner: Some(MockPendingPlanner {
-                io_future_id,
-                polls_to_resolve,
-                result: Ok(()),
-            }),
-        })
+        self.add_plan_step(MockPlanBuilder::new().with_pending_planner(
+            io_future_id,
+            polls_to_resolve,
+            Err(MockError(message.into())),
+        ))
     }
 
     /// Adds one planning step that reports the planner is exhausted.

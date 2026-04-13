@@ -172,7 +172,8 @@ enum FileStreamState {
 mod tests {
     use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
     use crate::morsel::mocks::{
-        IoFutureId, MockMorselizer, MockPlanner, MorselId, PollsToResolve,
+        IoFutureId, MockMorselizer, MockPlanBuilder, MockPlanner, MorselId,
+        PollsToResolve,
     };
     use crate::tests::make_partition;
     use crate::{PartitionedFile, TableSchema};
@@ -820,11 +821,10 @@ mod tests {
     async fn morsel_pending_planner_does_not_block_active_reader() -> Result<()> {
         let test = FileStreamMorselTest::new().with_file(
             MockPlanner::builder("file1.parquet")
-                .return_morsel_batches_and_io(
-                    MorselId(10),
-                    vec![41, 42],
-                    IoFutureId(1),
-                    PollsToResolve(3),
+                .add_plan_step(
+                    MockPlanBuilder::new()
+                        .with_morsel_batches(MorselId(10), vec![41, 42])
+                        .with_pending_planner(IoFutureId(1), PollsToResolve(3), Ok(())),
                 )
                 .return_morsel(MorselId(11), 43)
                 .return_none()
