@@ -22,11 +22,10 @@ use datafusion::logical_expr::{
     Coercion, ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_common::types::{logical_date, logical_string};
-use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, internal_err, plan_err, ScalarValue};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
-use datafusion_functions::utils::make_scalar_function;
 use std::sync::Arc;
+use arrow::util::display::FormatOptions;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDayName {
@@ -82,18 +81,41 @@ impl ScalarUDFImpl for SparkDayName {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(spark_day_name, vec![])(&args.args)
+        if args.args.len() != 1 {
+            return plan_err!("dayname expects exactly 1 argument");
+        }
+        let cast_options = CastOptions {
+            safe: args.config_options.execution.enable_ansi_mode,
+            format_options: FormatOptions::default(),
+        };
+        match &args.args[0] {
+            ColumnarValue::Array(array) => {
+                let array = spark_day_name_array(array, cast_options)?;
+                Ok(ColumnarValue::Array(array))
+            }
+            ColumnarValue::Scalar(scalar) => {
+                let scalar = spark_day_name_scalar(scalar, cast_options)?;
+                Ok(ColumnarValue::Scalar(scalar))
+            }
+        }
     }
 }
 
-fn spark_day_name(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [array] = take_function_args("dayname", args)?;
+fn spark_day_name_scalar(scalar: &ScalarValue, cast_options: &CastOptions) -> Result<ScalarValue> {
+    match scalar.data_type() {
+        DataType::Date32 | DataType::Timestamp(_, _) => unimplemented!(),
+        other => {
+            internal_err!("Unsupported arg {other:?} for Spark function `dayname`")
+        }
+    }
+}
+
+fn spark_day_name_array(array: &ArrayRef, cast_options: &CastOptions) -> Result<ArrayRef> {
     match array.data_type() {
-        DataType::Date32 | DataType::Timestamp(_, _) => spark_day_name_inner(array),
+        DataType::Date32 | DataType::Timestamp(_, _) => spark_day_name_array_inner(array),
         DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-            let date_array =
-                cast_with_options(array, &DataType::Date32, &CastOptions::default())?;
-            spark_day_name_inner(&date_array)
+            let date_array = cast_with_options(array, &DataType::Date32, cast_options)?;
+            spark_day_name_array_inner(&date_array)
         }
         other => {
             internal_err!("Unsupported arg {other:?} for Spark function `dayname`")
@@ -101,7 +123,7 @@ fn spark_day_name(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn spark_day_name_inner(array: &ArrayRef) -> Result<ArrayRef> {
+fn spark_day_name_array_inner(array: &ArrayRef) -> Result<ArrayRef> {
     let result: StringArray = date_part(array, DatePart::DayOfWeekMonday0)?
         .as_primitive::<Int32Type>()
         .iter()
