@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::internal_datafusion_err;
 use std::collections::VecDeque;
 use std::task::{Context, Poll};
 
@@ -35,6 +36,11 @@ use super::{FileStreamMetrics, OnError};
 /// It groups together the lifecycle of scanning that partition's files:
 /// unopened files, CPU-ready planners, pending planner I/O, ready morsels,
 /// the active reader, and the metrics associated with processing that work.
+///
+/// # I/O
+///
+/// To avoid challenges controlling buffering, the ScanState only ever has a
+/// single I/O outstanding at any time.
 ///
 /// # State Transitions
 ///
@@ -70,7 +76,7 @@ pub(super) struct ScanState {
     ready_morsels: VecDeque<Box<dyn Morsel>>,
     /// The active reader, if any.
     reader: Option<BoxStream<'static, Result<RecordBatch>>>,
-    /// The single planner currently blocked on I/O, if any.
+    /// The currently outstanding I/O, if any.
     pending_planner: Option<PendingMorselPlanner>,
     /// Metrics for the active scan queues.
     metrics: FileStreamMetrics,
@@ -118,18 +124,18 @@ impl ScanState {
         let _processing_timer: ScopedTimerGuard<'_> =
             self.metrics.time_processing.timer();
 
-        // Try and resolve outstanding IO first
+        // Try and resolve outstanding IO first. If it is still pending, check
+        // the current reader or ready morsels before yielding. New planning
+        // work must still wait for this I/O to resolve.
         if let Some(mut pending_planner) = self.pending_planner.take() {
             match pending_planner.poll_unpin(cx) {
                 // IO is still pending
                 Poll::Pending => {
                     self.pending_planner = Some(pending_planner);
-                    return ScanAndReturn::Return(Poll::Pending);
                 }
                 // IO resolved, and the planner is ready for CPU work
                 Poll::Ready(Ok(planner)) => {
                     self.ready_planners.push_back(planner);
-                    return ScanAndReturn::Continue;
                 }
                 // IO Error
                 Poll::Ready(Err(err)) => {
@@ -213,6 +219,13 @@ impl ScanState {
             return ScanAndReturn::Continue;
         }
 
+        // Do not start CPU planning or open another file while planner I/O is
+        // still outstanding because they may need additional IO and ScanState
+        // currently only permits a single outstanding IO
+        if self.pending_planner.is_some() {
+            return ScanAndReturn::Return(Poll::Pending);
+        }
+
         // No reader or morsel, so try to produce more work via CPU planning.
         if let Some(planner) = self.ready_planners.pop_front() {
             return match planner.plan() {
@@ -221,6 +234,12 @@ impl ScanState {
                     self.ready_morsels.extend(plan.take_morsels());
                     self.ready_planners.extend(plan.take_ready_planners());
                     if let Some(pending_planner) = plan.take_pending_planner() {
+                        // should not have planned if we have outstanding I/O
+                        if self.pending_planner.is_some() {
+                            return ScanAndReturn::Error(internal_datafusion_err!(
+                                "Conflicting pending planner state in FileStream ScanState"
+                            ));
+                        }
                         self.pending_planner = Some(pending_planner);
                     }
                     ScanAndReturn::Continue
