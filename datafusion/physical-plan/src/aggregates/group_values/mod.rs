@@ -41,7 +41,8 @@ pub(crate) use single_group_by::primitive::HashValue;
 use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+        bytes_view::GroupValuesBytesView, flat::GroupValuesFlatMap,
+        primitive::GroupValuesPrimitive,
     },
     order::GroupOrdering,
 };
@@ -138,43 +139,60 @@ pub fn new_group_values(
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
-        macro_rules! downcast_helper {
+        // Integer-native types use an adaptive flat/hash strategy: starts with
+        // a direct-address flat array for low-cardinality data, and dynamically
+        // falls back to a hash table if the value range grows too large.
+        // See `GroupValuesFlatMap` for details.
+        macro_rules! flat_helper {
+            ($t:ty, $d:ident) => {
+                return Ok(Box::new(GroupValuesFlatMap::<$t>::new($d.clone())))
+            };
+        }
+
+        match d {
+            DataType::Int8 => flat_helper!(arrow::array::types::Int8Type, d),
+            DataType::Int16 => flat_helper!(arrow::array::types::Int16Type, d),
+            DataType::Int32 => flat_helper!(arrow::array::types::Int32Type, d),
+            DataType::Int64 => flat_helper!(arrow::array::types::Int64Type, d),
+            DataType::UInt8 => flat_helper!(arrow::array::types::UInt8Type, d),
+            DataType::UInt16 => flat_helper!(arrow::array::types::UInt16Type, d),
+            DataType::UInt32 => flat_helper!(arrow::array::types::UInt32Type, d),
+            DataType::UInt64 => flat_helper!(arrow::array::types::UInt64Type, d),
+            DataType::Date32 => flat_helper!(Date32Type, d),
+            DataType::Date64 => flat_helper!(Date64Type, d),
+            DataType::Time32(t) => match t {
+                TimeUnit::Second => flat_helper!(Time32SecondType, d),
+                TimeUnit::Millisecond => flat_helper!(Time32MillisecondType, d),
+                _ => {}
+            },
+            DataType::Time64(t) => match t {
+                TimeUnit::Microsecond => flat_helper!(Time64MicrosecondType, d),
+                TimeUnit::Nanosecond => flat_helper!(Time64NanosecondType, d),
+                _ => {}
+            },
+            DataType::Timestamp(t, _tz) => match t {
+                TimeUnit::Second => flat_helper!(TimestampSecondType, d),
+                TimeUnit::Millisecond => flat_helper!(TimestampMillisecondType, d),
+                TimeUnit::Microsecond => flat_helper!(TimestampMicrosecondType, d),
+                TimeUnit::Nanosecond => flat_helper!(TimestampNanosecondType, d),
+            },
+            DataType::Decimal128(_, _) => flat_helper!(Decimal128Type, d),
+            _ => {}
+        }
+
+        // Float types and other non-integer primitives use hash-based lookup.
+        macro_rules! hash_helper {
             ($t:ty, $d:ident) => {
                 return Ok(Box::new(GroupValuesPrimitive::<$t>::new($d.clone())))
             };
         }
 
         downcast_primitive! {
-            d => (downcast_helper, d),
+            d => (hash_helper, d),
             _ => {}
         }
 
         match d {
-            DataType::Date32 => {
-                downcast_helper!(Date32Type, d);
-            }
-            DataType::Date64 => {
-                downcast_helper!(Date64Type, d);
-            }
-            DataType::Time32(t) => match t {
-                TimeUnit::Second => downcast_helper!(Time32SecondType, d),
-                TimeUnit::Millisecond => downcast_helper!(Time32MillisecondType, d),
-                _ => {}
-            },
-            DataType::Time64(t) => match t {
-                TimeUnit::Microsecond => downcast_helper!(Time64MicrosecondType, d),
-                TimeUnit::Nanosecond => downcast_helper!(Time64NanosecondType, d),
-                _ => {}
-            },
-            DataType::Timestamp(t, _tz) => match t {
-                TimeUnit::Second => downcast_helper!(TimestampSecondType, d),
-                TimeUnit::Millisecond => downcast_helper!(TimestampMillisecondType, d),
-                TimeUnit::Microsecond => downcast_helper!(TimestampMicrosecondType, d),
-                TimeUnit::Nanosecond => downcast_helper!(TimestampNanosecondType, d),
-            },
-            DataType::Decimal128(_, _) => {
-                downcast_helper!(Decimal128Type, d);
-            }
             DataType::Utf8 => {
                 return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Utf8)));
             }
