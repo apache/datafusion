@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::strings::make_and_append_view;
+use crate::strings::append_view;
 use arrow::array::{
     Array, ArrayRef, GenericStringArray, GenericStringBuilder, NullBufferBuilder,
     OffsetSizeTrait, StringViewArray, StringViewBuilder, new_null_array,
@@ -152,13 +152,8 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
             {
                 if let Some(src_str) = src_str_opt {
                     let (trimmed, offset) = Tr::trim_ascii_char(src_str, b' ');
-                    make_and_append_view(
-                        &mut views_buf,
-                        &mut null_builder,
-                        raw_view,
-                        trimmed,
-                        offset,
-                    );
+                    append_view(&mut views_buf, raw_view, trimmed, offset);
+                    null_builder.append_non_null();
                 } else {
                     null_builder.append_null();
                     views_buf.push(0);
@@ -204,13 +199,8 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                         pattern.clear();
                         pattern.extend(characters.chars());
                         let (trimmed, offset) = Tr::trim(src_str, &pattern);
-                        make_and_append_view(
-                            &mut views_buf,
-                            &mut null_builder,
-                            raw_view,
-                            trimmed,
-                            offset,
-                        );
+                        append_view(&mut views_buf, raw_view, trimmed, offset);
+                        null_builder.append_non_null();
                     } else {
                         null_builder.append_null();
                         views_buf.push(0);
@@ -261,7 +251,8 @@ fn trim_and_append_view<Tr: Trimmer>(
 ) {
     if let Some(src_str) = src_str_opt {
         let (trimmed, offset) = Tr::trim(src_str, pattern);
-        make_and_append_view(views_buf, null_builder, original_view, trimmed, offset);
+        append_view(views_buf, original_view, trimmed, offset);
+        null_builder.append_non_null();
     } else {
         null_builder.append_null();
         views_buf.push(0);

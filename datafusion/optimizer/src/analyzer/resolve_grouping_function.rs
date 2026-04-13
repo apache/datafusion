@@ -97,15 +97,15 @@ fn replace_grouping_exprs(
         .into_iter()
         .zip(columns.into_iter().skip(group_expr_len + grouping_id_len))
     {
+        let grouping_id_type = is_grouping_set
+            .then(|| {
+                schema
+                    .field_with_name(None, Aggregate::INTERNAL_GROUPING_ID)
+                    .map(|f| f.data_type().clone())
+            })
+            .transpose()?;
         match expr {
             Expr::AggregateFunction(ref function) if is_grouping_function(&expr) => {
-                let grouping_id_type = is_grouping_set
-                    .then(|| {
-                        schema
-                            .field_with_name(None, Aggregate::INTERNAL_GROUPING_ID)
-                            .map(|f| f.data_type().clone())
-                    })
-                    .transpose()?;
                 let grouping_expr = grouping_function_on_id(
                     function,
                     &group_expr_to_bitmap_index,
@@ -115,6 +115,24 @@ fn replace_grouping_exprs(
                     grouping_expr,
                     column.relation,
                     column.name,
+                )));
+            }
+            Expr::Alias(Alias {
+                ref relation,
+                ref name,
+                ..
+            }) if is_grouping_function(&expr) => {
+                let function = unwrap_alias_to_grouping_function(&expr)?;
+                let grouping_expr = grouping_function_on_id(
+                    function,
+                    &group_expr_to_bitmap_index,
+                    grouping_id_type,
+                )?;
+                // Preserve the outermost user-provided alias
+                projection_exprs.push(Expr::Alias(Alias::new(
+                    grouping_expr,
+                    relation.clone(),
+                    name.clone(),
                 )));
             }
             _ => {
@@ -155,10 +173,27 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     Ok(transformed_plan)
 }
 
+/// Recursively unwrap `Expr::Alias` nodes to reach the inner `AggregateFunction`.
+/// Returns an error if the innermost expression is not an `AggregateFunction`,
+/// which should not happen if `is_grouping_function` returned true.
+fn unwrap_alias_to_grouping_function(expr: &Expr) -> Result<&AggregateFunction> {
+    match expr {
+        Expr::AggregateFunction(function) => Ok(function),
+        Expr::Alias(Alias { expr, .. }) => unwrap_alias_to_grouping_function(expr),
+        _ => plan_err!("Expected grouping aggregate function inside alias, got {expr}"),
+    }
+}
+
 fn is_grouping_function(expr: &Expr) -> bool {
     // TODO: Do something better than name here should grouping be a built
     // in expression?
-    matches!(expr, Expr::AggregateFunction(AggregateFunction { func, .. }) if func.name() == "grouping")
+    match expr {
+        Expr::AggregateFunction(AggregateFunction { func, .. }) => {
+            func.name() == "grouping"
+        }
+        Expr::Alias(Alias { expr, .. }) => is_grouping_function(expr),
+        _ => false,
+    }
 }
 
 fn contains_grouping_function(exprs: &[Expr]) -> bool {
