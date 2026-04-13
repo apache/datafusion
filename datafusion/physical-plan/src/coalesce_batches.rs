@@ -288,6 +288,21 @@ impl ExecutionPlan for CoalesceBatchesExec {
             ) as Arc<dyn ExecutionPlan>)
         })
     }
+
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(self
+            .input
+            .try_pushdown_groupby_order(group_exprs)?
+            .map(|new_input| {
+                Arc::new(
+                    CoalesceBatchesExec::new(new_input, self.target_batch_size)
+                        .with_fetch(self.fetch),
+                ) as Arc<dyn ExecutionPlan>
+            }))
+    }
 }
 
 /// Stream for [`CoalesceBatchesExec`]. See [`CoalesceBatchesExec`] for more details.

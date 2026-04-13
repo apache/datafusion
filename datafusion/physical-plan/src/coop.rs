@@ -368,6 +368,20 @@ impl ExecutionPlan for CooperativeExec {
             }
         }
     }
+
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(self
+            .input()
+            .try_pushdown_groupby_order(group_exprs)?
+            .map(|new_input| {
+                Arc::new(self.clone())
+                    .with_new_children(vec![new_input])
+                    .unwrap()
+            }))
+    }
 }
 
 /// Creates a [`CooperativeStream`] wrapper around the given [`RecordBatchStream`].

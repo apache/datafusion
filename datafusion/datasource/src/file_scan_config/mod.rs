@@ -981,16 +981,19 @@ impl DataSource for FileScanConfig {
             sort_files_within_groups_by_statistics,
         };
 
-        // Build a LexOrdering from the first grouping key (ASC).
-        let first_expr = match group_exprs.first() {
-            Some(expr) => Arc::clone(expr),
+        if group_exprs.is_empty() {
+            return Ok(None);
+        }
+        // Build a LexOrdering from all grouping keys (ASC) for multi-column
+        // file sorting. This gives better clustering than just the first key.
+        let sort_exprs: Vec<PhysicalSortExpr> = group_exprs
+            .iter()
+            .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
+            .collect();
+        let sort_order = match LexOrdering::new(sort_exprs) {
+            Some(order) => order,
             None => return Ok(None),
         };
-        let sort_order =
-            match LexOrdering::new(vec![PhysicalSortExpr::new_default(first_expr)]) {
-                Some(order) => order,
-                None => return Ok(None),
-            };
 
         // Sort files within each partition by grouping key statistics.
         let projected_schema = self.projected_schema()?;

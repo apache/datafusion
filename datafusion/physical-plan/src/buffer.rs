@@ -296,6 +296,18 @@ impl ExecutionPlan for BufferExec {
             Ok(Arc::new(Self::new(new_input, self.capacity)) as Arc<dyn ExecutionPlan>)
         })
     }
+
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(self
+            .input
+            .try_pushdown_groupby_order(group_exprs)?
+            .map(|new_input| {
+                Arc::new(Self::new(new_input, self.capacity)) as Arc<dyn ExecutionPlan>
+            }))
+    }
 }
 
 /// Represents anything that occupies a capacity in a [MemoryBufferedStream].

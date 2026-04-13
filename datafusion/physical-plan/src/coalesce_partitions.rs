@@ -345,6 +345,19 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 }
             })
     }
+
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(self
+            .input
+            .try_pushdown_groupby_order(group_exprs)?
+            .map(|new_input| {
+                Arc::new(CoalescePartitionsExec::new(new_input).with_fetch(self.fetch))
+                    as Arc<dyn ExecutionPlan>
+            }))
+    }
 }
 
 #[cfg(test)]

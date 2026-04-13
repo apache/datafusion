@@ -496,6 +496,51 @@ impl ExecutionPlan for ProjectionExec {
         }
     }
 
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let child = self.input();
+        let mut child_exprs = Vec::new();
+
+        // Remap group expressions from projection output to child columns
+        for expr in group_exprs {
+            let mut can_pushdown = true;
+            let transformed = Arc::clone(expr).transform(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    if col.index() >= self.expr().len() {
+                        can_pushdown = false;
+                        return Ok(Transformed::no(e));
+                    }
+                    let proj_expr = &self.expr()[col.index()];
+                    if let Some(child_col) =
+                        proj_expr.expr.as_any().downcast_ref::<Column>()
+                    {
+                        Ok(Transformed::yes(Arc::new(child_col.clone()) as _))
+                    } else {
+                        can_pushdown = false;
+                        Ok(Transformed::no(e))
+                    }
+                } else {
+                    Ok(Transformed::no(e))
+                }
+            })?;
+            if !can_pushdown {
+                return Ok(None);
+            }
+            child_exprs.push(transformed.data);
+        }
+
+        match child.try_pushdown_groupby_order(&child_exprs)? {
+            Some(new_input) => {
+                let new_exec =
+                    Arc::new(self.clone()).with_new_children(vec![new_input])?;
+                Ok(Some(new_exec))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn with_preserve_order(
         &self,
         preserve_order: bool,

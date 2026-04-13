@@ -1230,6 +1230,23 @@ impl ExecutionPlan for RepartitionExec {
         })
     }
 
+    fn try_pushdown_groupby_order(
+        &self,
+        group_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        match self.input.try_pushdown_groupby_order(group_exprs)? {
+            Some(new_input) => {
+                let mut new_repartition =
+                    RepartitionExec::try_new(new_input, self.partitioning().clone())?;
+                if self.preserve_order {
+                    new_repartition = new_repartition.with_preserve_order();
+                }
+                Ok(Some(Arc::new(new_repartition) as Arc<dyn ExecutionPlan>))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn repartitioned(
         &self,
         target_partitions: usize,

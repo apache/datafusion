@@ -838,18 +838,18 @@ impl FileSource for ParquetSource {
             return Ok(None);
         }
 
-        // Take the first group expression
-        let first_expr = match group_exprs.first() {
-            Some(expr) => Arc::clone(expr),
-            None => return Ok(None),
-        };
+        if group_exprs.is_empty() {
+            return Ok(None);
+        }
 
-        // Create ASC sort order from the first grouping key.
-        // This causes row groups to be reordered by the grouping key's
-        // min statistics, which clusters similar group values together
-        // for better aggregation hash table locality.
-        let sort_expr = PhysicalSortExpr::new_default(first_expr);
-        let sort_order = LexOrdering::new(vec![sort_expr]);
+        // Create ASC sort order from all grouping keys.
+        // reorder_by_statistics uses the first key for row group reordering,
+        // but having all keys available allows future multi-column sorting.
+        let sort_exprs: Vec<PhysicalSortExpr> = group_exprs
+            .iter()
+            .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
+            .collect();
+        let sort_order = LexOrdering::new(sort_exprs);
 
         let mut new_source = self.clone();
         new_source.sort_order_for_reorder = sort_order;
