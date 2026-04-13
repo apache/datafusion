@@ -190,8 +190,6 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
-    /// Registry for expression-level statistics analyzers (NDV, selectivity, etc.)
-    expression_analyzer_registry: Arc<ExpressionAnalyzerRegistry>,
     /// [FunctionFactory] to support pluggable user defined function handler.
     ///
     /// It will be invoked on `CREATE FUNCTION` statements.
@@ -216,6 +214,13 @@ impl PhysicalOptimizerContext for SessionState {
 
     fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
         self.statistics_registry.as_ref()
+    }
+
+    fn expression_analyzer_registry(&self) -> Option<&Arc<ExpressionAnalyzerRegistry>> {
+        self.config_options()
+            .optimizer
+            .use_expression_analyzer
+            .then_some(&self.expression_analyzer_registry)
     }
 }
 

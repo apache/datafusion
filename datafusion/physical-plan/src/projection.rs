@@ -49,6 +49,7 @@ use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
@@ -175,26 +176,6 @@ impl ProjectionExec {
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
-    }
-
-    /// Set the expression analyzer registry for statistics estimation.
-    /// The registry is stored on the underlying [`ProjectionExprs`].
-    pub fn with_expression_analyzer_registry(
-        mut self,
-        registry: Arc<
-            datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry,
-        >,
-    ) -> Self {
-        self.projector.set_expression_analyzer_registry(registry);
-        self
-    }
-
-    /// Get the expression analyzer registry, if set
-    pub fn expression_analyzer_registry(
-        &self,
-    ) -> Option<&datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry>
-    {
-        self.projector.expression_analyzer_registry()
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -377,6 +358,28 @@ impl ExecutionPlan for ProjectionExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn uses_expression_level_statistics(&self) -> bool {
+        true
+    }
+
+    fn with_expression_analyzer_registry(
+        &self,
+        registry: &Arc<ExpressionAnalyzerRegistry>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.expression_analyzer_registry().is_some() {
+            return None;
+        }
+        let mut new_exec = self.clone();
+        new_exec
+            .projector
+            .set_expression_analyzer_registry(Arc::clone(registry));
+        Some(Arc::new(new_exec))
+    }
+
+    fn expression_analyzer_registry(&self) -> Option<&ExpressionAnalyzerRegistry> {
+        self.projector.expression_analyzer_registry()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {

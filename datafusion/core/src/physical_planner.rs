@@ -1103,11 +1103,6 @@ impl DefaultPhysicalPlanner {
                             physical_input,
                         )
                         .with_batch_size(session_state.config().batch_size());
-                        let builder =
-                            match Self::expression_analyzer_registry(session_state) {
-                                Some(r) => builder.with_expression_analyzer_registry(r),
-                                None => builder,
-                            };
                         builder.build()?
                     }
                     PlanAsyncExpr::Async(
@@ -1118,7 +1113,7 @@ impl DefaultPhysicalPlanner {
                             async_map.async_exprs,
                             physical_input,
                         )?;
-                        let builder = FilterExecBuilder::new(
+                        FilterExecBuilder::new(
                             Arc::clone(&runtime_expr[0]),
                             Arc::new(async_exec),
                         )
@@ -1127,13 +1122,8 @@ impl DefaultPhysicalPlanner {
                         .apply_projection(Some(
                             (0..input.schema().fields().len()).collect::<Vec<_>>(),
                         ))?
-                        .with_batch_size(session_state.config().batch_size());
-                        let builder =
-                            match Self::expression_analyzer_registry(session_state) {
-                                Some(r) => builder.with_expression_analyzer_registry(r),
-                                None => builder,
-                            };
-                        builder.build()?
+                        .with_batch_size(session_state.config().batch_size())
+                        .build()?
                     }
                     _ => {
                         return internal_err!(
@@ -1656,7 +1646,7 @@ impl DefaultPhysicalPlanner {
                 {
                     // Use SortMergeJoin if hash join is not preferred
                     let join_on_len = join_on.len();
-                    Arc::new(SortMergeJoinExec::try_new(
+                    let exec = SortMergeJoinExec::try_new(
                         physical_left,
                         physical_right,
                         join_on,
@@ -1664,7 +1654,8 @@ impl DefaultPhysicalPlanner {
                         *join_type,
                         vec![SortOptions::default(); join_on_len],
                         *null_equality,
-                    )?)
+                    )?;
+                    Arc::new(exec)
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && prefer_hash_join
@@ -2772,14 +2763,29 @@ impl DefaultPhysicalPlanner {
         // to verify that the plan fulfills the base requirements.
         InvariantChecker(InvariantLevel::Always).check(&plan)?;
 
+        let use_expression_analyzer = session_state
+            .config_options()
+            .optimizer
+            .use_expression_analyzer;
         let mut new_plan = Arc::clone(&plan);
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
+            let plan_before_rule = Arc::clone(&new_plan);
             new_plan = optimizer
                 .optimize_with_context(new_plan, session_state)
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
+
+            // Re-inject ExpressionAnalyzer registry into any exec nodes created or replaced by
+            // this rule. Skip if the rule returned the same plan unchanged to
+            // avoid an O(nodes) walk for no-op rules.
+            if use_expression_analyzer && !Arc::ptr_eq(&plan_before_rule, &new_plan) {
+                new_plan = Self::inject_expression_analyzer(
+                    new_plan,
+                    session_state.expression_analyzer_registry(),
+                )?;
+            }
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
             OptimizationInvariantChecker::new(optimizer)
@@ -2850,15 +2856,22 @@ impl DefaultPhysicalPlanner {
         Ok(mem_exec)
     }
 
-    /// Returns the expression analyzer registry if the config option is enabled.
-    fn expression_analyzer_registry(
-        session_state: &SessionState,
-    ) -> Option<Arc<ExpressionAnalyzerRegistry>> {
-        session_state
-            .config_options()
-            .optimizer
-            .use_expression_analyzer
-            .then(|| Arc::clone(session_state.expression_analyzer_registry()))
+    /// Walks `plan` and injects `registry` into every exec node that accepts it,
+    /// skipping nodes that already have a registry set.
+    fn inject_expression_analyzer(
+        plan: Arc<dyn ExecutionPlan>,
+        registry: &Arc<ExpressionAnalyzerRegistry>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::tree_node::{Transformed, TreeNode};
+
+        plan.transform_up(|node| {
+            if let Some(updated) = node.with_expression_analyzer_registry(registry) {
+                Ok(Transformed::yes(updated))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        })
+        .map(|t| t.data)
     }
 
     fn create_project_physical_exec(
@@ -2920,11 +2933,7 @@ impl DefaultPhysicalPlanner {
                     .into_iter()
                     .map(|(expr, alias)| ProjectionExpr { expr, alias })
                     .collect();
-                let mut proj_exec = ProjectionExec::try_new(proj_exprs, input_exec)?;
-                if let Some(r) = Self::expression_analyzer_registry(session_state) {
-                    proj_exec = proj_exec.with_expression_analyzer_registry(r);
-                }
-                Ok(Arc::new(proj_exec))
+                Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input_exec)?))
             }
             PlanAsyncExpr::Async(
                 async_map,
@@ -2936,18 +2945,10 @@ impl DefaultPhysicalPlanner {
                     .into_iter()
                     .map(|(expr, alias)| ProjectionExpr { expr, alias })
                     .collect();
-                let mut new_proj_exec =
-                    ProjectionExec::try_new(proj_exprs, Arc::new(async_exec))?;
-                if session_state
-                    .config_options()
-                    .optimizer
-                    .use_expression_analyzer
-                {
-                    new_proj_exec = new_proj_exec.with_expression_analyzer_registry(
-                        Arc::clone(session_state.expression_analyzer_registry()),
-                    );
-                }
-                Ok(Arc::new(new_proj_exec))
+                Ok(Arc::new(ProjectionExec::try_new(
+                    proj_exprs,
+                    Arc::new(async_exec),
+                )?))
             }
             _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
         }

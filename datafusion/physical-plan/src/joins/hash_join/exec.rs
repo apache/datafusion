@@ -85,6 +85,7 @@ use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumula
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
@@ -294,6 +295,7 @@ impl HashJoinExecBuilder {
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
                 dynamic_filter: None,
+                expression_analyzer_registry: None,
                 // Will be computed at when plan will be built.
                 cache: stub_properties(),
                 join_schema: Arc::new(Schema::empty()),
@@ -358,6 +360,15 @@ impl HashJoinExecBuilder {
     /// Set fetch property.
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.exec.fetch = fetch;
+        self
+    }
+
+    /// Set expression analyzer registry.
+    pub fn with_expression_analyzer_registry(
+        mut self,
+        registry: Arc<ExpressionAnalyzerRegistry>,
+    ) -> Self {
+        self.exec.expression_analyzer_registry = Some(registry);
         self
     }
 
@@ -438,6 +449,7 @@ impl HashJoinExecBuilder {
             null_aware,
             dynamic_filter,
             fetch,
+            expression_analyzer_registry,
             // Recomputed.
             join_schema: _,
             column_indices: _,
@@ -487,6 +499,7 @@ impl HashJoinExecBuilder {
             cache: Arc::new(cache),
             dynamic_filter,
             fetch,
+            expression_analyzer_registry,
         })
     }
 
@@ -517,6 +530,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
                 cache: Arc::clone(&exec.cache),
                 dynamic_filter: exec.dynamic_filter.clone(),
                 fetch: exec.fetch,
+                expression_analyzer_registry: exec.expression_analyzer_registry.clone(),
             },
             preserve_properties: true,
         }
@@ -758,6 +772,9 @@ pub struct HashJoinExec {
     dynamic_filter: Option<HashJoinExecDynamicFilter>,
     /// Maximum number of rows to return
     fetch: Option<usize>,
+    /// Registry for expression-level statistics estimation.
+    /// Set when `use_expression_analyzer` is enabled.
+    expression_analyzer_registry: Option<Arc<ExpressionAnalyzerRegistry>>,
 }
 
 #[derive(Clone)]
@@ -1439,6 +1456,30 @@ impl ExecutionPlan for HashJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn uses_expression_level_statistics(&self) -> bool {
+        true
+    }
+
+    fn with_expression_analyzer_registry(
+        &self,
+        registry: &Arc<ExpressionAnalyzerRegistry>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.expression_analyzer_registry.is_some() {
+            return None;
+        }
+        // build_exec() validates the join configuration; since we only set the
+        // registry field without changing any structural fields, this cannot fail
+        // in practice. Map to None (no-op) in the unlikely error case.
+        self.builder()
+            .with_expression_analyzer_registry(Arc::clone(registry))
+            .build_exec()
+            .ok()
+    }
+
+    fn expression_analyzer_registry(&self) -> Option<&ExpressionAnalyzerRegistry> {
+        self.expression_analyzer_registry.as_deref()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {

@@ -181,7 +181,7 @@ impl Default for ExpressionAnalyzerRegistry {
 }
 
 impl ExpressionAnalyzerRegistry {
-    /// Create a new registry with the [`DefaultExpressionAnalyzer`].
+    /// Create a registry pre-populated with [`DefaultExpressionAnalyzer`].
     pub fn new() -> Self {
         Self {
             analyzers: vec![Arc::new(DefaultExpressionAnalyzer)],
@@ -189,7 +189,17 @@ impl ExpressionAnalyzerRegistry {
     }
 
     /// Create a registry with only the given analyzers (no builtins).
-    pub fn with_analyzers(analyzers: Vec<Arc<dyn ExpressionAnalyzer>>) -> Self {
+    /// Create a registry with only the given analyzers and no built-in fallback.
+    ///
+    /// If none of the provided analyzers can handle a request, the registry
+    /// returns `None` and the caller applies its own default (e.g.
+    /// `default_selectivity` for filters). [`DefaultExpressionAnalyzer`] is
+    /// the built-in analyzer that handles common patterns (equality,
+    /// AND/OR, literals); use [`with_analyzers_and_default`] to include it
+    /// as a fallback after your custom analyzers.
+    ///
+    /// [`with_analyzers_and_default`]: ExpressionAnalyzerRegistry::with_analyzers_and_default
+    pub fn with_analyzers_only(analyzers: Vec<Arc<dyn ExpressionAnalyzer>>) -> Self {
         Self { analyzers }
     }
 
@@ -218,7 +228,7 @@ impl ExpressionAnalyzerRegistry {
             if let AnalysisResult::Computed(sel) =
                 analyzer.get_selectivity(expr, input_stats, self)
             {
-                return Some(sel);
+                return Some(sel.clamp(0.0, 1.0));
             }
         }
         None
@@ -266,7 +276,7 @@ impl ExpressionAnalyzerRegistry {
             if let AnalysisResult::Computed(frac) =
                 analyzer.get_null_fraction(expr, input_stats, self)
             {
-                return Some(frac);
+                return Some(frac.clamp(0.0, 1.0));
             }
         }
         None

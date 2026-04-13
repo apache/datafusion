@@ -42,6 +42,7 @@ use crate::pushdown_sort::PushdownSort;
 use crate::window_topn::WindowTopN;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 
@@ -60,6 +61,11 @@ pub trait PhysicalOptimizerContext: Send + Sync {
     /// Returns `None` if no registry is configured, in which case rules
     /// should fall back to using `ExecutionPlan::partition_statistics()`.
     fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        None
+    }
+
+    /// Returns the expression analyzer registry, if `use_expression_analyzer` is enabled.
+    fn expression_analyzer_registry(&self) -> Option<&Arc<ExpressionAnalyzerRegistry>> {
         None
     }
 }

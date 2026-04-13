@@ -21,6 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use itertools::Itertools;
 
@@ -96,9 +97,7 @@ pub struct FilterExec {
     /// Number of rows to fetch
     fetch: Option<usize>,
     /// Optional expression analyzer registry for selectivity estimation
-    expression_analyzer_registry: Option<
-        Arc<datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry>,
-    >,
+    expression_analyzer_registry: Option<Arc<ExpressionAnalyzerRegistry>>,
 }
 
 /// Builder for [`FilterExec`] to set optional parameters
@@ -109,9 +108,6 @@ pub struct FilterExecBuilder {
     default_selectivity: u8,
     batch_size: usize,
     fetch: Option<usize>,
-    expression_analyzer_registry: Option<
-        Arc<datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry>,
-    >,
 }
 
 impl FilterExecBuilder {
@@ -124,7 +120,6 @@ impl FilterExecBuilder {
             default_selectivity: FILTER_EXEC_DEFAULT_SELECTIVITY,
             batch_size: FILTER_EXEC_DEFAULT_BATCH_SIZE,
             fetch: None,
-            expression_analyzer_registry: None,
         }
     }
 
@@ -183,24 +178,6 @@ impl FilterExecBuilder {
         self
     }
 
-    /// Set the expression analyzer registry for selectivity estimation.
-    ///
-    /// The physical planner injects the registry from `SessionState` when
-    /// creating filters. When `use_statistics_registry` is also enabled,
-    /// [`FilterStatisticsProvider`](crate::operator_statistics::FilterStatisticsProvider)
-    /// uses this registry for all filters it handles. Filters created by
-    /// optimizer rules that do not call this method fall back to the
-    /// default selectivity.
-    pub fn with_expression_analyzer_registry(
-        mut self,
-        registry: Arc<
-            datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry,
-        >,
-    ) -> Self {
-        self.expression_analyzer_registry = Some(registry);
-        self
-    }
-
     /// Build the FilterExec, computing properties once with all configured parameters
     pub fn build(self) -> Result<FilterExec> {
         // Validate predicate type
@@ -240,7 +217,7 @@ impl FilterExecBuilder {
             projection: self.projection,
             batch_size: self.batch_size,
             fetch: self.fetch,
-            expression_analyzer_registry: self.expression_analyzer_registry,
+            expression_analyzer_registry: None,
         })
     }
 }
@@ -254,7 +231,6 @@ impl From<&FilterExec> for FilterExecBuilder {
             default_selectivity: exec.default_selectivity,
             batch_size: exec.batch_size,
             fetch: exec.fetch,
-            expression_analyzer_registry: exec.expression_analyzer_registry.clone(),
             // We could cache / copy over PlanProperties
             // here but that would require invalidating them in FilterExecBuilder::apply_projection, etc.
             // and currently every call to this method ends up invalidating them anyway.
@@ -339,13 +315,6 @@ impl FilterExec {
         &self.projection
     }
 
-    /// Expression analyzer registry for selectivity estimation
-    pub fn expression_analyzer_registry(
-        &self,
-    ) -> Option<&datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry> {
-        self.expression_analyzer_registry.as_deref()
-    }
-
     /// Calculates `Statistics` for `FilterExec`, by applying selectivity
     /// (either default, or estimated) to input statistics.
     ///
@@ -356,9 +325,7 @@ impl FilterExec {
         input_stats: Statistics,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
-        expression_analyzer_registry: Option<
-            &datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry,
-        >,
+        expression_analyzer_registry: Option<&ExpressionAnalyzerRegistry>,
     ) -> Result<Statistics> {
         let (eq_columns, is_infeasible) = collect_equality_columns(predicate);
 
@@ -615,6 +582,26 @@ impl ExecutionPlan for FilterExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn uses_expression_level_statistics(&self) -> bool {
+        true
+    }
+
+    fn with_expression_analyzer_registry(
+        &self,
+        registry: &Arc<ExpressionAnalyzerRegistry>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.expression_analyzer_registry.is_some() {
+            return None;
+        }
+        let mut new_exec = self.clone();
+        new_exec.expression_analyzer_registry = Some(Arc::clone(registry));
+        Some(Arc::new(new_exec))
+    }
+
+    fn expression_analyzer_registry(&self) -> Option<&ExpressionAnalyzerRegistry> {
+        self.expression_analyzer_registry.as_deref()
     }
 
     /// The output statistics of a filtering operation can be estimated if the

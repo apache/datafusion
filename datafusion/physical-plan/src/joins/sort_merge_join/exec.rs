@@ -53,6 +53,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::expression_analyzer::ExpressionAnalyzerRegistry;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
@@ -130,6 +131,9 @@ pub struct SortMergeJoinExec {
     pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
+    /// Registry for expression-level statistics estimation.
+    /// Set when `use_expression_analyzer` is enabled.
+    expression_analyzer_registry: Option<Arc<ExpressionAnalyzerRegistry>>,
 }
 
 impl SortMergeJoinExec {
@@ -201,6 +205,7 @@ impl SortMergeJoinExec {
             sort_options,
             null_equality,
             cache: Arc::new(cache),
+            expression_analyzer_registry: None,
         })
     }
 
@@ -579,6 +584,26 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn uses_expression_level_statistics(&self) -> bool {
+        true
+    }
+
+    fn with_expression_analyzer_registry(
+        &self,
+        registry: &Arc<ExpressionAnalyzerRegistry>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.expression_analyzer_registry.is_some() {
+            return None;
+        }
+        let mut new_exec = self.clone();
+        new_exec.expression_analyzer_registry = Some(Arc::clone(registry));
+        Some(Arc::new(new_exec))
+    }
+
+    fn expression_analyzer_registry(&self) -> Option<&ExpressionAnalyzerRegistry> {
+        self.expression_analyzer_registry.as_deref()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
