@@ -251,12 +251,6 @@ pub(crate) struct MockPlanBuilder {
     pending_planner: Option<MockPendingPlanner>,
 }
 
-impl From<MockPlanBuilder> for PlannerStep {
-    fn from(builder: MockPlanBuilder) -> Self {
-        builder.build()
-    }
-}
-
 impl MockPlanBuilder {
     /// Create an empty mock plan.
     pub(crate) fn new() -> Self {
@@ -297,6 +291,20 @@ impl MockPlanBuilder {
             polls_to_resolve,
             result,
         });
+        self
+    }
+
+    /// Add a ready child planner
+    pub(crate) fn with_ready_planner(self, ready_planners: MockPlanner) -> Self {
+        self.with_ready_planners(vec![ready_planners])
+    }
+
+    /// Add ready child planners produced by this planning step.
+    pub(crate) fn with_ready_planners(
+        mut self,
+        ready_planners: Vec<MockPlanner>,
+    ) -> Self {
+        self.ready_planners.extend(ready_planners);
         self
     }
 

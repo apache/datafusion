@@ -865,6 +865,40 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies that one `plan()` call can return a ready child planner, which
+    /// is then called to produce the morsel.
+    #[tokio::test]
+    async fn morsel_ready_child_planner() -> Result<()> {
+        let child_planner = MockPlanner::builder("child planner")
+            .add_plan(MockPlanBuilder::new().with_morsel(MorselId(10), 42))
+            .return_none()
+            .build();
+
+        let test = FileStreamMorselTest::new().with_file(
+            MockPlanner::builder("file1.parquet")
+                .add_plan(MockPlanBuilder::new().with_ready_planner(child_planner))
+                .return_none(),
+        );
+
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Output Stream -----
+        Batch: 42
+        Done
+        ----- File Stream Events -----
+        morselize_file: file1.parquet
+        planner_created: file1.parquet
+        planner_called: file1.parquet
+        planner_created: child planner
+        planner_called: child planner
+        morsel_produced: child planner, MorselId(10)
+        morsel_stream_started: MorselId(10)
+        morsel_stream_batch_produced: MorselId(10), BatchId(42)
+        morsel_stream_finished: MorselId(10)
+        ");
+
+        Ok(())
+    }
+
     /// Verifies that planning can fail after a successful I/O phase.
     #[tokio::test]
     async fn morsel_plan_error_after_io() -> Result<()> {
