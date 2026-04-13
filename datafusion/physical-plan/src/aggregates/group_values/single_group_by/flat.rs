@@ -27,7 +27,7 @@
 use super::primitive::{GroupValuesPrimitive, HashValue};
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::{
-    ArrayRef, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray, cast::AsArray,
+    Array, ArrayRef, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray, cast::AsArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -47,7 +47,7 @@ const EMPTY_GROUP: u32 = u32::MAX;
 /// Provides a wider signed type (`Wide`) for safe range arithmetic that avoids
 /// i128 overhead.  For 8/16-bit natives the wide type is `i32`; for 32-bit
 /// it is `i64`; for 64-bit it is `i128`.
-pub(crate) trait FlatMappable: Copy + Default {
+pub(crate) trait FlatMappable: Copy + Default + Ord {
     /// A signed integer type wide enough to hold `max - min` for any two
     /// values of `Self` without overflow.
     type Wide: Copy
@@ -134,64 +134,44 @@ where
         }
     }
 
-    /// Intern a NULL value.
-    #[inline(always)]
-    fn intern_null(&mut self) -> usize {
-        *self.null_group.get_or_insert_with(|| {
-            let g = self.values.len();
-            self.values.push(Default::default());
-            g
-        })
-    }
-
-    /// Try to intern a non-null value via the flat map.
+    /// Ensure the flat map covers `[batch_min, batch_max]`.
     ///
-    /// Returns `Some(group_index)` on success, `None` if the value range
-    /// would exceed [`MAX_FLAT_RANGE`] (caller should convert to hash).
-    #[inline(always)]
-    fn try_intern_value(&mut self, key: T::Native) -> Option<usize> {
-        let key_wide = key.to_wide();
+    /// Returns `true` if the range fits (map has been expanded if needed),
+    /// `false` if the range exceeds [`MAX_FLAT_RANGE`] (caller should
+    /// convert to hash).
+    fn ensure_range(&mut self, batch_min: T::Native, batch_max: T::Native) -> bool {
+        let min_wide = batch_min.to_wide();
+        let max_wide = batch_max.to_wide();
 
         if let Some((map, base)) = &mut self.map_and_base {
-            let offset = key_wide - *base;
-            // Fast path: value is within the current range.
-            if let Ok(idx) = offset.try_into() {
-                let idx: usize = idx;
-                if idx < map.len() {
-                    let existing = map[idx];
-                    if existing != EMPTY_GROUP {
-                        return Some(existing as usize);
-                    }
-                    let g = self.values.len();
-                    map[idx] = g as u32;
-                    self.values.push(key);
-                    return Some(g);
-                }
-            }
-
-            // Compute expanded range.
             let current_max =
                 *base + <T::Native as FlatMappable>::wide_from_usize(map.len() - 1);
-            let new_min = if key_wide < *base { key_wide } else { *base };
-            let new_max = if key_wide > current_max {
-                key_wide
+
+            // Already in range — nothing to do.
+            if min_wide >= *base && max_wide <= current_max {
+                return true;
+            }
+
+            let new_min = if min_wide < *base { min_wide } else { *base };
+            let new_max = if max_wide > current_max {
+                max_wide
             } else {
                 current_max
             };
             let new_range_wide = new_max - new_min;
             let Ok(new_range_minus_one) = new_range_wide.try_into() else {
-                return None;
+                return false;
             };
-            let new_range_minus_one: usize = new_range_minus_one;
-            let new_range = new_range_minus_one + 1;
+            let new_range: usize = new_range_minus_one;
+            let new_range = new_range + 1;
 
             if new_range > MAX_FLAT_RANGE {
-                return None;
+                return false;
             }
 
-            if key_wide < *base {
+            if min_wide < *base {
                 let Ok(shift) = (*base - new_min).try_into() else {
-                    return None;
+                    return false;
                 };
                 let shift: usize = shift;
                 let old_len = map.len();
@@ -202,21 +182,90 @@ where
             } else {
                 map.resize(new_range, EMPTY_GROUP);
             }
-
-            let Ok(idx) = (key_wide - *base).try_into() else {
-                return None;
-            };
-            let idx: usize = idx;
-            let g = self.values.len();
-            map[idx] = g as u32;
-            self.values.push(key);
-            Some(g)
+            true
         } else {
-            // First non-null value — initialise.
-            let g = self.values.len();
-            self.values.push(key);
-            self.map_and_base = Some((vec![g as u32; 1], key_wide));
-            Some(g)
+            // First non-null values — initialise.
+            let range_wide = max_wide - min_wide;
+            let Ok(range_minus_one) = range_wide.try_into() else {
+                return false;
+            };
+            let range: usize = range_minus_one;
+            let range = range + 1;
+
+            if range > MAX_FLAT_RANGE {
+                return false;
+            }
+
+            self.map_and_base = Some((vec![EMPTY_GROUP; range], min_wide));
+            true
+        }
+    }
+
+    /// Intern an entire batch assuming the flat map already covers the value
+    /// range.  No range checks are performed in the inner loop.
+    fn intern_batch_in_range(
+        &mut self,
+        array: &PrimitiveArray<T>,
+        groups: &mut Vec<usize>,
+    ) {
+        // Destructure to get independent mutable borrows of each field.
+        let Self {
+            values,
+            null_group,
+            map_and_base,
+            ..
+        } = self;
+
+        let Some((map, base)) = map_and_base else {
+            // No flat map (entire batch is null).
+            let g = *null_group.get_or_insert_with(|| {
+                let g = values.len();
+                values.push(Default::default());
+                g
+            });
+            groups.resize(array.len(), g);
+            return;
+        };
+
+        let raw_values = array.values();
+
+        if array.null_count() == 0 {
+            // Tight loop — no null checks.
+            for &key in raw_values.iter() {
+                let idx: usize = (key.to_wide() - *base).try_into().unwrap_or(0);
+                let slot = &mut map[idx];
+                if *slot == EMPTY_GROUP {
+                    let g = values.len();
+                    *slot = g as u32;
+                    values.push(key);
+                    groups.push(g);
+                } else {
+                    groups.push(*slot as usize);
+                }
+            }
+        } else {
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    let g = *null_group.get_or_insert_with(|| {
+                        let g = values.len();
+                        values.push(Default::default());
+                        g
+                    });
+                    groups.push(g);
+                } else {
+                    let key = raw_values[i];
+                    let idx: usize = (key.to_wide() - *base).try_into().unwrap_or(0);
+                    let slot = &mut map[idx];
+                    if *slot == EMPTY_GROUP {
+                        let g = values.len();
+                        *slot = g as u32;
+                        values.push(key);
+                        groups.push(g);
+                    } else {
+                        groups.push(*slot as usize);
+                    }
+                }
+            }
         }
     }
 
@@ -311,51 +360,54 @@ where
     T::Native: HashValue + FlatMappable,
 {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // ---- Per-batch mode check ----
+        // ---- Per-batch mode check (once, not per-value) ----
         if let Inner::Hash(primitive) = &mut self.inner {
-            // Full delegation — zero per-value overhead.
             return primitive.intern(cols, groups);
         }
 
-        // ---- Flat mode ----
+        // ---- Flat mode: batch-oriented processing ----
         assert_eq!(cols.len(), 1);
         groups.clear();
         let array = cols[0].as_primitive::<T>();
+        groups.reserve(array.len());
 
-        let mut conversion_point = None;
+        // 1. Compute min/max of non-null values (single pass).
+        let min_max = {
+            let raw = array.values();
+            let mut iter_positions = (0..array.len()).filter(|&i| !array.is_null(i));
+            iter_positions.next().map(|first| {
+                let first_val = raw[first];
+                iter_positions.fold((first_val, first_val), |(mn, mx), i| {
+                    let v = raw[i];
+                    (if v < mn { v } else { mn }, if v > mx { v } else { mx })
+                })
+            })
+        };
 
-        {
-            let Inner::Flat(flat) = &mut self.inner else {
-                unreachable!()
+        // 2. Ensure the flat map covers the batch range (expand once).
+        if let Some((batch_min, batch_max)) = min_max {
+            let range_ok = {
+                let Inner::Flat(flat) = &mut self.inner else {
+                    unreachable!()
+                };
+                flat.ensure_range(batch_min, batch_max)
             };
 
-            for (i, v) in array.iter().enumerate() {
-                let group_id = match v {
-                    None => flat.intern_null(),
-                    Some(key) => match flat.try_intern_value(key) {
-                        Some(g) => g,
-                        None => {
-                            conversion_point = Some(i);
-                            break;
-                        }
-                    },
+            if !range_ok {
+                // Range too large — convert to hash and delegate entire batch.
+                self.convert_flat_to_hash();
+                let Inner::Hash(primitive) = &mut self.inner else {
+                    unreachable!()
                 };
-                groups.push(group_id);
+                return primitive.intern(cols, groups);
             }
         }
 
-        if let Some(from_row) = conversion_point {
-            self.convert_flat_to_hash();
-
-            // Process the remaining rows through GroupValuesPrimitive.
-            let remaining = cols[0].slice(from_row, array.len() - from_row);
-            let Inner::Hash(primitive) = &mut self.inner else {
-                unreachable!()
-            };
-            let mut remaining_groups = vec![];
-            primitive.intern(&[remaining], &mut remaining_groups)?;
-            groups.extend(remaining_groups);
-        }
+        // 3. Tight inner loop — no range checks, no per-value function calls.
+        let Inner::Flat(flat) = &mut self.inner else {
+            unreachable!()
+        };
+        flat.intern_batch_in_range(array, groups);
 
         Ok(())
     }
