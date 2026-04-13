@@ -814,6 +814,58 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies that pending planner I/O does not block draining the current
+    /// morsel stream.
+    #[tokio::test]
+    async fn morsel_pending_planner_does_not_block_active_reader() -> Result<()> {
+        let test = FileStreamMorselTest::new().with_file(
+            MockPlanner::builder("file1.parquet")
+                .return_morsel_batches_and_io(
+                    MorselId(10),
+                    vec![41, 42],
+                    IoFutureId(1),
+                    PollsToResolve(3),
+                )
+                .return_morsel(MorselId(11), 43)
+                .return_none()
+                .build(),
+        );
+
+        // The key events are:
+        // 1. the first `planner_called` produces `MorselId(10)` and creates `IoFutureId(1)`
+        // 2. `MorselId(10)` continues yielding both batches while that I/O is pending
+        // 3. after the I/O resolves, planning resumes and yields `MorselId(11)`
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Output Stream -----
+        Batch: 41
+        Batch: 42
+        Batch: 43
+        Done
+        ----- File Stream Events -----
+        morselize_file: file1.parquet
+        planner_created: file1.parquet
+        planner_called: file1.parquet
+        morsel_produced: file1.parquet, MorselId(10)
+        io_future_created: file1.parquet, IoFutureId(1)
+        io_future_polled: file1.parquet, IoFutureId(1)
+        morsel_stream_started: MorselId(10)
+        io_future_polled: file1.parquet, IoFutureId(1)
+        morsel_stream_batch_produced: MorselId(10), BatchId(41)
+        io_future_polled: file1.parquet, IoFutureId(1)
+        morsel_stream_batch_produced: MorselId(10), BatchId(42)
+        io_future_polled: file1.parquet, IoFutureId(1)
+        io_future_resolved: file1.parquet, IoFutureId(1)
+        morsel_stream_finished: MorselId(10)
+        planner_called: file1.parquet
+        morsel_produced: file1.parquet, MorselId(11)
+        morsel_stream_started: MorselId(11)
+        morsel_stream_batch_produced: MorselId(11), BatchId(43)
+        morsel_stream_finished: MorselId(11)
+        ");
+
+        Ok(())
+    }
+
     /// Verifies that planning can fail after a successful I/O phase.
     #[tokio::test]
     async fn morsel_plan_error_after_io() -> Result<()> {

@@ -214,22 +214,33 @@ impl MockPlanner {
     }
 }
 
-/// One scheduler-visible step in a mock planner's lifecycle.
+/// One scheduler-visible result from calling `MorselPlanner::plan`.
 #[derive(Debug, Clone)]
 enum PlannerStep {
-    Morsel {
-        morsel_id: MorselId,
-        batch_ids: Vec<i32>,
-    },
-    Io {
-        io_future_id: IoFutureId,
-        polls_to_resolve: PollsToResolve,
-        result: std::result::Result<(), MockError>,
+    Plan {
+        morsels: Vec<MockMorselSpec>,
+        ready_planners: Vec<MockPlanner>,
+        pending_planner: Option<MockPendingPlanner>,
     },
     Error {
         error: MockError,
     },
     None,
+}
+
+/// One mock morsel returned from a planning step.
+#[derive(Debug, Clone)]
+struct MockMorselSpec {
+    morsel_id: MorselId,
+    batch_ids: Vec<i32>,
+}
+
+/// One pending planner I/O future returned from a planning step.
+#[derive(Debug, Clone)]
+struct MockPendingPlanner {
+    io_future_id: IoFutureId,
+    polls_to_resolve: PollsToResolve,
+    result: std::result::Result<(), MockError>,
 }
 
 /// Fluent builder for [`MockPlanner`] test specs.
@@ -240,55 +251,94 @@ pub(crate) struct MockPlannerBuilder {
 }
 
 impl MockPlannerBuilder {
-    /// Adds one planning step that returns a single ready morsel.
-    pub(crate) fn return_morsel(mut self, morsel_id: MorselId, batch_id: i32) -> Self {
-        self.steps.push(PlannerStep::Morsel {
-            morsel_id,
-            batch_ids: vec![batch_id],
-        });
+    fn add_plan_step(mut self, step: PlannerStep) -> Self {
+        self.steps.push(step);
         self
+    }
+
+    /// Adds one planning step that returns a single ready morsel.
+    pub(crate) fn return_morsel(self, morsel_id: MorselId, batch_id: i32) -> Self {
+        self.add_plan_step(PlannerStep::Plan {
+            morsels: vec![MockMorselSpec {
+                morsel_id,
+                batch_ids: vec![batch_id],
+            }],
+            ready_planners: vec![],
+            pending_planner: None,
+        })
     }
 
     /// Adds one planning step that returns a morsel with multiple ready batches.
     pub(crate) fn return_morsel_batches(
-        mut self,
+        self,
         morsel_id: MorselId,
         batch_ids: Vec<i32>,
     ) -> Self {
-        self.steps.push(PlannerStep::Morsel {
-            morsel_id,
-            batch_ids,
-        });
-        self
+        self.add_plan_step(PlannerStep::Plan {
+            morsels: vec![MockMorselSpec {
+                morsel_id,
+                batch_ids,
+            }],
+            ready_planners: vec![],
+            pending_planner: None,
+        })
     }
 
     /// Adds one planning step that returns a single outstanding I/O future.
     pub(crate) fn return_io(
-        mut self,
+        self,
         io_future_id: IoFutureId,
         polls_to_resolve: PollsToResolve,
     ) -> Self {
-        self.steps.push(PlannerStep::Io {
-            io_future_id,
-            polls_to_resolve,
-            result: Ok(()),
-        });
-        self
+        self.add_plan_step(PlannerStep::Plan {
+            morsels: vec![],
+            ready_planners: vec![],
+            pending_planner: Some(MockPendingPlanner {
+                io_future_id,
+                polls_to_resolve,
+                result: Ok(()),
+            }),
+        })
     }
 
     /// Adds one planning step that returns a failing I/O future.
     pub(crate) fn return_io_error(
-        mut self,
+        self,
         io_future_id: IoFutureId,
         polls_to_resolve: PollsToResolve,
         message: impl Into<String>,
     ) -> Self {
-        self.steps.push(PlannerStep::Io {
-            io_future_id,
-            polls_to_resolve,
-            result: Err(MockError(message.into())),
-        });
-        self
+        self.add_plan_step(PlannerStep::Plan {
+            morsels: vec![],
+            ready_planners: vec![],
+            pending_planner: Some(MockPendingPlanner {
+                io_future_id,
+                polls_to_resolve,
+                result: Err(MockError(message.into())),
+            }),
+        })
+    }
+
+    /// Adds one planning step that returns ready morsels and then parks on I/O.
+    pub(crate) fn return_morsel_batches_and_io(
+        self,
+        morsel_id: MorselId,
+        batch_ids: Vec<i32>,
+        io_future_id: IoFutureId,
+        polls_to_resolve: PollsToResolve,
+    ) -> Self {
+        self.add_plan_step(PlannerStep::Plan {
+            morsels: vec![MockMorselSpec {
+                morsel_id,
+                batch_ids,
+            }],
+            ready_planners: vec![],
+            pending_planner: Some(MockPendingPlanner {
+                io_future_id,
+                polls_to_resolve,
+                result: Ok(()),
+            }),
+        })
     }
 
     /// Adds one planning step that reports the planner is exhausted.
@@ -382,7 +432,7 @@ impl MockMorselPlanner {
 }
 
 /// Rebuilds the mock planner continuation after one step completes.
-fn remaining_planners(
+fn current_planner_continuation(
     observer: MorselObserver,
     planner_name: String,
     steps: VecDeque<PlannerStep>,
@@ -399,6 +449,23 @@ fn remaining_planners(
             steps,
         }) as Box<dyn MorselPlanner>]
     }
+}
+
+/// Create any child planners produced by this planning step.
+fn child_planners(
+    observer: MorselObserver,
+    ready_planners: Vec<MockPlanner>,
+) -> Vec<Box<dyn MorselPlanner>> {
+    ready_planners
+        .into_iter()
+        .map(|planner| {
+            observer.push(MorselEvent::PlannerCreated {
+                planner_name: planner.file_path.clone(),
+            });
+            Box::new(MockMorselPlanner::new(observer.clone(), planner))
+                as Box<dyn MorselPlanner>
+        })
+        .collect()
 }
 
 impl MorselPlanner for MockMorselPlanner {
@@ -418,54 +485,71 @@ impl MorselPlanner for MockMorselPlanner {
         };
 
         match step {
-            PlannerStep::Morsel {
-                morsel_id,
-                batch_ids,
+            PlannerStep::Plan {
+                morsels,
+                ready_planners,
+                pending_planner,
             } => {
-                observer.push(MorselEvent::MorselProduced {
-                    planner_name: planner_name.clone(),
+                let mut ready_morsels = Vec::new();
+                for MockMorselSpec {
                     morsel_id,
-                });
-                Ok(Some(
-                    MorselPlan::new()
-                        .with_morsels(vec![Box::new(MockMorsel::new(
-                            observer.clone(),
-                            morsel_id,
-                            batch_ids,
-                        ))])
-                        .with_planners(remaining_planners(
-                            observer.clone(),
-                            planner_name.clone(),
-                            steps,
-                        )),
-                ))
-            }
-            PlannerStep::Io {
-                io_future_id,
-                polls_to_resolve,
-                result,
-            } => {
-                observer.push(MorselEvent::IoFutureCreated {
-                    planner_name: planner_name.clone(),
-                    io_future_id,
-                });
-                let io_future = MockIoFuture::new(
-                    observer.clone(),
-                    planner_name.clone(),
+                    batch_ids,
+                } in morsels
+                {
+                    observer.push(MorselEvent::MorselProduced {
+                        planner_name: planner_name.clone(),
+                        morsel_id,
+                    });
+                    ready_morsels.push(Box::new(MockMorsel::new(
+                        observer.clone(),
+                        morsel_id,
+                        batch_ids,
+                    )) as Box<dyn Morsel>);
+                }
+
+                let mut planners = child_planners(observer.clone(), ready_planners);
+                if pending_planner.is_none() {
+                    planners.extend(current_planner_continuation(
+                        observer.clone(),
+                        planner_name.clone(),
+                        steps.clone(),
+                    ));
+                }
+
+                let mut plan = MorselPlan::new()
+                    .with_morsels(ready_morsels)
+                    .with_planners(planners);
+
+                if let Some(MockPendingPlanner {
                     io_future_id,
                     polls_to_resolve,
                     result,
-                )
-                .map(move |result| {
-                    result?;
-                    Ok(Box::new(MockMorselPlanner {
-                        observer,
-                        planner_name,
-                        steps,
-                    }) as Box<dyn MorselPlanner>)
-                })
-                .boxed();
-                Ok(Some(MorselPlan::new().with_pending_planner(io_future)))
+                }) = pending_planner
+                {
+                    observer.push(MorselEvent::IoFutureCreated {
+                        planner_name: planner_name.clone(),
+                        io_future_id,
+                    });
+                    let io_future = MockIoFuture::new(
+                        observer.clone(),
+                        planner_name.clone(),
+                        io_future_id,
+                        polls_to_resolve,
+                        result,
+                    )
+                    .map(move |result| {
+                        result?;
+                        Ok(Box::new(MockMorselPlanner {
+                            observer,
+                            planner_name,
+                            steps,
+                        }) as Box<dyn MorselPlanner>)
+                    })
+                    .boxed();
+                    plan = plan.with_pending_planner(io_future);
+                }
+
+                Ok(Some(plan))
             }
             PlannerStep::Error { error } => {
                 Err(DataFusionError::External(Box::new(error)))
