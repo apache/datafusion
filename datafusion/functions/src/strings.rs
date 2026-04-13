@@ -230,11 +230,15 @@ impl StringViewArrayBuilder {
         }
 
         let v = &self.block;
-        let offset = self.data.len() as u32;
         if v.len() > 12 {
+            let offset: u32 = self.data.len().try_into().map_err(|_| {
+                exec_datafusion_err!("StringView data buffer overflow")
+            })?;
             self.data.extend_from_slice(v);
+            self.views.push(make_view(v, 0, offset));
+        } else {
+            self.views.push(make_view(v, 0, 0));
         }
-        self.views.push(make_view(v, 0, offset));
 
         self.block.clear();
         self.tainted = false;
@@ -266,8 +270,8 @@ impl StringViewArrayBuilder {
         };
 
         // SAFETY: views were constructed with correct lengths, offsets, and
-        // prefixes. UTF-8 validity has also been checked, if the input was
-        // tainted.
+        // prefixes. UTF-8 validity was checked in append_offset() for any row
+        // where tainted data (e.g., binary literals) was appended.
         let array = unsafe {
             StringViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
