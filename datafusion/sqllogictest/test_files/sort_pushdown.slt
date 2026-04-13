@@ -2307,7 +2307,19 @@ CREATE EXTERNAL TABLE th_reorder(id INT, value INT)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/sort_pushdown/th_reorder/data.parquet';
 
-# Test H.1: ASC ORDER BY with LIMIT — reorder helps TopK find min values first
+# Test H.1: ASC ORDER BY with LIMIT — Inexact path (file has no declared ordering)
+# Plan: SortExec(TopK) preserved. RG reorder happens inside DataSourceExec
+# (not visible in EXPLAIN, but verified by unit tests in access_plan.rs).
+query TT
+EXPLAIN SELECT * FROM th_reorder ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: th_reorder.id ASC NULLS LAST, fetch=3
+02)--TableScan: th_reorder projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/th_reorder/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
 # Results must be correct regardless of RG reorder.
 query II
 SELECT * FROM th_reorder ORDER BY id ASC LIMIT 3;
@@ -2317,6 +2329,16 @@ SELECT * FROM th_reorder ORDER BY id ASC LIMIT 3;
 5 50
 
 # Test H.2: DESC ORDER BY with LIMIT — reorder + reverse compose
+query TT
+EXPLAIN SELECT * FROM th_reorder ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: th_reorder.id DESC NULLS FIRST, fetch=3
+02)--TableScan: th_reorder projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/th_reorder/data.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ]
+
 query II
 SELECT * FROM th_reorder ORDER BY id DESC LIMIT 3;
 ----
