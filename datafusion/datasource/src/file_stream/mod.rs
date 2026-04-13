@@ -164,7 +164,7 @@ enum FileStreamState {
     },
     /// Encountered an error
     Error,
-    /// Finished scanning all requested data
+    /// Finished scanning all requested data, possibly because a limit was reached
     Done,
 }
 
