@@ -215,8 +215,6 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         buf: &mut Vec<u8>,
     ) -> Result<()> {
         let table = node
-            .as_ref()
-            .as_any()
             .downcast_ref::<TestTableProvider>()
             .expect("Can't encode non-test tables");
         let msg = TestTableProto {

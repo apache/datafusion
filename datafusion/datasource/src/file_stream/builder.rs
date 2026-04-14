@@ -18,6 +18,8 @@
 use std::sync::Arc;
 
 use crate::file_scan_config::FileScanConfig;
+use crate::file_stream::scan_state::ScanState;
+use crate::morsel::{FileOpenerMorselizer, Morselizer};
 use datafusion_common::{Result, internal_err};
 use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 
@@ -28,7 +30,7 @@ use super::{FileOpener, FileStream, FileStreamState, OnError};
 pub struct FileStreamBuilder<'a> {
     config: &'a FileScanConfig,
     partition: Option<usize>,
-    file_opener: Option<Arc<dyn FileOpener>>,
+    morselizer: Option<Box<dyn Morselizer>>,
     metrics: Option<&'a ExecutionPlanMetricsSet>,
     on_error: OnError,
 }
@@ -39,7 +41,7 @@ impl<'a> FileStreamBuilder<'a> {
         Self {
             config,
             partition: None,
-            file_opener: None,
+            morselizer: None,
             metrics: None,
             on_error: OnError::Fail,
         }
@@ -52,8 +54,18 @@ impl<'a> FileStreamBuilder<'a> {
     }
 
     /// Configure the [`FileOpener`] used to open files.
+    ///
+    /// This will overwrite any setting from [`Self::with_morselizer`]
     pub fn with_file_opener(mut self, file_opener: Arc<dyn FileOpener>) -> Self {
-        self.file_opener = Some(file_opener);
+        self.morselizer = Some(Box::new(FileOpenerMorselizer::new(file_opener)));
+        self
+    }
+
+    /// Configure the [`Morselizer`] used to open files.
+    ///
+    /// This will overwrite any setting from [`Self::with_file_opener`]
+    pub fn with_morselizer(mut self, morselizer: Box<dyn Morselizer>) -> Self {
+        self.morselizer = Some(morselizer);
         self
     }
 
@@ -74,7 +86,7 @@ impl<'a> FileStreamBuilder<'a> {
         let Self {
             config,
             partition,
-            file_opener,
+            morselizer,
             metrics,
             on_error,
         } = self;
@@ -82,8 +94,8 @@ impl<'a> FileStreamBuilder<'a> {
         let Some(partition) = partition else {
             return internal_err!("FileStreamBuilder missing required partition");
         };
-        let Some(file_opener) = file_opener else {
-            return internal_err!("FileStreamBuilder missing required file_opener");
+        let Some(morselizer) = morselizer else {
+            return internal_err!("FileStreamBuilder missing required morselizer");
         };
         let Some(metrics) = metrics else {
             return internal_err!("FileStreamBuilder missing required metrics");
@@ -95,15 +107,19 @@ impl<'a> FileStreamBuilder<'a> {
             );
         };
 
-        Ok(FileStream {
-            file_iter: file_group.into_inner().into_iter().collect(),
-            projected_schema,
-            remain: config.limit,
-            file_opener,
-            state: FileStreamState::Idle,
-            file_stream_metrics: FileStreamMetrics::new(metrics, partition),
-            baseline_metrics: BaselineMetrics::new(metrics, partition),
+        let file_stream_metrics = FileStreamMetrics::new(metrics, partition);
+        let scan_state = Box::new(ScanState::new(
+            file_group.into_inner(),
+            config.limit,
+            morselizer,
             on_error,
+            file_stream_metrics,
+        ));
+
+        Ok(FileStream {
+            projected_schema,
+            state: FileStreamState::Scan { scan_state },
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
         })
     }
 }

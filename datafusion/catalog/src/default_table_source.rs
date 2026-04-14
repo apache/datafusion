@@ -117,10 +117,6 @@ fn preserves_table_type() {
 
     #[async_trait]
     impl TableProvider for TestTempTable {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn table_type(&self) -> TableType {
             TableType::Temporary
         }

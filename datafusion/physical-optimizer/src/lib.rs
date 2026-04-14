@@ -48,4 +48,4 @@ pub mod update_aggr_exprs;
 pub mod utils;
 pub mod window_topn;
 
-pub use optimizer::PhysicalOptimizerRule;
+pub use optimizer::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};
