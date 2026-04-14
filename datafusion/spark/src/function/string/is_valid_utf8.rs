@@ -21,7 +21,7 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 
 use arrow::array::{Array, ArrayRef, BooleanArray};
-use datafusion_common::cast::{as_binary_array, as_string_array};
+use datafusion_common::cast::{as_binary_array, as_string_array, as_string_view_array};
 use datafusion_common::utils::take_function_args;
 use datafusion_functions::utils::make_scalar_function;
 
@@ -86,6 +86,12 @@ fn spark_is_valid_utf8_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::Utf8 => Ok(Arc::new(
             as_string_array(array)?
+                .iter()
+                .map(|x| x.map(|y| String::from_utf8(y.as_bytes().to_vec()).is_ok()))
+                .collect::<BooleanArray>(),
+        )),
+        DataType::Utf8View => Ok(Arc::new(
+            as_string_view_array(array)?
                 .iter()
                 .map(|x| x.map(|y| String::from_utf8(y.as_bytes().to_vec()).is_ok()))
                 .collect::<BooleanArray>(),
