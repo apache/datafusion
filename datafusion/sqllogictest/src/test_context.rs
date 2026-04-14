@@ -165,7 +165,7 @@ impl TestContext {
                 info!("Registering table with many types");
                 register_table_with_many_types(test_ctx.session_ctx()).await;
             }
-            "metadata.slt" => {
+            "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx()).await;
             }
