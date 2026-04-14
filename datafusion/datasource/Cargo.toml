@@ -31,6 +31,7 @@ version.workspace = true
 all-features = true
 
 [features]
+backtrace = ["datafusion-common/backtrace"]
 compression = ["async-compression", "liblzma", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
 
@@ -72,6 +73,7 @@ zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+insta = { workspace = true }
 tempfile = { workspace = true }
 
 # Note: add additional linter rules in lib.rs.

@@ -93,6 +93,7 @@ impl LiteralGuarantee {
     /// Create a new instance of the guarantee if the provided operator is
     /// supported. Returns None otherwise. See [`LiteralGuarantee::analyze`] to
     /// create these structures from an predicate (boolean expression).
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn new<'a>(
         column_name: impl Into<String>,
         guarantee: Guarantee,
@@ -309,6 +310,7 @@ impl<'a> GuaranteeBuilder<'a> {
     /// * `AND (a IN (1,2,3))`: a is in (1, 2, or 3)
     /// * `AND (a != 1 OR a != 2 OR a != 3)`: a is not in (1, 2, or 3)
     /// * `AND (a NOT IN (1,2,3))`: a is not in (1, 2, or 3)
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn aggregate_multi_conjunct(
         mut self,
         col: &'a crate::expressions::Column,

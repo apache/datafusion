@@ -142,6 +142,20 @@ impl JoinType {
                 | JoinType::RightMark
         )
     }
+
+    /// Returns true when an empty build side necessarily produces an empty
+    /// result for this join type.
+    pub fn empty_build_side_produces_empty_result(self) -> bool {
+        matches!(
+            self,
+            JoinType::Inner
+                | JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::RightSemi
+        )
+    }
 }
 
 impl Display for JoinType {

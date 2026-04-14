@@ -29,9 +29,9 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result, not_impl_err, plan_err};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
-use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
+use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
@@ -90,6 +90,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("SORT BY");
         }
 
+        // Capture and clear set expression schema so it doesn't leak
+        // into subqueries planned during FROM clause handling.
+        let set_expr_left_schema = planner_context.set_set_expr_left_schema(None);
+
         // Process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
@@ -110,7 +114,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )?;
 
         // Having and group by clause may reference aliases defined in select projection
-        let projected_plan = self.project(base_plan.clone(), select_exprs)?;
+        let projected_plan =
+            self.project(base_plan.clone(), select_exprs, set_expr_left_schema)?;
         let select_exprs = projected_plan.expressions();
 
         let order_by =
@@ -193,15 +198,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect::<Result<Vec<Expr>>>()?
         } else {
             // 'group by all' groups wrt. all select expressions except 'AggregateFunction's.
-            // Filter and collect non-aggregate select expressions
+            // Filter and collect non-aggregate select expressions.
             select_exprs
                 .iter()
-                .filter(|select_expr| match select_expr {
-                    Expr::AggregateFunction(_) => false,
-                    Expr::Alias(Alias { expr, name: _, .. }) => {
-                        !matches!(**expr, Expr::AggregateFunction(_))
-                    }
-                    _ => true,
+                .filter(|select_expr| {
+                    find_aggregate_exprs(std::iter::once(*select_expr)).is_empty()
                 })
                 .cloned()
                 .collect()
@@ -261,7 +262,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             select_exprs: mut select_exprs_post_aggr,
             having_expr: having_expr_post_aggr,
             qualify_expr: qualify_expr_post_aggr,
-            order_by_exprs: order_by_rex,
+            order_by_exprs: mut order_by_rex,
         } = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
             self.aggregate(
                 &base_plan,
@@ -297,14 +298,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        // The outer expressions we will search through for window functions.
-        // Window functions may be sourced from the SELECT list or from the QUALIFY expression.
-        let windows_expr_haystack = select_exprs_post_aggr
-            .iter()
-            .chain(qualify_expr_post_aggr.iter());
         // All of the window expressions (deduplicated and rewritten to reference aggregates as
-        // columns from input).
-        let window_func_exprs = find_window_exprs(windows_expr_haystack);
+        // columns from input). Window functions may be sourced from the SELECT list, QUALIFY
+        // expression, or ORDER BY.
+        let window_func_exprs = find_window_exprs(
+            select_exprs_post_aggr
+                .iter()
+                .chain(qualify_expr_post_aggr.iter())
+                .chain(order_by_rex.iter().map(|s| &s.expr)),
+        );
 
         // Process window functions after aggregation as they can reference
         // aggregate functions in their body
@@ -319,14 +321,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
                 .collect::<Result<Vec<Expr>>>()?;
 
+            order_by_rex = order_by_rex
+                .into_iter()
+                .map(|sort_expr| {
+                    Ok(sort_expr.with_expr(rebase_expr(
+                        &sort_expr.expr,
+                        &window_func_exprs,
+                        &plan,
+                    )?))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
             plan
         };
 
         // Process QUALIFY clause after window functions
         // QUALIFY filters the results of window functions, similar to how HAVING filters aggregates
         let plan = if let Some(qualify_expr) = qualify_expr_post_aggr {
-            // Validate that QUALIFY is used with window functions
-            if window_func_exprs.is_empty() {
+            // Validate that QUALIFY is used with window functions in SELECT or QUALIFY
+            let qualify_window_func_exprs = find_window_exprs(
+                select_exprs_post_aggr
+                    .iter()
+                    .chain(std::iter::once(&qualify_expr)),
+            );
+            if qualify_window_func_exprs.is_empty() {
                 return plan_err!(
                     "QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
                 );
@@ -579,9 +597,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } else {
                 let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
 
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut projection_exprs = match &aggr_expr_using_columns {
                     Some(exprs) => (*exprs).clone(),
                     None => {
+                        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                         let mut columns = HashSet::new();
                         for expr in &aggr_expr {
                             expr.apply(|expr| {
@@ -879,18 +900,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         input: LogicalPlan,
         expr: Vec<SelectExpr>,
+        set_expr_left_schema: Option<DFSchemaRef>,
     ) -> Result<LogicalPlan> {
         // convert to Expr for validate_schema_satisfies_exprs
-        let exprs = expr
+        let plain_exprs = expr
             .iter()
             .filter_map(|e| match e {
                 SelectExpr::Expression(expr) => Some(expr.to_owned()),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        self.validate_schema_satisfies_exprs(input.schema(), &exprs)?;
+        self.validate_schema_satisfies_exprs(input.schema(), &plain_exprs)?;
 
-        LogicalPlanBuilder::from(input).project(expr)?.build()
+        // When inside a set expression, pass the left-most schema so
+        // that expressions get aliased to match, avoiding duplicate
+        // name errors from expressions like `count(*), count(*)`.
+        let builder = LogicalPlanBuilder::from(input);
+        if let Some(left_schema) = set_expr_left_schema {
+            builder
+                .project_with_validation_and_schema(expr, &left_schema)?
+                .build()
+        } else {
+            builder.project(expr)?.build()
+        }
     }
 
     /// Create an aggregate plan.

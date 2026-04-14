@@ -28,7 +28,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -41,7 +40,24 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 "#,
     syntax_example = r#"current_time()
     (optional) SET datafusion.execution.time_zone = '+00:00';
-    SELECT current_time();"#
+    SELECT current_time();"#,
+    sql_example = r#"```sql
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 06:30:00.123456789 |
++--------------------+
+
+-- The current time is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 15:30:00.123456789 |
++--------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentTimeFunc {
@@ -69,10 +85,6 @@ impl CurrentTimeFunc {
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
 impl ScalarUDFImpl for CurrentTimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "current_time"
     }
@@ -151,10 +163,11 @@ mod tests {
             Some(tz.to_string())
         };
         let schema = Arc::new(DFSchema::empty());
-        SimplifyContext::default()
+        SimplifyContext::builder()
             .with_schema(schema)
             .with_config_options(Arc::new(config))
             .with_query_execution_start_time(Some(start_time))
+            .build()
     }
 
     #[test]

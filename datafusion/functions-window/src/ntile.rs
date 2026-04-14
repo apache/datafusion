@@ -32,7 +32,6 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -109,10 +108,6 @@ impl Default for Ntile {
 }
 
 impl WindowUDFImpl for Ntile {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "ntile"
     }

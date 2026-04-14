@@ -27,7 +27,6 @@ use datafusion_expr::{
     TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Returns the longest string with leading and trailing characters removed. If the characters are not specified, spaces are removed.
@@ -98,10 +97,6 @@ impl BTrimFunc {
 }
 
 impl ScalarUDFImpl for BTrimFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "btrim"
     }

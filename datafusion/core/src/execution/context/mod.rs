@@ -320,7 +320,7 @@ impl SessionContext {
                 let schema = cat
                     .schema(schema_name.as_str())
                     .ok_or_else(|| internal_datafusion_err!("Schema not found!"))?;
-                let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
+                let lister = schema.downcast_ref::<ListingSchemaProvider>();
                 if let Some(lister) = lister {
                     lister.refresh(&self.state()).await?;
                 }
@@ -1488,12 +1488,13 @@ impl SessionContext {
         })?;
 
         let state = self.state.read();
-        let context = SimplifyContext::default()
+        let context = SimplifyContext::builder()
             .with_schema(Arc::clone(prepared.plan.schema()))
             .with_config_options(Arc::clone(state.config_options()))
             .with_query_execution_start_time(
                 state.execution_props().query_execution_start_time,
-            );
+            )
+            .build();
         let simplifier = ExprSimplifier::new(context);
 
         // Only allow literals as parameters for now.

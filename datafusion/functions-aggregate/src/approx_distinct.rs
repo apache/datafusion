@@ -42,7 +42,6 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
@@ -304,10 +303,6 @@ impl ApproxDistinct {
 }
 
 impl AggregateUDFImpl for ApproxDistinct {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "approx_distinct"
     }

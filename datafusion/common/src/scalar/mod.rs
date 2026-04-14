@@ -4138,20 +4138,16 @@ impl ScalarValue {
 
         let scalar_array = self.to_array()?;
 
-        // For struct types, use name-based casting logic that matches fields by name
-        // and recursively casts nested structs. The field name wrapper is arbitrary
-        // since cast_column only uses the DataType::Struct field definitions inside.
-        let cast_arr = match target_type {
-            DataType::Struct(_) => {
-                // Field name is unused; only the struct's inner field names matter
-                let target_field = Field::new("_", target_type.clone(), true);
-                crate::nested_struct::cast_column(
-                    &scalar_array,
-                    &target_field,
-                    cast_options,
-                )?
-            }
-            _ => cast_with_options(&scalar_array, target_type, cast_options)?,
+        // For types that contain structs (including nested inside Lists, Dictionaries,
+        // etc.), use name-based casting logic that matches struct fields by name and
+        // recursively casts nested structs.
+        let cast_arr = if crate::nested_struct::requires_nested_struct_cast(
+            scalar_array.data_type(),
+            target_type,
+        ) {
+            crate::nested_struct::cast_column(&scalar_array, target_type, cast_options)?
+        } else {
+            cast_with_options(&scalar_array, target_type, cast_options)?
         };
 
         ScalarValue::try_from_array(&cast_arr, 0)
@@ -4605,6 +4601,7 @@ impl ScalarValue {
     /// Estimates [size](Self::size) of [`HashSet`] in bytes.
     ///
     /// Includes the size of the [`HashSet`] container itself.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     pub fn size_of_hashset<S>(set: &HashSet<Self, S>) -> usize {
         size_of_val(set)
             + (size_of::<ScalarValue>() * set.capacity())
@@ -7267,6 +7264,8 @@ mod tests {
             size_of::<Vec<ScalarValue>>() + (9 * size_of::<ScalarValue>()) + sv_size,
         );
 
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+        // ScalarValue has interior mutability but is intentionally used as hash key
         let mut s = HashSet::with_capacity(0);
         // do NOT clone `sv` here because this may shrink the vector capacity
         s.insert(v.pop().unwrap());

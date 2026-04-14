@@ -272,7 +272,6 @@ mod tests {
             SendableRecordBatchStream,
             execution_plan::{Boundedness, EmissionType},
         };
-        use std::any::Any;
 
         #[derive(Debug)]
         struct DummyExec {
@@ -322,9 +321,6 @@ mod tests {
         impl ExecutionPlan for DummyExec {
             fn name(&self) -> &str {
                 &self.name
-            }
-            fn as_any(&self) -> &dyn Any {
-                self
             }
             fn properties(&self) -> &Arc<PlanProperties> {
                 &self.properties

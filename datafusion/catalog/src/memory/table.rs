@@ -17,7 +17,6 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -214,10 +213,6 @@ impl MemTable {
 
 #[async_trait]
 impl TableProvider for MemTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -592,10 +587,6 @@ impl DisplayAs for DmlResultExec {
 impl ExecutionPlan for DmlResultExec {
     fn name(&self) -> &str {
         "DmlResultExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {

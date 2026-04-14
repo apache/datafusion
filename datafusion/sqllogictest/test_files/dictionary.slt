@@ -426,7 +426,8 @@ physical_plan
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
-# Now query using an integer which must be coerced into a dictionary string
+# Query using an integer literal: comparison coercion prefers numeric types,
+# so the dictionary string column is cast to Int64
 query TT
 SELECT * from test where column2 = 1;
 ----
@@ -436,10 +437,10 @@ query TT
 explain SELECT * from test where column2 = 1;
 ----
 logical_plan
-01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+01)Filter: CAST(test.column2 AS Int64) = Int64(1)
 02)--TableScan: test projection=[column1, column2]
 physical_plan
-01)FilterExec: column2@1 = 1
+01)FilterExec: CAST(column2@1 AS Int64) = 1
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Window Functions
@@ -454,3 +455,63 @@ CREATE TABLE test0 AS VALUES ('foo',1), ('bar',2), ('foo',3);
 
 statement ok
 COPY (SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS column1, column2 FROM test0) TO 'test_files/scratch/dictionary/part_dict_test' STORED AS PARQUET PARTITIONED BY (column1);
+
+
+# Dictionary-encoded large hashes repeated across 10 rows (3 unique hashes)
+statement ok
+CREATE TABLE dict_hash_src AS
+SELECT
+  arrow_cast(column1, 'Int64') AS id,
+  arrow_cast(column2, 'Dictionary(Int32, Utf8)') AS payload_hash,
+  arrow_cast(column3, 'Float64') AS metric,
+  arrow_cast(column4, 'Timestamp(ns)') AS ts
+FROM (
+  VALUES
+    (1,  '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', 10.0, 1703030400000000000),
+    (2,  '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', 11.0, 1703031000000000000),
+    (3,  '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', 12.0, 1703031600000000000),
+    (4,  '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', 13.0, 1703032200000000000),
+    (5,  '1f40fc92da241694750979ee6cf582f2d5d7d28e18335de05abc54d0560e0f53', 14.0, 1703032800000000000),
+    (6,  '1f40fc92da241694750979ee6cf582f2d5d7d28e18335de05abc54d0560e0f53', 15.0, 1703033400000000000),
+    (7,  '1f40fc92da241694750979ee6cf582f2d5d7d28e18335de05abc54d0560e0f53', 16.0, 1703034000000000000),
+    (8,  '6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b', 17.0, 1703034600000000000),
+    (9,  '6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b', 18.0, 1703035200000000000),
+    (10, '6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b', 19.0, 1703035800000000000)
+);
+
+statement ok
+COPY dict_hash_src
+TO 'test_files/scratch/dictionary/dict_hash_10.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE dict_hash_10
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dictionary/dict_hash_10.parquet';
+
+query TTT
+DESCRIBE dict_hash_10;
+----
+id Int64 YES
+payload_hash Dictionary(Int32, Utf8) YES
+metric Float64 YES
+ts Timestamp(ns) YES
+
+query II
+SELECT COUNT(*), COUNT(DISTINCT payload_hash)
+FROM dict_hash_10;
+----
+10 3
+
+query I
+SELECT COUNT(*)
+FROM dict_hash_10
+WHERE payload_hash = '1f40fc92da241694750979ee6cf582f2d5d7d28e18335de05abc54d0560e0f53';
+----
+3
+
+statement ok
+DROP TABLE dict_hash_10;
+
+statement ok
+DROP TABLE dict_hash_src;

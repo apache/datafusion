@@ -883,6 +883,144 @@ impl<'de> serde::Deserialize<'de> for AvroOptions {
         deserializer.deserialize_struct("datafusion_common.AvroOptions", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for CdcOptions {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.min_chunk_size != 0 {
+            len += 1;
+        }
+        if self.max_chunk_size != 0 {
+            len += 1;
+        }
+        if self.norm_level != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion_common.CdcOptions", len)?;
+        if self.min_chunk_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("minChunkSize", ToString::to_string(&self.min_chunk_size).as_str())?;
+        }
+        if self.max_chunk_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("maxChunkSize", ToString::to_string(&self.max_chunk_size).as_str())?;
+        }
+        if self.norm_level != 0 {
+            struct_ser.serialize_field("normLevel", &self.norm_level)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for CdcOptions {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "min_chunk_size",
+            "minChunkSize",
+            "max_chunk_size",
+            "maxChunkSize",
+            "norm_level",
+            "normLevel",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            MinChunkSize,
+            MaxChunkSize,
+            NormLevel,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "minChunkSize" | "min_chunk_size" => Ok(GeneratedField::MinChunkSize),
+                            "maxChunkSize" | "max_chunk_size" => Ok(GeneratedField::MaxChunkSize),
+                            "normLevel" | "norm_level" => Ok(GeneratedField::NormLevel),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = CdcOptions;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.CdcOptions")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<CdcOptions, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut min_chunk_size__ = None;
+                let mut max_chunk_size__ = None;
+                let mut norm_level__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::MinChunkSize => {
+                            if min_chunk_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("minChunkSize"));
+                            }
+                            min_chunk_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::MaxChunkSize => {
+                            if max_chunk_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxChunkSize"));
+                            }
+                            max_chunk_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NormLevel => {
+                            if norm_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("normLevel"));
+                            }
+                            norm_level__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(CdcOptions {
+                    min_chunk_size: min_chunk_size__.unwrap_or_default(),
+                    max_chunk_size: max_chunk_size__.unwrap_or_default(),
+                    norm_level: norm_level__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.CdcOptions", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for Column {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -5695,6 +5833,9 @@ impl serde::Serialize for ParquetOptions {
         if !self.created_by.is_empty() {
             len += 1;
         }
+        if self.content_defined_chunking.is_some() {
+            len += 1;
+        }
         if self.metadata_size_hint_opt.is_some() {
             len += 1;
         }
@@ -5805,6 +5946,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
+        }
+        if let Some(v) = self.content_defined_chunking.as_ref() {
+            struct_ser.serialize_field("contentDefinedChunking", v)?;
         }
         if let Some(v) = self.metadata_size_hint_opt.as_ref() {
             match v {
@@ -5944,6 +6088,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxRowGroupSize",
             "created_by",
             "createdBy",
+            "content_defined_chunking",
+            "contentDefinedChunking",
             "metadata_size_hint",
             "metadataSizeHint",
             "compression",
@@ -5989,6 +6135,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DataPageRowCountLimit,
             MaxRowGroupSize,
             CreatedBy,
+            ContentDefinedChunking,
             MetadataSizeHint,
             Compression,
             DictionaryEnabled,
@@ -6042,6 +6189,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
+                            "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
                             "compression" => Ok(GeneratedField::Compression),
                             "dictionaryEnabled" | "dictionary_enabled" => Ok(GeneratedField::DictionaryEnabled),
@@ -6093,6 +6241,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
                 let mut created_by__ = None;
+                let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
                 let mut compression_opt__ = None;
                 let mut dictionary_enabled_opt__ = None;
@@ -6246,6 +6395,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             created_by__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::ContentDefinedChunking => {
+                            if content_defined_chunking__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("contentDefinedChunking"));
+                            }
+                            content_defined_chunking__ = map_.next_value()?;
+                        }
                         GeneratedField::MetadataSizeHint => {
                             if metadata_size_hint_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("metadataSizeHint"));
@@ -6336,6 +6491,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
+                    content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,
                     compression_opt: compression_opt__,
                     dictionary_enabled_opt: dictionary_enabled_opt__,

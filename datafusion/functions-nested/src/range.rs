@@ -51,7 +51,6 @@ use datafusion_expr::{
     TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::cmp::Ordering;
 use std::iter::from_fn;
 use std::str::FromStr;
@@ -212,10 +211,6 @@ impl Range {
 }
 
 impl ScalarUDFImpl for Range {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         if self.include_upper_bound {
             "generate_series"

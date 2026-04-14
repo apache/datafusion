@@ -15,25 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains code for reading [Avro] data into `RecordBatch`es
-//!
-//! [Avro]: https://avro.apache.org/docs/1.2.0/
+mod bool8;
+mod fixed_shape_tensor;
+mod json;
+mod opaque;
+mod timestamp_with_offset;
+mod uuid;
+mod variable_shape_tensor;
 
-mod arrow_array_reader;
-mod reader;
-mod schema;
-
-use arrow::datatypes::Schema;
-pub use reader::{Reader, ReaderBuilder};
-
-pub use schema::to_arrow_schema;
-use std::io::Read;
-
-/// Read Avro schema given a reader
-pub fn read_avro_schema_from_reader<R: Read>(
-    reader: &mut R,
-) -> datafusion_common::Result<Schema> {
-    let avro_reader = apache_avro::Reader::new(reader)?;
-    let schema = avro_reader.writer_schema();
-    to_arrow_schema(schema)
-}
+pub use bool8::DFBool8;
+pub use fixed_shape_tensor::DFFixedShapeTensor;
+pub use json::DFJson;
+pub use opaque::DFOpaque;
+pub use timestamp_with_offset::DFTimestampWithOffset;
+pub use uuid::DFUuid;
+pub use variable_shape_tensor::DFVariableShapeTensor;
