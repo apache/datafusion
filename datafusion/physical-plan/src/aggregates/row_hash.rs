@@ -204,6 +204,11 @@ impl SkipAggregationProbe {
         self.should_skip
     }
 
+    /// Returns whether the probe has evaluated (enough rows seen).
+    fn has_evaluated(&self) -> bool {
+        self.input_rows >= self.probe_rows_threshold
+    }
+
     /// Record the number of rows that were output directly without aggregation
     fn record_skipped(&mut self, batch: &RecordBatch) {
         self.skipped_aggregation_rows.add(batch.num_rows());
@@ -807,7 +812,16 @@ impl Stream for GroupedHashAggregateStream {
                             // Emit+reset: when the hash table exceeds the
                             // size limit, emit all accumulated state and
                             // reset the table to bound memory usage.
+                            //
+                            // Only activate after the skip probe has evaluated
+                            // and decided NOT to skip. This prevents emit+reset
+                            // from cycling on high-cardinality queries where
+                            // skip_aggregation should take over instead.
                             if self.early_emit_max_table_size > 0
+                                && match &self.skip_aggregation_probe {
+                                    None => true,
+                                    Some(p) => p.has_evaluated() && !p.should_skip(),
+                                }
                                 && self.table_size() >= self.early_emit_max_table_size
                             {
                                 let batch_size = self.batch_size;
