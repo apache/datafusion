@@ -3859,7 +3859,7 @@ fn subquery_order_by_is_eliminated_by_default() {
 fn subquery_order_by_can_be_preserved() {
     let sql = "SELECT x.* FROM (SELECT id FROM person ORDER BY id) x";
     let mut config_options = datafusion_common::config::ConfigOptions::new();
-    config_options.optimizer.enable_subquery_sort_elimination = false;
+    config_options.sql_parser.enable_subquery_sort_elimination = false;
     let plan = logical_plan_with_config(sql, config_options).unwrap();
     assert_snapshot!(
         plan.display_indent_schema().to_string(),

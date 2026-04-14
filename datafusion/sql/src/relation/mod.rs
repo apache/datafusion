@@ -101,7 +101,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             planned_relation.plan,
             self.context_provider
                 .options()
-                .optimizer
+                .sql_parser
                 .enable_subquery_sort_elimination,
         )?
         .data;
