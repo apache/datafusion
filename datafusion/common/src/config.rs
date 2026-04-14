@@ -3646,6 +3646,42 @@ mod tests {
         assert_eq!(factory_options.get("key2"), Some(&"value 2".to_string()));
     }
 
+    #[cfg(feature = "parquet_encryption")]
+    struct ParquetEncryptionKeyRetriever {}
+
+    #[cfg(feature = "parquet_encryption")]
+    impl parquet::encryption::decrypt::KeyRetriever for ParquetEncryptionKeyRetriever {
+        fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
+            if !key_metadata.is_empty() {
+                Ok(b"1234567890123450".to_vec())
+            } else {
+                Err(parquet::errors::ParquetError::General(
+                    "Key metadata not provided".to_string(),
+                ))
+            }
+        }
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn conversion_from_key_retriever_to_config_file_decryption_properties() {
+        use crate::Result;
+        use crate::config::ConfigFileDecryptionProperties;
+        use crate::encryption::FileDecryptionProperties;
+
+        let retriever = std::sync::Arc::new(ParquetEncryptionKeyRetriever {});
+        let decryption_properties =
+            FileDecryptionProperties::with_key_retriever(retriever)
+                .build()
+                .unwrap();
+        let config_file_decryption_properties: Result<ConfigFileDecryptionProperties> =
+            (&decryption_properties).try_into();
+        assert!(config_file_decryption_properties.is_err());
+        let err = config_file_decryption_properties.unwrap_err().to_string();
+        assert!(err.contains("key retriever"));
+        assert!(err.contains("Key metadata not provided"));
+    }
+
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options_config_entry() {
