@@ -17,7 +17,6 @@
 
 //! A simplified [`TableProvider`] for streaming partitioned datasets
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -81,10 +80,6 @@ impl StreamingTable {
 
 #[async_trait]
 impl TableProvider for StreamingTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
