@@ -42,7 +42,6 @@ use datafusion_common::{
     tree_node::{Transformed, TreeNode},
 };
 use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
@@ -1124,40 +1123,34 @@ fn rewrite_expr_to_prunable(
         Ok((Arc::clone(column_expr), op, Arc::clone(scalar_expr)))
     } else if let Some(cast) = column_expr_any.downcast_ref::<phys_expr::CastExpr>() {
         // `cast(col) op lit()`
-        let arrow_schema = schema.as_arrow();
-        let from_type = cast.expr().data_type(arrow_schema)?;
-        verify_support_type_for_prune(&from_type, cast.cast_type())?;
-        let (left, op, right) =
-            rewrite_expr_to_prunable(cast.expr(), op, scalar_expr, schema)?;
-        let left = Arc::new(phys_expr::CastExpr::new(
+        let (left, op, right) = rewrite_cast_child_to_prunable(
+            cast.expr(),
+            cast.cast_type(),
+            op,
+            scalar_expr,
+            schema,
+        )?;
+        let left = Arc::new(phys_expr::CastExpr::new_with_target_field(
             left,
-            cast.cast_type().clone(),
+            Arc::clone(cast.target_field()),
             None,
         ));
-        Ok((left, op, right))
-    } else if let Some(cast_col) = column_expr_any.downcast_ref::<CastColumnExpr>() {
-        // `cast_column(col) op lit()` - same as CastExpr but uses CastColumnExpr
-        let arrow_schema = schema.as_arrow();
-        let from_type = cast_col.expr().data_type(arrow_schema)?;
-        let to_type = cast_col.target_field().data_type();
-        verify_support_type_for_prune(&from_type, to_type)?;
-        let (left, op, right) =
-            rewrite_expr_to_prunable(cast_col.expr(), op, scalar_expr, schema)?;
-        // Predicate pruning / statistics generally don't support struct columns yet.
-        // In the future we may want to support pruning on nested fields, in which case we probably need to
-        // do something more sophisticated here.
-        // But for now since we don't support pruning on nested fields, we can just cast to the target type directly.
-        let left = Arc::new(phys_expr::CastExpr::new(left, to_type.clone(), None));
+        // PruningPredicate does not support pruning on nested fields yet.
+        // End-to-end nested-field pruning also requires Parquet statistics
+        // extraction to agree with PruningPredicate on a stats representation
+        // for nested field expressions.
         Ok((left, op, right))
     } else if let Some(try_cast) =
         column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()
     {
         // `try_cast(col) op lit()`
-        let arrow_schema = schema.as_arrow();
-        let from_type = try_cast.expr().data_type(arrow_schema)?;
-        verify_support_type_for_prune(&from_type, try_cast.cast_type())?;
-        let (left, op, right) =
-            rewrite_expr_to_prunable(try_cast.expr(), op, scalar_expr, schema)?;
+        let (left, op, right) = rewrite_cast_child_to_prunable(
+            try_cast.expr(),
+            try_cast.cast_type(),
+            op,
+            scalar_expr,
+            schema,
+        )?;
         let left = Arc::new(phys_expr::TryCastExpr::new(
             left,
             try_cast.cast_type().clone(),
@@ -1189,6 +1182,20 @@ fn rewrite_expr_to_prunable(
     } else {
         plan_err!("column expression {column_expr:?} is not supported")
     }
+}
+
+fn rewrite_cast_child_to_prunable(
+    cast_child_expr: &PhysicalExprRef,
+    cast_type: &DataType,
+    op: Operator,
+    scalar_expr: &PhysicalExprRef,
+    schema: DFSchema,
+) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
+    verify_support_type_for_prune(
+        &cast_child_expr.data_type(schema.as_arrow())?,
+        cast_type,
+    )?;
+    rewrite_expr_to_prunable(cast_child_expr, op, scalar_expr, schema)
 }
 
 fn is_compare_op(op: Operator) -> bool {
@@ -4192,7 +4199,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_cast_column_scalar() {
+    fn prune_cast_scalar() {
         // The data type of column i is INT32
         let (schema, statistics) = int32_setup();
         let expected_ret = &[true, true, false, true, true];

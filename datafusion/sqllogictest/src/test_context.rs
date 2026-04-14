@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -166,7 +165,7 @@ impl TestContext {
                 info!("Registering table with many types");
                 register_table_with_many_types(test_ctx.session_ctx()).await;
             }
-            "metadata.slt" => {
+            "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx()).await;
             }
@@ -228,10 +227,6 @@ struct StrictOrdersSchema {
 
 #[async_trait]
 impl SchemaProvider for StrictOrdersSchema {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         vec!["orders".to_string()]
     }
@@ -359,10 +354,6 @@ pub async fn register_temp_table(ctx: &SessionContext) {
 
     #[async_trait]
     impl TableProvider for TestTable {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn schema(&self) -> SchemaRef {
             unimplemented!()
         }
