@@ -26,9 +26,9 @@ SELECT make_valid_utf8(''::string);
 (empty)
 
 query T
-SELECT make_valid_utf64(NULL::string);
+SELECT make_valid_utf8(NULL::string);
 ----
-(empty)
+NULL
 
 query T
 SELECT make_valid_utf8(arrow_cast(x'C3A9', 'Binary'));
@@ -61,7 +61,7 @@ SELECT make_valid_utf8(arrow_cast(x'F4808080', 'Binary'));
 􀀀
 
 query T
-SELECT make_valid_utf8(arrow_cast(x'ED A0 BD ED B2 A9', 'Binary'));
+SELECT make_valid_utf8(arrow_cast(x'EDA0BDEDB2A9', 'Binary'));
 ----
 ���
 
@@ -76,6 +76,6 @@ SELECT make_valid_utf8(arrow_cast(x'E0', 'Binary'));
 �
 
 query T
-SELECT make_valid_utf8(arrow_cast(x'F0808080'::string);
+SELECT make_valid_utf8(arrow_cast(x'F0808080', 'Binary'));
 ----
 ���
