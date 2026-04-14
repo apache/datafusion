@@ -80,6 +80,54 @@ impl<'a, 'b, S: ContextProvider> RelationPlannerContext
 }
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
+    pub(crate) fn register_relation_binding(
+        &self,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<()> {
+        match relation {
+            TableFactor::Table {
+                name, alias, args, ..
+            } => {
+                if let Some(alias) = alias {
+                    let display_name =
+                        self.ident_normalizer.normalize(alias.name.clone());
+                    planner_context.insert_relation_binding(
+                        display_name.clone(),
+                        display_name,
+                        Span::try_from_sqlparser_span(alias.name.span),
+                    )
+                } else if args.is_none() {
+                    let table_ref = self.object_name_to_table_reference(name.clone())?;
+                    let display_name = table_ref.to_string();
+                    planner_context.insert_relation_binding(
+                        display_name.clone(),
+                        display_name,
+                        Span::try_from_sqlparser_span(relation.span()),
+                    )
+                } else {
+                    Ok(())
+                }
+            }
+            TableFactor::Derived { alias, .. }
+            | TableFactor::NestedJoin { alias, .. }
+            | TableFactor::UNNEST { alias, .. }
+            | TableFactor::Function { alias, .. } => alias
+                .as_ref()
+                .map(|alias| {
+                    let display_name =
+                        self.ident_normalizer.normalize(alias.name.clone());
+                    planner_context.insert_relation_binding(
+                        display_name.clone(),
+                        display_name,
+                        Span::try_from_sqlparser_span(alias.name.span),
+                    )
+                })
+                .unwrap_or(Ok(())),
+            _ => Ok(()),
+        }
+    }
+
     /// Create a `LogicalPlan` that scans the named relation.
     ///
     /// First tries any registered extension planners. If no extension handles
@@ -214,10 +262,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             TableFactor::NestedJoin {
                 table_with_joins,
                 alias,
-            } => (
-                self.plan_table_with_joins(*table_with_joins, planner_context)?,
-                alias,
-            ),
+            } => {
+                let logical_plan = if alias.is_some() {
+                    planner_context.with_new_relation_scope(|planner_context| {
+                        self.plan_table_with_joins(*table_with_joins, planner_context)
+                    })?
+                } else {
+                    self.plan_table_with_joins(*table_with_joins, planner_context)?
+                };
+                (logical_plan, alias)
+            }
             TableFactor::UNNEST {
                 alias,
                 array_exprs,

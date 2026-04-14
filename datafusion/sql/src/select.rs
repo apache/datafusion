@@ -704,7 +704,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         mut from: Vec<TableWithJoins>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        match from.len() {
+        planner_context.with_new_relation_scope(|planner_context| match from.len() {
             0 => Ok(LogicalPlanBuilder::empty(true).build()?),
             1 => {
                 let input = from.remove(0);
@@ -732,7 +732,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 planner_context.set_outer_from_schema(old_outer_from_schema);
                 left.build()
             }
-        }
+        })
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.

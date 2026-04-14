@@ -2424,6 +2424,80 @@ fn equijoin_explicit_syntax() {
 }
 
 #[test]
+fn join_duplicate_relation_alias_errors() {
+    let sql = "SELECT * FROM person p JOIN orders p ON true";
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: duplicate relation alias or name 'p'"
+    );
+}
+
+#[test]
+fn comma_join_duplicate_relation_alias_errors() {
+    let sql = "SELECT * FROM person p, orders p";
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: duplicate relation alias or name 'p'"
+    );
+}
+
+#[test]
+fn join_distinct_relation_aliases_ok() {
+    let sql = "SELECT p.id, o.order_id FROM person p JOIN orders o ON true";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: p.id, o.order_id
+      Inner Join:  Filter: Boolean(true)
+        SubqueryAlias: p
+          TableScan: person
+        SubqueryAlias: o
+          TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn nested_join_relation_scope_does_not_leak() {
+    let sql = "SELECT p.id FROM person p WHERE EXISTS (SELECT 1 FROM orders p)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: p.id
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            SubqueryAlias: p
+              TableScan: orders
+        SubqueryAlias: p
+          TableScan: person
+    "
+    );
+}
+
+#[test]
+fn aliased_nested_join_relation_scope_does_not_leak() {
+    let sql = "SELECT p.id FROM (person p JOIN orders o ON p.id = o.customer_id) p";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: p.id
+      SubqueryAlias: p
+        Inner Join:  Filter: p.id = o.customer_id
+          SubqueryAlias: p
+            TableScan: person
+          SubqueryAlias: o
+            TableScan: orders
+    "
+    );
+}
+
+#[test]
 fn equijoin_with_condition() {
     let sql = "SELECT id, order_id \
             FROM person \

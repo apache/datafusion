@@ -44,6 +44,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Each query has its own planner context, including CTEs that are visible within that query.
         // It also inherits the CTEs from the outer query by cloning the outer planner context.
         let mut query_plan_context = outer_planner_context.clone();
+        query_plan_context.clear_relation_scopes();
         let planner_context = &mut query_plan_context;
 
         let Query {

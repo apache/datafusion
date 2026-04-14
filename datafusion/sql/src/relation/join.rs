@@ -29,6 +29,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         t: TableWithJoins,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        self.register_relation_binding(&t.relation, planner_context)?;
         let mut left = if is_lateral(&t.relation) {
             self.create_relation_subquery(t.relation, planner_context)?
         } else {
@@ -49,6 +50,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         join: Join,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        self.register_relation_binding(&join.relation, planner_context)?;
         let right = if is_lateral_join(&join)? {
             self.create_relation_subquery(join.relation, planner_context)?
         } else {

@@ -29,7 +29,7 @@ use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
-    DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
+    DFSchemaRef, Diagnostic, SchemaError, Span, field_not_found, internal_err,
     plan_datafusion_err,
 };
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
@@ -274,6 +274,20 @@ pub struct PlannerContext {
     /// (UNION/INTERSECT/EXCEPT), holds the schema of the left-most query.
     /// Used to alias duplicate expressions to match the left side's field names.
     set_expr_left_schema: Option<DFSchemaRef>,
+
+    /// Relation aliases and names bound by currently planned FROM scopes.
+    relation_scopes: Vec<RelationScope>,
+}
+
+#[derive(Debug, Clone)]
+struct RelationScope {
+    bindings: HashMap<String, RelationBinding>,
+}
+
+#[derive(Debug, Clone)]
+struct RelationBinding {
+    display_name: String,
+    span: Option<Span>,
 }
 
 impl Default for PlannerContext {
@@ -292,6 +306,7 @@ impl PlannerContext {
             outer_from_schema: None,
             create_table_schema: None,
             set_expr_left_schema: None,
+            relation_scopes: vec![],
         }
     }
 
@@ -374,6 +389,57 @@ impl PlannerContext {
             Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
             None => self.outer_from_schema = Some(Arc::clone(schema)),
         };
+        Ok(())
+    }
+
+    /// Run `f` with a fresh relation binding scope for a single FROM clause.
+    pub(crate) fn with_new_relation_scope<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        self.relation_scopes.push(RelationScope {
+            bindings: HashMap::new(),
+        });
+        let result = f(self);
+        self.relation_scopes.pop();
+        result
+    }
+
+    /// Clear relation scopes inherited by cloning an outer query context.
+    pub(crate) fn clear_relation_scopes(&mut self) {
+        self.relation_scopes.clear();
+    }
+
+    pub(crate) fn insert_relation_binding(
+        &mut self,
+        key: impl Into<String>,
+        display_name: impl Into<String>,
+        span: Option<Span>,
+    ) -> Result<()> {
+        let Some(scope) = self.relation_scopes.last_mut() else {
+            return Ok(());
+        };
+
+        let key = key.into();
+        let display_name = display_name.into();
+        if let Some(existing) = scope.bindings.get(&key) {
+            let mut diagnostic = Diagnostic::new_error(
+                format!("duplicate relation alias or name '{display_name}'"),
+                span,
+            );
+            diagnostic.add_note(
+                format!("'{}' was previously bound here", existing.display_name),
+                existing.span,
+            );
+            return plan_err!(
+                "duplicate relation alias or name '{display_name}'";
+                diagnostic = diagnostic
+            );
+        }
+
+        scope
+            .bindings
+            .insert(key, RelationBinding { display_name, span });
         Ok(())
     }
 
