@@ -33,7 +33,7 @@ use half::f16;
 use hashbrown::hash_table::HashTable;
 #[cfg(not(feature = "force_hash_collisions"))]
 use std::hash::BuildHasher;
-use std::{collections::VecDeque, mem};
+use std::mem;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -97,7 +97,7 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     null_group: Option<u64>,
 
     /// The values for each group index
-    values: VecDeque<Vec<T::Native>>,
+    values: Vec<Vec<T::Native>>,
 
     /// The random state used to generate hashes
     random_state: RandomState,
@@ -119,8 +119,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
 
         // As a optimization, we ensure the `single block` always exist
         // in flat mode, it can eliminate an expansive row-level empty checking
-        let mut values = VecDeque::new();
-        values.push_back(Vec::new());
+        let values = vec![Vec::new()];
 
         Self {
             data_type,
@@ -139,12 +138,12 @@ where
 {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         if let Some(block_size) = self.block_size {
-            let before_add_group = |group_values: &mut VecDeque<Vec<T::Native>>| {
+            let before_add_group = |group_values: &mut Vec<Vec<T::Native>>| {
                 if group_values.is_empty()
-                    || group_values.back().unwrap().len() == block_size
+                    || group_values.last().unwrap().len() == block_size
                 {
                     let new_block = Vec::with_capacity(block_size);
-                    group_values.push_back(new_block);
+                    group_values.push(new_block);
                 }
             };
             self.get_or_create_groups_internal::<_, BlockedGroupIndexOperations>(
@@ -156,7 +155,7 @@ where
             self.get_or_create_groups_internal::<_, FlatGroupIndexOperations>(
                 cols,
                 groups,
-                |_: &mut VecDeque<Vec<T::Native>>| {},
+                |_: &mut Vec<Vec<T::Native>>| {},
             )
         }
     }
@@ -191,7 +190,7 @@ where
         // we may need to consider it again when supporting spilling
         // for `blocked mode`.
         if self.block_size.is_none() {
-            let single_block = self.values.back_mut().unwrap();
+            let single_block = self.values.last_mut().unwrap();
             single_block.clear();
             single_block.shrink_to(num_rows);
         }
@@ -213,7 +212,7 @@ where
         // As mentioned above, we ensure the `single block` always exist
         // in `flat mode`
         if block_size.is_none() {
-            self.values.push_back(Vec::new());
+            self.values.push(Vec::new());
         }
 
         Ok(())
@@ -231,7 +230,7 @@ where
         mut before_add_group: F,
     ) -> Result<()>
     where
-        F: FnMut(&mut VecDeque<Vec<T::Native>>),
+        F: FnMut(&mut Vec<Vec<T::Native>>),
         O: GroupIndexOperations,
     {
         assert_eq!(cols.len(), 1);
@@ -247,7 +246,7 @@ where
                     // we need `current block` and `next offset in block`
                     let block_id = self.values.len() as u32 - 1;
                     // Safety: we have already ensured that the block exists
-                    let current_block = self.values.back_mut().unwrap();
+                    let current_block = self.values.last_mut().unwrap();
                     let block_offset = current_block.len() as u64;
                     current_block.push(Default::default());
 
@@ -263,7 +262,7 @@ where
                             hash == h && {
                                 let block_id = O::get_block_id(idx);
                                 let block_offset = O::get_block_offset(idx);
-                                (*self.values.get(block_id as usize).unwrap_unchecked())
+                                self.values.get_unchecked(block_id as usize)
                                     .get_unchecked(block_offset as usize)
                                     .is_eq(key)
                             }
@@ -283,7 +282,7 @@ where
                             // Get block infos and update block,
                             // we need `current block` and `next offset in block`
                             let block_id = self.values.len() as u32 - 1;
-                            let current_block = self.values.back_mut().unwrap();
+                            let current_block = self.values.last_mut().unwrap();
                             let block_offset = current_block.len() as u64;
                             current_block.push(key);
 
@@ -325,7 +324,7 @@ where
             // ===============================================
             (None, EmitTo::All) => {
                 self.map.clear();
-                let values = mem::take(self.values.back_mut().unwrap());
+                let values = mem::take(self.values.last_mut().unwrap());
                 let null_group_opt = self.null_group.take().map(|packed_index| {
                     let blk_offset = O::get_block_offset(packed_index);
                     blk_offset as usize
@@ -365,7 +364,7 @@ where
                     None => None,
                 };
 
-                let single_block = self.values.back_mut().unwrap();
+                let single_block = self.values.last_mut().unwrap();
                 let mut split = single_block.split_off(n as usize);
                 mem::swap(single_block, &mut split);
                 build_primitive(split, null_group_opt)
@@ -398,7 +397,7 @@ where
                     None => None,
                 };
 
-                let emit_blk = self.values.pop_front().unwrap();
+                let emit_blk = self.values.remove(0);
                 build_primitive(emit_blk, null_idx)
             }
             (blk_size, emit_to) => {

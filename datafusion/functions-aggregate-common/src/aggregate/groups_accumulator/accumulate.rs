@@ -590,9 +590,14 @@ impl Block for BooleanBufferBuilder {
     fn len(&self) -> usize {
         self.len()
     }
+
+    fn new_empty() -> Self {
+        BooleanBufferBuilder::new(0)
+    }
 }
 
 impl Blocks<BooleanBufferBuilder> {
+    #[inline]
     fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool) {
         self[block_id as usize].set_bit(block_offset as usize, value);
     }

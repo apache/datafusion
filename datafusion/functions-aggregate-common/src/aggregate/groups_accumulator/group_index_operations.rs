@@ -60,14 +60,17 @@ pub trait GroupIndexOperations: Debug {
 pub struct BlockedGroupIndexOperations;
 
 impl GroupIndexOperations for BlockedGroupIndexOperations {
+    #[inline]
     fn pack_index(block_id: u32, block_offset: u64) -> u64 {
         ((block_id as u64) << 32) | block_offset
     }
 
+    #[inline]
     fn get_block_id(packed_index: u64) -> u32 {
         (packed_index >> 32) as u32
     }
 
+    #[inline]
     fn get_block_offset(packed_index: u64) -> u64 {
         (packed_index as u32) as u64
     }
@@ -77,14 +80,17 @@ impl GroupIndexOperations for BlockedGroupIndexOperations {
 pub struct FlatGroupIndexOperations;
 
 impl GroupIndexOperations for FlatGroupIndexOperations {
+    #[inline]
     fn pack_index(_block_id: u32, block_offset: u64) -> u64 {
         block_offset
     }
 
+    #[inline]
     fn get_block_id(_packed_index: u64) -> u32 {
         0
     }
 
+    #[inline]
     fn get_block_offset(packed_index: u64) -> u64 {
         packed_index
     }

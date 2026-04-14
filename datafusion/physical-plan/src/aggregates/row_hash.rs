@@ -794,10 +794,7 @@ fn can_enable_blocked_groups(
     let group_values_supports_blocked = group_values.supports_blocked_groups();
     let accumulators_support_blocked =
         accumulators.iter().all(|acc| acc.supports_blocked_groups());
-    match (group_values_supports_blocked, accumulators_support_blocked) {
-        (true, true) => true,
-        _ => false,
-    }
+    group_values_supports_blocked && accumulators_support_blocked
 }
 
 // fn maybe_enable_blocked_groups(
@@ -1468,21 +1465,21 @@ impl GroupedHashAggregateStream {
     ///
     /// Returns `Some(ExecutionState)` if the state should be changed, None otherwise.
     fn switch_to_skip_aggregation(&mut self) -> Result<Option<ExecutionState>> {
-        if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            if probe.should_skip() {
-                if !self.enable_blocked_groups {
-                    if let Some(batch) = self.emit(EmitTo::All, false)? {
-                        return Ok(Some(ExecutionState::ProducingOutput(batch)));
-                    };
-                } else {
-                    assert!(can_enable_blocked_groups(
-                        &self.group_ordering,
-                        &self.oom_mode,
-                        self.group_values.as_ref(),
-                        &self.accumulators
-                    ));
-                    return Ok(Some(ExecutionState::ProducingBlocks));
-                }
+        if let Some(probe) = self.skip_aggregation_probe.as_mut()
+            && probe.should_skip()
+        {
+            if !self.enable_blocked_groups {
+                if let Some(batch) = self.emit(EmitTo::All, false)? {
+                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
+                };
+            } else {
+                assert!(can_enable_blocked_groups(
+                    &self.group_ordering,
+                    &self.oom_mode,
+                    self.group_values.as_ref(),
+                    &self.accumulators
+                ));
+                return Ok(Some(ExecutionState::ProducingBlocks));
             }
         }
 

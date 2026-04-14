@@ -18,9 +18,8 @@
 //! Aggregation intermediate results blocks in blocked approach
 
 use std::{
-    collections::VecDeque,
     fmt::Debug,
-    iter,
+    iter, mem,
     ops::{Index, IndexMut},
 };
 
@@ -38,14 +37,18 @@ use datafusion_expr_common::groups_accumulator::EmitTo;
 ///
 #[derive(Debug)]
 pub struct Blocks<B: Block> {
-    inner: VecDeque<B>,
+    inner: Vec<B>,
+    /// Index of the first active block. Blocks before this index have been
+    /// popped via `pop_block` and are empty placeholders.
+    start: usize,
     block_size: Option<usize>,
 }
 
 impl<B: Block> Blocks<B> {
     pub fn new(block_size: Option<usize>) -> Self {
         Self {
-            inner: VecDeque::new(),
+            inner: Vec::new(),
+            start: 0,
             block_size,
         }
     }
@@ -58,6 +61,7 @@ impl<B: Block> Blocks<B> {
     ) where
         F: Fn(Option<usize>) -> B,
     {
+        debug_assert_eq!(self.start, 0, "resize should not be called after pop_block");
         let block_size = self.block_size.unwrap_or(usize::MAX);
         // For resize, we need to:
         //   1. Ensure the blks are enough first
@@ -65,7 +69,7 @@ impl<B: Block> Blocks<B> {
         let (mut cur_blk_idx, exist_slots) = if !self.inner.is_empty() {
             let cur_blk_idx = self.inner.len() - 1;
             let exist_slots =
-                (self.inner.len() - 1) * block_size + self.inner.back().unwrap().len();
+                (self.inner.len() - 1) * block_size + self.inner.last().unwrap().len();
 
             (cur_blk_idx, exist_slots)
         } else {
@@ -83,7 +87,7 @@ impl<B: Block> Blocks<B> {
         if new_blks > 0 {
             for _ in 0..new_blks {
                 let block = new_block(self.block_size);
-                self.inner.push_back(block);
+                self.inner.push(block);
             }
         }
 
@@ -113,44 +117,53 @@ impl<B: Block> Blocks<B> {
         let rest_slots = new_slots % block_size;
         if rest_slots > 0 {
             self.inner
-                .back_mut()
+                .last_mut()
                 .unwrap()
                 .fill_default_value(rest_slots, default_value);
         }
     }
 
     pub fn pop_block(&mut self) -> Option<B> {
-        self.inner.pop_front()
+        if self.start >= self.inner.len() {
+            None
+        } else {
+            let block = mem::replace(&mut self.inner[self.start], B::new_empty());
+            self.start += 1;
+            Some(block)
+        }
     }
 
     pub fn num_blocks(&self) -> usize {
-        self.inner.len()
+        self.inner.len() - self.start
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.start >= self.inner.len()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &B> {
-        self.inner.iter()
+        self.inner[self.start..].iter()
     }
 
     pub fn clear(&mut self) {
         self.inner.clear();
+        self.start = 0;
     }
 }
 
 impl<B: Block> Index<usize> for Blocks<B> {
     type Output = B;
 
+    #[inline]
     fn index(&self, index: usize) -> &Self::Output {
-        &self.inner[index]
+        &self.inner[self.start + index]
     }
 }
 
 impl<B: Block> IndexMut<usize> for Blocks<B> {
+    #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.inner[index]
+        &mut self.inner[self.start + index]
     }
 }
 
@@ -173,6 +186,9 @@ pub trait Block: Debug {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Create a cheap empty block, used as a placeholder when popping blocks
+    fn new_empty() -> Self;
 }
 
 /// Usually we use `Vec` to represent `Block`, so we define `Blocks<Vec<T>>`
@@ -191,6 +207,10 @@ impl<Ty: Clone + Debug> Block for Vec<Ty> {
     fn len(&self) -> usize {
         self.len()
     }
+
+    fn new_empty() -> Self {
+        Vec::new()
+    }
 }
 
 impl<T: Clone + Debug> GeneralBlocks<T> {
@@ -200,8 +220,7 @@ impl<T: Clone + Debug> GeneralBlocks<T> {
                 self.block_size.is_some(),
                 "only support emit next block in blocked groups"
             );
-            self.inner
-                .pop_front()
+            self.pop_block()
                 .expect("should not call emit for empty blocks")
         } else {
             // TODO: maybe remove `EmitTo::take_needed` and move the
@@ -211,7 +230,7 @@ impl<T: Clone + Debug> GeneralBlocks<T> {
                 self.block_size.is_none(),
                 "only support emit all/first in flat groups"
             );
-            emit_to.take_needed(&mut self.inner[0])
+            emit_to.take_needed(&mut self[0])
         }
     }
 }
@@ -304,5 +323,39 @@ mod test {
 
             // Test resize after clear in next round
         }
+    }
+
+    #[test]
+    fn test_pop_block() {
+        let new_block = |block_size: Option<usize>| {
+            let cap = block_size.unwrap_or(0);
+            Vec::with_capacity(cap)
+        };
+
+        let mut blocks = TestBlocks::new(Some(3));
+        blocks.resize(7, new_block, 42);
+        assert_eq!(blocks.num_blocks(), 3);
+
+        // Pop first block
+        let b = blocks.pop_block().unwrap();
+        assert_eq!(b.len(), 3);
+        assert_eq!(blocks.num_blocks(), 2);
+        // blocks[0] should now be the second original block
+        assert_eq!(blocks[0].len(), 3);
+
+        // Pop second block
+        let b = blocks.pop_block().unwrap();
+        assert_eq!(b.len(), 3);
+        assert_eq!(blocks.num_blocks(), 1);
+        assert_eq!(blocks[0].len(), 1);
+
+        // Pop last block
+        let b = blocks.pop_block().unwrap();
+        assert_eq!(b.len(), 1);
+        assert_eq!(blocks.num_blocks(), 0);
+        assert!(blocks.is_empty());
+
+        // Pop from empty
+        assert!(blocks.pop_block().is_none());
     }
 }
