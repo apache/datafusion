@@ -716,13 +716,14 @@ FROM fact_table
 GROUP BY f_dkey, timestamp;
 ----
 logical_plan
-01)Projection: fact_table.f_dkey, fact_table.timestamp, count(Int64(1)) AS count(*), avg(fact_table.value)
-02)--Aggregate: groupBy=[[fact_table.f_dkey, fact_table.timestamp]], aggr=[[count(Int64(1)), avg(fact_table.value)]]
+01)Projection: fact_table.f_dkey, fact_table.timestamp, __decompose_0 AS count(*), CAST(__decompose_1 AS Float64) / CAST(__decompose_2 AS Float64) AS avg(fact_table.value)
+02)--Aggregate: groupBy=[[fact_table.f_dkey, fact_table.timestamp]], aggr=[[count(Int64(1)) AS __decompose_0, sum(fact_table.value) AS __decompose_1, count(fact_table.value) AS __decompose_2]]
 03)----TableScan: fact_table projection=[timestamp, value, f_dkey]
 physical_plan
-01)ProjectionExec: expr=[f_dkey@0 as f_dkey, timestamp@1 as timestamp, count(Int64(1))@2 as count(*), avg(fact_table.value)@3 as avg(fact_table.value)]
-02)--AggregateExec: mode=SinglePartitioned, gby=[f_dkey@2 as f_dkey, timestamp@0 as timestamp], aggr=[count(Int64(1)), avg(fact_table.value)]
-03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], file_type=parquet
+01)ProjectionExec: expr=[f_dkey@0 as f_dkey, timestamp@1 as timestamp, __decompose_0@2 as count(*), __decompose_1@3 / CAST(__decompose_2@4 AS Float64) as avg(fact_table.value)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+03)----AggregateExec: mode=SinglePartitioned, gby=[f_dkey@2 as f_dkey, timestamp@0 as timestamp], aggr=[__decompose_0, __decompose_1, __decompose_2]
+04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], file_type=parquet
 
 query TPIR rowsort
 SELECT f_dkey, timestamp,
