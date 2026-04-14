@@ -1964,6 +1964,7 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
+ "insta",
  "itertools 0.14.0",
  "liblzma",
  "log",
