@@ -15,27 +15,27 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query T
+query B
 SELECT is_valid_utf8('Spark'::string);
 ----
 true
 
-query T
+query B
 SELECT is_valid_utf8(NULL::string);
 ----
 NULL
 
-query T
+query B
 SELECT is_valid_utf8(arrow_cast(x'61', 'Binary'));
 ----
 true
 
-query T
+query B
 SELECT is_valid_utf8(arrow_cast(x'80', 'Binary'));
 ----
 false
 
-query T
+query B
 SELECT is_valid_utf8(arrow_cast(x'61C262', 'Binary'));
 ----
 false
