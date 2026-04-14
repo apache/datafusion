@@ -24,6 +24,7 @@ use datafusion_expr::{
 use itertools::Itertools;
 use std::env::args;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 /// Print documentation for all functions of a given type to stdout
 ///
@@ -69,6 +70,10 @@ fn print_scalar_docs() -> Result<String> {
 
     for f in SessionStateDefaults::default_scalar_functions() {
         providers.push(Box::new(f.as_ref().clone()));
+    }
+
+    for f in SessionStateDefaults::default_higher_order_functions() {
+        providers.push(Box::new(f));
     }
 
     print_docs(providers, scalar_doc_sections::doc_sections())
@@ -282,7 +287,7 @@ impl DocProvider for WindowUDF {
     }
 }
 
-impl DocProvider for dyn HigherOrderUDF {
+impl DocProvider for Arc<dyn HigherOrderUDF> {
     fn get_name(&self) -> String {
         self.name().to_string()
     }
