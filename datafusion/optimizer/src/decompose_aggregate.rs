@@ -198,9 +198,28 @@ impl OptimizerRule for DecomposeAggregate {
                 let count_alias = format!("__decompose_{alias_idx}");
                 alias_idx += 1;
 
+                // Strip CAST(x AS Float64) when the inner type is one SUM
+                // handles natively — avoids precision loss for Int64/UInt64.
+                let sum_args: Vec<Expr> = args
+                    .iter()
+                    .map(|a| match a {
+                        Expr::Cast(c) if *c.field.data_type() == DataType::Float64 => {
+                            match c.expr.get_type(input_schema.as_ref()).ok().as_ref() {
+                                Some(
+                                    DataType::Int64
+                                    | DataType::UInt64
+                                    | DataType::Float64,
+                                ) => (*c.expr).clone(),
+                                _ => a.clone(),
+                            }
+                        }
+                        other => other.clone(),
+                    })
+                    .collect();
+
                 let sum_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
                     Arc::clone(&sum_udaf),
-                    args.clone(),
+                    sum_args,
                     false,
                     None,
                     vec![],
