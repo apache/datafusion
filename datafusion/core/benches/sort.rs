@@ -108,10 +108,11 @@ const BATCH_SIZE: usize = 1024;
 const INPUT_SIZES: &[(u64, &str)] = &[(100_000, "100k"), (10_000_000, "10M")];
 
 type PartitionedBatches = Vec<Vec<RecordBatch>>;
+type StreamGenerator = Box<dyn Fn(bool) -> PartitionedBatches>;
 
 fn criterion_benchmark(c: &mut Criterion) {
     for &(input_size, size_label) in INPUT_SIZES {
-        let cases: Vec<(&str, Box<dyn Fn(bool) -> PartitionedBatches>)> = vec![
+        let cases: Vec<(&str, StreamGenerator)> = vec![
             (
                 "i64",
                 Box::new(move |sorted| i64_streams(sorted, input_size)),
