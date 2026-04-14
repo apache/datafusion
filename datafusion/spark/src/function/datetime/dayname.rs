@@ -85,7 +85,7 @@ impl ScalarUDFImpl for SparkDayName {
             return plan_err!("dayname expects exactly 1 argument");
         }
         let cast_options = CastOptions {
-            safe: args.config_options.execution.enable_ansi_mode,
+            safe: !args.config_options.execution.enable_ansi_mode,
             format_options: FormatOptions::default(),
         };
         let result = match &args.args[0] {
