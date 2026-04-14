@@ -286,7 +286,6 @@ struct RelationScope {
 
 #[derive(Debug, Clone)]
 struct RelationBinding {
-    display_name: String,
     span: Option<Span>,
 }
 
@@ -420,14 +419,15 @@ impl PlannerContext {
         let display_name = display_name.into();
         match scope.bindings.entry(display_name.clone()) {
             Entry::Occupied(existing) => {
-                let existing = existing.get();
+                let existing_name = existing.key();
+                let existing_span = existing.get().span;
                 let mut diagnostic = Diagnostic::new_error(
                     format!("duplicate relation alias or name '{display_name}'"),
                     span,
                 );
                 diagnostic.add_note(
-                    format!("'{}' was previously bound here", existing.display_name),
-                    existing.span,
+                    format!("'{existing_name}' was previously bound here"),
+                    existing_span,
                 );
                 plan_err!(
                     "duplicate relation alias or name '{display_name}'";
@@ -435,7 +435,7 @@ impl PlannerContext {
                 )
             }
             Entry::Vacant(entry) => {
-                entry.insert(RelationBinding { display_name, span });
+                entry.insert(RelationBinding { span });
                 Ok(())
             }
         }

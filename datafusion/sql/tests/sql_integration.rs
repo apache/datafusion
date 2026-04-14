@@ -2436,6 +2436,14 @@ fn comma_join_duplicate_relation_alias_errors() {
     assert_duplicate_relation_alias_error("SELECT * FROM person p, orders p", "p");
 }
 
+#[test]
+fn join_duplicate_unaliased_relation_and_alias_errors() {
+    assert_duplicate_relation_alias_error(
+        "SELECT * FROM person JOIN orders person ON true",
+        "person",
+    );
+}
+
 fn assert_duplicate_relation_alias_error(sql: &str, alias: &str) {
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
@@ -2457,6 +2465,23 @@ fn join_distinct_relation_aliases_ok() {
           TableScan: person
         SubqueryAlias: o
           TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn join_qualified_same_leaf_relation_names_ok() {
+    let sql = "SELECT public.orders.order_id AS public_order_id, \
+        other.orders.order_id AS other_order_id \
+        FROM public.orders JOIN other.orders ON true";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: public.orders.order_id AS public_order_id, other.orders.order_id AS other_order_id
+      Inner Join:  Filter: Boolean(true)
+        TableScan: public.orders
+        TableScan: other.orders
     "
     );
 }

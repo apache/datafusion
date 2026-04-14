@@ -133,10 +133,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn plan_nested_join_relation(
         &self,
         table_with_joins: TableWithJoins,
-        has_alias: bool,
+        is_aliased_nested_join: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        if has_alias {
+        if is_aliased_nested_join {
             planner_context.with_new_relation_scope(|planner_context| {
                 self.plan_table_with_joins(table_with_joins, planner_context)
             })
