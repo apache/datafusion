@@ -42,6 +42,76 @@ physical_plan
 statement error DataFusion error: Error during planning: WITH query name "a" specified more than once
 WITH a AS (SELECT 1), a AS (SELECT 2) SELECT * FROM a;
 
+
+##########
+## CTE Reference Resolution
+##########
+
+# These tests exercise CTE reference resolution with and without identifier
+# normalization. The session is configured with a strict catalog/schema provider
+# (see `datafusion/sqllogictest/src/test_context.rs`) that only provides the
+# `orders` table and panics on any unexpected table lookup.
+#
+# This makes it observable if DataFusion incorrectly treats a CTE reference as a
+# catalog lookup.
+#
+# Refs: https://github.com/apache/datafusion/issues/18932
+#
+# NOTE: This test relies on a strict schema provider registered in
+# `datafusion/sqllogictest/src/test_context.rs` that provides only the `orders`
+# table and panics on unexpected lookups.
+
+# Use the strict schema provider
+statement ok
+set datafusion.catalog.default_schema = "strict_schema";
+
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+query I
+with barbaz as (select * from orders) select * from "barbaz";
+----
+1
+2
+
+query I
+with BarBaz as (select * from orders) select * from "barbaz";
+----
+1
+2
+
+query I
+with barbaz as (select * from orders) select * from barbaz;
+----
+1
+2
+
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+query I
+with barbaz as (select * from orders) select * from "barbaz";
+----
+1
+2
+
+query I
+with barbaz as (select * from orders) select * from barbaz;
+----
+1
+2
+
+# Reset to default configs
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+statement ok
+set datafusion.catalog.default_schema = "public";
+
+## CTE reference resolution tests end ##
+
+
+
 # Test disabling recursive CTE
 statement ok
 set datafusion.execution.enable_recursive_ctes = false;
@@ -958,7 +1028,7 @@ logical_plan
 04)----SubqueryAlias: cte
 05)------TableScan: person projection=[id]
 physical_plan
-01)HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
 03)--DataSourceExec: partitions=1, partition_sizes=[0]
 
@@ -996,7 +1066,7 @@ query TT
 explain WITH RECURSIVE numbers AS (
   select 1 as n
   UNION ALL
-  select n + 1 FROM numbers WHERE N < 10
+  select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
 ----
 logical_plan
@@ -1021,7 +1091,7 @@ query TT
 explain WITH RECURSIVE numbers AS (
   select 1 as n
   UNION ALL
-  select n + 1 FROM numbers WHERE N < 10
+  select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
 ----
 logical_plan
@@ -1160,5 +1230,15 @@ query error DataFusion error: This feature is not implemented: Recursive CTEs ar
 explain WITH RECURSIVE numbers AS (
   select 1 as n
   UNION ALL
-  select n + 1 FROM numbers WHERE N < 10
+  select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
+
+# Config reset
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+RESET datafusion.execution.enable_recursive_ctes;
+
+statement ok
+RESET datafusion.sql_parser.enable_ident_normalization;

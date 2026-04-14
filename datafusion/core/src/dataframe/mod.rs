@@ -41,7 +41,6 @@ use crate::physical_plan::{
     execute_stream, execute_stream_partitioned,
 };
 use crate::prelude::SessionContext;
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -71,6 +70,7 @@ use datafusion_functions_aggregate::expr_fn::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::extension_types::DFArrayFormatterFactory;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -78,9 +78,11 @@ pub struct DataFrameWriteOptions {
     /// Controls how new data should be written to the table, determining whether
     /// to append, overwrite, or replace existing data.
     insert_op: InsertOp,
-    /// Controls if all partitions should be coalesced into a single output file
-    /// Generally will have slower performance when set to true.
-    single_file_output: bool,
+    /// Controls if all partitions should be coalesced into a single output file.
+    /// - `None`: Use automatic mode (extension-based heuristic)
+    /// - `Some(true)`: Force single file output at exact path
+    /// - `Some(false)`: Force directory output with generated filenames
+    single_file_output: Option<bool>,
     /// Sets which columns should be used for hive-style partitioned writes by name.
     /// Can be set to empty vec![] for non-partitioned writes.
     partition_by: Vec<String>,
@@ -94,7 +96,7 @@ impl DataFrameWriteOptions {
     pub fn new() -> Self {
         DataFrameWriteOptions {
             insert_op: InsertOp::Append,
-            single_file_output: false,
+            single_file_output: None,
             partition_by: vec![],
             sort_by: vec![],
         }
@@ -108,9 +110,13 @@ impl DataFrameWriteOptions {
 
     /// Set the single_file_output value to true or false
     ///
-    /// When set to true, an output file will always be created even if the DataFrame is empty
+    /// - `true`: Force single file output at the exact path specified
+    /// - `false`: Force directory output with generated filenames
+    ///
+    /// When not called, automatic mode is used (extension-based heuristic).
+    /// When set to true, an output file will always be created even if the DataFrame is empty.
     pub fn with_single_file_output(mut self, single_file_output: bool) -> Self {
-        self.single_file_output = single_file_output;
+        self.single_file_output = Some(single_file_output);
         self
     }
 
@@ -124,6 +130,15 @@ impl DataFrameWriteOptions {
     pub fn with_sort_by(mut self, sort_by: Vec<SortExpr>) -> Self {
         self.sort_by = sort_by;
         self
+    }
+
+    /// Build the options HashMap to pass to CopyTo for sink configuration.
+    fn build_sink_options(&self) -> HashMap<String, String> {
+        let mut options = HashMap::new();
+        if let Some(single_file) = self.single_file_output {
+            options.insert("single_file_output".to_string(), single_file.to_string());
+        }
+        options
     }
 }
 
@@ -279,8 +294,11 @@ impl DataFrame {
         self.session_state.create_logical_expr(sql, df_schema)
     }
 
-    /// Consume the DataFrame and produce a physical plan
-    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
+    /// Create a physical plan from this DataFrame.
+    ///
+    /// The `DataFrame` remains accessible after this call, so you can inspect
+    /// the plan and still call [`DataFrame::collect`] or other execution methods.
+    pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -497,7 +515,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_json("tests/data/unnest.json", NdJsonReadOptions::default()).await?;
+    /// let df = ctx.read_json("tests/data/unnest.json", JsonReadOptions::default()).await?;
     /// // expand into multiple columns if it's json array, flatten field name if it's nested structure
     /// let df = df.unnest_columns(&["b","c","d"])?;
     /// let expected = vec![
@@ -1501,6 +1519,11 @@ impl DataFrame {
         let options = self.session_state.config().options().format.clone();
         let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
 
+        let registry = self.session_state.extension_type_registry();
+        let formatter_factory = DFArrayFormatterFactory::new(Arc::clone(registry));
+        let arrow_options =
+            arrow_options.with_formatter_factory(Some(&formatter_factory));
+
         let results = self.collect().await?;
         Ok(
             pretty::pretty_format_batches_with_options(&results, &arrow_options)?
@@ -2040,6 +2063,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.build_sink_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -2052,7 +2077,7 @@ impl DataFrame {
             plan,
             path.into(),
             file_type,
-            HashMap::new(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;
@@ -2108,6 +2133,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.build_sink_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -2120,7 +2147,7 @@ impl DataFrame {
             plan,
             path.into(),
             file_type,
-            Default::default(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;
@@ -2373,7 +2400,7 @@ impl DataFrame {
         } else {
             let context = SessionContext::new_with_state((*self.session_state).clone());
             // The schema is consistent with the output
-            let plan = self.clone().create_physical_plan().await?;
+            let plan = self.create_physical_plan().await?;
             let schema = plan.schema();
             let task_ctx = Arc::new(self.task_ctx());
             let partitions = collect_partitioned(plan, task_ctx).await?;
@@ -2620,10 +2647,6 @@ struct DataFrameTableProvider {
 
 #[async_trait]
 impl TableProvider for DataFrameTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.plan))
     }

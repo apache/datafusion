@@ -24,7 +24,6 @@
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-#![deny(clippy::allow_attributes)]
 
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
@@ -39,6 +38,7 @@ pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
+pub mod morsel;
 pub mod projection;
 pub mod schema_adapter;
 pub mod sink;
@@ -72,6 +72,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 /// Stream of files get listed from object store
+#[deprecated(
+    since = "54.0.0",
+    note = "This type is unused and will be removed in a future release"
+)]
 pub type PartitionedFileStream =
     Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
@@ -574,7 +578,7 @@ mod tests {
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
-    use object_store::{local::LocalFileSystem, path::Path};
+    use object_store::{ObjectStoreExt, local::LocalFileSystem, path::Path};
     use std::{collections::HashMap, ops::Not, sync::Arc};
     use url::Url;
 

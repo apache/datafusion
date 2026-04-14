@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
@@ -111,18 +110,10 @@ An alternative syntax is also supported:
         description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
     )
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct ApproxPercentileContWithWeight {
     signature: Signature,
     approx_percentile_cont: ApproxPercentileCont,
-}
-
-impl Debug for ApproxPercentileContWithWeight {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ApproxPercentileContWithWeight")
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for ApproxPercentileContWithWeight {
@@ -160,10 +151,6 @@ impl ApproxPercentileContWithWeight {
 }
 
 impl AggregateUDFImpl for ApproxPercentileContWithWeight {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "approx_percentile_cont_with_weight"
     }

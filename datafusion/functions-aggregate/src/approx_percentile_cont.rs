@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::mem::size_of_val;
 use std::sync::Arc;
@@ -239,10 +238,6 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
 }
 
 impl AggregateUDFImpl for ApproxPercentileCont {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -259,7 +254,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             ),
             Field::new(
                 format_state_name(args.name, "count"),
-                DataType::UInt64,
+                DataType::Float64,
                 false,
             ),
             Field::new(
@@ -436,7 +431,7 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.digest.count() == 0 {
+        if self.digest.count() == 0.0 {
             return ScalarValue::try_from(self.return_type.clone());
         }
         let q = self.digest.estimate_quantile(self.percentile);
@@ -513,8 +508,8 @@ mod tests {
             ApproxPercentileAccumulator::new_with_max_size(0.5, DataType::Float64, 100);
 
         accumulator.merge_digests(&[t1]);
-        assert_eq!(accumulator.digest.count(), 50_000);
+        assert_eq!(accumulator.digest.count(), 50_000.0);
         accumulator.merge_digests(&[t2]);
-        assert_eq!(accumulator.digest.count(), 100_000);
+        assert_eq!(accumulator.digest.count(), 100_000.0);
     }
 }

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Date32Array};
@@ -48,10 +47,6 @@ impl SparkLastDay {
 }
 
 impl ScalarUDFImpl for SparkLastDay {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "last_day"
     }
@@ -114,7 +109,11 @@ impl ScalarUDFImpl for SparkLastDay {
 }
 
 fn spark_last_day(days: i32) -> Result<i32> {
-    let date = Date32Type::to_naive_date(days);
+    let date = Date32Type::to_naive_date_opt(days).ok_or_else(|| {
+        exec_datafusion_err!(
+            "Spark `last_day`: Unable to convert days value {days} to date"
+        )
+    })?;
 
     let (year, month) = (date.year(), date.month());
     let (next_year, next_month) = if month == 12 {
@@ -139,10 +138,7 @@ fn spark_last_day(days: i32) -> Result<i32> {
 mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
-    use arrow::array::{Array, Date32Array};
-    use arrow::datatypes::Field;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ReturnFieldArgs};
+    use arrow::array::Array;
 
     #[test]
     fn test_last_day_nullability_matches_input() {

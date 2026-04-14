@@ -26,8 +26,15 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `dataframe` — run a query using a DataFrame API against parquet files, csv files, and in-memory data, including multiple subqueries
-//! - `deserialize_to_struct` — convert query results (Arrow ArrayRefs) into Rust structs
+//!
+//! - `cache_factory`  
+//!   (file: cache_factory.rs, desc: Custom lazy caching for DataFrames using `CacheFactory`)
+//
+//! - `dataframe`
+//!   (file: dataframe.rs, desc: Query DataFrames from various sources and write output)
+//!
+//! - `deserialize_to_struct`
+//!   (file: deserialize_to_struct.rs, desc: Convert Arrow arrays into Rust structs)
 
 mod cache_factory;
 mod dataframe;

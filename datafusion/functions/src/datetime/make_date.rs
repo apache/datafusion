@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::builder::PrimitiveBuilder;
@@ -29,8 +28,8 @@ use chrono::prelude::*;
 use datafusion_common::types::{NativeType, logical_int32, logical_string};
 use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -96,10 +95,6 @@ impl MakeDateFunc {
 }
 
 impl ScalarUDFImpl for MakeDateFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "make_date"
     }
@@ -112,10 +107,7 @@ impl ScalarUDFImpl for MakeDateFunc {
         Ok(Date32)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [years, months, days] = take_function_args(self.name(), args.args)?;
 
         match (years, months, days) {

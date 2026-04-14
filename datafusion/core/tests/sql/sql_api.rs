@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::prelude::*;
+use datafusion_common::assert_contains;
 
 use tempfile::TempDir;
 
@@ -204,5 +205,21 @@ async fn ddl_can_not_be_planned_by_session_state() {
     assert_eq!(
         physical_plan.unwrap_err().strip_backtrace(),
         "This feature is not implemented: Unsupported logical plan: DropTable"
+    );
+}
+
+#[tokio::test]
+async fn invalid_wrapped_negation_fails_during_optimization() {
+    let ctx = SessionContext::new();
+    let err = ctx
+        .sql("SELECT * FROM (SELECT 1) WHERE ((-'a') IS NULL)")
+        .await
+        .unwrap()
+        .into_optimized_plan()
+        .unwrap_err();
+
+    assert_contains!(
+        err.strip_backtrace(),
+        "Negation only supports numeric, interval and timestamp types"
     );
 }

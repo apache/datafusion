@@ -15,27 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for reading line-delimited JSON files
+//! Execution plan for reading JSON files (line-delimited and array formats)
 
 use std::any::Any;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::BufReader;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::task::Poll;
+use std::task::{Context, Poll};
 
 use crate::file_format::JsonDecoder;
+use crate::utils::{ChannelReader, JsonArrayToNdjsonReader};
+
+use crate::boundary_stream::AlignedBoundaryStream;
 
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common_runtime::JoinSet;
+use datafusion_common::exec_datafusion_err;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::{
-    ListingTableUrl, PartitionedFile, RangeCalculation, as_file_source, calculate_range,
-};
+use datafusion_datasource::{ListingTableUrl, PartitionedFile, as_file_source};
 use datafusion_physical_plan::projection::ProjectionExprs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use arrow::array::RecordBatch;
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_datasource::file::FileSource;
@@ -43,10 +48,55 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
-use futures::{StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
+use tokio_stream::wrappers::ReceiverStream;
+
+/// Channel buffer size for streaming JSON array processing.
+/// With ~128KB average chunk size, 128 chunks ≈ 16MB buffer.
+const CHANNEL_BUFFER_SIZE: usize = 128;
+
+/// Buffer size for JsonArrayToNdjsonReader (2MB each, 4MB total for input+output)
+const JSON_CONVERTER_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+
+// ============================================================================
+// JsonArrayStream - Custom stream wrapper to hold SpawnedTask handles
+// ============================================================================
+
+/// A stream wrapper that holds SpawnedTask handles to keep them alive
+/// until the stream is fully consumed or dropped.
+///
+/// This ensures cancel-safety: when the stream is dropped, the tasks
+/// are properly aborted via SpawnedTask's Drop implementation.
+struct JsonArrayStream {
+    inner: ReceiverStream<std::result::Result<RecordBatch, arrow::error::ArrowError>>,
+    /// Task that reads from object store and sends bytes to channel.
+    /// Kept alive until stream is consumed or dropped.
+    _read_task: SpawnedTask<()>,
+    /// Task that parses JSON and sends RecordBatches.
+    /// Kept alive until stream is consumed or dropped.
+    _parse_task: SpawnedTask<()>,
+}
+
+impl Stream for JsonArrayStream {
+    type Item = std::result::Result<RecordBatch, arrow::error::ArrowError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+// ============================================================================
+// JsonOpener and JsonSource
+// ============================================================================
 
 /// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]
 pub struct JsonOpener {
@@ -54,21 +104,26 @@ pub struct JsonOpener {
     projected_schema: SchemaRef,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+    /// When `true` (default), expects newline-delimited JSON (NDJSON).
+    /// When `false`, expects JSON array format `[{...}, {...}]`.
+    newline_delimited: bool,
 }
 
 impl JsonOpener {
-    /// Returns a  [`JsonOpener`]
+    /// Returns a [`JsonOpener`]
     pub fn new(
         batch_size: usize,
         projected_schema: SchemaRef,
         file_compression_type: FileCompressionType,
         object_store: Arc<dyn ObjectStore>,
+        newline_delimited: bool,
     ) -> Self {
         Self {
             batch_size,
             projected_schema,
             file_compression_type,
             object_store,
+            newline_delimited,
         }
     }
 }
@@ -80,6 +135,9 @@ pub struct JsonSource {
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projection: SplitProjection,
+    /// When `true` (default), expects newline-delimited JSON (NDJSON).
+    /// When `false`, expects JSON array format `[{...}, {...}]`.
+    newline_delimited: bool,
 }
 
 impl JsonSource {
@@ -91,7 +149,17 @@ impl JsonSource {
             table_schema,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
+            newline_delimited: true,
         }
+    }
+
+    /// Set whether to read as newline-delimited JSON.
+    ///
+    /// When `true` (default), expects newline-delimited format.
+    /// When `false`, expects JSON array format `[{...}, {...}]`.
+    pub fn with_newline_delimited(mut self, newline_delimited: bool) -> Self {
+        self.newline_delimited = newline_delimited;
+        self
     }
 }
 
@@ -120,6 +188,7 @@ impl FileSource for JsonSource {
             projected_schema,
             file_compression_type: base_config.file_compression_type,
             object_store,
+            newline_delimited: self.newline_delimited,
         }) as Arc<dyn FileOpener>;
 
         // Wrap with ProjectionOpener
@@ -169,10 +238,24 @@ impl FileSource for JsonSource {
     fn file_type(&self) -> &str {
         "json"
     }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion_physical_plan::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Visit projection expressions
+        let mut tnr = TreeNodeRecursion::Continue;
+        for proj_expr in &self.projection.source {
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
+        }
+        Ok(tnr)
+    }
 }
 
 impl FileOpener for JsonOpener {
-    /// Open a partitioned NDJSON file.
+    /// Open a partitioned JSON file.
     ///
     /// If `file_meta.range` is `None`, the entire file is opened.
     /// Else `file_meta.range` is `Some(FileRange{start, end})`, which corresponds to the byte range [start, end) within the file.
@@ -181,68 +264,215 @@ impl FileOpener for JsonOpener {
     /// are applied to determine which lines to read:
     /// 1. The first line of the partition is the line in which the index of the first character >= `start`.
     /// 2. The last line of the partition is the line in which the byte at position `end - 1` resides.
+    ///
+    /// Note: JSON array format does not support range-based scanning.
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let store = Arc::clone(&self.object_store);
         let schema = Arc::clone(&self.projected_schema);
         let batch_size = self.batch_size;
         let file_compression_type = self.file_compression_type.to_owned();
+        let newline_delimited = self.newline_delimited;
+
+        // JSON array format requires reading the complete file
+        if !newline_delimited && partitioned_file.range.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "JSON array format does not support range-based file scanning. \
+                 Disable repartition_file_scans or use newline-delimited JSON format."
+                    .to_string(),
+            ));
+        }
 
         Ok(Box::pin(async move {
-            let calculated_range =
-                calculate_range(&partitioned_file, &store, None).await?;
+            let file_size = partitioned_file.object_meta.size;
+            let location = &partitioned_file.object_meta.location;
 
-            let range = match calculated_range {
-                RangeCalculation::Range(None) => None,
-                RangeCalculation::Range(Some(range)) => Some(range.into()),
-                RangeCalculation::TerminateEarly => {
-                    return Ok(
-                        futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                    );
-                }
-            };
+            if let Some(file_range) = partitioned_file.range.as_ref() {
+                let raw_start: u64 = file_range.start.try_into().map_err(|_| {
+                    exec_datafusion_err!(
+                        "Expected start range to fit in u64, got {}",
+                        file_range.start
+                    )
+                })?;
+                let raw_end: u64 = file_range.end.try_into().map_err(|_| {
+                    exec_datafusion_err!(
+                        "Expected end range to fit in u64, got {}",
+                        file_range.end
+                    )
+                })?;
 
-            let options = GetOptions {
-                range,
-                ..Default::default()
-            };
+                let aligned_stream = AlignedBoundaryStream::new(
+                    Arc::clone(&store),
+                    location.clone(),
+                    raw_start,
+                    raw_end,
+                    file_size,
+                    b'\n',
+                )
+                .await?
+                .map_err(DataFusionError::from);
 
-            let result = store
-                .get_opts(&partitioned_file.object_meta.location, options)
-                .await?;
+                let decoder = ReaderBuilder::new(schema)
+                    .with_batch_size(batch_size)
+                    .build_decoder()?;
+                let input = file_compression_type
+                    .convert_stream(aligned_stream.boxed())?
+                    .fuse();
+                let stream = deserialize_stream(
+                    input,
+                    DecoderDeserializer::new(JsonDecoder::new(decoder)),
+                );
+                return Ok(stream.map_err(Into::into).boxed());
+            }
+
+            // No range specified — read the entire file
+            let options = GetOptions::default();
+            let result = store.get_opts(location, options).await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => {
-                    let bytes = match partitioned_file.range {
-                        None => file_compression_type.convert_read(file)?,
-                        Some(_) => {
-                            file.seek(SeekFrom::Start(result.range.start as _))?;
-                            let limit = result.range.end - result.range.start;
-                            file_compression_type.convert_read(file.take(limit as u64))?
-                        }
-                    };
+                GetResultPayload::File(file, _) => {
+                    let bytes = file_compression_type.convert_read(file)?;
 
-                    let reader = ReaderBuilder::new(schema)
-                        .with_batch_size(batch_size)
-                        .build(BufReader::new(bytes))?;
+                    if newline_delimited {
+                        // NDJSON: use BufReader directly
+                        let reader = BufReader::new(bytes);
+                        let arrow_reader = ReaderBuilder::new(schema)
+                            .with_batch_size(batch_size)
+                            .build(reader)?;
 
-                    Ok(futures::stream::iter(reader)
-                        .map(|r| r.map_err(Into::into))
-                        .boxed())
+                        Ok(futures::stream::iter(arrow_reader)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
+                    } else {
+                        // JSON array format: wrap with streaming converter
+                        let ndjson_reader = JsonArrayToNdjsonReader::with_capacity(
+                            bytes,
+                            JSON_CONVERTER_BUFFER_SIZE,
+                        );
+                        let arrow_reader = ReaderBuilder::new(schema)
+                            .with_batch_size(batch_size)
+                            .build(ndjson_reader)?;
+
+                        Ok(futures::stream::iter(arrow_reader)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
+                    }
                 }
                 GetResultPayload::Stream(s) => {
-                    let s = s.map_err(DataFusionError::from);
+                    if newline_delimited {
+                        // Newline-delimited JSON (NDJSON) streaming reader
+                        let s = s.map_err(DataFusionError::from);
+                        let decoder = ReaderBuilder::new(schema)
+                            .with_batch_size(batch_size)
+                            .build_decoder()?;
+                        let input =
+                            file_compression_type.convert_stream(s.boxed())?.fuse();
+                        let stream = deserialize_stream(
+                            input,
+                            DecoderDeserializer::new(JsonDecoder::new(decoder)),
+                        );
+                        Ok(stream.map_err(Into::into).boxed())
+                    } else {
+                        // JSON array format: streaming conversion with channel-based byte transfer
+                        //
+                        // Architecture:
+                        // 1. Async task reads from object store stream, decompresses, sends to channel
+                        // 2. Blocking task receives bytes, converts JSON array to NDJSON, parses to Arrow
+                        // 3. RecordBatches are sent back via another channel
+                        //
+                        // Memory budget (~32MB):
+                        // - sync_channel: CHANNEL_BUFFER_SIZE chunks (~16MB)
+                        // - JsonArrayToNdjsonReader: 2 × JSON_CONVERTER_BUFFER_SIZE (~4MB)
+                        // - Arrow JsonReader internal buffer (~8MB)
+                        // - Miscellaneous (~4MB)
 
-                    let decoder = ReaderBuilder::new(schema)
-                        .with_batch_size(batch_size)
-                        .build_decoder()?;
-                    let input = file_compression_type.convert_stream(s.boxed())?.fuse();
+                        let s = s.map_err(DataFusionError::from);
+                        let decompressed_stream =
+                            file_compression_type.convert_stream(s.boxed())?;
 
-                    let stream = deserialize_stream(
-                        input,
-                        DecoderDeserializer::new(JsonDecoder::new(decoder)),
-                    );
-                    Ok(stream.map_err(Into::into).boxed())
+                        // Channel for bytes: async producer -> blocking consumer
+                        // Uses tokio::sync::mpsc so the async send never blocks a
+                        // tokio worker thread; the consumer calls blocking_recv()
+                        // inside spawn_blocking.
+                        let (byte_tx, byte_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(
+                            CHANNEL_BUFFER_SIZE,
+                        );
+
+                        // Channel for results: sync producer -> async consumer
+                        let (result_tx, result_rx) = tokio::sync::mpsc::channel(2);
+                        let error_tx = result_tx.clone();
+
+                        // Async task: read from object store stream and send bytes to channel
+                        // Store the SpawnedTask to keep it alive until stream is dropped
+                        let read_task = SpawnedTask::spawn(async move {
+                            tokio::pin!(decompressed_stream);
+                            while let Some(chunk) = decompressed_stream.next().await {
+                                match chunk {
+                                    Ok(bytes) => {
+                                        if byte_tx.send(bytes).await.is_err() {
+                                            break; // Consumer dropped
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = error_tx
+                                            .send(Err(
+                                                arrow::error::ArrowError::ExternalError(
+                                                    Box::new(e),
+                                                ),
+                                            ))
+                                            .await;
+                                        break;
+                                    }
+                                }
+                            }
+                            // byte_tx dropped here, signals EOF to ChannelReader
+                        });
+
+                        // Blocking task: receive bytes from channel and parse JSON
+                        // Store the SpawnedTask to keep it alive until stream is dropped
+                        let parse_task = SpawnedTask::spawn_blocking(move || {
+                            let channel_reader = ChannelReader::new(byte_rx);
+                            let mut ndjson_reader =
+                                JsonArrayToNdjsonReader::with_capacity(
+                                    channel_reader,
+                                    JSON_CONVERTER_BUFFER_SIZE,
+                                );
+
+                            match ReaderBuilder::new(schema)
+                                .with_batch_size(batch_size)
+                                .build(&mut ndjson_reader)
+                            {
+                                Ok(arrow_reader) => {
+                                    for batch_result in arrow_reader {
+                                        if result_tx.blocking_send(batch_result).is_err()
+                                        {
+                                            break; // Receiver dropped
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = result_tx.blocking_send(Err(e));
+                                }
+                            }
+
+                            // Validate the JSON array was properly formed
+                            if let Err(e) = ndjson_reader.validate_complete() {
+                                let _ = result_tx.blocking_send(Err(
+                                    arrow::error::ArrowError::JsonError(e.to_string()),
+                                ));
+                            }
+                            // result_tx dropped here, closes the stream
+                        });
+
+                        // Wrap in JsonArrayStream to keep tasks alive until stream is consumed
+                        let stream = JsonArrayStream {
+                            inner: ReceiverStream::new(result_rx),
+                            _read_task: read_task,
+                            _parse_task: parse_task,
+                        };
+
+                        Ok(stream.map(|r| r.map_err(Into::into)).boxed())
+                    }
                 }
             }
         }))
@@ -302,4 +532,540 @@ pub async fn plan_to_json(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{CHUNK_SIZES, make_chunked_store};
+    use arrow::array::{Int64Array, StringArray};
+    use arrow::compute;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use bytes::Bytes;
+    use datafusion_datasource::FileRange;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectStoreExt, PutPayload};
+
+    /// Helper to create a test schema
+    fn test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+        ]))
+    }
+
+    #[tokio::test]
+    async fn test_json_array_from_file() -> Result<()> {
+        // Test reading JSON array format from a file
+        let json_data = r#"[{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}]"#;
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            1024,
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false, // JSON array format
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_from_stream() -> Result<()> {
+        // Test reading JSON array format from object store stream (simulates S3)
+        let json_data = r#"[{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}, {"id": 3, "name": "charlie"}]"#;
+
+        // Use InMemory store which returns Stream payload
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test_stream.json");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            2, // small batch size to test multiple batches
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false, // JSON array format
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_nested_objects() -> Result<()> {
+        // Test JSON array with nested objects and arrays
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("data", DataType::Utf8, true),
+        ]));
+
+        let json_data = r#"[
+            {"id": 1, "data": "{\"nested\": true}"},
+            {"id": 2, "data": "[1, 2, 3]"}
+        ]"#;
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("nested.json");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            1024,
+            schema,
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false,
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        assert_eq!(batches[0].num_rows(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_empty() -> Result<()> {
+        // Test empty JSON array
+        let json_data = "[]";
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("empty.json");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            1024,
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false,
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_range_not_supported() {
+        // Test that range-based scanning returns error for JSON array format
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+        store
+            .put(&path, PutPayload::from_static(b"[]"))
+            .await
+            .unwrap();
+
+        let opener = JsonOpener::new(
+            1024,
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false, // JSON array format
+        );
+
+        let meta = store.head(&path).await.unwrap();
+        let mut file = PartitionedFile::new(path.to_string(), meta.size);
+        file.range = Some(FileRange { start: 0, end: 10 });
+
+        let result = opener.open(file);
+        match result {
+            Ok(_) => panic!("Expected error for range-based JSON array scanning"),
+            Err(e) => {
+                assert!(
+                    e.to_string().contains("does not support range-based"),
+                    "Unexpected error message: {e}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ndjson_still_works() -> Result<()> {
+        // Ensure NDJSON format still works correctly
+        let json_data =
+            "{\"id\": 1, \"name\": \"alice\"}\n{\"id\": 2, \"name\": \"bob\"}\n";
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("test.ndjson");
+        store
+            .put(&path, PutPayload::from_static(json_data.as_bytes()))
+            .await?;
+
+        let opener = JsonOpener::new(
+            1024,
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            true, // NDJSON format
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_large_file() -> Result<()> {
+        // Test with a larger JSON array to verify streaming works
+        let mut json_data = String::from("[");
+        for i in 0..1000 {
+            if i > 0 {
+                json_data.push(',');
+            }
+            json_data.push_str(&format!(r#"{{"id": {i}, "name": "user{i}"}}"#));
+        }
+        json_data.push(']');
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("large.json");
+        store
+            .put(&path, PutPayload::from(Bytes::from(json_data)))
+            .await?;
+
+        let opener = JsonOpener::new(
+            100, // batch size of 100
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false,
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let stream = opener.open(file)?.await?;
+        let batches: Vec<_> = stream.try_collect().await?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 1000);
+
+        // Should have multiple batches due to batch_size=100
+        assert!(batches.len() >= 10);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_json_array_stream_cancellation() -> Result<()> {
+        // Test that cancellation works correctly (tasks are aborted when stream is dropped)
+        let mut json_data = String::from("[");
+        for i in 0..10000 {
+            if i > 0 {
+                json_data.push(',');
+            }
+            json_data.push_str(&format!(r#"{{"id": {i}, "name": "user{i}"}}"#));
+        }
+        json_data.push(']');
+
+        let store = Arc::new(InMemory::new());
+        let path = Path::from("cancel_test.json");
+        store
+            .put(&path, PutPayload::from(Bytes::from(json_data)))
+            .await?;
+
+        let opener = JsonOpener::new(
+            10, // small batch size
+            test_schema(),
+            FileCompressionType::UNCOMPRESSED,
+            store.clone(),
+            false,
+        );
+
+        let meta = store.head(&path).await?;
+        let file = PartitionedFile::new(path.to_string(), meta.size);
+
+        let mut stream = opener.open(file)?.await?;
+
+        // Read only first batch, then drop the stream (simulating cancellation)
+        let first_batch = stream.next().await;
+        assert!(first_batch.is_some());
+
+        // Drop the stream - this should abort the spawned tasks via SpawnedTask's Drop
+        drop(stream);
+
+        // Give tasks time to be aborted
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // If we reach here without hanging, cancellation worked
+        Ok(())
+    }
+
+    fn get_partition_splits() -> Vec<usize> {
+        vec![1usize, 2, 3, 5, 7, 10]
+    }
+
+    /// Opens each byte-range partition of `path` in `store` and collects all
+    /// record batches produced across every partition.
+    async fn collect_partitioned_batches(
+        store: Arc<dyn ObjectStore>,
+        path: &Path,
+        file_size: u64,
+        num_partitions: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        let mut all_batches = Vec::new();
+        for p in 0..num_partitions {
+            let start = (p as u64 * file_size) / num_partitions as u64;
+            let end = ((p as u64 + 1) * file_size) / num_partitions as u64;
+
+            let meta = store.head(path).await?;
+            let mut file = PartitionedFile::new(path.to_string(), meta.size);
+            file.range = Some(FileRange {
+                start: start as i64,
+                end: end as i64,
+            });
+
+            let opener = JsonOpener::new(
+                1024,
+                test_schema(),
+                FileCompressionType::UNCOMPRESSED,
+                Arc::clone(&store),
+                true,
+            );
+
+            let stream = opener.open(file)?.await?;
+            let batches: Vec<_> = stream.try_collect().await?;
+            all_batches.extend(batches);
+        }
+        Ok(all_batches)
+    }
+
+    /// Concatenates `batches` and returns a single batch sorted ascending by
+    /// the first (id) column.
+    fn concat_and_sort_by_id(batches: &[RecordBatch]) -> Result<RecordBatch> {
+        let schema = test_schema();
+        let combined = compute::concat_batches(&schema, batches)?;
+        let indices = compute::sort_to_indices(combined.column(0), None, None)?;
+        let sorted_cols: Vec<_> = combined
+            .columns()
+            .iter()
+            .map(|col| compute::take(col.as_ref(), &indices, None))
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(RecordBatch::try_new(schema, sorted_cols)?)
+    }
+
+    #[tokio::test]
+    async fn test_ndjson_partitioned() -> Result<()> {
+        // Build an NDJSON file with a known number of rows.
+        let num_rows: usize = 20;
+        let mut ndjson = String::new();
+        for i in 0..num_rows {
+            ndjson.push_str(&format!("{{\"id\": {i}, \"name\": \"user{i}\"}}\n"));
+        }
+        let ndjson_bytes = Bytes::from(ndjson);
+        let file_size = ndjson_bytes.len() as u64;
+
+        for &cs in CHUNK_SIZES {
+            let (store, path) = make_chunked_store(&ndjson_bytes, cs).await;
+
+            for num_partitions in get_partition_splits() {
+                let batches = collect_partitioned_batches(
+                    Arc::clone(&store),
+                    &path,
+                    file_size,
+                    num_partitions,
+                )
+                .await?;
+
+                let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+                assert_eq!(
+                    total, num_rows,
+                    "Expected {num_rows} rows with {num_partitions} partitions"
+                );
+
+                let result = concat_and_sort_by_id(&batches)?;
+                let ids = result
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let names = result
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                for i in 0..num_rows {
+                    assert_eq!(
+                        ids.value(i),
+                        i as i64,
+                        "id mismatch at row {i} with {num_partitions} partitions"
+                    );
+                    assert_eq!(
+                        names.value(i),
+                        format!("user{i}"),
+                        "name mismatch at row {i} with {num_partitions} partitions"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ndjson_partitioned_uneven_lines() -> Result<()> {
+        // Lines of deliberately varying lengths so byte-range boundaries are
+        // more likely to land in the middle of a line.
+        let rows: &[(&str, &str)] = &[
+            ("1", "alice"),
+            ("2", "bob-with-a-longer-name"),
+            ("3", "charlie"),
+            ("4", "x"),
+            ("5", "diana-has-an-even-longer-name-here"),
+            ("6", "ed"),
+            ("7", "francesca"),
+            ("8", "g"),
+            ("9", "hector-the-magnificent"),
+            ("10", "isabella"),
+        ];
+        let num_rows = rows.len();
+
+        let mut ndjson = String::new();
+        for (id, name) in rows {
+            ndjson.push_str(&format!("{{\"id\": {id}, \"name\": \"{name}\"}}\n"));
+        }
+        let ndjson_bytes = Bytes::from(ndjson);
+        let file_size = ndjson_bytes.len() as u64;
+
+        for &cs in CHUNK_SIZES {
+            let (store, path) = make_chunked_store(&ndjson_bytes, cs).await;
+
+            for num_partitions in get_partition_splits() {
+                let batches = collect_partitioned_batches(
+                    Arc::clone(&store),
+                    &path,
+                    file_size,
+                    num_partitions,
+                )
+                .await?;
+
+                let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+                assert_eq!(
+                    total, num_rows,
+                    "Expected {num_rows} rows with {num_partitions} partitions"
+                );
+
+                let result = concat_and_sort_by_id(&batches)?;
+                let ids = result
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let names = result
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                for (i, (expected_id, expected_name)) in rows.iter().enumerate() {
+                    assert_eq!(
+                        ids.value(i),
+                        expected_id.parse::<i64>().unwrap(),
+                        "id mismatch at row {i} with {num_partitions} partitions"
+                    );
+                    assert_eq!(
+                        names.value(i),
+                        *expected_name,
+                        "name mismatch at row {i} with {num_partitions} partitions"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ndjson_partitioned_single_entry() -> Result<()> {
+        // A single JSON object with no trailing newline. No matter how many
+        // byte-range partitions the file is split into, exactly one row must
+        // be produced in total.
+        let ndjson = r#"{"id": 1, "name": "alice"}"#;
+        let ndjson_bytes = Bytes::from(ndjson);
+        let file_size = ndjson_bytes.len() as u64;
+
+        for &cs in CHUNK_SIZES {
+            let (store, path) = make_chunked_store(&ndjson_bytes, cs).await;
+
+            for num_partitions in get_partition_splits() {
+                let batches = collect_partitioned_batches(
+                    Arc::clone(&store),
+                    &path,
+                    file_size,
+                    num_partitions,
+                )
+                .await?;
+
+                let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+                assert_eq!(
+                    total, 1,
+                    "Expected exactly 1 row with {num_partitions} partitions"
+                );
+
+                let result = concat_and_sort_by_id(&batches)?;
+                let ids = result
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let names = result
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                assert_eq!(ids.value(0), 1);
+                assert_eq!(names.value(0), "alice");
+            }
+        }
+
+        Ok(())
+    }
 }

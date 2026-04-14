@@ -176,6 +176,13 @@ pub struct Map {
     pub keys_sorted: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RunEndEncoded {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub run_ends_field: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub values_field: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Union {
     #[prost(message, repeated, tag = "1")]
     pub union_types: ::prost::alloc::vec::Vec<Field>,
@@ -264,6 +271,15 @@ pub struct ScalarDictionaryValue {
     #[prost(message, optional, boxed, tag = "2")]
     pub value: ::core::option::Option<::prost::alloc::boxed::Box<ScalarValue>>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarRunEndEncodedValue {
+    #[prost(message, optional, tag = "1")]
+    pub run_ends_field: ::core::option::Option<Field>,
+    #[prost(message, optional, tag = "2")]
+    pub values_field: ::core::option::Option<Field>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub value: ::core::option::Option<::prost::alloc::boxed::Box<ScalarValue>>,
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct IntervalDayTimeValue {
     #[prost(int32, tag = "1")]
@@ -311,7 +327,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 23, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 41, 43, 44, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 22, 30, 25, 31, 34, 42"
+        tags = "33, 1, 2, 3, 23, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 41, 43, 44, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 22, 30, 25, 31, 34, 42, 45"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -406,6 +422,8 @@ pub mod scalar_value {
         FixedSizeBinaryValue(super::ScalarFixedSizeBinary),
         #[prost(message, tag = "42")]
         UnionValue(::prost::alloc::boxed::Box<super::UnionValue>),
+        #[prost(message, tag = "45")]
+        RunEndEncodedValue(::prost::alloc::boxed::Box<super::ScalarRunEndEncodedValue>),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -449,7 +467,7 @@ pub struct Decimal256 {
 pub struct ArrowType {
     #[prost(
         oneof = "arrow_type::ArrowTypeEnum",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 40, 41, 24, 36, 25, 26, 27, 28, 29, 30, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 40, 41, 24, 36, 25, 26, 27, 28, 29, 30, 33, 42"
     )]
     pub arrow_type_enum: ::core::option::Option<arrow_type::ArrowTypeEnum>,
 }
@@ -538,6 +556,8 @@ pub mod arrow_type {
         Dictionary(::prost::alloc::boxed::Box<super::Dictionary>),
         #[prost(message, tag = "33")]
         Map(::prost::alloc::boxed::Box<super::Map>),
+        #[prost(message, tag = "42")]
+        RunEndEncoded(::prost::alloc::boxed::Box<super::RunEndEncoded>),
     }
 }
 /// Useful for representing an empty enum variant in rust
@@ -665,6 +685,9 @@ pub struct JsonOptions {
     /// Optional compression level
     #[prost(uint32, optional, tag = "3")]
     pub compression_level: ::core::option::Option<u32>,
+    /// Whether to read as newline-delimited JSON (default true). When false, expects JSON array format \[{},...\]
+    #[prost(bool, optional, tag = "4")]
+    pub newline_delimited: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableParquetOptions {
@@ -815,6 +838,8 @@ pub struct ParquetOptions {
     pub max_row_group_size: u64,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "35")]
+    pub content_defined_chunking: ::core::option::Option<CdcOptions>,
     #[prost(oneof = "parquet_options::MetadataSizeHintOpt", tags = "4")]
     pub metadata_size_hint_opt: ::core::option::Option<
         parquet_options::MetadataSizeHintOpt,
@@ -907,6 +932,15 @@ pub mod parquet_options {
         #[prost(uint64, tag = "33")]
         MaxPredicateCacheSize(u64),
     }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CdcOptions {
+    #[prost(uint64, tag = "1")]
+    pub min_chunk_size: u64,
+    #[prost(uint64, tag = "2")]
+    pub max_chunk_size: u64,
+    #[prost(int32, tag = "3")]
+    pub norm_level: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Precision {

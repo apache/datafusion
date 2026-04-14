@@ -21,6 +21,7 @@ mod field_reference;
 mod function_arguments;
 mod if_then;
 mod literal;
+mod nested;
 mod scalar_function;
 mod singular_or_list;
 mod subquery;
@@ -32,6 +33,7 @@ pub use field_reference::*;
 pub use function_arguments::*;
 pub use if_then::*;
 pub use literal::*;
+pub use nested::*;
 pub use scalar_function::*;
 pub use singular_or_list::*;
 pub use subquery::*;
@@ -88,9 +90,13 @@ pub async fn from_substrait_rex(
                 consumer.consume_subquery(expr.as_ref(), input_schema).await
             }
             RexType::Nested(expr) => consumer.consume_nested(expr, input_schema).await,
+            #[expect(deprecated)]
             RexType::Enum(expr) => consumer.consume_enum(expr, input_schema).await,
             RexType::DynamicParameter(expr) => {
                 consumer.consume_dynamic_parameter(expr, input_schema).await
+            }
+            RexType::Lambda(_) | RexType::LambdaInvocation(_) => {
+                not_impl_err!("Lambda expressions are not yet supported")
             }
         },
         None => substrait_err!("Expression must set rex_type: {expression:?}"),
@@ -116,10 +122,7 @@ pub async fn from_substrait_extended_expr(
         return not_impl_err!("Type variation extensions are not supported");
     }
 
-    let consumer = DefaultSubstraitConsumer {
-        extensions: &extensions,
-        state,
-    };
+    let consumer = DefaultSubstraitConsumer::new(&extensions, state);
 
     let input_schema = DFSchemaRef::new(match &extended_expr.base_schema {
         Some(base_schema) => from_substrait_named_struct(&consumer, base_schema),

@@ -22,7 +22,7 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
 use crate::operator::Operator;
-use crate::type_coercion::binary::{BinaryTypeCoercer, comparison_coercion_numeric};
+use crate::type_coercion::binary::{BinaryTypeCoercer, comparison_coercion};
 
 use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
@@ -37,7 +37,7 @@ use datafusion_common::{
 };
 
 macro_rules! get_extreme_value {
-    ($extreme:ident, $value:expr) => {
+    ($extreme:ident, $DECIMAL128_ARRAY:ident, $DECIMAL256_ARRAY:ident, $value:expr) => {
         match $value {
             DataType::UInt8 => ScalarValue::UInt8(Some(u8::$extreme)),
             DataType::UInt16 => ScalarValue::UInt16(Some(u16::$extreme)),
@@ -49,6 +49,8 @@ macro_rules! get_extreme_value {
             DataType::Int64 => ScalarValue::Int64(Some(i64::$extreme)),
             DataType::Float32 => ScalarValue::Float32(Some(f32::$extreme)),
             DataType::Float64 => ScalarValue::Float64(Some(f64::$extreme)),
+            DataType::Date32 => ScalarValue::Date32(Some(i32::$extreme)),
+            DataType::Date64 => ScalarValue::Date64(Some(i64::$extreme)),
             DataType::Duration(TimeUnit::Second) => {
                 ScalarValue::DurationSecond(Some(i64::$extreme))
             }
@@ -83,18 +85,12 @@ macro_rules! get_extreme_value {
                 ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::$extreme))
             }
             DataType::Decimal128(precision, scale) => ScalarValue::Decimal128(
-                Some(
-                    paste::paste! {[<$extreme _DECIMAL128_FOR_EACH_PRECISION>]}
-                        [*precision as usize],
-                ),
+                Some($DECIMAL128_ARRAY[*precision as usize]),
                 *precision,
                 *scale,
             ),
             DataType::Decimal256(precision, scale) => ScalarValue::Decimal256(
-                Some(
-                    paste::paste! {[<$extreme _DECIMAL256_FOR_EACH_PRECISION>]}
-                        [*precision as usize],
-                ),
+                Some($DECIMAL256_ARRAY[*precision as usize]),
                 *precision,
                 *scale,
             ),
@@ -734,7 +730,7 @@ impl Interval {
             (self.lower.clone(), self.upper.clone(), rhs.clone())
         } else {
             let maybe_common_type =
-                comparison_coercion_numeric(&self.data_type(), &rhs.data_type());
+                comparison_coercion(&self.data_type(), &rhs.data_type());
             assert_or_internal_err!(
                 maybe_common_type.is_some(),
                 "Data types must be compatible for containment checks, lhs:{}, rhs:{}",
@@ -1162,10 +1158,20 @@ fn handle_overflow<const UPPER: bool>(
     match (UPPER, positive_sign) {
         (true, true) | (false, false) => ScalarValue::try_from(dt).unwrap(),
         (true, false) => {
-            get_extreme_value!(MIN, dt)
+            get_extreme_value!(
+                MIN,
+                MIN_DECIMAL128_FOR_EACH_PRECISION,
+                MIN_DECIMAL256_FOR_EACH_PRECISION,
+                dt
+            )
         }
         (false, true) => {
-            get_extreme_value!(MAX, dt)
+            get_extreme_value!(
+                MAX,
+                MAX_DECIMAL128_FOR_EACH_PRECISION,
+                MAX_DECIMAL256_FOR_EACH_PRECISION,
+                dt
+            )
         }
     }
 }
@@ -4218,12 +4224,8 @@ mod tests {
     }
 
     macro_rules! capture_mode_change {
-        ($TYPE:ty) => {
-            paste::item! {
-                capture_mode_change_helper!([<capture_mode_change_ $TYPE>],
-                                            [<create_interval_ $TYPE>],
-                                            $TYPE);
-            }
+        ($TYPE:ty, $TEST_FN_NAME:ident, $CREATE_FN_NAME:ident) => {
+            capture_mode_change_helper!($TEST_FN_NAME, $CREATE_FN_NAME, $TYPE);
         };
     }
 
@@ -4251,8 +4253,8 @@ mod tests {
         };
     }
 
-    capture_mode_change!(f32);
-    capture_mode_change!(f64);
+    capture_mode_change!(f32, capture_mode_change_f32, create_interval_f32);
+    capture_mode_change!(f64, capture_mode_change_f64, create_interval_f64);
 
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),

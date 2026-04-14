@@ -33,13 +33,57 @@ use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
 use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
+use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
+use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+
+/// Context available to physical optimizer rules.
+///
+/// This trait provides access to configuration options and optional statistics
+/// registry for enhanced statistics lookup. It allows optimizer rules to access
+/// extended context without changing the core [`PhysicalOptimizerRule::optimize`]
+/// signature.
+pub trait PhysicalOptimizerContext: Send + Sync {
+    /// Returns the configuration options.
+    fn config_options(&self) -> &ConfigOptions;
+
+    /// Returns the statistics registry for enhanced statistics lookup.
+    ///
+    /// Returns `None` if no registry is configured, in which case rules
+    /// should fall back to using `ExecutionPlan::partition_statistics()`.
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        None
+    }
+}
+
+/// Simple context wrapping [`ConfigOptions`] for backward compatibility.
+///
+/// This struct provides a minimal implementation of [`PhysicalOptimizerContext`]
+/// that only supplies configuration options. Used when no statistics registry
+/// is available or needed.
+pub struct ConfigOnlyContext<'a> {
+    config: &'a ConfigOptions,
+}
+
+impl<'a> ConfigOnlyContext<'a> {
+    /// Create a new context wrapping the given config options.
+    pub fn new(config: &'a ConfigOptions) -> Self {
+        Self { config }
+    }
+}
+
+impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
+    fn config_options(&self) -> &ConfigOptions {
+        self.config
+    }
+}
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
 /// computes the same results, but in a potentially more efficient way.
@@ -48,13 +92,29 @@ use datafusion_physical_plan::ExecutionPlan;
 /// `PhysicalOptimizerRule`s.
 ///
 /// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_physical_optimizer_rule
-pub trait PhysicalOptimizerRule: Debug {
-    /// Rewrite `plan` to an optimized form
+pub trait PhysicalOptimizerRule: Debug + std::any::Any {
+    /// Rewrite `plan` to an optimized form.
+    ///
+    /// This is the primary optimization method. For rules that need access to
+    /// the statistics registry, override [`optimize_with_context`](Self::optimize_with_context) instead.
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Rewrite `plan` with access to extended context (statistics registry, etc.).
+    ///
+    /// Override this method if you need access to the statistics registry for
+    /// enhanced statistics lookup. The default implementation simply calls
+    /// [`optimize`](Self::optimize) with the config options from the context.
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize(plan, context.config_options())
+    }
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
@@ -82,6 +142,12 @@ impl Default for PhysicalOptimizer {
 impl PhysicalOptimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
+        // NOTEs:
+        // - The order of rules in this list is important, as it determines the
+        //   order in which they are applied.
+        // - Adding a new rule here is expensive as it will be applied to all
+        //   queries, and will likely increase the optimization time. Please extend
+        //   existing rules when possible, rather than adding a new rule.
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
             // If there is a output requirement of the query, make sure that
             // this information is not lost across different rules during optimization.
@@ -131,10 +197,19 @@ impl PhysicalOptimizer {
             // This can possibly be combined with [LimitPushdown]
             // It needs to come after [EnforceSorting]
             Arc::new(LimitPushPastWindows::new()),
+            // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
+            // in the prob side of hash joins. That way, the probe side gets eagerly polled before
+            // the build side is completely finished.
+            Arc::new(HashJoinBuffering::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.
             Arc::new(LimitPushdown::new()),
+            // TopKRepartition pushes TopK (Sort with fetch) below Hash
+            // repartition when the partition key is a prefix of the sort key.
+            // This reduces data volume before a hash shuffle. It must run
+            // after LimitPushdown so that the TopK already exists on the SortExec.
+            Arc::new(TopKRepartition::new()),
             // The ProjectionPushdown rule tries to push projections towards
             // the sources in the execution plan. As a result of this process,
             // a projection can disappear if it reaches the source providers, and

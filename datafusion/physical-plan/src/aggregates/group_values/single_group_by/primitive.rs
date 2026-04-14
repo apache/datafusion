@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
     cast::AsArray,
 };
 use arrow::datatypes::{DataType, i256};
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
@@ -31,6 +31,8 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_
 };
 use half::f16;
 use hashbrown::hash_table::HashTable;
+#[cfg(not(feature = "force_hash_collisions"))]
+use std::hash::BuildHasher;
 use std::{collections::VecDeque, mem};
 use std::mem::size_of;
 use std::sync::Arc;
@@ -257,14 +259,14 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |&(idx, _)| unsafe {
-                            let block_id = O::get_block_id(idx);
-                            let block_offset = O::get_block_offset(idx);
-                            self.values
-                                .get(block_id as usize)
-                                .unwrap()
-                                .get_unchecked(block_offset as usize)
-                                .is_eq(key)
+                        |&(idx, h)| unsafe {
+                            hash == h && {
+                                let block_id = O::get_block_id(idx);
+                                let block_offset = O::get_block_offset(idx);
+                                (*self.values.get(block_id as usize).unwrap_unchecked())
+                                    .get_unchecked(block_offset as usize)
+                                    .is_eq(key)
+                            }
                         },
                         |&(_, h)| h,
                     );

@@ -1,0 +1,150 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for the TopKRepartition optimizer rule.
+#
+# When a partitioned window function has ORDER BY + LIMIT, the optimizer
+# can push a TopK (Sort with fetch) below the hash repartition to reduce
+# the volume of data flowing through the shuffle.
+#
+# The optimization is correct when the hash partition key is a prefix of
+# the sort key, because all rows with the same partition key land in the
+# same output partition.
+
+statement ok
+CREATE EXTERNAL TABLE employees (
+  depname VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  empno INT NOT NULL,
+  salary BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL,
+  hire_date DATE NOT NULL,
+  c15 TIMESTAMP NOT NULL
+)
+STORED AS CSV
+LOCATION '../../testing/data/csv/aggregate_test_100_with_dates.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+###
+### Results correctness: both enabled and disabled must produce the same output
+###
+
+# Disabled: baseline results without the optimization
+statement ok
+SET datafusion.optimizer.enable_topk_repartition = false;
+
+query TI
+SELECT depname, SUM(1) OVER (PARTITION BY depname ORDER BY empno ASC ROWS UNBOUNDED PRECEDING) as running_total
+FROM employees
+ORDER BY depname, empno
+LIMIT 3;
+----
+a 1
+a 2
+a 3
+
+statement ok
+RESET datafusion.optimizer.enable_topk_repartition;
+
+# Enabled: results must match baseline
+statement ok
+SET datafusion.optimizer.enable_topk_repartition = true;
+
+query TI
+SELECT depname, SUM(1) OVER (PARTITION BY depname ORDER BY empno ASC ROWS UNBOUNDED PRECEDING) as running_total
+FROM employees
+ORDER BY depname, empno
+LIMIT 3;
+----
+a 1
+a 2
+a 3
+
+###
+### Plan shape: disabled should have TopK only above repartition
+###
+
+statement ok
+SET datafusion.optimizer.enable_topk_repartition = false;
+
+query TT
+EXPLAIN SELECT depname, SUM(1) OVER (PARTITION BY depname ORDER BY empno ASC ROWS UNBOUNDED PRECEDING) as running_total
+FROM employees
+ORDER BY depname, empno
+LIMIT 3;
+----
+logical_plan
+01)Projection: employees.depname, running_total
+02)--Sort: employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST, fetch=3
+03)----Projection: employees.depname, sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_total, employees.empno
+04)------WindowAggr: windowExpr=[[sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------TableScan: employees projection=[depname, empno]
+physical_plan
+01)ProjectionExec: expr=[depname@0 as depname, running_total@1 as running_total]
+02)--SortPreservingMergeExec: [depname@0 ASC NULLS LAST, empno@2 ASC NULLS LAST], fetch=3
+03)----ProjectionExec: expr=[depname@0 as depname, sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as running_total, empno@1 as empno]
+04)------BoundedWindowAggExec: wdw=[sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+05)--------SortExec: TopK(fetch=3), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno], file_type=csv, has_header=true
+
+###
+### Plan shape: enabled should have TopK on BOTH sides of the repartition
+###
+
+statement ok
+SET datafusion.optimizer.enable_topk_repartition = true;
+
+query TT
+EXPLAIN SELECT depname, SUM(1) OVER (PARTITION BY depname ORDER BY empno ASC ROWS UNBOUNDED PRECEDING) as running_total
+FROM employees
+ORDER BY depname, empno
+LIMIT 3;
+----
+logical_plan
+01)Projection: employees.depname, running_total
+02)--Sort: employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST, fetch=3
+03)----Projection: employees.depname, sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_total, employees.empno
+04)------WindowAggr: windowExpr=[[sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------TableScan: employees projection=[depname, empno]
+physical_plan
+01)ProjectionExec: expr=[depname@0 as depname, running_total@1 as running_total]
+02)--SortPreservingMergeExec: [depname@0 ASC NULLS LAST, empno@2 ASC NULLS LAST], fetch=3
+03)----ProjectionExec: expr=[depname@0 as depname, sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as running_total, empno@1 as empno]
+04)------BoundedWindowAggExec: wdw=[sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+05)--------SortExec: TopK(fetch=3), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST]
+06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1, maintains_sort_order=true
+07)------------SortExec: TopK(fetch=3), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno], file_type=csv, has_header=true
+
+statement ok
+RESET datafusion.optimizer.enable_topk_repartition;

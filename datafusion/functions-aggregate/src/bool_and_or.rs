@@ -17,7 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
 use std::mem::size_of_val;
 
 use arrow::array::ArrayRef;
@@ -114,11 +113,7 @@ pub struct BoolAnd {
 impl BoolAnd {
     fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Boolean],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![DataType::Boolean], Volatility::Immutable),
         }
     }
 }
@@ -130,10 +125,6 @@ impl Default for BoolAnd {
 }
 
 impl AggregateUDFImpl for BoolAnd {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bool_and"
     }
@@ -251,11 +242,7 @@ pub struct BoolOr {
 impl BoolOr {
     fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Boolean],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![DataType::Boolean], Volatility::Immutable),
         }
     }
 }
@@ -267,10 +254,6 @@ impl Default for BoolOr {
 }
 
 impl AggregateUDFImpl for BoolOr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bool_or"
     }

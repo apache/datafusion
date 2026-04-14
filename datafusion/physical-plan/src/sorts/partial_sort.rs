@@ -51,7 +51,6 @@
 //! The plan concats incoming data with such last rows of previous input
 //! and continues partial sorting of the segments.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -62,15 +61,17 @@ use crate::sorts::sort::sort_batch;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+    check_if_same_properties,
 };
 
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_execution::{RecordBatchStream, TaskContext};
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
 use futures::{Stream, StreamExt, ready};
 use log::trace;
@@ -93,7 +94,7 @@ pub struct PartialSortExec {
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl PartialSortExec {
@@ -114,7 +115,7 @@ impl PartialSortExec {
             metrics_set: ExecutionPlanMetricsSet::new(),
             preserve_partitioning,
             fetch: None,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -132,12 +133,8 @@ impl PartialSortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
-        self.cache = self
-            .cache
-            .with_partitioning(Self::output_partitioning_helper(
-                &self.input,
-                self.preserve_partitioning,
-            ));
+        Arc::make_mut(&mut self.cache).partitioning =
+            Self::output_partitioning_helper(&self.input, self.preserve_partitioning);
         self
     }
 
@@ -207,6 +204,17 @@ impl PartialSortExec {
             input.boundedness(),
         ))
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics_set: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for PartialSortExec {
@@ -251,11 +259,7 @@ impl ExecutionPlan for PartialSortExec {
         "PartialSortExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -279,10 +283,22 @@ impl ExecutionPlan for PartialSortExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for sort_expr in &self.expr {
+            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+        }
+        Ok(tnr)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         let new_partial_sort = PartialSortExec::new(
             self.expr.clone(),
             Arc::clone(&children[0]),
@@ -329,11 +345,7 @@ impl ExecutionPlan for PartialSortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 }

@@ -32,7 +32,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use std::sync::RwLock;
-use std::{any::Any, collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 use std::{fs::File, io::Write};
 use tempfile::TempDir;
 
@@ -140,7 +140,6 @@ struct DirSchemaOpts<'a> {
 /// Schema where every file with extension `ext` in a given `dir` is a table.
 #[derive(Debug)]
 struct DirSchema {
-    ext: String,
     tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
 }
 
@@ -173,22 +172,12 @@ impl DirSchema {
         }
         Ok(Arc::new(Self {
             tables: RwLock::new(tables),
-            ext: ext.to_string(),
         }))
-    }
-
-    #[allow(unused)]
-    fn name(&self) -> &str {
-        &self.ext
     }
 }
 
 #[async_trait]
 impl SchemaProvider for DirSchema {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         let tables = self.tables.read().unwrap();
         tables.keys().cloned().collect::<Vec<_>>()
@@ -217,7 +206,6 @@ impl SchemaProvider for DirSchema {
 
     /// If supported by the implementation, removes an existing table from this schema and returns it.
     /// If no table of that name exists, returns Ok(None).
-    #[allow(unused_variables)]
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         let mut tables = self.tables.write().unwrap();
         log::info!("dropping table {name}");
@@ -239,10 +227,6 @@ impl DirCatalog {
 }
 
 impl CatalogProvider for DirCatalog {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_schema(
         &self,
         name: &str,
@@ -285,10 +269,6 @@ impl CustomCatalogProviderList {
 }
 
 impl CatalogProviderList for CustomCatalogProviderList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,

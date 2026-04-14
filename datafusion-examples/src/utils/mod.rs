@@ -17,5 +17,6 @@
 
 mod csv_to_parquet;
 pub mod datasets;
+pub mod example_metadata;
 
 pub use csv_to_parquet::write_csv_to_parquet;

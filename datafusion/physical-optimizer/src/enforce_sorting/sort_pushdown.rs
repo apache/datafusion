@@ -35,6 +35,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
@@ -279,7 +280,7 @@ fn pushdown_requirement_to_children(
             }
             RequirementsCompatibility::NonCompatible => Ok(None),
         }
-    } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+    } else if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
         let Some(sort_ordering) = sort_exec.properties().output_ordering().cloned()
         else {
             return internal_err!("SortExec should have output ordering");
@@ -318,7 +319,7 @@ fn pushdown_requirement_to_children(
         // `UnionExec` does not have real sort requirements for its input, we
         // just propagate the sort requirements down:
         Ok(Some(vec![Some(parent_required); plan.children().len()]))
-    } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
+    } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
         let left_columns_len = smj.left().schema().fields().len();
         let parent_ordering: Vec<PhysicalSortExpr> = parent_required
             .first()
@@ -353,12 +354,14 @@ fn pushdown_requirement_to_children(
                 Ok(None)
             }
         }
+    } else if let Some(aggregate_exec) = plan.downcast_ref::<AggregateExec>() {
+        handle_aggregate_pushdown(aggregate_exec, parent_required)
     } else if maintains_input_order.is_empty()
         || !maintains_input_order.iter().any(|o| *o)
-        || plan.as_any().is::<RepartitionExec>()
-        || plan.as_any().is::<FilterExec>()
+        || plan.is::<RepartitionExec>()
+        || plan.is::<FilterExec>()
         // TODO: Add support for Projection push down
-        || plan.as_any().is::<ProjectionExec>()
+        || plan.is::<ProjectionExec>()
         || pushdown_would_violate_requirements(&parent_required, plan.as_ref())
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
@@ -380,12 +383,83 @@ fn pushdown_requirement_to_children(
             // ordering requirement invalidates requirement of sort preserving merge exec.
             Ok(None)
         }
-    } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+    } else if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
     } else {
         handle_custom_pushdown(plan, parent_required, &maintains_input_order)
     }
     // TODO: Add support for Projection push down
+}
+
+/// Try to push sorting through  [`AggregateExec`]
+///
+/// `AggregateExec` only preserves the input order of its group by columns
+/// (not aggregates in general, which are formed from arbitrary expressions over
+/// input)
+///
+/// Thus function rewrites the parent required ordering in terms of the
+/// aggregate input if possible. This rewritten requirement represents the
+/// ordering of the `AggregateExec`'s **input** that would also satisfy the
+/// **parent** ordering.
+///
+/// If no such mapping is possible (e.g. because the sort references aggregate
+/// columns), returns None.
+fn handle_aggregate_pushdown(
+    aggregate_exec: &AggregateExec,
+    parent_required: OrderingRequirements,
+) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    if !aggregate_exec
+        .maintains_input_order()
+        .into_iter()
+        .any(|o| o)
+    {
+        return Ok(None);
+    }
+
+    let group_expr = aggregate_exec.group_expr();
+    // GROUPING SETS introduce additional output columns and NULL substitutions;
+    // skip pushdown until we can map those cases safely.
+    if group_expr.has_grouping_set() {
+        return Ok(None);
+    }
+
+    let group_input_exprs = group_expr.input_exprs();
+    let parent_requirement = parent_required.into_single();
+    let mut child_requirement = Vec::with_capacity(parent_requirement.len());
+
+    for req in parent_requirement {
+        // Sort above AggregateExec should reference its output columns. Map each
+        // output group-by column to its original input expression.
+        let Some(column) = req.expr.as_any().downcast_ref::<Column>() else {
+            return Ok(None);
+        };
+        if column.index() >= group_input_exprs.len() {
+            // AggregateExec does not produce output that is sorted on aggregate
+            // columns so those can not be pushed through.
+            return Ok(None);
+        }
+        child_requirement.push(PhysicalSortRequirement::new(
+            Arc::clone(&group_input_exprs[column.index()]),
+            req.options,
+        ));
+    }
+
+    let Some(child_requirement) = LexRequirement::new(child_requirement) else {
+        return Ok(None);
+    };
+
+    // Keep sort above aggregate unless input ordering already satisfies the
+    // mapped requirement.
+    if aggregate_exec
+        .input()
+        .equivalence_properties()
+        .ordering_satisfy_requirement(child_requirement.iter().cloned())?
+    {
+        let child_requirements = OrderingRequirements::new(child_requirement);
+        Ok(Some(vec![Some(child_requirements)]))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Return true if pushing the sort requirements through a node would violate
@@ -606,8 +680,10 @@ fn handle_custom_pushdown(
     parent_required: OrderingRequirements,
     maintains_input_order: &[bool],
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    let plan_children = plan.children();
+
     // If the plan has no children, return early:
-    if plan.children().is_empty() {
+    if plan_children.is_empty() {
         return Ok(None);
     }
 
@@ -625,8 +701,7 @@ fn handle_custom_pushdown(
         .collect();
 
     // Get the number of fields in each child's schema:
-    let children_schema_lengths: Vec<usize> = plan
-        .children()
+    let children_schema_lengths: Vec<usize> = plan_children
         .iter()
         .map(|c| c.schema().fields().len())
         .collect();
@@ -660,7 +735,7 @@ fn handle_custom_pushdown(
         let updated_parent_req = requirement
             .into_iter()
             .map(|req| {
-                let child_schema = plan.children()[maintained_child_idx].schema();
+                let child_schema = plan_children[maintained_child_idx].schema();
                 let updated_columns = req
                     .expr
                     .transform_up(|expr| {
@@ -723,7 +798,7 @@ fn handle_hash_join(
         .collect();
 
     let column_indices = build_join_column_index(plan);
-    let projected_indices: Vec<_> = if let Some(projection) = &plan.projection {
+    let projected_indices: Vec<_> = if let Some(projection) = plan.projection.as_ref() {
         projection.iter().map(|&i| &column_indices[i]).collect()
     } else {
         column_indices.iter().collect()
@@ -735,13 +810,15 @@ fn handle_hash_join(
 
     let all_from_right_child = all_indices.iter().all(|i| *i >= len_of_left_fields);
 
+    let plan_children = plan.children();
+
     // If all columns are from the right child, update the parent requirements
     if all_from_right_child {
         // Transform the parent-required expression for the child schema by adjusting columns
         let updated_parent_req = requirement
             .into_iter()
             .map(|req| {
-                let child_schema = plan.children()[1].schema();
+                let child_schema = plan_children[1].schema();
                 let updated_columns = req
                     .expr
                     .transform_up(|expr| {

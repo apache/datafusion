@@ -39,7 +39,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -195,6 +195,27 @@ impl OrderingEquivalenceCache {
 }
 
 impl EquivalenceProperties {
+    /// Helper used by the ordering equivalence rule when considering whether a
+    /// cast-bearing expression can replace an existing sort key without
+    /// invalidating the ordering.
+    ///
+    /// The substitution is only allowed when the cast wraps the very same child
+    /// expression that the original sort used and the casted type is a
+    /// widening/order-preserving conversion. Without those restrictions, a
+    /// narrowing cast could collapse distinct values and violate the existing
+    /// sort order.
+    fn substitute_cast_ordering(
+        r_expr: Arc<dyn PhysicalExpr>,
+        sort_expr: &PhysicalSortExpr,
+        expr_type: &DataType,
+    ) -> Option<PhysicalSortExpr> {
+        let cast_expr = r_expr.as_any().downcast_ref::<CastExpr>()?;
+
+        (cast_expr.expr().eq(&sort_expr.expr)
+            && CastExpr::check_bigger_cast(cast_expr.cast_type(), expr_type))
+        .then(|| PhysicalSortExpr::new(r_expr, sort_expr.options))
+    }
+
     /// Creates an empty `EquivalenceProperties` object.
     pub fn new(schema: SchemaRef) -> Self {
         Self {
@@ -207,8 +228,13 @@ impl EquivalenceProperties {
     }
 
     /// Adds constraints to the properties.
-    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+    pub fn set_constraints(&mut self, constraints: Constraints) {
         self.constraints = constraints;
+    }
+
+    /// Adds constraints to the properties.
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.set_constraints(constraints);
         self
     }
 
@@ -828,35 +854,25 @@ impl EquivalenceProperties {
             order
                 .into_iter()
                 .map(|sort_expr| {
-                    let referring_exprs = mapping
-                        .iter()
-                        .map(|(source, _target)| source)
-                        .filter(|source| expr_refers(source, &sort_expr.expr))
-                        .cloned();
-                    let mut result = vec![];
                     // The sort expression comes from this schema, so the
                     // following call to `unwrap` is safe.
                     let expr_type = sort_expr.expr.data_type(schema).unwrap();
+                    let original_sort_expr = sort_expr.clone();
                     // TODO: Add one-to-one analysis for ScalarFunctions.
-                    for r_expr in referring_exprs {
-                        // We check whether this expression is substitutable.
-                        if let Some(cast_expr) =
-                            r_expr.as_any().downcast_ref::<CastExpr>()
-                        {
-                            // For casts, we need to know whether the cast
-                            // expression matches:
-                            if cast_expr.expr.eq(&sort_expr.expr)
-                                && cast_expr.is_bigger_cast(&expr_type)
-                            {
-                                result.push(PhysicalSortExpr::new(
-                                    r_expr,
-                                    sort_expr.options,
-                                ));
-                            }
-                        }
-                    }
-                    result.push(sort_expr);
-                    result
+                    mapping
+                        .iter()
+                        .map(|(source, _target)| source)
+                        .filter(|source| expr_refers(source, &original_sort_expr.expr))
+                        .cloned()
+                        .filter_map(|r_expr| {
+                            Self::substitute_cast_ordering(
+                                r_expr,
+                                &original_sort_expr,
+                                &expr_type,
+                            )
+                        })
+                        .chain(std::iter::once(sort_expr))
+                        .collect::<Vec<_>>()
                 })
                 // Generate all valid orderings given substituted expressions:
                 .multi_cartesian_product()
@@ -1277,7 +1293,7 @@ impl EquivalenceProperties {
             // Rewriting equivalence properties in terms of new schema is not
             // safe when schemas are not aligned:
             return plan_err!(
-                "Schemas have to be aligned to rewrite equivalences:\n Old schema: {:?}\n New schema: {:?}",
+                "Schemas have to be aligned to rewrite equivalences:\n Old schema: {}\n New schema: {}",
                 self.schema,
                 schema
             );

@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! DataFusion Parquet Reader: [`ParquetSource`]
+//!
+//! [`ParquetSource`]: source::ParquetSource
+
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-#![deny(clippy::allow_attributes)]
 
 pub mod access_plan;
 pub mod file_format;

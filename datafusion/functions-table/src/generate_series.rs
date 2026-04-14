@@ -23,9 +23,9 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
+use datafusion_catalog::{Session, TableFunctionArgs};
 use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
@@ -433,28 +433,9 @@ fn reach_end_int64(val: i64, end: i64, step: i64, include_end: bool) -> bool {
     }
 }
 
-fn validate_interval_step(
-    step: IntervalMonthDayNano,
-    start: i64,
-    end: i64,
-) -> Result<()> {
+fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
     if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
         return plan_err!("Step interval cannot be zero");
-    }
-
-    let step_is_positive = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
-    let step_is_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
-
-    if start > end && step_is_positive {
-        return plan_err!(
-            "Start is bigger than end, but increment is positive: Cannot generate infinite series"
-        );
-    }
-
-    if start < end && step_is_negative {
-        return plan_err!(
-            "Start is smaller than end, but increment is negative: Cannot generate infinite series"
-        );
     }
 
     Ok(())
@@ -462,10 +443,6 @@ fn validate_interval_step(
 
 #[async_trait]
 impl TableProvider for GenerateSeriesTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -498,7 +475,8 @@ struct GenerateSeriesFuncImpl {
 }
 
 impl TableFunctionImpl for GenerateSeriesFuncImpl {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         if exprs.is_empty() || exprs.len() > 3 {
             return plan_err!("{} function requires 1 to 3 arguments", self.name);
         }
@@ -566,18 +544,6 @@ impl GenerateSeriesFuncImpl {
                 return plan_err!("{} function requires 1 to 3 arguments", self.name);
             }
         };
-
-        if start > end && step > 0 {
-            return plan_err!(
-                "Start is bigger than end, but increment is positive: Cannot generate infinite series"
-            );
-        }
-
-        if start < end && step < 0 {
-            return plan_err!(
-                "Start is smaller than end, but increment is negative: Cannot generate infinite series"
-            );
-        }
 
         if step == 0 {
             return plan_err!("Step cannot be zero");
@@ -656,7 +622,7 @@ impl GenerateSeriesFuncImpl {
         };
 
         // Validate step interval
-        validate_interval_step(step, start, end)?;
+        validate_interval_step(step)?;
 
         Ok(Arc::new(GenerateSeriesTable {
             schema,
@@ -749,7 +715,7 @@ impl GenerateSeriesFuncImpl {
         let end_ts = end_date as i64 * NANOS_PER_DAY;
 
         // Validate step interval
-        validate_interval_step(step_interval, start_ts, end_ts)?;
+        validate_interval_step(step_interval)?;
 
         Ok(Arc::new(GenerateSeriesTable {
             schema,
@@ -768,12 +734,12 @@ impl GenerateSeriesFuncImpl {
 pub struct GenerateSeriesFunc {}
 
 impl TableFunctionImpl for GenerateSeriesFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
         let impl_func = GenerateSeriesFuncImpl {
             name: "generate_series",
             include_end: true,
         };
-        impl_func.call(exprs)
+        impl_func.call_with_args(args)
     }
 }
 
@@ -781,12 +747,12 @@ impl TableFunctionImpl for GenerateSeriesFunc {
 pub struct RangeFunc {}
 
 impl TableFunctionImpl for RangeFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
         let impl_func = GenerateSeriesFuncImpl {
             name: "range",
             include_end: false,
         };
-        impl_func.call(exprs)
+        impl_func.call_with_args(args)
     }
 }
 

@@ -166,7 +166,9 @@ impl TestParquetFile {
         let df_schema = Arc::clone(&self.schema).to_dfschema_ref()?;
 
         // run coercion on the filters to coerce types etc.
-        let context = SimplifyContext::default().with_schema(Arc::clone(&df_schema));
+        let context = SimplifyContext::builder()
+            .with_schema(Arc::clone(&df_schema))
+            .build();
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, &df_schema).unwrap();
@@ -194,7 +196,7 @@ impl TestParquetFile {
     /// Recursively searches for DataSourceExec and returns the metrics
     /// on the first one it finds
     pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
-        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
             && data_source_exec
                 .downcast_to_file_source::<ParquetSource>()
                 .is_some()

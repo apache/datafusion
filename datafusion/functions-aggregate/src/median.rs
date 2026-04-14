@@ -85,18 +85,9 @@ make_udaf_expr_and_func!(
 /// If using the distinct variation, the memory usage will be similarly high if the
 /// cardinality is high as it stores all distinct values in memory before computing the
 /// result, but if cardinality is low then memory usage will also be lower.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Median {
     signature: Signature,
-}
-
-impl Debug for Median {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.debug_struct("Median")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for Median {
@@ -114,10 +105,6 @@ impl Median {
 }
 
 impl AggregateUDFImpl for Median {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "median"
     }
@@ -298,6 +285,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
     }
 
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
 
@@ -566,10 +554,8 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut d = std::mem::take(&mut self.distinct_values.values)
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
+        let mut d: Vec<T::Native> =
+            self.distinct_values.values.iter().map(|v| v.0).collect();
         let median = calculate_median::<T>(&mut d);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }

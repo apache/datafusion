@@ -33,8 +33,8 @@ use datafusion::error::Result;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::SessionContext;
-use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
+use datafusion_catalog::{Session, TableFunctionArgs};
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 
@@ -118,10 +118,6 @@ struct SimpleCsvTable {
 
 #[async_trait]
 impl TableProvider for SimpleCsvTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -200,7 +196,8 @@ impl SimpleCsvTable {
 struct SimpleCsvTableFunc {}
 
 impl TableFunctionImpl for SimpleCsvTableFunc {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         let mut new_exprs = vec![];
         let mut filepath = String::new();
         for expr in exprs {
@@ -219,6 +216,31 @@ impl TableFunctionImpl for SimpleCsvTableFunc {
         };
         Ok(Arc::new(table))
     }
+}
+
+/// Test that expressions passed to UDTFs are properly type-coerced
+/// This is a regression test for https://github.com/apache/datafusion/issues/19914
+#[tokio::test]
+async fn test_udtf_type_coercion() -> Result<()> {
+    use datafusion::datasource::MemTable;
+
+    #[derive(Debug)]
+    struct NoOpTableFunc;
+
+    impl TableFunctionImpl for NoOpTableFunc {
+        fn call_with_args(&self, _: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+            let schema = Arc::new(arrow::datatypes::Schema::empty());
+            Ok(Arc::new(MemTable::try_new(schema, vec![vec![]])?))
+        }
+    }
+
+    let ctx = SessionContext::new();
+    ctx.register_udtf("f", Arc::new(NoOpTableFunc));
+
+    // This should not panic - the array elements should be coerced to Float64
+    let _ = ctx.sql("SELECT * FROM f(ARRAY[0.1, 1, 2])").await?;
+
+    Ok(())
 }
 
 fn read_csv_batches(csv_path: impl AsRef<Path>) -> Result<(SchemaRef, Vec<RecordBatch>)> {

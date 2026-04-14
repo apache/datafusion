@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![deny(clippy::allow_attributes)]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
@@ -763,13 +762,11 @@
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
 
-/// DataFusion crate version
-pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
-
 extern crate core;
-
 #[cfg(feature = "sql")]
 extern crate sqlparser;
+/// DataFusion crate version
+pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod dataframe;
 pub mod datasource;
@@ -787,7 +784,7 @@ pub use object_store;
 pub use parquet;
 
 #[cfg(feature = "avro")]
-pub use datafusion_datasource_avro::apache_avro;
+pub use datafusion_datasource_avro::arrow_avro;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
@@ -1181,8 +1178,56 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/upgrading.md",
-    library_user_guide_upgrading
+    "../../../docs/source/library-user-guide/upgrading/46.0.0.md",
+    library_user_guide_upgrading_46_0_0
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading/47.0.0.md",
+    library_user_guide_upgrading_47_0_0
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading/48.0.0.md",
+    library_user_guide_upgrading_48_0_0
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading/48.0.1.md",
+    library_user_guide_upgrading_48_0_1
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading/49.0.0.md",
+    library_user_guide_upgrading_49_0_0
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading/50.0.0.md",
+    library_user_guide_upgrading_50_0_0
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading/51.0.0.md",
+    library_user_guide_upgrading_51_0_0
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading/52.0.0.md",
+    library_user_guide_upgrading_52_0_0
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading/53.0.0.md",
+    library_user_guide_upgrading_53_0_0
 );
 
 #[cfg(doctest)]

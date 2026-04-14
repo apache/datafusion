@@ -42,7 +42,7 @@ use crate::aggregate::groups_accumulator::blocks::{Blocks, GeneralBlocks};
 pub struct PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     /// Values per group, stored as the native type
     values: GeneralBlocks<T::Native>,
@@ -63,7 +63,7 @@ where
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
@@ -85,7 +85,7 @@ where
 impl<T, F> GroupsAccumulator for PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
-    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     fn update_batch(
         &mut self,

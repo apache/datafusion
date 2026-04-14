@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -201,10 +200,6 @@ impl std::fmt::Debug for Simple0ArgsScalarUDF {
 }
 
 impl ScalarUDFImpl for Simple0ArgsScalarUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -511,10 +506,6 @@ impl AddIndexToStringVolatileScalarUDF {
 }
 
 impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -678,9 +669,6 @@ impl CastToI64UDF {
 }
 
 impl ScalarUDFImpl for CastToI64UDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "cast_to_i64"
     }
@@ -715,10 +703,7 @@ impl ScalarUDFImpl for CastToI64UDF {
             arg
         } else {
             // need to use an actual cast to get the correct type
-            Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Int64,
-            })
+            Expr::Cast(datafusion_expr::Cast::new(Box::new(arg), DataType::Int64))
         };
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))
@@ -803,9 +788,6 @@ impl TakeUDF {
 
 /// Implement a ScalarUDFImpl whose return type is a function of the input values
 impl ScalarUDFImpl for TakeUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "take"
     }
@@ -952,10 +934,6 @@ struct ScalarFunctionWrapper {
 }
 
 impl ScalarUDFImpl for ScalarFunctionWrapper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -1444,10 +1422,6 @@ impl MyRegexUdf {
 }
 
 impl ScalarUDFImpl for MyRegexUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regex_udf"
     }
@@ -1612,10 +1586,6 @@ impl MetadataBasedUdf {
 }
 
 impl ScalarUDFImpl for MetadataBasedUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -1821,10 +1791,6 @@ impl Default for ExtensionBasedUdf {
     }
 }
 impl ScalarUDFImpl for ExtensionBasedUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -1991,9 +1957,6 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     }
 
     impl ScalarUDFImpl for TestScalarUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "TestScalarUDF"
         }
@@ -2055,10 +2018,6 @@ async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
     }
 
     impl ScalarUDFImpl for MakeExtension {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "make_extension"
         }
@@ -2136,10 +2095,6 @@ async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
     }
 
     impl ScalarUDFImpl for ExtensionScalarPredicate {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "extension_predicate"
         }
