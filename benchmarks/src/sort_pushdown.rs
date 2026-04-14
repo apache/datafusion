@@ -159,7 +159,14 @@ impl RunOpt {
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let sql = self.load_query(query_id)?;
 
-        let config = self.common.config()?;
+        let mut config = self.common.config()?;
+        // Enable parquet filter pushdown + late materialization. This is
+        // essential for the Inexact sort pushdown path: TopK's dynamic
+        // filter is pushed to the parquet reader, so only sort-column
+        // rows pass the filter's Decode non-sort columns are skipped for
+        // rows that don't pass the filter — this is where RG reorder's
+        // tight-threshold-first strategy pays off for wide-row queries.
+        config.options_mut().execution.parquet.pushdown_filters = true;
         let rt = self.common.build_runtime()?;
         let state = SessionStateBuilder::new()
             .with_config(config)

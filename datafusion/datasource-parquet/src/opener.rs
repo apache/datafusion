@@ -1134,18 +1134,19 @@ impl RowGroupsPrunedParquetOpen {
         let mut prepared_plan = access_plan.prepare(rg_metadata)?;
 
         // Reorder row groups by statistics if sort order is known.
-        // This helps TopK queries find optimal values first.
+        // This helps TopK queries find optimal values first by placing
+        // row groups with optimal min/max values at the front.
+        // When reorder is active, skip reverse — reorder already encodes
+        // the direction (uses min for ASC, max for DESC).
         if let Some(sort_order) = &prepared.sort_order_for_reorder {
             prepared_plan = prepared_plan.reorder_by_statistics(
                 sort_order,
                 file_metadata.as_ref(),
                 &prepared.physical_file_schema,
             )?;
-        }
-
-        // Potentially reverse the access plan for performance.
-        // See `ParquetSource::try_pushdown_sort` for the rationale.
-        if prepared.reverse_row_groups {
+        } else if prepared.reverse_row_groups {
+            // Fallback: simple reverse when no sort order statistics available.
+            // See `ParquetSource::try_pushdown_sort` for the rationale.
             prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
         }
 
