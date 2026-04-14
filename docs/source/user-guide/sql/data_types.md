@@ -69,27 +69,32 @@ select arrow_cast(now(), 'Timestamp(Second, None)') as "now()";
 
 | SQL DataType | Arrow DataType |
 | ------------ | -------------- |
-| `CHAR`       | `Utf8`         |
-| `VARCHAR`    | `Utf8`         |
-| `TEXT`       | `Utf8`         |
-| `STRING`     | `Utf8`         |
+| `CHAR`       | `Utf8View`     |
+| `VARCHAR`    | `Utf8View`     |
+| `TEXT`       | `Utf8View`     |
+| `STRING`     | `Utf8View`     |
+
+By default, string types are mapped to `Utf8View`. This can be configured using the `datafusion.sql_parser.map_string_types_to_utf8view` setting. When set to `false`, string types are mapped to `Utf8` instead.
 
 ## Numeric Types
 
-| SQL DataType                         | Arrow DataType                 |
-| ------------------------------------ | :----------------------------- |
-| `TINYINT`                            | `Int8`                         |
-| `SMALLINT`                           | `Int16`                        |
-| `INT` or `INTEGER`                   | `Int32`                        |
-| `BIGINT`                             | `Int64`                        |
-| `TINYINT UNSIGNED`                   | `UInt8`                        |
-| `SMALLINT UNSIGNED`                  | `UInt16`                       |
-| `INT UNSIGNED` or `INTEGER UNSIGNED` | `UInt32`                       |
-| `BIGINT UNSIGNED`                    | `UInt64`                       |
-| `FLOAT`                              | `Float32`                      |
-| `REAL`                               | `Float32`                      |
-| `DOUBLE`                             | `Float64`                      |
-| `DECIMAL(precision, scale)`          | `Decimal128(precision, scale)` |
+| SQL DataType                                     | Arrow DataType                 |
+| ------------------------------------------------ | :----------------------------- |
+| `TINYINT`                                        | `Int8`                         |
+| `SMALLINT`                                       | `Int16`                        |
+| `INT` or `INTEGER`                               | `Int32`                        |
+| `BIGINT`                                         | `Int64`                        |
+| `TINYINT UNSIGNED`                               | `UInt8`                        |
+| `SMALLINT UNSIGNED`                              | `UInt16`                       |
+| `INT UNSIGNED` or `INTEGER UNSIGNED`             | `UInt32`                       |
+| `BIGINT UNSIGNED`                                | `UInt64`                       |
+| `FLOAT`                                          | `Float32`                      |
+| `REAL`                                           | `Float32`                      |
+| `DOUBLE`                                         | `Float64`                      |
+| `DECIMAL(precision, scale)` where precision ≤ 38 | `Decimal128(precision, scale)` |
+| `DECIMAL(precision, scale)` where precision > 38 | `Decimal256(precision, scale)` |
+
+The maximum supported precision for `DECIMAL` types is 76.
 
 ## Date/Time Types
 
@@ -131,42 +136,3 @@ You can create binary literals using a hex string literal such as
 | `ENUM`        | _Not yet supported_ |
 | `SET`         | _Not yet supported_ |
 | `DATETIME`    | _Not yet supported_ |
-
-## Supported Arrow Types
-
-The following types are supported by the `arrow_typeof` function:
-
-| Arrow Type                                                  |
-| ----------------------------------------------------------- |
-| `Null`                                                      |
-| `Boolean`                                                   |
-| `Int8`                                                      |
-| `Int16`                                                     |
-| `Int32`                                                     |
-| `Int64`                                                     |
-| `UInt8`                                                     |
-| `UInt16`                                                    |
-| `UInt32`                                                    |
-| `UInt64`                                                    |
-| `Float16`                                                   |
-| `Float32`                                                   |
-| `Float64`                                                   |
-| `Utf8`                                                      |
-| `LargeUtf8`                                                 |
-| `Binary`                                                    |
-| `Timestamp(Second, None)`                                   |
-| `Timestamp(Millisecond, None)`                              |
-| `Timestamp(Microsecond, None)`                              |
-| `Timestamp(Nanosecond, None)`                               |
-| `Time32`                                                    |
-| `Time64`                                                    |
-| `Duration(Second)`                                          |
-| `Duration(Millisecond)`                                     |
-| `Duration(Microsecond)`                                     |
-| `Duration(Nanosecond)`                                      |
-| `Interval(YearMonth)`                                       |
-| `Interval(DayTime)`                                         |
-| `Interval(MonthDayNano)`                                    |
-| `FixedSizeBinary(<len>)` (e.g. `FixedSizeBinary(16)`)       |
-| `Decimal128(<precision>, <scale>)` e.g. `Decimal128(3, 10)` |
-| `Decimal256(<precision>, <scale>)` e.g. `Decimal256(3, 10)` |

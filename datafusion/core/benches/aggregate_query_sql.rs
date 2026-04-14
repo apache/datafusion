@@ -15,14 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-extern crate arrow;
-extern crate datafusion;
-
 mod data_utils;
 
-use crate::criterion::Criterion;
+use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::create_table_provider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
@@ -253,6 +248,83 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "SELECT first_value(u64_wide order by f64), \
                             last_value(u64_wide order by f64)   \
                 FROM t GROUP BY u64_narrow",
+            )
+        })
+    });
+
+    c.bench_function("array_agg_query_group_by_few_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_narrow, array_agg(f64) \
+                 FROM t GROUP BY u64_narrow",
+            )
+        })
+    });
+
+    c.bench_function("array_agg_query_group_by_mid_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_mid, array_agg(f64) \
+                 FROM t GROUP BY u64_mid",
+            )
+        })
+    });
+
+    c.bench_function("array_agg_query_group_by_many_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_wide, array_agg(f64) \
+                 FROM t GROUP BY u64_wide",
+            )
+        })
+    });
+
+    c.bench_function("array_agg_struct_query_group_by_mid_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_mid, array_agg(named_struct('market', dict10, 'price', f64)) \
+                 FROM t GROUP BY u64_mid",
+            )
+        })
+    });
+
+    c.bench_function("string_agg_query_group_by_few_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_narrow, string_agg(utf8, ',') \
+                 FROM t GROUP BY u64_narrow",
+            )
+        })
+    });
+
+    c.bench_function("string_agg_query_group_by_mid_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_mid, string_agg(utf8, ',') \
+                 FROM t GROUP BY u64_mid",
+            )
+        })
+    });
+
+    c.bench_function("string_agg_query_group_by_many_groups", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT u64_wide, string_agg(utf8, ',') \
+                 FROM t GROUP BY u64_wide",
             )
         })
     });

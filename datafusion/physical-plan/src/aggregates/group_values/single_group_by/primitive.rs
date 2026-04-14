@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
@@ -24,6 +23,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::{Result, internal_err};
+use datafusion_common::hash_utils::RandomState;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_index_operations::{
@@ -32,6 +32,8 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_
 use half::f16;
 use hashbrown::hash_table::HashTable;
 use std::{collections::VecDeque, mem};
+#[cfg(not(feature = "force_hash_collisions"))]
+use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::sync::Arc;
 

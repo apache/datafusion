@@ -24,22 +24,24 @@
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-#![deny(clippy::allow_attributes)]
 
 pub mod arrow_wrappers;
 pub mod catalog_provider;
 pub mod catalog_provider_list;
+pub mod config;
 pub mod execution;
 pub mod execution_plan;
 pub mod expr;
 pub mod insert_op;
 pub mod physical_expr;
+pub mod physical_optimizer;
 pub mod plan_properties;
 pub mod proto;
 pub mod record_batch_stream;
 pub mod schema_provider;
 pub mod session;
 pub mod table_provider;
+pub mod table_provider_factory;
 pub mod table_source;
 pub mod udaf;
 pub mod udf;

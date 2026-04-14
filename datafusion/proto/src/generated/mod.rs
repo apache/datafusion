@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![allow(clippy::allow_attributes)]
-
+// This code is generated so we don't want to fix any lint violations manually
+#[allow(clippy::allow_attributes)]
 #[allow(clippy::all)]
 #[rustfmt::skip]
 pub mod datafusion {

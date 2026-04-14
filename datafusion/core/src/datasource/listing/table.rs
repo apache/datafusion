@@ -107,9 +107,11 @@ impl ListingTableConfigExt for ListingTableConfig {
 
 #[cfg(test)]
 mod tests {
+
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::listing::table::ListingTableConfigExt;
+    use crate::execution::options::JsonReadOptions;
     use crate::prelude::*;
     use crate::{
         datasource::{
@@ -403,7 +405,7 @@ mod tests {
             .await
             .expect("Empty execution plan");
 
-        assert!(scan.as_any().is::<EmptyExec>());
+        assert!(scan.is::<EmptyExec>());
         assert_eq!(
             columns(&scan.schema()),
             vec!["a".to_owned(), "p1".to_owned()]
@@ -808,7 +810,7 @@ mod tests {
                     .register_json(
                         "t",
                         tmp_dir.path().to_str().unwrap(),
-                        NdJsonReadOptions::default()
+                        JsonReadOptions::default()
                             .schema(schema.as_ref())
                             .file_compression_type(file_compression_type),
                     )

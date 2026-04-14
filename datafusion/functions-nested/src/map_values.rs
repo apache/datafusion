@@ -23,11 +23,10 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, cast::as_map_array, exec_err, internal_err};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -80,10 +79,6 @@ impl MapValuesFunc {
 }
 
 impl ScalarUDFImpl for MapValuesFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_values"
     }
@@ -111,10 +106,7 @@ impl ScalarUDFImpl for MapValuesFunc {
         .into())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(map_values_inner)(&args.args)
     }
 

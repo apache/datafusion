@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
@@ -50,10 +48,6 @@ impl TryUrlDecode {
 }
 
 impl ScalarUDFImpl for TryUrlDecode {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "try_url_decode"
     }
@@ -84,7 +78,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::StringArray;
-    use datafusion_common::{Result, cast::as_string_array};
+    use datafusion_common::cast::as_string_array;
 
     use super::*;
 

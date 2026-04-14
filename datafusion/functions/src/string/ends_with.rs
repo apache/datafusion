@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Scalar};
@@ -79,10 +78,6 @@ impl EndsWithFunc {
 }
 
 impl ScalarUDFImpl for EndsWithFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "ends_with"
     }

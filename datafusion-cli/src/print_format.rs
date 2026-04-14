@@ -259,7 +259,7 @@ mod tests {
     fn print_csv_no_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Csv)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::No)
             .run();
         assert_snapshot!(output, @r"
@@ -273,7 +273,7 @@ mod tests {
     fn print_csv_with_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Csv)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Yes)
             .run();
         assert_snapshot!(output, @r"
@@ -288,7 +288,7 @@ mod tests {
     fn print_tsv_no_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Tsv)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::No)
             .run();
         assert_snapshot!(output, @r"
@@ -302,7 +302,7 @@ mod tests {
     fn print_tsv_with_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Tsv)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Yes)
             .run();
         assert_snapshot!(output, @r"
@@ -317,7 +317,7 @@ mod tests {
     fn print_table() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Table)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Ignored)
             .run();
         assert_snapshot!(output, @r"
@@ -334,7 +334,7 @@ mod tests {
     fn print_json() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Json)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Ignored)
             .run();
         assert_snapshot!(output, @r#"[{"a":1,"b":4,"c":7},{"a":2,"b":5,"c":8},{"a":3,"b":6,"c":9}]"#);
@@ -344,7 +344,7 @@ mod tests {
     fn print_ndjson() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::NdJson)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Ignored)
             .run();
         assert_snapshot!(output, @r#"
@@ -358,7 +358,7 @@ mod tests {
     fn print_automatic_no_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Automatic)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::No)
             .run();
         assert_snapshot!(output, @r"
@@ -371,7 +371,7 @@ mod tests {
     fn print_automatic_with_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Automatic)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Yes)
             .run();
         assert_snapshot!(output, @r"
@@ -633,7 +633,7 @@ mod tests {
     }
 
     /// Slice the record batch into 2 batches
-    fn split_batch(batch: RecordBatch) -> Vec<RecordBatch> {
+    fn split_batch(batch: &RecordBatch) -> Vec<RecordBatch> {
         assert!(batch.num_rows() > 1);
         let split = batch.num_rows() / 2;
         vec![

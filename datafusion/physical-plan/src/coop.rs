@@ -71,10 +71,10 @@
 //! that report [`SchedulingType::NonCooperative`] in their [plan properties](ExecutionPlan::properties).
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::PhysicalExpr;
 #[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -87,7 +87,7 @@ use crate::filter_pushdown::{
 use crate::projection::ProjectionExec;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, SortOrderPushdownResult,
+    SendableRecordBatchStream, SortOrderPushdownResult, check_if_same_properties,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
@@ -217,16 +217,15 @@ where
 #[derive(Debug, Clone)]
 pub struct CooperativeExec {
     input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl CooperativeExec {
     /// Creates a new `CooperativeExec` operator that wraps the given input execution plan.
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        let properties = input
-            .properties()
-            .clone()
-            .with_scheduling_type(SchedulingType::Cooperative);
+        let properties = PlanProperties::clone(input.properties())
+            .with_scheduling_type(SchedulingType::Cooperative)
+            .into();
 
         Self { input, properties }
     }
@@ -234,6 +233,16 @@ impl CooperativeExec {
     /// Returns a reference to the wrapped input execution plan.
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -252,15 +261,11 @@ impl ExecutionPlan for CooperativeExec {
         "CooperativeExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> Arc<Schema> {
         self.input.schema()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -272,6 +277,13 @@ impl ExecutionPlan for CooperativeExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -281,6 +293,7 @@ impl ExecutionPlan for CooperativeExec {
             1,
             "CooperativeExec requires exactly one child"
         );
+        check_if_same_properties!(self, children);
         Ok(Arc::new(CooperativeExec::new(children.swap_remove(0))))
     }
 
@@ -293,7 +306,7 @@ impl ExecutionPlan for CooperativeExec {
         Ok(make_cooperative(child_stream))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 
@@ -383,11 +396,10 @@ pub fn make_cooperative(stream: SendableRecordBatchStream) -> SendableRecordBatc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stream::RecordBatchStreamAdapter;
 
     use arrow_schema::SchemaRef;
 
-    use futures::{StreamExt, stream};
+    use futures::stream;
 
     // This is the hardcoded value Tokio uses
     const TASK_BUDGET: usize = 128;

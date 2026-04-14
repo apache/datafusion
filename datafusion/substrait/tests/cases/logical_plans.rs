@@ -20,6 +20,9 @@
 #[cfg(test)]
 mod tests {
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
+    use datafusion::common::test_util::format_batches;
+    use std::collections::HashSet;
+
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
     use datafusion::prelude::SessionContext;
@@ -157,28 +160,21 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        let mut settings = insta::Settings::clone_current();
-        settings.add_filter(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            "[UUID]",
+        assert_snapshot!(
+            plan,
+            @r"
+        Projection: left.A, left.Utf8(NULL) AS C, right.D, Utf8(NULL) AS Utf8(NULL)__temp__0 AS E
+          Left Join: left.A = right.A
+            SubqueryAlias: left
+              Union
+                Projection: A.A, Utf8(NULL)
+                  TableScan: A
+                Projection: B.A, CAST(B.C AS Utf8)
+                  TableScan: B
+            SubqueryAlias: right
+              TableScan: C
+        "
         );
-        settings.bind(|| {
-            assert_snapshot!(
-                plan,
-                @r"
-            Projection: left.A, left.[UUID] AS C, right.D, Utf8(NULL) AS [UUID] AS E
-              Left Join: left.A = right.A
-                SubqueryAlias: left
-                  Union
-                    Projection: A.A, Utf8(NULL) AS [UUID]
-                      TableScan: A
-                    Projection: B.A, CAST(B.C AS Utf8)
-                      TableScan: B
-                SubqueryAlias: right
-                  TableScan: C
-            "
-            );
-        });
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
@@ -223,6 +219,74 @@ mod tests {
               TableScan: sales
         "
                 );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_name_in_union() -> Result<()> {
+        let proto_plan =
+            read_json("tests/testdata/test_plans/duplicate_name_in_union.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r"
+        Projection: foo AS col1, bar AS col2
+          Union
+            Projection: foo, bar
+              Values: (Int64(100), Int64(200))
+            Projection: x, foo
+              Values: (Int32(300), Int64(400))
+        "
+                );
+
+        // Trigger execution to ensure plan validity
+        let results = DataFrame::new(ctx.state(), plan).collect().await?;
+
+        assert_snapshot!(
+            format_batches(&results)?,
+            @r"
+        +------+------+
+        | col1 | col2 |
+        +------+------+
+        | 100  | 200  |
+        | 300  | 400  |
+        +------+------+
+        ",
+        );
+
+        // also verify that the output schema has unique field names
+        let schema = results[0].schema();
+        for batch in &results {
+            assert_eq!(schema, batch.schema());
+        }
+        let field_names: HashSet<_> = schema.fields().iter().map(|f| f.name()).collect();
+        assert_eq!(field_names.len(), schema.fields().len());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nested_list_expressions() -> Result<()> {
+        // Tests that a Substrait Nested list expression containing non-literal
+        // expressions (column references) uses the make_array UDF.
+        let proto_plan =
+            read_json("tests/testdata/test_plans/nested_list_expressions.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+            plan,
+            @r"
+        Projection: make_array(DATA.a, DATA.b) AS my_list
+          TableScan: DATA
+        "
+        );
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;

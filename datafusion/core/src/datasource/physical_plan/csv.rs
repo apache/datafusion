@@ -31,7 +31,7 @@ mod tests {
 
     use datafusion_datasource::TableSchema;
     use datafusion_datasource_csv::CsvFormat;
-    use object_store::ObjectStore;
+    use object_store::{ObjectStore, ObjectStoreExt};
 
     use crate::datasource::file_format::FileFormat;
     use crate::prelude::CsvReadOptions;

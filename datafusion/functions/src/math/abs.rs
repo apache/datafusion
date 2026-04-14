@@ -17,7 +17,6 @@
 
 //! math expressions
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -50,6 +49,7 @@ macro_rules! make_abs_function {
     }};
 }
 
+#[macro_export]
 macro_rules! make_try_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |input: &ArrayRef| {
@@ -62,7 +62,8 @@ macro_rules! make_try_abs_function {
                         x
                     ))
                 })
-            })?;
+            })
+            .and_then(|v| Ok(v.with_data_type(input.data_type().clone())))?; // maintain decimal's precision and scale
             Ok(Arc::new(res) as ArrayRef)
         }
     }};
@@ -145,10 +146,6 @@ impl AbsFunc {
 }
 
 impl ScalarUDFImpl for AbsFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "abs"
     }

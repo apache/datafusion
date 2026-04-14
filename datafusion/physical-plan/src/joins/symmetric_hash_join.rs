@@ -25,13 +25,13 @@
 //! This plan uses the [`OneSideHashJoiner`] object to facilitate join calculations
 //! for both its children.
 
-use std::any::Any;
 use std::fmt::{self, Debug};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
+use crate::check_if_same_properties;
 use crate::common::SharedMemoryReservation;
 use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::stream_join_utils::{
@@ -52,7 +52,7 @@ use crate::projection::{
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
@@ -65,6 +65,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
@@ -78,7 +79,7 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
 use parking_lot::Mutex;
@@ -197,7 +198,7 @@ pub struct SymmetricHashJoinExec {
     /// Partition Mode
     mode: StreamJoinPartitionMode,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SymmetricHashJoinExec {
@@ -237,7 +238,7 @@ impl SymmetricHashJoinExec {
             build_join_schema(&left_schema, &right_schema, join_type);
 
         // Initialize the random state for the join operation:
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let schema = Arc::new(schema);
         let cache = Self::compute_properties(&left, &right, schema, *join_type, &on)?;
         Ok(SymmetricHashJoinExec {
@@ -253,7 +254,7 @@ impl SymmetricHashJoinExec {
             left_sort_exprs,
             right_sort_exprs,
             mode,
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -360,6 +361,20 @@ impl SymmetricHashJoinExec {
         }
         Ok(false)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for SymmetricHashJoinExec {
@@ -407,11 +422,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         "SymmetricHashJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -449,10 +460,28 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join keys from both sides
+        let mut tnr = TreeNodeRecursion::Continue;
+        for (left, right) in &self.on {
+            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
+            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
+        }
+        // Apply to join filter expressions if present
+        if let Some(filter) = &self.filter {
+            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
+        }
+        Ok(tnr)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(SymmetricHashJoinExec::try_new(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
@@ -468,11 +497,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // TODO stats: it is not possible in general to know the output size of joins
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 
     fn execute(
@@ -930,6 +954,7 @@ pub(crate) fn build_side_determined_results(
             &probe_indices,
             column_indices,
             build_hash_joiner.build_side,
+            join_type,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     } else {
@@ -993,6 +1018,7 @@ pub(crate) fn join_with_probe_batch(
             filter,
             build_hash_joiner.build_side,
             None,
+            join_type,
         )?
     } else {
         (build_indices, probe_indices)
@@ -1031,6 +1057,7 @@ pub(crate) fn join_with_probe_batch(
             &probe_indices,
             column_indices,
             build_hash_joiner.build_side,
+            join_type,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     }

@@ -1,0 +1,98 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Basic hex string
+query ?
+SELECT unhex('537061726B2053514C');
+----
+537061726b2053514c
+
+query T
+SELECT arrow_cast(unhex('537061726B2053514C'), 'Utf8');
+----
+Spark SQL
+
+# Lowercase hex
+query ?
+SELECT unhex('616263');
+----
+616263
+
+query T
+SELECT arrow_cast(unhex('616263'), 'Utf8');
+----
+abc
+
+# Odd length hex (left pad with 0)
+query ?
+SELECT unhex(a) FROM VALUES ('1A2B3'), ('1'), ('ABC'), ('123') AS t(a);
+----
+01a2b3
+01
+0abc
+0123
+
+# Null input
+query ?
+SELECT unhex(NULL);
+----
+NULL
+
+# Invalid hex characters
+query ?
+SELECT unhex('GGHH');
+----
+NULL
+
+# Empty hex string
+query T
+SELECT arrow_cast(unhex(''), 'Utf8');
+----
+(empty)
+
+# Array with mixed case
+query ?
+SELECT unhex(a) FROM VALUES ('4a4B4c'), ('F'), ('A'), ('AbCdEf'), ('123abc'), ('41 42'), ('00'), ('FF') AS t(a);
+----
+4a4b4c
+0f
+0a
+abcdef
+123abc
+NULL
+00
+ff
+
+# LargeUtf8 type
+statement ok
+CREATE TABLE t_large_utf8 AS VALUES (arrow_cast('414243', 'LargeUtf8')), (NULL);
+
+query ?
+SELECT unhex(column1) FROM t_large_utf8;
+----
+414243
+NULL
+
+# Utf8View type
+statement ok
+CREATE TABLE t_utf8view AS VALUES (arrow_cast('414243', 'Utf8View')), (NULL);
+
+query ?
+SELECT unhex(column1) FROM t_utf8view;
+----
+414243
+NULL

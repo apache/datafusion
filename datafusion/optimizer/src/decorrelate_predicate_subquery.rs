@@ -461,7 +461,7 @@ fn build_join(
     //
     // Additionally, if the join keys are non-nullable on both sides, we don't need
     // null-aware semantics because NULLs cannot exist in the data.
-    let null_aware = matches!(join_type, JoinType::LeftAnti)
+    let null_aware = join_type == JoinType::LeftAnti
         && in_predicate_opt.is_some()
         && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?;
 
@@ -538,7 +538,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
-    use datafusion_expr::{and, binary_expr, col, lit, not, out_ref_col, table_scan};
+    use datafusion_expr::{and, binary_expr, col, out_ref_col, table_scan};
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -2041,7 +2041,7 @@ mod tests {
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [arr:Int32;N]
               Unnest: lists[sq.arr|depth=1] structs[] [arr:Int32;N]
-                TableScan: sq [arr:List(Field { data_type: Int32, nullable: true });N]
+                TableScan: sq [arr:List(Int32);N]
         "
         )
     }
@@ -2076,7 +2076,7 @@ mod tests {
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [a:UInt32;N]
               Unnest: lists[sq.a|depth=1] structs[] [a:UInt32;N]
-                TableScan: sq [a:List(Field { data_type: UInt32, nullable: true });N]
+                TableScan: sq [a:List(UInt32);N]
         "
         )
     }

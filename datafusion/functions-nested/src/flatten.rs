@@ -27,10 +27,10 @@ use arrow::datatypes::{
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -80,10 +80,6 @@ impl Flatten {
 }
 
 impl ScalarUDFImpl for Flatten {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "flatten"
     }
@@ -114,10 +110,7 @@ impl ScalarUDFImpl for Flatten {
         Ok(data_type)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(flatten_inner)(&args.args)
     }
 
@@ -208,7 +201,7 @@ fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         Null => Ok(Arc::clone(array)),
         _ => {
-            exec_err!("flatten does not support type '{:?}'", array.data_type())
+            exec_err!("flatten does not support type '{}'", array.data_type())
         }
     }
 }

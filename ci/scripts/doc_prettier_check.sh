@@ -19,17 +19,19 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(git rev-parse --show-toplevel)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
-PRETTIER_VERSION="2.7.1"
+
+# Load shared utilities and tool versions
+source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
+source "${ROOT_DIR}/ci/scripts/utils/git.sh"
+
 PRETTIER_TARGETS=(
   '{datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md'
   '!datafusion/CHANGELOG.md'
   README.md
   CONTRIBUTING.md
 )
-
-source "${SCRIPT_DIR}/utils/git.sh"
 
 MODE="check"
 ALLOW_DIRTY=0
