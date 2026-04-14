@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::vec;
@@ -279,7 +279,7 @@ pub struct PlannerContext {
     relation_scopes: Vec<RelationScope>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct RelationScope {
     bindings: HashMap<String, RelationBinding>,
 }
@@ -397,9 +397,7 @@ impl PlannerContext {
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<T> {
-        self.relation_scopes.push(RelationScope {
-            bindings: HashMap::new(),
-        });
+        self.relation_scopes.push(RelationScope::default());
         let result = f(self);
         self.relation_scopes.pop();
         result
@@ -412,7 +410,6 @@ impl PlannerContext {
 
     pub(crate) fn insert_relation_binding(
         &mut self,
-        key: impl Into<String>,
         display_name: impl Into<String>,
         span: Option<Span>,
     ) -> Result<()> {
@@ -420,27 +417,28 @@ impl PlannerContext {
             return Ok(());
         };
 
-        let key = key.into();
         let display_name = display_name.into();
-        if let Some(existing) = scope.bindings.get(&key) {
-            let mut diagnostic = Diagnostic::new_error(
-                format!("duplicate relation alias or name '{display_name}'"),
-                span,
-            );
-            diagnostic.add_note(
-                format!("'{}' was previously bound here", existing.display_name),
-                existing.span,
-            );
-            return plan_err!(
-                "duplicate relation alias or name '{display_name}'";
-                diagnostic = diagnostic
-            );
+        match scope.bindings.entry(display_name.clone()) {
+            Entry::Occupied(existing) => {
+                let existing = existing.get();
+                let mut diagnostic = Diagnostic::new_error(
+                    format!("duplicate relation alias or name '{display_name}'"),
+                    span,
+                );
+                diagnostic.add_note(
+                    format!("'{}' was previously bound here", existing.display_name),
+                    existing.span,
+                );
+                plan_err!(
+                    "duplicate relation alias or name '{display_name}'";
+                    diagnostic = diagnostic
+                )
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(RelationBinding { display_name, span });
+                Ok(())
+            }
         }
-
-        scope
-            .bindings
-            .insert(key, RelationBinding { display_name, span });
-        Ok(())
     }
 
     /// Return the types of parameters (`$1`, `$2`, etc) if known

@@ -2425,21 +2425,22 @@ fn equijoin_explicit_syntax() {
 
 #[test]
 fn join_duplicate_relation_alias_errors() {
-    let sql = "SELECT * FROM person p JOIN orders p ON true";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_snapshot!(
-        err.strip_backtrace(),
-        @"Error during planning: duplicate relation alias or name 'p'"
+    assert_duplicate_relation_alias_error(
+        "SELECT * FROM person p JOIN orders p ON true",
+        "p",
     );
 }
 
 #[test]
 fn comma_join_duplicate_relation_alias_errors() {
-    let sql = "SELECT * FROM person p, orders p";
+    assert_duplicate_relation_alias_error("SELECT * FROM person p, orders p", "p");
+}
+
+fn assert_duplicate_relation_alias_error(sql: &str, alias: &str) {
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_snapshot!(
+    assert_eq!(
         err.strip_backtrace(),
-        @"Error during planning: duplicate relation alias or name 'p'"
+        format!("Error during planning: duplicate relation alias or name '{alias}'")
     );
 }
 

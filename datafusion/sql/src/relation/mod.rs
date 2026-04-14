@@ -29,7 +29,9 @@ use datafusion_expr::planner::{
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, expr::Unnest};
 use datafusion_expr::{Subquery, SubqueryAlias};
-use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
+use sqlparser::ast::{
+    FunctionArg, FunctionArgExpr, Spanned, TableAlias, TableFactor, TableWithJoins,
+};
 
 mod join;
 
@@ -90,18 +92,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name, alias, args, ..
             } => {
                 if let Some(alias) = alias {
-                    let display_name =
-                        self.ident_normalizer.normalize(alias.name.clone());
-                    planner_context.insert_relation_binding(
-                        display_name.clone(),
-                        display_name,
-                        Span::try_from_sqlparser_span(alias.name.span),
-                    )
+                    self.register_table_alias_binding(alias, planner_context)
                 } else if args.is_none() {
                     let table_ref = self.object_name_to_table_reference(name.clone())?;
                     let display_name = table_ref.to_string();
                     planner_context.insert_relation_binding(
-                        display_name.clone(),
                         display_name,
                         Span::try_from_sqlparser_span(relation.span()),
                     )
@@ -112,19 +107,41 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             TableFactor::Derived { alias, .. }
             | TableFactor::NestedJoin { alias, .. }
             | TableFactor::UNNEST { alias, .. }
-            | TableFactor::Function { alias, .. } => alias
-                .as_ref()
-                .map(|alias| {
-                    let display_name =
-                        self.ident_normalizer.normalize(alias.name.clone());
-                    planner_context.insert_relation_binding(
-                        display_name.clone(),
-                        display_name,
-                        Span::try_from_sqlparser_span(alias.name.span),
-                    )
-                })
-                .unwrap_or(Ok(())),
+            | TableFactor::Function { alias, .. } => {
+                if let Some(alias) = alias {
+                    self.register_table_alias_binding(alias, planner_context)
+                } else {
+                    Ok(())
+                }
+            }
             _ => Ok(()),
+        }
+    }
+
+    fn register_table_alias_binding(
+        &self,
+        alias: &TableAlias,
+        planner_context: &mut PlannerContext,
+    ) -> Result<()> {
+        let display_name = self.ident_normalizer.normalize(alias.name.clone());
+        planner_context.insert_relation_binding(
+            display_name,
+            Span::try_from_sqlparser_span(alias.name.span),
+        )
+    }
+
+    fn plan_nested_join_relation(
+        &self,
+        table_with_joins: TableWithJoins,
+        has_alias: bool,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        if has_alias {
+            planner_context.with_new_relation_scope(|planner_context| {
+                self.plan_table_with_joins(table_with_joins, planner_context)
+            })
+        } else {
+            self.plan_table_with_joins(table_with_joins, planner_context)
         }
     }
 
@@ -263,13 +280,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 table_with_joins,
                 alias,
             } => {
-                let logical_plan = if alias.is_some() {
-                    planner_context.with_new_relation_scope(|planner_context| {
-                        self.plan_table_with_joins(*table_with_joins, planner_context)
-                    })?
-                } else {
-                    self.plan_table_with_joins(*table_with_joins, planner_context)?
-                };
+                let logical_plan = self.plan_nested_join_relation(
+                    *table_with_joins,
+                    alias.is_some(),
+                    planner_context,
+                )?;
                 (logical_plan, alias)
             }
             TableFactor::UNNEST {
