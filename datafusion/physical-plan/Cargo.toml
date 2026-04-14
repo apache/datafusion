@@ -106,3 +106,11 @@ required-features = ["test_utils"]
 harness = false
 name = "aggregate_vectorized"
 required-features = ["test_utils"]
+
+[[bench]]
+name = "single_column_aggr"
+harness = false
+
+[profile.profiling]
+inherits = "release"
+debug = true
