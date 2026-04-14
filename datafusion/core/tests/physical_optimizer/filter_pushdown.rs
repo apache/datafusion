@@ -5497,3 +5497,98 @@ async fn test_filter_pushdown_through_sort_with_projection() {
         "
     );
 }
+
+/// Test that in the Post phase (dynamic-filter pushdown), when the probe-side
+/// DataSourceExec does NOT support filter pushdown, SortExec does NOT intercept
+/// the dynamic filter — Post-phase interception is intentionally not supported.
+/// The plan is left unchanged and the dynamic filter is not applied.
+///
+/// Plan:
+///   HashJoinExec
+///     left:  DataSourceExec (build side)
+///     right: SortExec (no fetch)
+///              DataSourceExec (probe side, pushdown_supported=false)
+///
+/// Expected after optimization (unchanged — no FilterExec inserted):
+///   HashJoinExec
+///     left:  DataSourceExec (build side)
+///     right: SortExec
+///              DataSourceExec (probe side, unchanged)
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_not_pushed_through_sort_when_scan_unsupported() {
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .build();
+
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    // probe scan does NOT support filter pushdown
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(false)
+        .build();
+
+    let sort_expr =
+        PhysicalSortExpr::new(col("a", &probe_schema).unwrap(), SortOptions::default());
+    let probe_sort = Arc::new(SortExec::new(
+        LexOrdering::new(vec![sort_expr]).unwrap(),
+        probe_scan,
+    )) as Arc<dyn ExecutionPlan>;
+
+    let on = vec![
+        (
+            col("a", &build_schema).unwrap(),
+            col("a", &probe_schema).unwrap(),
+        ),
+        (
+            col("b", &build_schema).unwrap(),
+            col("b", &probe_schema).unwrap(),
+        ),
+    ];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_sort,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // The probe-side DataSourceExec does not accept the dynamic filter.
+    // SortExec only intercepts unsupported filters in the Pre phase, not
+    // in the Post phase, so the plan is left unchanged.
+    insta::assert_snapshot!(
+        OptimizationTest::new(
+            Arc::clone(&plan),
+            FilterPushdown::new_post_optimization(),
+            true
+        ),
+        @r"
+    OptimizationTest:
+      input:
+        - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=false
+      output:
+        Ok:
+          - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+          -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=false
+    "
+    );
+}

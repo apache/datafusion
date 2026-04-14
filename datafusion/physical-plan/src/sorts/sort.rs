@@ -1433,9 +1433,24 @@ impl ExecutionPlan for SortExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &datafusion_common::config::ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // Only absorb filters in Pre phase for a plain sort (no fetch).
-        // A sort with fetch (TopK) must not accept filters: reordering
-        // filter vs. limit would change semantics.
+        // For a plain sort (no fetch) in the Pre phase we intercept any
+        // unsupported filters by inserting a FilterExec below this Sort.
+        //
+        // Pre phase (static predicates, e.g. `a > 5`): moving the filter below
+        // Sort is safe because Sort preserves all rows.
+        //
+        // We do NOT intercept unsupported filters in the Post phase.  In the
+        // Post phase the optimizer is pushing dynamic predicates (e.g. a
+        // HashJoin bloom filter). inserting one as a bare FilterExec below
+        // Sort (before DataSourceExec) maybe not good.
+        //
+        // Why not fetch (TopK)?
+        // A sort with fetch limits the number of output rows.  Inserting a
+        // FilterExec *below* the TopK would change semantics.  A filter *above*
+        // the TopK is supposed to post-filter its output (e.g. "take the top 10
+        // rows, then keep only those with a > 5").  Pushing the filter below
+        // Sort changes the meaning to "filter first, then take top 10", which
+        // produces a different result.
         if phase != FilterPushdownPhase::Pre || self.fetch.is_some() {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
