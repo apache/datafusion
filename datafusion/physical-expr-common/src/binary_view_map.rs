@@ -270,6 +270,16 @@ where
         // Ensure lengths are equivalent
         assert_eq!(values.len(), self.hashes_buffer.len());
 
+        // Track the last seen value to skip hash table probes for
+        // consecutive duplicates. For inline strings (len <= 12), the u128
+        // view uniquely identifies the value. For non-inline strings,
+        // matching views within the same input array means identical
+        // buffer_index + offset + length, so the bytes are the same.
+        // This is highly effective for workloads with repeated values
+        // (e.g. ClickBench SearchPhrase is ~90% empty strings).
+        let mut last_view: u128 = u128::MAX; // impossible: len would be u32::MAX
+        let mut last_payload: V = V::default();
+
         for i in 0..values.len() {
             let view_u128 = input_views[i];
             let hash = self.hashes_buffer[i];
@@ -292,6 +302,13 @@ where
 
             // Extract length from the view (first 4 bytes of u128 in little-endian)
             let len = view_u128 as u32;
+
+            // Fast path: if the view matches the last seen value we know
+            // it is the same string and can skip the hash table probe.
+            if view_u128 == last_view {
+                observe_payload_fn(last_payload);
+                continue;
+            }
 
             // Check if value already exists
             let maybe_payload = {
@@ -355,6 +372,9 @@ where
                 payload
             };
             observe_payload_fn(payload);
+
+            last_view = view_u128;
+            last_payload = payload;
         }
     }
 
