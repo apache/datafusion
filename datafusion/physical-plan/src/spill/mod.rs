@@ -348,7 +348,6 @@ fn get_max_alignment_for_schema(schema: &Schema) -> usize {
 
 /// Size of a single view structure in StringView/BinaryView arrays (in bytes).
 /// Each view is 16 bytes: 4 bytes length + 4 bytes prefix + 8 bytes buffer ID/offset.
-#[cfg(test)]
 const VIEW_SIZE_BYTES: usize = 16;
 
 /// Performs garbage collection on StringView and BinaryView arrays before spilling to reduce memory usage.
@@ -443,22 +442,20 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
 /// Determines whether a view array should be garbage collected before spilling.
 ///
 /// Arrow's `gc()` always allocates new compact buffers (it is never a no-op), so we
-/// check here to skip the allocation cost when data buffers are small.
-///
-/// We check `data_buffers` capacity rather than `array.get_buffer_memory_size()` because
-/// the latter includes the views buffer (16 bytes × n_rows), which scales with row count
-/// regardless of string content. We want to trigger GC only when non-inline string data
-/// is substantial enough to justify the copy.
+/// check here to skip the allocation cost when data buffers are small. We subtract
+/// the views buffer (16 bytes × n_rows) from `get_buffer_memory_size()` so the
+/// threshold tracks non-inline string data rather than row count.
 fn should_gc_view_array<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
     const MIN_BUFFER_SIZE_FOR_GC: usize = 10 * 1024; // 10KB threshold
 
-    let data_buffers = array.data_buffers();
-    if data_buffers.is_empty() {
+    if array.data_buffers().is_empty() {
         return false;
     }
 
-    let total_buffer_size: usize = data_buffers.iter().map(|b| b.capacity()).sum();
-    total_buffer_size > MIN_BUFFER_SIZE_FOR_GC
+    let data_buffer_size = array
+        .get_buffer_memory_size()
+        .saturating_sub(array.len() * VIEW_SIZE_BYTES);
+    data_buffer_size > MIN_BUFFER_SIZE_FOR_GC
 }
 
 #[cfg(test)]
