@@ -1325,6 +1325,15 @@ config_namespace! {
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
 
+        /// When set to true, DataFusion may remove `ORDER BY` clauses from
+        /// subqueries or CTEs when their ordering cannot affect the result,
+        /// such as when no `LIMIT` or other order-sensitive operator depends
+        /// on them.
+        ///
+        /// Disable this option to preserve explicit subquery ordering in the
+        /// planned query.
+        pub enable_subquery_sort_elimination: bool, default = true
+
         /// When set to true, the optimizer will extract leaf expressions
         /// (such as `get_field`) from filter/sort/join nodes into projections
         /// closer to the leaf table scans, and push those projections down
