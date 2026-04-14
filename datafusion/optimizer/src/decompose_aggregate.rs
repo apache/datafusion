@@ -121,6 +121,18 @@ impl OptimizerRule for DecomposeAggregate {
             return Ok(Transformed::no(plan));
         };
 
+        // Skip GroupingSet aggregates (ROLLUP/CUBE/GROUPING SETS) — the
+        // group_expr expands to more schema fields than group_expr.len(),
+        // which breaks our index arithmetic.
+        if group_expr
+            .first()
+            .is_some_and(|e| matches!(e, Expr::GroupingSet(_)))
+        {
+            return Ok(Transformed::no(LogicalPlan::Aggregate(
+                Aggregate::try_new_with_schema(input, group_expr, aggr_expr, schema)?,
+            )));
+        }
+
         let group_size = group_expr.len();
 
         // Quick check: any eligible AVGs?
@@ -477,6 +489,28 @@ mod tests {
         Projection: CAST(__decompose_0 AS Float64) / CAST(__decompose_1 AS Float64) AS avg(test.b) [avg(test.b):Float64;N]
           Aggregate: groupBy=[[]], aggr=[[sum(test.b) AS __decompose_0, count(Int64(1)) AS __decompose_1]] [__decompose_0:UInt64;N, __decompose_1:Int64]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn grouping_set_not_decomposed() -> Result<()> {
+        use datafusion_expr::expr::GroupingSet;
+
+        let table_scan = test_table_scan()?;
+
+        let rollup = Expr::GroupingSet(GroupingSet::Rollup(vec![col("a"), col("b")]));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![rollup], vec![avg(col("c"))])?
+            .build()?;
+
+        // ROLLUP aggregates should not be decomposed
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[ROLLUP (test.a, test.b)]], aggr=[[avg(test.c)]] [a:UInt32;N, b:UInt32;N, __grouping_id:UInt8, avg(test.c):Float64;N]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
