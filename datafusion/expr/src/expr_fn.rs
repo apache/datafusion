@@ -44,7 +44,6 @@ use datafusion_common::{Column, Result, ScalarValue, Spans, TableReference, plan
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -479,10 +478,6 @@ impl SimpleScalarUDF {
 }
 
 impl ScalarUDFImpl for SimpleScalarUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -593,10 +588,6 @@ impl SimpleAggregateUDF {
 }
 
 impl AggregateUDFImpl for SimpleAggregateUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -686,10 +677,6 @@ impl SimpleWindowUDF {
 }
 
 impl WindowUDFImpl for SimpleWindowUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }

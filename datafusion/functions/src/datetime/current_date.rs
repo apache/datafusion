@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
@@ -39,7 +37,24 @@ The `current_date()` return value is determined at query time and will return th
 "#,
     syntax_example = r#"current_date()
     (optional) SET datafusion.execution.time_zone = '+00:00';
-    SELECT current_date();"#
+    SELECT current_date();"#,
+    sql_example = r#"```sql
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-23     |
++----------------+
+
+-- The current date is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-24     |
++----------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentDateFunc {
@@ -69,10 +84,6 @@ impl CurrentDateFunc {
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
 impl ScalarUDFImpl for CurrentDateFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "current_date"
     }

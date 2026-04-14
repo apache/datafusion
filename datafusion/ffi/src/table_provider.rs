@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -159,12 +158,12 @@ unsafe impl Send for FFI_TableProvider {}
 unsafe impl Sync for FFI_TableProvider {}
 
 struct ProviderPrivateData {
-    provider: Arc<dyn TableProvider + Send>,
+    provider: Arc<dyn TableProvider>,
     runtime: Option<Handle>,
 }
 
 impl FFI_TableProvider {
-    fn inner(&self) -> &Arc<dyn TableProvider + Send> {
+    fn inner(&self) -> &Arc<dyn TableProvider> {
         let private_data = self.private_data as *const ProviderPrivateData;
         unsafe { &(*private_data).provider }
     }
@@ -186,7 +185,7 @@ unsafe extern "C" fn table_type_fn_wrapper(
 }
 
 fn supports_filters_pushdown_internal(
-    provider: &Arc<dyn TableProvider + Send>,
+    provider: &Arc<dyn TableProvider>,
     filters_serialized: &[u8],
     task_ctx: &Arc<TaskContext>,
     codec: &dyn LogicalExtensionCodec,
@@ -363,7 +362,7 @@ impl Drop for FFI_TableProvider {
 impl FFI_TableProvider {
     /// Creates a new [`FFI_TableProvider`].
     pub fn new(
-        provider: Arc<dyn TableProvider + Send>,
+        provider: Arc<dyn TableProvider>,
         can_support_pushdown_filters: bool,
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
@@ -386,12 +385,12 @@ impl FFI_TableProvider {
     }
 
     pub fn new_with_ffi_codec(
-        provider: Arc<dyn TableProvider + Send>,
+        provider: Arc<dyn TableProvider>,
         can_support_pushdown_filters: bool,
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
-        if let Some(provider) = provider.as_any().downcast_ref::<ForeignTableProvider>() {
+        if let Some(provider) = provider.downcast_ref::<ForeignTableProvider>() {
             return provider.0.clone();
         }
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
@@ -443,10 +442,6 @@ impl Clone for FFI_TableProvider {
 
 #[async_trait]
 impl TableProvider for ForeignTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         let wrapped_schema = unsafe { (self.0.schema)(&self.0) };
         wrapped_schema.into()
@@ -701,7 +696,6 @@ mod tests {
         let foreign_table: Arc<dyn TableProvider> = (&ffi_table).into();
         assert!(
             foreign_table
-                .as_any()
                 .downcast_ref::<datafusion::datasource::MemTable>()
                 .is_some()
         );
@@ -711,7 +705,6 @@ mod tests {
         let foreign_table: Arc<dyn TableProvider> = (&ffi_table).into();
         assert!(
             foreign_table
-                .as_any()
                 .downcast_ref::<ForeignTableProvider>()
                 .is_some()
         );

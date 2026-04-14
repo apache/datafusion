@@ -969,7 +969,6 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
         roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
 
     let data_source = roundtripped
-        .as_any()
         .downcast_ref::<DataSourceExec>()
         .ok_or_else(|| {
             internal_datafusion_err!("Expected DataSourceExec after roundtrip")
@@ -1280,7 +1279,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        if let Some(udf) = binding.as_any().downcast_ref::<MyRegexUdf>() {
+        if let Some(udf) = binding.downcast_ref::<MyRegexUdf>() {
             let proto = MyRegexUdfNode {
                 pattern: udf.pattern.clone(),
             };
@@ -1307,7 +1306,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        if let Some(udf) = binding.as_any().downcast_ref::<MyAggregateUDF>() {
+        if let Some(udf) = binding.downcast_ref::<MyAggregateUDF>() {
             let proto = MyAggregateUdfNode {
                 result: udf.result.clone(),
             };
@@ -1334,7 +1333,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
-        if let Some(udwf) = binding.as_any().downcast_ref::<CustomUDWF>() {
+        if let Some(udwf) = binding.downcast_ref::<CustomUDWF>() {
             let proto = CustomUDWFNode {
                 payload: udwf.payload.clone(),
             };
@@ -1558,7 +1557,8 @@ fn roundtrip_analyze() -> Result<()> {
     roundtrip_test(Arc::new(AnalyzeExec::new(
         false,
         false,
-        vec![MetricType::SUMMARY, MetricType::DEV],
+        vec![MetricType::Summary, MetricType::Dev],
+        None,
         input,
         Arc::new(schema),
     )))
@@ -1655,10 +1655,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         &proto_converter,
     )?;
 
-    let roundtrip_plan = roundtrip_plan
-        .as_any()
-        .downcast_ref::<DataSinkExec>()
-        .unwrap();
+    let roundtrip_plan = roundtrip_plan.downcast_ref::<DataSinkExec>().unwrap();
     let csv_sink = roundtrip_plan
         .sink()
         .as_any()
@@ -2436,10 +2433,6 @@ async fn roundtrip_async_func_exec() -> Result<()> {
     }
 
     impl ScalarUDFImpl for TestAsyncUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "test_async_udf"
         }
@@ -2524,7 +2517,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
 
     // The deserialized plan should have lit(true) instead of HashTableLookupExpr
     // Verify the filter predicate is a Literal(true)
-    let result_filter = result.as_any().downcast_ref::<FilterExec>().unwrap();
+    let result_filter = result.downcast_ref::<FilterExec>().unwrap();
     let predicate = result_filter.predicate();
     let literal = predicate.as_any().downcast_ref::<Literal>().unwrap();
     assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
@@ -2821,7 +2814,6 @@ fn test_expression_deduplication_arc_sharing() -> Result<()> {
 
     // Get the projection from the result
     let projection = result_plan
-        .as_any()
         .downcast_ref::<ProjectionExec>()
         .expect("Expected ProjectionExec");
 
@@ -2930,7 +2922,6 @@ fn test_deduplication_within_plan_deserialization() -> Result<()> {
 
     // Check that the plan was deserialized correctly with deduplication
     let projection1 = plan1
-        .as_any()
         .downcast_ref::<ProjectionExec>()
         .expect("Expected ProjectionExec");
     let exprs1: Vec<_> = projection1.expr().iter().collect();
@@ -2950,7 +2941,6 @@ fn test_deduplication_within_plan_deserialization() -> Result<()> {
 
     // Check that the second plan was also deserialized correctly
     let projection2 = plan2
-        .as_any()
         .downcast_ref::<ProjectionExec>()
         .expect("Expected ProjectionExec");
     let exprs2: Vec<_> = projection2.expr().iter().collect();

@@ -19,7 +19,6 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -1176,10 +1175,6 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -1247,7 +1242,6 @@ impl ExecutionPlan for SortExec {
         let children = self.children().into_iter().cloned().collect();
         let new_sort = self.with_new_children(children)?;
         let mut new_sort = new_sort
-            .as_any()
             .downcast_ref::<SortExec>()
             .expect("cloned 1 lines above this line, we know the type")
             .clone();
@@ -1507,10 +1501,6 @@ mod tests {
     impl ExecutionPlan for SortedUnboundedExec {
         fn name(&self) -> &'static str {
             Self::static_name()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {

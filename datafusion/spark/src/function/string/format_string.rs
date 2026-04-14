@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -62,10 +61,6 @@ impl FormatStringFunc {
 }
 
 impl ScalarUDFImpl for FormatStringFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "format_string"
     }

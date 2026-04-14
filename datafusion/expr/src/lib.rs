@@ -53,6 +53,7 @@ pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
+pub mod extension_types;
 pub mod function;
 pub mod select_expr;
 pub mod groups_accumulator {
@@ -126,7 +127,9 @@ pub use udaf::{
     udaf_default_schema_name, udaf_default_window_function_display_name,
     udaf_default_window_function_schema_name,
 };
-pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+pub use udf::{
+    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, StructFieldMapping,
+};
 pub use udhof::{
     HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderTypeSignature, HigherOrderUDF, LambdaArgument, ValueOrLambda,

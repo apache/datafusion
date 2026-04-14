@@ -23,7 +23,6 @@ use datafusion_common::{
     Result, arrow_datafusion_err, datatype::DataTypeExt, exec_datafusion_err, exec_err,
     internal_err, types::logical_string, utils::take_function_args,
 };
-use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
@@ -32,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use super::arrow_cast::data_type_from_args;
+use super::arrow_cast::data_type_from_type_arg;
 
 /// Like [`arrow_cast`](super::arrow_cast::ArrowCastFunc) but returns NULL on cast failure instead of erroring.
 ///
@@ -87,10 +86,6 @@ impl ArrowTryCastFunc {
 }
 
 impl ScalarUDFImpl for ArrowTryCastFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "arrow_try_cast"
     }
@@ -132,20 +127,18 @@ impl ScalarUDFImpl for ArrowTryCastFunc {
 
     fn simplify(
         &self,
-        mut args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let target_type = data_type_from_args(self.name(), &args)?;
-        // remove second (type) argument
-        args.pop().unwrap();
-        let arg = args.pop().unwrap();
+        let [source_arg, type_arg] = take_function_args(self.name(), args)?;
+        let target_type = data_type_from_type_arg(self.name(), &type_arg)?;
 
-        let source_type = info.get_data_type(&arg)?;
+        let source_type = info.get_data_type(&source_arg)?;
         let new_expr = if source_type == target_type {
-            arg
+            source_arg
         } else {
             Expr::TryCast(datafusion_expr::TryCast {
-                expr: Box::new(arg),
+                expr: Box::new(source_arg),
                 field: target_type.into_nullable_field_ref(),
             })
         };

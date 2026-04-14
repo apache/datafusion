@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -90,10 +89,6 @@ impl TruncFunc {
 }
 
 impl ScalarUDFImpl for TruncFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "trunc"
     }

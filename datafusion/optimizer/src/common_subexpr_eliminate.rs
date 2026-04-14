@@ -325,11 +325,7 @@ impl CommonSubexprEliminate {
                                 .map(|expr| Some(name_preserver.save(expr)))
                                 .collect::<Vec<_>>()
                         } else {
-                            new_aggr_expr
-                                .clone()
-                                .into_iter()
-                                .map(|_| None)
-                                .collect::<Vec<_>>()
+                            (0..new_aggr_expr.len()).map(|_| None).collect()
                         };
 
                         let mut agg_exprs = common_exprs
@@ -835,7 +831,7 @@ fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
 
 #[cfg(test)]
 mod test {
-    use std::any::Any;
+
     use std::iter;
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1706,9 +1702,6 @@ mod test {
     }
 
     impl ScalarUDFImpl for TestUdf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "my_udf"
         }
@@ -1832,10 +1825,6 @@ mod test {
         }
     }
     impl ScalarUDFImpl for RandomStub {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "random"
         }

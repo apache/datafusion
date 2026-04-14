@@ -33,7 +33,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::expressions::{CastColumnExpr, CastExpr};
+use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::prelude::SessionConfig;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
@@ -43,9 +43,10 @@ use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 
 // Example showing how to implement custom casting rules to adapt file schemas.
-// This example enforces that casts must be strictly widening: if the file type is Int64 and the table type is Int32, it will error
-// before even reading the data.
-// Without this custom cast rule DataFusion would happily do the narrowing cast, potentially erroring only if it found a row with data it could not cast.
+// This example enforces strictly widening casts: if the file type is Int64 and
+// the table type is Int32, it errors before reading the data. Without this
+// custom cast rule DataFusion would apply the narrowing cast and might only
+// error after reading a row that it could not cast.
 pub async fn custom_file_casts() -> Result<()> {
     println!("=== Creating example data ===");
 
@@ -139,7 +140,7 @@ async fn write_data(
     Ok(())
 }
 
-/// Factory for creating DefaultValuePhysicalExprAdapter instances
+/// Factory for creating custom cast physical expression adapters
 #[derive(Debug)]
 struct CustomCastPhysicalExprAdapterFactory {
     inner: Arc<dyn PhysicalExprAdapterFactory>,
@@ -167,8 +168,8 @@ impl PhysicalExprAdapterFactory for CustomCastPhysicalExprAdapterFactory {
     }
 }
 
-/// Custom PhysicalExprAdapter that handles missing columns with default values from metadata
-/// and wraps DefaultPhysicalExprAdapter for standard schema adaptation
+/// Custom `PhysicalExprAdapter` that wraps the default adapter and rejects
+/// narrowing file-schema casts.
 #[derive(Debug, Clone)]
 struct CustomCastsPhysicalExprAdapter {
     physical_file_schema: SchemaRef,
@@ -177,29 +178,18 @@ struct CustomCastsPhysicalExprAdapter {
 
 impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
     fn rewrite(&self, mut expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
-        // First delegate to the inner adapter to handle missing columns and discover any necessary casts
+        // First delegate to the inner adapter to handle standard schema adaptation
+        // and discover any necessary casts.
         expr = self.inner.rewrite(expr)?;
-        // Now we can apply custom casting rules or even swap out all CastExprs for a custom cast kernel / expression
-        // For example, [DataFusion Comet](https://github.com/apache/datafusion-comet) has a [custom cast kernel](https://github.com/apache/datafusion-comet/blob/b4ac876ab420ed403ac7fc8e1b29f42f1f442566/native/spark-expr/src/conversion_funcs/cast.rs#L133-L138).
+        // Now apply custom casting rules or swap CastExprs for a custom cast
+        // kernel / expression. For example, DataFusion Comet has a custom cast
+        // kernel in its native Spark expression implementation.
         expr.transform(|expr| {
             if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
                 let input_data_type =
                     cast.expr().data_type(&self.physical_file_schema)?;
-                let output_data_type = cast.data_type(&self.physical_file_schema)?;
+                let output_data_type = cast.target_field().data_type();
                 if !cast.is_bigger_cast(&input_data_type) {
-                    return not_impl_err!(
-                        "Unsupported CAST from {input_data_type} to {output_data_type}"
-                    );
-                }
-            }
-            if let Some(cast) = expr.as_any().downcast_ref::<CastColumnExpr>() {
-                let input_data_type =
-                    cast.expr().data_type(&self.physical_file_schema)?;
-                let output_data_type = cast.data_type(&self.physical_file_schema)?;
-                if !CastExpr::check_bigger_cast(
-                    cast.target_field().data_type(),
-                    &input_data_type,
-                ) {
                     return not_impl_err!(
                         "Unsupported CAST from {input_data_type} to {output_data_type}"
                     );

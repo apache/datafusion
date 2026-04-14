@@ -29,7 +29,6 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Hashing Functions"),
@@ -89,10 +88,6 @@ impl DigestFunc {
 }
 
 impl ScalarUDFImpl for DigestFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "digest"
     }

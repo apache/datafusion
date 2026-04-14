@@ -23,7 +23,6 @@ use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, Signature, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `soundex` expression
@@ -48,10 +47,6 @@ impl SparkSoundex {
 }
 
 impl ScalarUDFImpl for SparkSoundex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "soundex"
     }
