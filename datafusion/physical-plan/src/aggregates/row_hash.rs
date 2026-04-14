@@ -704,10 +704,12 @@ impl GroupedHashAggregateStream {
             .enable_aggregation_blocked_groups
             && can_enable_blocked_groups;
 
-        group_values.alter_block_size(Some(batch_size))?;
-        accumulators
-            .iter_mut()
-            .try_for_each(|acc| acc.alter_block_size(Some(batch_size)))?;
+        if enable_blocked_groups {
+            group_values.alter_block_size(Some(batch_size))?;
+            accumulators
+                .iter_mut()
+                .try_for_each(|acc| acc.alter_block_size(Some(batch_size)))?;
+        }
 
         // Metrics for aggregation stats
         let reduction_factor = if agg.mode == AggregateMode::Partial {
