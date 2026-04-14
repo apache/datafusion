@@ -91,7 +91,8 @@ impl ScalarUDFImpl for SparkDayName {
         let result = match &args.args[0] {
             ColumnarValue::Array(array) => spark_day_name(array, &cast_options)?,
             ColumnarValue::Scalar(scalar) => {
-                spark_day_name(&scalar.to_array()?, &cast_options)?
+                let array = scalar.to_array()?;
+                spark_day_name(&array, &cast_options)?
             }
         };
         Ok(ColumnarValue::Array(result))
