@@ -102,14 +102,13 @@ EXPLAIN SELECT SUM("AdvEngineID"), COUNT(*), AVG("ResolutionWidth") FROM hits;
 ----
 logical_plan
 01)Projection: __decompose_0 AS sum(hits.AdvEngineID), __decompose_1 AS count(*), CAST(__decompose_2 AS Float64) / CAST(__decompose_3 AS Float64) AS avg(hits.ResolutionWidth)
-02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(hits.AdvEngineID AS Int64)) AS __decompose_0, count(Int64(1)) AS __decompose_1, sum(__common_expr_1) AS __decompose_2, count(__common_expr_1) AS __decompose_3]]
-03)----Projection: CAST(hits.ResolutionWidth AS Float64) AS __common_expr_1, hits.AdvEngineID
-04)------SubqueryAlias: hits
-05)--------TableScan: hits_raw projection=[ResolutionWidth, AdvEngineID]
+02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(hits.AdvEngineID AS Int64)) AS __decompose_0, count(Int64(1)) AS __decompose_1, sum(CAST(hits.ResolutionWidth AS Int64)) AS __decompose_2, count(CAST(hits.ResolutionWidth AS Float64)) AS __decompose_3]]
+03)----SubqueryAlias: hits
+04)------TableScan: hits_raw projection=[ResolutionWidth, AdvEngineID]
 physical_plan
-01)ProjectionExec: expr=[__decompose_0@0 as sum(hits.AdvEngineID), __decompose_1@1 as count(*), __decompose_2@2 / CAST(__decompose_3@3 AS Float64) as avg(hits.ResolutionWidth)]
+01)ProjectionExec: expr=[__decompose_0@0 as sum(hits.AdvEngineID), __decompose_1@1 as count(*), CAST(__decompose_2@2 AS Float64) / CAST(__decompose_3@3 AS Float64) as avg(hits.ResolutionWidth)]
 02)--AggregateExec: mode=Single, gby=[], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(ResolutionWidth@20 AS Float64) as __common_expr_1, AdvEngineID], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[ResolutionWidth, AdvEngineID], file_type=parquet
 
 query IIR
 SELECT SUM("AdvEngineID"), COUNT(*), AVG("ResolutionWidth") FROM hits;
@@ -122,19 +121,18 @@ EXPLAIN SELECT AVG("UserID") FROM hits;
 ----
 logical_plan
 01)Projection: CAST(__decompose_0 AS Float64) / CAST(__decompose_1 AS Float64) AS avg(hits.UserID)
-02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1) AS __decompose_0, count(__common_expr_1) AS __decompose_1]]
-03)----Projection: CAST(hits.UserID AS Float64) AS __common_expr_1
-04)------SubqueryAlias: hits
-05)--------TableScan: hits_raw projection=[UserID]
+02)--Aggregate: groupBy=[[]], aggr=[[sum(hits.UserID) AS __decompose_0, count(CAST(hits.UserID AS Float64)) AS __decompose_1]]
+03)----SubqueryAlias: hits
+04)------TableScan: hits_raw projection=[UserID]
 physical_plan
-01)ProjectionExec: expr=[__decompose_0@0 / CAST(__decompose_1@1 AS Float64) as avg(hits.UserID)]
+01)ProjectionExec: expr=[CAST(__decompose_0@0 AS Float64) / CAST(__decompose_1@1 AS Float64) as avg(hits.UserID)]
 02)--AggregateExec: mode=Single, gby=[], aggr=[__decompose_0, __decompose_1]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(UserID@9 AS Float64) as __common_expr_1], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID], file_type=parquet
 
 query R
 SELECT AVG("UserID") FROM hits;
 ----
--304548765855551740
+-304548765855551600
 
 ## Q4
 query TT
@@ -268,18 +266,17 @@ EXPLAIN SELECT "RegionID", SUM("AdvEngineID"), COUNT(*) AS c, AVG("ResolutionWid
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
 02)--Projection: hits.RegionID, __decompose_0 AS sum(hits.AdvEngineID), __decompose_1 AS c, CAST(__decompose_2 AS Float64) / CAST(__decompose_3 AS Float64) AS avg(hits.ResolutionWidth), __decompose_4 AS count(DISTINCT hits.UserID)
-03)----Aggregate: groupBy=[[hits.RegionID]], aggr=[[sum(CAST(hits.AdvEngineID AS Int64)) AS __decompose_0, count(Int64(1)) AS __decompose_1, sum(__common_expr_1) AS __decompose_2, count(__common_expr_1) AS __decompose_3, count(DISTINCT hits.UserID) AS __decompose_4]]
-04)------Projection: CAST(hits.ResolutionWidth AS Float64) AS __common_expr_1, hits.RegionID, hits.UserID, hits.AdvEngineID
-05)--------SubqueryAlias: hits
-06)----------TableScan: hits_raw projection=[RegionID, UserID, ResolutionWidth, AdvEngineID]
+03)----Aggregate: groupBy=[[hits.RegionID]], aggr=[[sum(CAST(hits.AdvEngineID AS Int64)) AS __decompose_0, count(Int64(1)) AS __decompose_1, sum(CAST(hits.ResolutionWidth AS Int64)) AS __decompose_2, count(CAST(hits.ResolutionWidth AS Float64)) AS __decompose_3, count(DISTINCT hits.UserID) AS __decompose_4]]
+04)------SubqueryAlias: hits
+05)--------TableScan: hits_raw projection=[RegionID, UserID, ResolutionWidth, AdvEngineID]
 physical_plan
 01)SortPreservingMergeExec: [c@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[RegionID@0 as RegionID, __decompose_0@1 as sum(hits.AdvEngineID), __decompose_1@2 as c, __decompose_2@3 / CAST(__decompose_3@4 AS Float64) as avg(hits.ResolutionWidth), __decompose_4@5 as count(DISTINCT hits.UserID)]
+03)----ProjectionExec: expr=[RegionID@0 as RegionID, __decompose_0@1 as sum(hits.AdvEngineID), __decompose_1@2 as c, CAST(__decompose_2@3 AS Float64) / CAST(__decompose_3@4 AS Float64) as avg(hits.ResolutionWidth), __decompose_4@5 as count(DISTINCT hits.UserID)]
 04)------AggregateExec: mode=FinalPartitioned, gby=[RegionID@0 as RegionID], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3, __decompose_4]
 05)--------RepartitionExec: partitioning=Hash([RegionID@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[RegionID@1 as RegionID], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3, __decompose_4]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(ResolutionWidth@20 AS Float64) as __common_expr_1, RegionID, UserID, AdvEngineID], file_type=parquet
+06)----------AggregateExec: mode=Partial, gby=[RegionID@0 as RegionID], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3, __decompose_4]
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID, ResolutionWidth, AdvEngineID], file_type=parquet
 
 query IIIRI rowsort
 SELECT "RegionID", SUM("AdvEngineID"), COUNT(*) AS c, AVG("ResolutionWidth"), COUNT(DISTINCT "UserID") FROM hits GROUP BY "RegionID" ORDER BY c DESC LIMIT 10;
@@ -737,8 +734,8 @@ logical_plan
 01)Sort: l DESC NULLS FIRST, fetch=25
 02)--Projection: hits.CounterID, CAST(__decompose_0 AS Float64) / CAST(__decompose_1 AS Float64) AS l, __decompose_2 AS c
 03)----Filter: __decompose_2 > Int64(100000)
-04)------Aggregate: groupBy=[[hits.CounterID]], aggr=[[sum(__common_expr_1) AS __decompose_0, count(__common_expr_1) AS __decompose_1, count(Int64(1)) AS __decompose_2]]
-05)--------Projection: CAST(character_length(hits.URL) AS length(hits.URL) AS Float64) AS __common_expr_1, hits.CounterID
+04)------Aggregate: groupBy=[[hits.CounterID]], aggr=[[sum(CAST(__common_expr_1 AS length(hits.URL) AS Int64)) AS __decompose_0, count(CAST(__common_expr_1 AS length(hits.URL) AS Float64)) AS __decompose_1, count(Int64(1)) AS __decompose_2]]
+05)--------Projection: character_length(hits.URL) AS __common_expr_1, hits.CounterID
 06)----------SubqueryAlias: hits
 07)------------Filter: hits_raw.URL != Utf8View("")
 08)--------------TableScan: hits_raw projection=[CounterID, URL], partial_filters=[hits_raw.URL != Utf8View("")]
@@ -746,11 +743,11 @@ physical_plan
 01)SortPreservingMergeExec: [l@1 DESC], fetch=25
 02)--SortExec: TopK(fetch=25), expr=[l@1 DESC], preserve_partitioning=[true]
 03)----FilterExec: c@2 > 100000
-04)------ProjectionExec: expr=[CounterID@0 as CounterID, __decompose_0@1 / CAST(__decompose_1@2 AS Float64) as l, __decompose_2@3 as c]
+04)------ProjectionExec: expr=[CounterID@0 as CounterID, CAST(__decompose_0@1 AS Float64) / CAST(__decompose_1@2 AS Float64) as l, __decompose_2@3 as c]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[CounterID@0 as CounterID], aggr=[__decompose_0, __decompose_1, __decompose_2]
 06)----------RepartitionExec: partitioning=Hash([CounterID@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[CounterID@1 as CounterID], aggr=[__decompose_0, __decompose_1, __decompose_2]
-08)--------------ProjectionExec: expr=[CAST(character_length(URL@1) AS Float64) as __common_expr_1, CounterID@0 as CounterID]
+08)--------------ProjectionExec: expr=[character_length(URL@1) as __common_expr_1, CounterID@0 as CounterID]
 09)----------------FilterExec: URL@1 !=
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CounterID, URL], file_type=parquet, predicate=URL@13 != , pruning_predicate=URL_null_count@2 != row_count@3 AND (URL_min@0 !=  OR  != URL_max@1), required_guarantees=[URL not in ()]
@@ -767,8 +764,8 @@ logical_plan
 01)Sort: l DESC NULLS FIRST, fetch=25
 02)--Projection: regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1")) AS k, CAST(__decompose_0 AS Float64) / CAST(__decompose_1 AS Float64) AS l, __decompose_2 AS c, __decompose_3 AS min(hits.Referer)
 03)----Filter: __decompose_2 > Int64(100000)
-04)------Aggregate: groupBy=[[regexp_replace(hits.Referer, Utf8View("^https?://(?:www\.)?([^/]+)/.*$"), Utf8View("\1")) AS regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))]], aggr=[[sum(__common_expr_1) AS __decompose_0, count(__common_expr_1) AS __decompose_1, count(Int64(1)) AS __decompose_2, min(hits.Referer) AS __decompose_3]]
-05)--------Projection: CAST(character_length(hits.Referer) AS length(hits.Referer) AS Float64) AS __common_expr_1, hits.Referer
+04)------Aggregate: groupBy=[[regexp_replace(hits.Referer, Utf8View("^https?://(?:www\.)?([^/]+)/.*$"), Utf8View("\1")) AS regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))]], aggr=[[sum(CAST(__common_expr_1 AS length(hits.Referer) AS Int64)) AS __decompose_0, count(CAST(__common_expr_1 AS length(hits.Referer) AS Float64)) AS __decompose_1, count(Int64(1)) AS __decompose_2, min(hits.Referer) AS __decompose_3]]
+05)--------Projection: character_length(hits.Referer) AS __common_expr_1, hits.Referer
 06)----------SubqueryAlias: hits
 07)------------Filter: hits_raw.Referer != Utf8View("")
 08)--------------TableScan: hits_raw projection=[Referer], partial_filters=[hits_raw.Referer != Utf8View("")]
@@ -776,11 +773,11 @@ physical_plan
 01)SortPreservingMergeExec: [l@1 DESC], fetch=25
 02)--SortExec: TopK(fetch=25), expr=[l@1 DESC], preserve_partitioning=[true]
 03)----FilterExec: c@2 > 100000
-04)------ProjectionExec: expr=[regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0 as k, __decompose_0@1 / CAST(__decompose_1@2 AS Float64) as l, __decompose_2@3 as c, __decompose_3@4 as min(hits.Referer)]
+04)------ProjectionExec: expr=[regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0 as k, CAST(__decompose_0@1 AS Float64) / CAST(__decompose_1@2 AS Float64) as l, __decompose_2@3 as c, __decompose_3@4 as min(hits.Referer)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0 as regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
 06)----------RepartitionExec: partitioning=Hash([regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[regexp_replace(Referer@1, ^https?://(?:www\.)?([^/]+)/.*$, \1) as regexp_replace(hits.Referer,Utf8("^https?://(?:www\.)?([^/]+)/.*$"),Utf8("\1"))], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
-08)--------------ProjectionExec: expr=[CAST(character_length(Referer@0) AS Float64) as __common_expr_1, Referer@0 as Referer]
+08)--------------ProjectionExec: expr=[character_length(Referer@0) as __common_expr_1, Referer@0 as Referer]
 09)----------------FilterExec: Referer@0 !=
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[Referer], file_type=parquet, predicate=Referer@14 != , pruning_predicate=Referer_null_count@2 != row_count@3 AND (Referer_min@0 !=  OR  != Referer_max@1), required_guarantees=[Referer not in ()]
@@ -817,23 +814,21 @@ EXPLAIN SELECT "SearchEngineID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AV
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
 02)--Projection: hits.SearchEngineID, hits.ClientIP, __decompose_0 AS c, __decompose_1 AS sum(hits.IsRefresh), CAST(__decompose_2 AS Float64) / CAST(__decompose_3 AS Float64) AS avg(hits.ResolutionWidth)
-03)----Aggregate: groupBy=[[hits.SearchEngineID, hits.ClientIP]], aggr=[[count(Int64(1)) AS __decompose_0, sum(CAST(hits.IsRefresh AS Int64)) AS __decompose_1, sum(__common_expr_1) AS __decompose_2, count(__common_expr_1) AS __decompose_3]]
-04)------Projection: CAST(hits.ResolutionWidth AS Float64) AS __common_expr_1, hits.ClientIP, hits.IsRefresh, hits.SearchEngineID
-05)--------SubqueryAlias: hits
-06)----------Projection: hits_raw.ClientIP, hits_raw.IsRefresh, hits_raw.ResolutionWidth, hits_raw.SearchEngineID
-07)------------Filter: hits_raw.SearchPhrase != Utf8View("")
-08)--------------TableScan: hits_raw projection=[ClientIP, IsRefresh, ResolutionWidth, SearchEngineID, SearchPhrase], partial_filters=[hits_raw.SearchPhrase != Utf8View("")]
+03)----Aggregate: groupBy=[[hits.SearchEngineID, hits.ClientIP]], aggr=[[count(Int64(1)) AS __decompose_0, sum(CAST(hits.IsRefresh AS Int64)) AS __decompose_1, sum(CAST(hits.ResolutionWidth AS Int64)) AS __decompose_2, count(CAST(hits.ResolutionWidth AS Float64)) AS __decompose_3]]
+04)------SubqueryAlias: hits
+05)--------Projection: hits_raw.ClientIP, hits_raw.IsRefresh, hits_raw.ResolutionWidth, hits_raw.SearchEngineID
+06)----------Filter: hits_raw.SearchPhrase != Utf8View("")
+07)------------TableScan: hits_raw projection=[ClientIP, IsRefresh, ResolutionWidth, SearchEngineID, SearchPhrase], partial_filters=[hits_raw.SearchPhrase != Utf8View("")]
 physical_plan
 01)SortPreservingMergeExec: [c@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[SearchEngineID@0 as SearchEngineID, ClientIP@1 as ClientIP, __decompose_0@2 as c, __decompose_1@3 as sum(hits.IsRefresh), __decompose_2@4 / CAST(__decompose_3@5 AS Float64) as avg(hits.ResolutionWidth)]
+03)----ProjectionExec: expr=[SearchEngineID@0 as SearchEngineID, ClientIP@1 as ClientIP, __decompose_0@2 as c, __decompose_1@3 as sum(hits.IsRefresh), CAST(__decompose_2@4 AS Float64) / CAST(__decompose_3@5 AS Float64) as avg(hits.ResolutionWidth)]
 04)------AggregateExec: mode=FinalPartitioned, gby=[SearchEngineID@0 as SearchEngineID, ClientIP@1 as ClientIP], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
 05)--------RepartitionExec: partitioning=Hash([SearchEngineID@0, ClientIP@1], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[SearchEngineID@3 as SearchEngineID, ClientIP@1 as ClientIP], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
-07)------------ProjectionExec: expr=[CAST(ResolutionWidth@0 AS Float64) as __common_expr_1, ClientIP@1 as ClientIP, IsRefresh@2 as IsRefresh, SearchEngineID@3 as SearchEngineID]
-08)--------------FilterExec: SearchPhrase@4 != , projection=[ResolutionWidth@2, ClientIP@0, IsRefresh@1, SearchEngineID@3]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[ClientIP, IsRefresh, ResolutionWidth, SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+06)----------AggregateExec: mode=Partial, gby=[SearchEngineID@3 as SearchEngineID, ClientIP@0 as ClientIP], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
+07)------------FilterExec: SearchPhrase@4 != , projection=[ClientIP@0, IsRefresh@1, ResolutionWidth@2, SearchEngineID@3]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[ClientIP, IsRefresh, ResolutionWidth, SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query IIIIR
 SELECT "SearchEngineID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchEngineID", "ClientIP" ORDER BY c DESC LIMIT 10;
@@ -846,23 +841,21 @@ EXPLAIN SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("Reso
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
 02)--Projection: hits.WatchID, hits.ClientIP, __decompose_0 AS c, __decompose_1 AS sum(hits.IsRefresh), CAST(__decompose_2 AS Float64) / CAST(__decompose_3 AS Float64) AS avg(hits.ResolutionWidth)
-03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)) AS __decompose_0, sum(CAST(hits.IsRefresh AS Int64)) AS __decompose_1, sum(__common_expr_1) AS __decompose_2, count(__common_expr_1) AS __decompose_3]]
-04)------Projection: CAST(hits.ResolutionWidth AS Float64) AS __common_expr_1, hits.WatchID, hits.ClientIP, hits.IsRefresh
-05)--------SubqueryAlias: hits
-06)----------Projection: hits_raw.WatchID, hits_raw.ClientIP, hits_raw.IsRefresh, hits_raw.ResolutionWidth
-07)------------Filter: hits_raw.SearchPhrase != Utf8View("")
-08)--------------TableScan: hits_raw projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], partial_filters=[hits_raw.SearchPhrase != Utf8View("")]
+03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)) AS __decompose_0, sum(CAST(hits.IsRefresh AS Int64)) AS __decompose_1, sum(CAST(hits.ResolutionWidth AS Int64)) AS __decompose_2, count(CAST(hits.ResolutionWidth AS Float64)) AS __decompose_3]]
+04)------SubqueryAlias: hits
+05)--------Projection: hits_raw.WatchID, hits_raw.ClientIP, hits_raw.IsRefresh, hits_raw.ResolutionWidth
+06)----------Filter: hits_raw.SearchPhrase != Utf8View("")
+07)------------TableScan: hits_raw projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], partial_filters=[hits_raw.SearchPhrase != Utf8View("")]
 physical_plan
 01)SortPreservingMergeExec: [c@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[WatchID@0 as WatchID, ClientIP@1 as ClientIP, __decompose_0@2 as c, __decompose_1@3 as sum(hits.IsRefresh), __decompose_2@4 / CAST(__decompose_3@5 AS Float64) as avg(hits.ResolutionWidth)]
+03)----ProjectionExec: expr=[WatchID@0 as WatchID, ClientIP@1 as ClientIP, __decompose_0@2 as c, __decompose_1@3 as sum(hits.IsRefresh), CAST(__decompose_2@4 AS Float64) / CAST(__decompose_3@5 AS Float64) as avg(hits.ResolutionWidth)]
 04)------AggregateExec: mode=FinalPartitioned, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
 05)--------RepartitionExec: partitioning=Hash([WatchID@0, ClientIP@1], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[WatchID@1 as WatchID, ClientIP@2 as ClientIP], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
-07)------------ProjectionExec: expr=[CAST(ResolutionWidth@0 AS Float64) as __common_expr_1, WatchID@1 as WatchID, ClientIP@2 as ClientIP, IsRefresh@3 as IsRefresh]
-08)--------------FilterExec: SearchPhrase@4 != , projection=[ResolutionWidth@3, WatchID@0, ClientIP@1, IsRefresh@2]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+06)----------AggregateExec: mode=Partial, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
+07)------------FilterExec: SearchPhrase@4 != , projection=[WatchID@0, ClientIP@1, IsRefresh@2, ResolutionWidth@3]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query IIIIR
 SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits WHERE "SearchPhrase" <> '' GROUP BY "WatchID", "ClientIP" ORDER BY c DESC LIMIT 10;
@@ -875,18 +868,17 @@ EXPLAIN SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("Reso
 logical_plan
 01)Sort: c DESC NULLS FIRST, fetch=10
 02)--Projection: hits.WatchID, hits.ClientIP, __decompose_0 AS c, __decompose_1 AS sum(hits.IsRefresh), CAST(__decompose_2 AS Float64) / CAST(__decompose_3 AS Float64) AS avg(hits.ResolutionWidth)
-03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)) AS __decompose_0, sum(CAST(hits.IsRefresh AS Int64)) AS __decompose_1, sum(__common_expr_1) AS __decompose_2, count(__common_expr_1) AS __decompose_3]]
-04)------Projection: CAST(hits.ResolutionWidth AS Float64) AS __common_expr_1, hits.WatchID, hits.ClientIP, hits.IsRefresh
-05)--------SubqueryAlias: hits
-06)----------TableScan: hits_raw projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth]
+03)----Aggregate: groupBy=[[hits.WatchID, hits.ClientIP]], aggr=[[count(Int64(1)) AS __decompose_0, sum(CAST(hits.IsRefresh AS Int64)) AS __decompose_1, sum(CAST(hits.ResolutionWidth AS Int64)) AS __decompose_2, count(CAST(hits.ResolutionWidth AS Float64)) AS __decompose_3]]
+04)------SubqueryAlias: hits
+05)--------TableScan: hits_raw projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth]
 physical_plan
 01)SortPreservingMergeExec: [c@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[c@2 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[WatchID@0 as WatchID, ClientIP@1 as ClientIP, __decompose_0@2 as c, __decompose_1@3 as sum(hits.IsRefresh), __decompose_2@4 / CAST(__decompose_3@5 AS Float64) as avg(hits.ResolutionWidth)]
+03)----ProjectionExec: expr=[WatchID@0 as WatchID, ClientIP@1 as ClientIP, __decompose_0@2 as c, __decompose_1@3 as sum(hits.IsRefresh), CAST(__decompose_2@4 AS Float64) / CAST(__decompose_3@5 AS Float64) as avg(hits.ResolutionWidth)]
 04)------AggregateExec: mode=FinalPartitioned, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
 05)--------RepartitionExec: partitioning=Hash([WatchID@0, ClientIP@1], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[WatchID@1 as WatchID, ClientIP@2 as ClientIP], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(ResolutionWidth@20 AS Float64) as __common_expr_1, WatchID, ClientIP, IsRefresh], file_type=parquet
+06)----------AggregateExec: mode=Partial, gby=[WatchID@0 as WatchID, ClientIP@1 as ClientIP], aggr=[__decompose_0, __decompose_1, __decompose_2, __decompose_3]
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth], file_type=parquet
 
 query IIIIR rowsort
 SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits GROUP BY "WatchID", "ClientIP" ORDER BY c DESC LIMIT 10;

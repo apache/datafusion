@@ -198,9 +198,42 @@ impl OptimizerRule for DecomposeAggregate {
                 let count_alias = format!("__decompose_{alias_idx}");
                 alias_idx += 1;
 
+                // Replace CAST(x AS Float64) added by AVG's type coercion
+                // with the narrower cast that SUM expects (e.g. Int16 → Int64
+                // instead of Int16 → Float64). This avoids the overhead of
+                // summing Float64 values when integer arithmetic suffices.
+                let sum_args: Vec<Expr> = args
+                    .iter()
+                    .map(|a| match a {
+                        Expr::Cast(c) if *c.field.data_type() == DataType::Float64 => {
+                            let inner_type = c.expr.get_type(input_schema.as_ref()).ok();
+                            match inner_type.as_ref() {
+                                // Signed integers → Int64 (SUM's native signed type)
+                                Some(
+                                    DataType::Int8 | DataType::Int16 | DataType::Int32,
+                                ) => cast((*c.expr).clone(), DataType::Int64),
+                                // Unsigned integers → UInt64
+                                Some(
+                                    DataType::UInt8 | DataType::UInt16 | DataType::UInt32,
+                                ) => cast((*c.expr).clone(), DataType::UInt64),
+                                // Types SUM already handles natively
+                                Some(
+                                    DataType::Int64
+                                    | DataType::UInt64
+                                    | DataType::Float64,
+                                ) => (*c.expr).clone(),
+                                // Everything else (Float32, unknown, etc.) →
+                                // keep CAST to Float64 so SUM can handle it.
+                                _ => a.clone(),
+                            }
+                        }
+                        other => other.clone(),
+                    })
+                    .collect();
+
                 let sum_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
                     Arc::clone(&sum_udaf),
-                    args.clone(),
+                    sum_args,
                     false,
                     None,
                     vec![],
