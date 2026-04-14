@@ -182,13 +182,11 @@ impl QueryBuilder {
 
     /// Add max columns num in group by(default: 3), for example if it is set to 1,
     /// the generated sql will group by at most 1 column
-    #[expect(dead_code)]
     pub fn with_max_group_by_columns(mut self, max_group_by_columns: usize) -> Self {
         self.max_group_by_columns = max_group_by_columns;
         self
     }
 
-    #[expect(dead_code)]
     pub fn with_min_group_by_columns(mut self, min_group_by_columns: usize) -> Self {
         self.min_group_by_columns = min_group_by_columns;
         self

@@ -216,7 +216,7 @@ datafusion.catalog.location NULL
 datafusion.catalog.newlines_in_values false
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
-datafusion.execution.collect_statistics false
+datafusion.execution.collect_statistics true
 datafusion.execution.enable_aggregation_blocked_groups true
 datafusion.execution.enable_ansi_mode false
 datafusion.execution.enable_recursive_ctes true
