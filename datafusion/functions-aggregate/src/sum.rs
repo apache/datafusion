@@ -208,6 +208,24 @@ impl AggregateUDFImpl for Sum {
         &self.signature
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        // Unwrap dictionary types to their value type first.
+        let arg = match &arg_types[0] {
+            DataType::Dictionary(_, v) => v.as_ref(),
+            other => other,
+        };
+        match arg {
+            DataType::Int8 | DataType::Int16 | DataType::Int32 => {
+                Ok(vec![DataType::Int64])
+            }
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 => {
+                Ok(vec![DataType::UInt64])
+            }
+            DataType::Float32 => Ok(vec![DataType::Float64]),
+            _ => Ok(arg_types.to_vec()),
+        }
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
             DataType::Int64 => Ok(DataType::Int64),

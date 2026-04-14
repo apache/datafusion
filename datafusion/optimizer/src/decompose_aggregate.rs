@@ -198,21 +198,9 @@ impl OptimizerRule for DecomposeAggregate {
                 let count_alias = format!("__decompose_{alias_idx}");
                 alias_idx += 1;
 
-                // Strip CAST(x AS Float64) added by AVG's type coercion
-                // and let SUM apply its own coercion (e.g. Int16 → Int64).
-                let sum_args: Vec<Expr> = args
-                    .iter()
-                    .map(|a| match a {
-                        Expr::Cast(c) if *c.field.data_type() == DataType::Float64 => {
-                            (*c.expr).clone()
-                        }
-                        other => other.clone(),
-                    })
-                    .collect();
-
                 let sum_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
                     Arc::clone(&sum_udaf),
-                    sum_args,
+                    args.clone(),
                     false,
                     None,
                     vec![],
