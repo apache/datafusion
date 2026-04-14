@@ -326,7 +326,7 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: Arc<PlanProperties>,
-    /// Per executon state shared across partitions of this plan.
+    /// Per execution state shared across partitions of this plan.
     ///
     /// Created by [`DataSource::create_sibling_state`]
     /// and then passed to
