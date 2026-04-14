@@ -204,16 +204,6 @@ impl SkipAggregationProbe {
         self.should_skip
     }
 
-    /// Returns the current ratio of groups to input rows, or `None` if
-    /// not enough rows have been seen yet.
-    fn ratio(&self) -> Option<f64> {
-        if self.input_rows >= self.probe_rows_threshold {
-            Some(self.num_groups as f64 / self.input_rows as f64)
-        } else {
-            None
-        }
-    }
-
     /// Record the number of rows that were output directly without aggregation
     fn record_skipped(&mut self, batch: &RecordBatch) {
         self.skipped_aggregation_rows.add(batch.num_rows());
@@ -447,23 +437,12 @@ pub(crate) struct GroupedHashAggregateStream {
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
-    /// Maximum size (in bytes) of the hash table before switching to
-    /// overflow passthrough mode during partial aggregation. When
-    /// exceeded, new batches are converted directly to intermediate
-    /// state (like SkippingAggregation) while the hash table retains
-    /// its accumulated groups for emission at end-of-input.
+    /// Maximum size (in bytes) of the hash table before emitting
+    /// accumulated state and resetting during partial aggregation.
+    /// When exceeded, all groups are emitted as partial state and
+    /// the hash table is cleared, bounding memory usage.
     /// 0 means disabled.
-    overflow_passthrough_max_table_size: usize,
-
-    /// Whether we're in overflow passthrough mode. When true, input
-    /// batches are converted to intermediate state and passed through
-    /// without updating the hash table. The table's accumulated state
-    /// is emitted at end-of-input.
-    overflow_passthrough: bool,
-
-    /// Maximum table size for emit+reset strategy (used for distinct
-    /// aggregates where overflow passthrough is not applicable).
-    emit_reset_max_table_size: usize,
+    early_emit_max_table_size: usize,
 
     // ========================================================================
     // EXECUTION RESOURCES:
@@ -677,18 +656,11 @@ impl GroupedHashAggregateStream {
             None
         };
 
-        // Two strategies for keeping the hash table cache-friendly:
-        //
-        // 1. Overflow passthrough (non-distinct): convert overflow
-        //    batches to state via convert_to_state. Fast, no
-        //    serialization of accumulated groups.
-        //
-        // 2. Emit+reset (distinct): emit accumulated state via state()
-        //    and reset the hash table. Works for distinct aggregates
-        //    where convert_to_state produces catastrophically expensive
-        //    per-row state.
-        let has_distinct = aggregate_exprs.iter().any(|e| e.is_distinct());
-        let max_table_size = if agg.mode == AggregateMode::Partial
+        // Emit+reset strategy: when the hash table exceeds a size
+        // limit, emit all accumulated state and reset the table.
+        // This bounds memory usage while still benefiting from
+        // partial aggregation.
+        let early_emit_max_table_size = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
         {
             context
@@ -696,17 +668,6 @@ impl GroupedHashAggregateStream {
                 .options()
                 .execution
                 .partial_aggregation_max_table_size
-        } else {
-            0
-        };
-        let overflow_passthrough_max_table_size =
-            if max_table_size > 0 && skip_aggregation_probe.is_some() && !has_distinct {
-                max_table_size
-            } else {
-                0
-            };
-        let emit_reset_max_table_size = if max_table_size > 0 && has_distinct {
-            max_table_size
         } else {
             0
         };
@@ -742,9 +703,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
-            overflow_passthrough_max_table_size,
-            overflow_passthrough: false,
-            emit_reset_max_table_size,
+            early_emit_max_table_size,
             reduction_factor,
         })
     }
@@ -793,24 +752,6 @@ impl Stream for GroupedHashAggregateStream {
                                     self.reduction_factor.as_ref()
                             {
                                 reduction_factor.add_total(input_rows);
-                            }
-
-                            // Overflow passthrough: when the hash table has
-                            // exceeded the size limit, convert input batches
-                            // directly to intermediate state (like
-                            // SkippingAggregation) while keeping the hash
-                            // table's accumulated groups intact for
-                            // end-of-input emission.
-                            if self.overflow_passthrough {
-                                let _timer = elapsed_compute.timer();
-                                if let Some(probe) = self.skip_aggregation_probe.as_mut()
-                                {
-                                    probe.record_skipped(&batch);
-                                }
-                                let states = self.transform_to_states(&batch)?;
-                                return Poll::Ready(Some(Ok(
-                                    states.record_output(&self.baseline_metrics)
-                                )));
                             }
 
                             // Do the grouping.
@@ -863,55 +804,19 @@ impl Stream for GroupedHashAggregateStream {
                                 }
                             }
 
-                            // Check if the hash table has exceeded the size
-                            // limit. If so, switch to overflow passthrough
-                            // mode: subsequent batches are converted directly
-                            // to intermediate state while the hash table
-                            // retains its accumulated groups.
-                            //
-                            // Only activate after the skip probe has evaluated
-                            // and decided NOT to skip. This prevents overflow
-                            // from interfering with very-high-cardinality
-                            // queries where skip_aggregation should take over.
-                            if self.overflow_passthrough_max_table_size > 0
-                                && !self.overflow_passthrough
-                                && match &self.skip_aggregation_probe {
-                                    None => true,
-                                    Some(p) => p.ratio().is_some() && !p.should_skip(),
-                                }
+                            // Emit+reset: when the hash table exceeds the
+                            // size limit, emit all accumulated state and
+                            // reset the table to bound memory usage.
+                            if self.early_emit_max_table_size > 0
+                                && self.table_size() >= self.early_emit_max_table_size
                             {
-                                let table_size = self.group_values.size()
-                                    + self
-                                        .accumulators
-                                        .iter()
-                                        .map(|x| x.size())
-                                        .sum::<usize>();
-                                if table_size >= self.overflow_passthrough_max_table_size
-                                {
-                                    self.overflow_passthrough = true;
-                                }
-                            }
-
-                            // Emit+reset: for distinct aggregates, emit all
-                            // accumulated state and reset the hash table.
-                            // Uses state() which compactly serializes distinct
-                            // HashSets, unlike convert_to_state which explodes.
-                            if self.emit_reset_max_table_size > 0 {
-                                let table_size = self.group_values.size()
-                                    + self
-                                        .accumulators
-                                        .iter()
-                                        .map(|x| x.size())
-                                        .sum::<usize>();
-                                if table_size >= self.emit_reset_max_table_size {
-                                    let batch_size = self.batch_size;
-                                    if let Some(batch) = self.emit(EmitTo::All, false)? {
-                                        self.clear_shrink(batch_size);
-                                        timer.done();
-                                        self.exec_state =
-                                            ExecutionState::ProducingOutput(batch);
-                                        break 'reading_input;
-                                    }
+                                let batch_size = self.batch_size;
+                                if let Some(batch) = self.emit(EmitTo::All, false)? {
+                                    self.clear_shrink(batch_size);
+                                    timer.done();
+                                    self.exec_state =
+                                        ExecutionState::ProducingOutput(batch);
+                                    break 'reading_input;
                                 }
                             }
 
@@ -1362,8 +1267,6 @@ impl GroupedHashAggregateStream {
             // Input has been entirely processed without spilling to disk.
 
             // Flush any remaining group values from the hash table.
-            // In overflow passthrough mode, the table retains groups
-            // accumulated before the overflow threshold was reached.
             let batch = self.emit(EmitTo::All, false)?;
 
             batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
