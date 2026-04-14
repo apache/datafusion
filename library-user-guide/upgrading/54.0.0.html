@@ -506,6 +506,17 @@ cannot be cast to an integer. Use a float column or adjust the literal.</p></li>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/15161">#15161</a> and
 <a class="reference external" href="https://github.com/apache/datafusion/pull/20426">PR #20426</a> for details.</p>
 </section>
+<section id="castcolumnexpr-removed-in-favor-of-field-aware-castexpr">
+<h3><code class="docutils literal notranslate"><span class="pre">CastColumnExpr</span></code> removed in favor of field-aware <code class="docutils literal notranslate"><span class="pre">CastExpr</span></code><a class="headerlink" href="#castcolumnexpr-removed-in-favor-of-field-aware-castexpr" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr::expressions::CastColumnExpr</span></code> has been removed; use
+the field-aware <code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr::expressions::CastExpr</span></code> instead.</p>
+<p>If your code downcasted to <code class="docutils literal notranslate"><span class="pre">CastColumnExpr</span></code>, downcast to <code class="docutils literal notranslate"><span class="pre">CastExpr</span></code> instead and
+use <code class="docutils literal notranslate"><span class="pre">CastExpr::target_field()</span></code> for the output field metadata and
+<code class="docutils literal notranslate"><span class="pre">CastExpr::expr()</span></code> for the input expression. To construct casts with explicit
+field semantics, use <code class="docutils literal notranslate"><span class="pre">CastExpr::new_with_target_field(...)</span></code>. The type-only
+<code class="docutils literal notranslate"><span class="pre">CastExpr::new(...)</span></code> and <code class="docutils literal notranslate"><span class="pre">cast(...)</span></code> helpers remain available for callers that
+only have a <code class="docutils literal notranslate"><span class="pre">DataType</span></code>.</p>
+</section>
 <section id="comparison-coercion-numeric-removed-replaced-by-comparison-coercion">
 <h3><code class="docutils literal notranslate"><span class="pre">comparison_coercion_numeric</span></code> removed, replaced by <code class="docutils literal notranslate"><span class="pre">comparison_coercion</span></code><a class="headerlink" href="#comparison-coercion-numeric-removed-replaced-by-comparison-coercion" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">comparison_coercion_numeric</span></code> function has been removed. Its behavior
@@ -881,6 +892,7 @@ behavior is unchanged.</p>
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-54-0-0">DataFusion 54.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#string-numeric-comparison-coercion-now-prefers-numeric-types">String/numeric comparison coercion now prefers numeric types</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#castcolumnexpr-removed-in-favor-of-field-aware-castexpr"><code class="docutils literal notranslate"><span class="pre">CastColumnExpr</span></code> removed in favor of field-aware <code class="docutils literal notranslate"><span class="pre">CastExpr</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#comparison-coercion-numeric-removed-replaced-by-comparison-coercion"><code class="docutils literal notranslate"><span class="pre">comparison_coercion_numeric</span></code> removed, replaced by <code class="docutils literal notranslate"><span class="pre">comparison_coercion</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-apply-expressions-is-now-a-required-method"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::apply_expressions</span></code> is now a required method</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-partition-statistics-now-returns-arc-statistics"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Arc&lt;Statistics&gt;</span></code></a></li>

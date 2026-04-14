@@ -76,6 +76,18 @@ adjustment:
 See [#15161](https://github.com/apache/datafusion/issues/15161) and
 [PR #20426](https://github.com/apache/datafusion/pull/20426) for details.
 
+### `CastColumnExpr` removed in favor of field-aware `CastExpr`
+
+`datafusion_physical_expr::expressions::CastColumnExpr` has been removed; use
+the field-aware `datafusion_physical_expr::expressions::CastExpr` instead.
+
+If your code downcasted to `CastColumnExpr`, downcast to `CastExpr` instead and
+use `CastExpr::target_field()` for the output field metadata and
+`CastExpr::expr()` for the input expression. To construct casts with explicit
+field semantics, use `CastExpr::new_with_target_field(...)`. The type-only
+`CastExpr::new(...)` and `cast(...)` helpers remain available for callers that
+only have a `DataType`.
+
 ### `comparison_coercion_numeric` removed, replaced by `comparison_coercion`
 
 The `comparison_coercion_numeric` function has been removed. Its behavior
