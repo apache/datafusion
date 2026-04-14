@@ -526,6 +526,7 @@ impl NullStateAdapter {
     }
 }
 
+#[cfg(test)]
 enum TestSeenValuesResult {
     All(usize),
     Some(BooleanBuffer),

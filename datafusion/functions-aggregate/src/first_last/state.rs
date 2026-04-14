@@ -309,6 +309,9 @@ pub(crate) fn take_need(
             }
             first_n
         }
+        EmitTo::NextBlock => {
+            unreachable!("first_last does not support blocked groups")
+        }
     }
 }
 

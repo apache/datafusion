@@ -508,7 +508,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
 
         Ok((
             self.state.take(emit_to)?,
-            self.take_orderings(emit_to),
+            self.take_orderings(emit_to)?,
             state::take_need(&mut self.is_sets, emit_to),
         ))
     }
