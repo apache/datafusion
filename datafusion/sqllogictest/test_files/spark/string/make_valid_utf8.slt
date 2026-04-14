@@ -79,3 +79,12 @@ query T
 SELECT make_valid_utf8(arrow_cast(x'F0808080', 'Binary'));
 ----
 ����
+
+query T
+SELECT make_valid_utf8(arrow_cast(x'61', 'Binary'))
+a
+
+query T
+SELECT make_valid_utf8(arrow_cast(x'61C262', 'Binary'));
+a�b
+
