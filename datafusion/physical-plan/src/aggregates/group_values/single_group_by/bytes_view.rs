@@ -28,7 +28,7 @@ use std::mem::size_of;
 /// purpose `Row`s format
 pub struct GroupValuesBytesView {
     /// Map string/binary values to group index
-    map: ArrowBytesViewMap<usize>,
+    map: ArrowBytesViewMap,
     /// The total number of groups so far (used to assign group_index)
     num_groups: usize,
 }
@@ -58,12 +58,9 @@ impl GroupValues for GroupValuesBytesView {
             arr,
             // called for each new group
             |_value| {
-                // assign new group index on each insert
-                let group_idx = self.num_groups;
                 self.num_groups += 1;
-                group_idx
             },
-            // called for each group
+            // called for each value with its view index (= group index)
             |group_idx| {
                 groups.push(group_idx);
             },
