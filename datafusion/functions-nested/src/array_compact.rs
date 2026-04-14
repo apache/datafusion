@@ -147,7 +147,7 @@ fn compact_list<O: OffsetSizeTrait>(
     );
 
     for row_index in 0..list_array.len() {
-        if list_array.is_null(row_index) {
+        if list_array.nulls().is_some_and(|n| n.is_null(row_index)) {
             offsets.push(offsets[row_index]);
             continue;
         }
