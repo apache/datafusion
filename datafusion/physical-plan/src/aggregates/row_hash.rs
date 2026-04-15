@@ -498,7 +498,7 @@ impl GroupedHashAggregateStream {
         };
 
         // Instantiate the accumulators
-        let accumulators: Vec<_> = aggregate_exprs
+        let mut accumulators: Vec<_> = aggregate_exprs
             .iter()
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
@@ -596,6 +596,12 @@ impl GroupedHashAggregateStream {
             .ok()
             .and_then(|stats| agg.compute_group_ndv(&stats))
             .map(|ndv: usize| ndv.min(MAX_NDV_CAPACITY));
+
+        if let Some(capacity) = capacity_hint {
+            for acc in &mut accumulators {
+                acc.preallocate(capacity);
+            }
+        }
 
         let group_values =
             new_group_values(group_schema, &group_ordering, capacity_hint)?;

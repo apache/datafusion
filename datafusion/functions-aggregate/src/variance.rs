@@ -575,6 +575,12 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         ])
     }
 
+    fn preallocate(&mut self, total_num_groups: usize) {
+        self.m2s.resize(total_num_groups, 0.0);
+        self.means.resize(total_num_groups, 0.0);
+        self.counts.resize(total_num_groups, 0);
+    }
+
     fn size(&self) -> usize {
         self.m2s.capacity() * size_of::<f64>()
             + self.means.capacity() * size_of::<f64>()

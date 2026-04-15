@@ -536,6 +536,15 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         Ok(())
     }
 
+    fn preallocate(&mut self, total_num_groups: usize) {
+        self.count.resize(total_num_groups, 0);
+        self.sum_x.resize(total_num_groups, 0.0);
+        self.sum_y.resize(total_num_groups, 0.0);
+        self.sum_xy.resize(total_num_groups, 0.0);
+        self.sum_xx.resize(total_num_groups, 0.0);
+        self.sum_yy.resize(total_num_groups, 0.0);
+    }
+
     fn size(&self) -> usize {
         self.count.capacity() * size_of::<u64>()
             + self.sum_x.capacity() * size_of::<f64>()

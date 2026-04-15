@@ -195,6 +195,10 @@ where
         true
     }
 
+    fn preallocate(&mut self, total_num_groups: usize) {
+        self.values.resize(total_num_groups, self.starting_value);
+    }
+
     fn size(&self) -> usize {
         self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
     }

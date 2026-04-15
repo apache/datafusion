@@ -712,6 +712,10 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         true
     }
 
+    fn preallocate(&mut self, total_num_groups: usize) {
+        self.counts.resize(total_num_groups, 0);
+    }
+
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<usize>()
     }

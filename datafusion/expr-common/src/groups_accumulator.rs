@@ -247,6 +247,16 @@ pub trait GroupsAccumulator: Send + std::any::Any {
         false
     }
 
+    /// Pre-allocates internal storage for the given number of groups.
+    ///
+    /// This is an optional optimization hint. When statistics (such as NDV
+    /// from Parquet metadata) predict the number of distinct groups, calling
+    /// this before the first `update_batch` avoids repeated resizing of
+    /// internal vectors.
+    ///
+    /// The default implementation is a no-op.
+    fn preallocate(&mut self, _total_num_groups: usize) {}
+
     /// Amount of memory used to store the state of this accumulator,
     /// in bytes.
     ///
