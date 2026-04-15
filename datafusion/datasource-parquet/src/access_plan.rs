@@ -19,6 +19,7 @@ use crate::sort::reverse_row_selection;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use std::sync::Arc;
 
 /// A selection of rows and row groups within a ParquetFile to decode.
 ///
@@ -339,6 +340,11 @@ impl ParquetAccessPlan {
         self.row_groups
     }
 
+    /// Return the count of row groups that should be scanned (not skipped).
+    pub fn scan_count(&self) -> usize {
+        self.row_groups.iter().filter(|rg| rg.should_scan()).count()
+    }
+
     /// Prepare this plan and resolve to the final `PreparedAccessPlan`
     pub(crate) fn prepare(
         self,
@@ -396,6 +402,52 @@ impl PreparedAccessPlan {
 
         Ok(self)
     }
+}
+
+/// Split a [`ParquetAccessPlan`] in two roughly equal halves by row group.
+///
+/// This is used as the `split_fn` in [`SplittableExt`] so that morsel
+/// splitting divides row groups instead of using byte-range heuristics.
+///
+/// [`SplittableExt`]: datafusion_datasource::SplittableExt
+pub fn split_parquet_access_plan(
+    plan: &dyn std::any::Any,
+) -> Option<(
+    Arc<dyn std::any::Any + Send + Sync>,
+    Arc<dyn std::any::Any + Send + Sync>,
+)> {
+    let plan = plan.downcast_ref::<ParquetAccessPlan>()?;
+    if plan.scan_count() < 2 {
+        return None;
+    }
+
+    let target = plan.scan_count() / 2;
+    let mut seen = 0;
+    let split_idx = plan
+        .inner()
+        .iter()
+        .position(|rg| {
+            if rg.should_scan() {
+                seen += 1;
+            }
+            seen >= target && rg.should_scan()
+        })
+        .unwrap_or(0)
+        + 1;
+
+    let mut first = plan.inner().to_vec();
+    let mut second = plan.inner().to_vec();
+    for rg in first.iter_mut().skip(split_idx) {
+        *rg = RowGroupAccess::Skip;
+    }
+    for rg in second.iter_mut().take(split_idx) {
+        *rg = RowGroupAccess::Skip;
+    }
+
+    Some((
+        Arc::new(ParquetAccessPlan::new(first)),
+        Arc::new(ParquetAccessPlan::new(second)),
+    ))
 }
 
 #[cfg(test)]

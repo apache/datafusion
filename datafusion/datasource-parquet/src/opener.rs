@@ -1536,15 +1536,22 @@ fn create_initial_plan(
     row_group_count: usize,
 ) -> Result<ParquetAccessPlan> {
     if let Some(extensions) = extensions {
-        if let Some(access_plan) = extensions.downcast_ref::<ParquetAccessPlan>() {
+        // Try direct ParquetAccessPlan first, then unwrap SplittableExt.
+        let plan = extensions
+            .downcast_ref::<ParquetAccessPlan>()
+            .or_else(|| {
+                extensions
+                    .downcast_ref::<datafusion_datasource::SplittableExt>()
+                    .and_then(|w| w.inner.downcast_ref::<ParquetAccessPlan>())
+            });
+
+        if let Some(access_plan) = plan {
             let plan_len = access_plan.len();
             if plan_len != row_group_count {
                 return exec_err!(
                     "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
                 );
             }
-
-            // check row group count matches the plan
             return Ok(access_plan.clone());
         } else {
             debug!("DataSourceExec Ignoring unknown extension specified for {file_name}");

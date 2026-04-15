@@ -67,6 +67,7 @@ pub use table_schema::TableSchema;
 #[expect(deprecated)]
 pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
+use std::fmt::Debug;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -95,6 +96,27 @@ impl FileRange {
     pub fn contains(&self, offset: i64) -> bool {
         offset >= self.start && offset < self.end
     }
+}
+
+/// A pair of type-erased extension values.
+type ExtPair = (
+    Arc<dyn std::any::Any + Send + Sync>,
+    Arc<dyn std::any::Any + Send + Sync>,
+);
+
+/// Wrapper for [`PartitionedFile::extensions`] that supports splitting
+/// the extension into two halves.
+///
+/// File formats that carry a sub-file selection (e.g. Parquet row groups)
+/// can wrap their extension in this struct so that morsel splitting divides
+/// the selection instead of falling back to byte-range splitting.
+#[derive(Debug)]
+pub struct SplittableExt {
+    /// The original extension value (e.g. `ParquetAccessPlan`).
+    pub inner: Arc<dyn std::any::Any + Send + Sync>,
+    /// Splits `inner` in two roughly equal halves.
+    /// Returns `None` when the extension cannot be split further.
+    pub split_fn: fn(&dyn std::any::Any) -> Option<ExtPair>,
 }
 
 #[derive(Debug, Clone)]
