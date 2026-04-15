@@ -294,6 +294,11 @@ config_namespace! {
         /// Default is true.
         pub map_string_types_to_utf8view: bool, default = true
 
+        /// When set to true, SQL string literals use Spark-compatible backslash
+        /// escape handling during SQL planning. This should only be enabled for
+        /// Spark compatibility mode.
+        pub spark_string_literal_unescape: bool, default = false
+        
         /// When set to true, the source locations relative to the original SQL
         /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
         /// and recorded in the logical plan nodes.

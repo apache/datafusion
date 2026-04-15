@@ -81,6 +81,12 @@ impl SessionStateBuilderSpark for SessionStateBuilder {
                     .map(|f| (f.name().to_string(), f)),
             );
 
+        self.config()
+            .get_or_insert_with(Default::default)
+            .options_mut()
+            .sql_parser
+            .spark_string_literal_unescape = true;
+
         self
     }
 }

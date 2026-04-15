@@ -80,10 +80,10 @@ SELECT soundex(' hello');
 ----
  hello
 
-query T
-SELECT soundex('\thello');
+query I
+SELECT ascii(substr(soundex('\thello'),1 ,1));
 ----
-\thello
+9
 
 query T
 SELECT soundex('😀hello');
@@ -190,10 +190,10 @@ SELECT soundex('#');
 ----
 #
 
-query T
-SELECT soundex('\nhello');
+query I
+SELECT ascii(substr(soundex('\nhello'),1 ,1));
 ----
-\nhello
+10
 
 query T
 SELECT concat(soundex('   '), 'Spark')

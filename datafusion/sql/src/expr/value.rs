@@ -48,9 +48,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         param_data_types: &[FieldRef],
     ) -> Result<Expr> {
         match value {
-            Value::Number(n, _) => self.parse_sql_number(&n, false),
+            Value::Number(n,_) => self.parse_sql_number(&n, false),
             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => {
-                Ok(lit(unescape_string_literal(&s)?))
+                if self.options.spark_string_literal_unescape {
+                    Ok(lit(unescape_string_literal(&s)?))
+                } else {
+                    Ok(lit(s))
+                }
             }
             Value::Null => Ok(Expr::Literal(ScalarValue::Null, None)),
             Value::Boolean(n) => Ok(lit(n)),
@@ -65,7 +69,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
             Value::DollarQuotedString(s) => Ok(lit(s.value)),
-            Value::EscapedStringLiteral(s) => Ok(lit(unescape_string_literal(&s)?)),
+            Value::EscapedStringLiteral(s) => {
+                if self.options.spark_string_literal_unescape {
+                    Ok(lit(unescape_string_literal(&s)?))
+                } else {
+                    Ok(lit(s))
+                }
+            }
             _ => plan_err!("Unsupported Value '{value:?}'"),
         }
     }
