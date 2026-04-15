@@ -137,6 +137,8 @@ pub struct FileStatisticsCacheEntry {
     pub statistics_size_bytes: usize,
     /// Whether ordering information is cached for this file.
     pub has_ordering: bool,
+    /// Reference to the table associated with this statistics entry.
+    pub table_reference: Option<TableReference>
 }
 
 /// Cached file listing.

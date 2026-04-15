@@ -115,6 +115,7 @@ impl DefaultFileStatisticsCacheState {
 
         if let Some(old_entry) = &old_value {
             self.memory_used -= old_entry.heap_size();
+            self.memory_used -= key.path.as_ref().heap_size();
         }
 
         self.evict_entries();
@@ -234,6 +235,7 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
                     table_size_bytes: cached.statistics.total_byte_size,
                     statistics_size_bytes: cached.statistics.heap_size(),
                     has_ordering: cached.ordering.is_some(),
+                    table_reference: path.table
                 },
             );
         }
@@ -595,6 +597,7 @@ mod tests {
                         table_size_bytes: Precision::Absent,
                         statistics_size_bytes: 304,
                         has_ordering: false,
+                        table_reference: None,
                     }
                 ),
                 (
@@ -606,6 +609,7 @@ mod tests {
                         table_size_bytes: Precision::Absent,
                         statistics_size_bytes: 304,
                         has_ordering: true,
+                        table_reference: None,
                     }
                 ),
             ])
@@ -664,6 +668,12 @@ mod tests {
 
         assert_eq!(result_2.unwrap(), value_2);
         assert_eq!(result_3.unwrap(), value_3);
+
+        // add the third entry again, making sure memory usage remains the same
+        cache.put(&path_3, value_3.clone());
+        assert_eq!(cache.memory_used(), limit_for_2_entries);
+        cache.put(&path_3, value_3.clone());
+        assert_eq!(cache.memory_used(), limit_for_2_entries);
 
         cache.remove(&path_2);
         assert_eq!(cache.len(), 1);
