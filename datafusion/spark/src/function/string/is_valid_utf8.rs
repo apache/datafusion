@@ -21,7 +21,10 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 
 use arrow::array::{Array, ArrayRef, BooleanArray};
-use datafusion_common::cast::{as_binary_array, as_binary_view_array, as_large_binary_array, as_large_string_array, as_string_array, as_string_view_array};
+use datafusion_common::cast::{
+    as_binary_array, as_binary_view_array, as_large_binary_array, as_large_string_array,
+    as_string_array, as_string_view_array,
+};
 use datafusion_common::utils::take_function_args;
 use datafusion_functions::utils::make_scalar_function;
 
