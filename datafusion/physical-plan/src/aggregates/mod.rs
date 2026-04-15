@@ -2308,8 +2308,16 @@ mod tests {
         )
     }
 
-    fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
-        let session_config = SessionConfig::new().with_batch_size(batch_size);
+    fn new_spill_ctx(
+        batch_size: usize,
+        max_memory: usize,
+        enable_blocked_groups: bool,
+    ) -> Arc<TaskContext> {
+        let mut session_config = SessionConfig::new().with_batch_size(batch_size);
+        session_config = session_config.set(
+            "datafusion.execution.enable_aggregation_blocked_groups",
+            &ScalarValue::Boolean(Some(enable_blocked_groups)),
+        );
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
             .build_arc()
@@ -2352,7 +2360,7 @@ mod tests {
 
         let task_ctx = if spill {
             // adjust the max memory size to have the partial aggregate result for spill mode.
-            new_spill_ctx(4, 500)
+            new_spill_ctx(4, 500, true)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -2432,7 +2440,7 @@ mod tests {
         let final_grouping_set = grouping_set.as_final();
 
         let task_ctx = if spill {
-            new_spill_ctx(4, 3160)
+            new_spill_ctx(4, 3160, true)
         } else {
             task_ctx
         };
@@ -2502,7 +2510,7 @@ mod tests {
 
         let task_ctx = if spill {
             // set to an appropriate value to trigger spill
-            new_spill_ctx(2, 1600)
+            new_spill_ctx(2, 1600, true)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -2566,7 +2574,7 @@ mod tests {
 
         let task_ctx = if spill {
             // enlarge memory limit to let the final aggregation finish
-            new_spill_ctx(2, 2600)
+            new_spill_ctx(2, 2600, true)
         } else {
             Arc::clone(&task_ctx)
         };
@@ -3037,7 +3045,7 @@ mod tests {
         max_memory: usize,
     ) -> Result<()> {
         let task_ctx = if spill {
-            new_spill_ctx(2, max_memory)
+            new_spill_ctx(2, max_memory, true)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -4433,7 +4441,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_order_is_retained_when_spilling() -> Result<()> {
+    async fn test_order_is_retained_when_spilling_flat() -> Result<()> {
+        check_order_is_retained_when_spilling(false, 2000).await
+    }
+
+    #[tokio::test]
+    async fn test_order_is_retained_when_spilling_blocked() -> Result<()> {
+        check_order_is_retained_when_spilling(true, 2000).await
+    }
+
+    async fn check_order_is_retained_when_spilling(
+        enable_blocked_groups: bool,
+        max_memory: usize,
+    ) -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
@@ -4497,9 +4517,7 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        // Blocked groups pre-allocates more memory per block, so give enough
-        // room for accumulation to proceed while still triggering spill.
-        let task_ctx = new_spill_ctx(1, 2000);
+        let task_ctx = new_spill_ctx(1, max_memory, enable_blocked_groups);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
         assert_spill_count_metric(true, aggr);
 
@@ -4521,7 +4539,21 @@ mod tests {
     /// reservation during spill, the error is properly propagated as
     /// ResourcesExhausted rather than silently exceeding memory limits.
     #[tokio::test]
-    async fn test_sort_reservation_fails_during_spill() -> Result<()> {
+    async fn test_sort_reservation_fails_during_spill_flat() -> Result<()> {
+        check_sort_reservation_fails_during_spill(false, 500).await
+    }
+
+    #[tokio::test]
+    async fn test_sort_reservation_fails_during_spill_blocked() -> Result<()> {
+        // Blocked groups pre-allocates memory per block, so use a larger
+        // pool that still triggers sort reservation failure.
+        check_sort_reservation_fails_during_spill(true, 500).await
+    }
+
+    async fn check_sort_reservation_fails_during_spill(
+        enable_blocked_groups: bool,
+        max_memory: usize,
+    ) -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("g", DataType::Int64, false),
             Field::new("a", DataType::Float64, false),
@@ -4629,10 +4661,9 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        // Pool must be large enough for accumulation to start but too small for
-        // sort_memory after clearing. Blocked groups approach pre-allocates more
-        // memory upfront, so give a bit more room for accumulation to proceed.
-        let task_ctx = new_spill_ctx(1, 500);
+        // Pool must be large enough for accumulation to start but too small
+        // for sort_memory after clearing.
+        let task_ctx = new_spill_ctx(1, max_memory, enable_blocked_groups);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await;
 
         match &result {
