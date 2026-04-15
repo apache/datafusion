@@ -223,19 +223,6 @@ impl<T: HashValue + ?Sized> HashValue for &T {
     }
 }
 
-#[cfg(not(feature = "force_hash_collisions"))]
-// Keep custom BuildHasher leaf hashing off the default RandomState fast path.
-trait BuildHasherHashValue {
-    fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64;
-}
-
-#[cfg(not(feature = "force_hash_collisions"))]
-impl<T: BuildHasherHashValue + ?Sized> BuildHasherHashValue for &T {
-    fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
-        T::hash_one_with_hasher(self, state)
-    }
-}
-
 macro_rules! hash_value {
     ($($t:ty),+) => {
         $(impl HashValue for $t {
@@ -244,13 +231,6 @@ macro_rules! hash_value {
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
                 Hash::hash(self, hasher)
-            }
-        }
-
-        #[cfg(not(feature = "force_hash_collisions"))]
-        impl BuildHasherHashValue for $t {
-            fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
-                state.hash_one(self)
             }
         })+
     };
@@ -266,13 +246,6 @@ macro_rules! hash_float_value {
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
                 hasher.write(&self.to_ne_bytes())
-            }
-        }
-
-        #[cfg(not(feature = "force_hash_collisions"))]
-        impl BuildHasherHashValue for $t {
-            fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
-                state.hash_one(<$i>::from_ne_bytes(self.to_ne_bytes()))
             }
         })+
     };
@@ -549,231 +522,6 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
             random_state,
             hashes_buffer,
         ),
-    }
-}
-
-#[cfg(not(feature = "force_hash_collisions"))]
-// The custom BuildHasher path intentionally mirrors the leaf helpers so the
-// default path does not route its tight loops through generic abstractions.
-fn hash_null_with_hasher<S: BuildHasher>(
-    hash_builder: &S,
-    hashes_buffer: &mut [u64],
-    mul_col: bool,
-) {
-    if mul_col {
-        hashes_buffer.iter_mut().for_each(|hash| {
-            *hash = combine_hashes(hash_builder.hash_one(1), *hash);
-        })
-    } else {
-        hashes_buffer.iter_mut().for_each(|hash| {
-            *hash = hash_builder.hash_one(1);
-        })
-    }
-}
-
-#[cfg(not(feature = "force_hash_collisions"))]
-fn hash_array_primitive_with_hasher<T, S>(
-    array: &PrimitiveArray<T>,
-    hash_builder: &S,
-    hashes_buffer: &mut [u64],
-    rehash: bool,
-) where
-    T: ArrowPrimitiveType<Native: BuildHasherHashValue>,
-    S: BuildHasher,
-{
-    assert_eq!(
-        hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
-    );
-
-    if array.null_count() == 0 {
-        if rehash {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = combine_hashes(value.hash_one_with_hasher(hash_builder), *hash);
-            }
-        } else {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = value.hash_one_with_hasher(hash_builder);
-            }
-        }
-    } else if rehash {
-        for i in array.nulls().unwrap().valid_indices() {
-            let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = combine_hashes(
-                value.hash_one_with_hasher(hash_builder),
-                hashes_buffer[i],
-            );
-        }
-    } else {
-        for i in array.nulls().unwrap().valid_indices() {
-            let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = value.hash_one_with_hasher(hash_builder);
-        }
-    }
-}
-
-#[cfg(not(feature = "force_hash_collisions"))]
-fn hash_array_with_hasher<T, S>(
-    array: &T,
-    hash_builder: &S,
-    hashes_buffer: &mut [u64],
-    rehash: bool,
-) where
-    T: ArrayAccessor,
-    T::Item: BuildHasherHashValue,
-    S: BuildHasher,
-{
-    assert_eq!(
-        hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
-    );
-
-    if array.null_count() == 0 {
-        if rehash {
-            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = combine_hashes(value.hash_one_with_hasher(hash_builder), *hash);
-            }
-        } else {
-            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = value.hash_one_with_hasher(hash_builder);
-            }
-        }
-    } else if rehash {
-        for i in array.nulls().unwrap().valid_indices() {
-            let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = combine_hashes(
-                value.hash_one_with_hasher(hash_builder),
-                hashes_buffer[i],
-            );
-        }
-    } else {
-        for i in array.nulls().unwrap().valid_indices() {
-            let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = value.hash_one_with_hasher(hash_builder);
-        }
-    }
-}
-
-#[cfg(not(feature = "force_hash_collisions"))]
-#[inline(never)]
-fn hash_string_view_array_inner_with_hasher<
-    T: ByteViewType,
-    S: BuildHasher,
-    const HAS_NULLS: bool,
-    const HAS_BUFFERS: bool,
-    const REHASH: bool,
->(
-    array: &GenericByteViewArray<T>,
-    hash_builder: &S,
-    hashes_buffer: &mut [u64],
-) {
-    assert_eq!(
-        hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
-    );
-
-    let buffers = array.data_buffers();
-    let view_bytes = |view_len: u32, view: u128| {
-        let view = ByteView::from(view);
-        let offset = view.offset as usize;
-        unsafe {
-            let data = buffers.get_unchecked(view.buffer_index as usize);
-            data.get_unchecked(offset..offset + view_len as usize)
-        }
-    };
-
-    let hashes_and_views = hashes_buffer.iter_mut().zip(array.views().iter());
-    for (i, (hash, &v)) in hashes_and_views.enumerate() {
-        if HAS_NULLS && array.is_null(i) {
-            continue;
-        }
-        let view_len = v as u32;
-        if !HAS_BUFFERS || view_len <= 12 {
-            if REHASH {
-                *hash = combine_hashes(v.hash_one_with_hasher(hash_builder), *hash);
-            } else {
-                *hash = v.hash_one_with_hasher(hash_builder);
-            }
-            continue;
-        }
-        let value = view_bytes(view_len, v);
-        if REHASH {
-            *hash = combine_hashes(value.hash_one_with_hasher(hash_builder), *hash);
-        } else {
-            *hash = value.hash_one_with_hasher(hash_builder);
-        }
-    }
-}
-
-#[cfg(not(feature = "force_hash_collisions"))]
-fn hash_generic_byte_view_array_with_hasher<T: ByteViewType, S: BuildHasher>(
-    array: &GenericByteViewArray<T>,
-    hash_builder: &S,
-    hashes_buffer: &mut [u64],
-    rehash: bool,
-) {
-    match (
-        array.null_count() != 0,
-        !array.data_buffers().is_empty(),
-        rehash,
-    ) {
-        (false, false, false) => {
-            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                *hash = view.hash_one_with_hasher(hash_builder);
-            }
-        }
-        (false, false, true) => {
-            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                *hash = combine_hashes(view.hash_one_with_hasher(hash_builder), *hash);
-            }
-        }
-        (false, true, false) => {
-            hash_string_view_array_inner_with_hasher::<T, S, false, true, false>(
-                array,
-                hash_builder,
-                hashes_buffer,
-            )
-        }
-        (false, true, true) => {
-            hash_string_view_array_inner_with_hasher::<T, S, false, true, true>(
-                array,
-                hash_builder,
-                hashes_buffer,
-            )
-        }
-        (true, false, false) => {
-            hash_string_view_array_inner_with_hasher::<T, S, true, false, false>(
-                array,
-                hash_builder,
-                hashes_buffer,
-            )
-        }
-        (true, false, true) => {
-            hash_string_view_array_inner_with_hasher::<T, S, true, false, true>(
-                array,
-                hash_builder,
-                hashes_buffer,
-            )
-        }
-        (true, true, false) => {
-            hash_string_view_array_inner_with_hasher::<T, S, true, true, false>(
-                array,
-                hash_builder,
-                hashes_buffer,
-            )
-        }
-        (true, true, true) => {
-            hash_string_view_array_inner_with_hasher::<T, S, true, true, true>(
-                array,
-                hash_builder,
-                hashes_buffer,
-            )
-        }
     }
 }
 
@@ -1618,6 +1366,271 @@ where
     S: BuildHasher,
 {
     create_hashes_with_hasher_impl(arrays, hash_builder, hashes_buffer)
+}
+
+// ---------------------------------------------------------------------------
+// Custom BuildHasher leaf hashing — kept below all RandomState code so the
+// hot default path stays tightly packed in the instruction cache.
+// ---------------------------------------------------------------------------
+
+#[cfg(not(feature = "force_hash_collisions"))]
+trait BuildHasherHashValue {
+    fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64;
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+impl<T: BuildHasherHashValue + ?Sized> BuildHasherHashValue for &T {
+    fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
+        T::hash_one_with_hasher(self, state)
+    }
+}
+
+macro_rules! build_hasher_hash_value {
+    ($($t:ty),+) => {
+        $(#[cfg(not(feature = "force_hash_collisions"))]
+        impl BuildHasherHashValue for $t {
+            fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
+                state.hash_one(self)
+            }
+        })+
+    };
+}
+build_hasher_hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, u128);
+build_hasher_hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
+
+macro_rules! build_hasher_hash_float_value {
+    ($(($t:ty, $i:ty)),+) => {
+        $(#[cfg(not(feature = "force_hash_collisions"))]
+        impl BuildHasherHashValue for $t {
+            fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
+                state.hash_one(<$i>::from_ne_bytes(self.to_ne_bytes()))
+            }
+        })+
+    };
+}
+build_hasher_hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_null_with_hasher<S: BuildHasher>(
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+    mul_col: bool,
+) {
+    if mul_col {
+        hashes_buffer.iter_mut().for_each(|hash| {
+            *hash = combine_hashes(hash_builder.hash_one(1), *hash);
+        })
+    } else {
+        hashes_buffer.iter_mut().for_each(|hash| {
+            *hash = hash_builder.hash_one(1);
+        })
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_array_primitive_with_hasher<T, S>(
+    array: &PrimitiveArray<T>,
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) where
+    T: ArrowPrimitiveType<Native: BuildHasherHashValue>,
+    S: BuildHasher,
+{
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    if array.null_count() == 0 {
+        if rehash {
+            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
+                *hash = combine_hashes(value.hash_one_with_hasher(hash_builder), *hash);
+            }
+        } else {
+            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
+                *hash = value.hash_one_with_hasher(hash_builder);
+            }
+        }
+    } else if rehash {
+        for i in array.nulls().unwrap().valid_indices() {
+            let value = unsafe { array.value_unchecked(i) };
+            hashes_buffer[i] = combine_hashes(
+                value.hash_one_with_hasher(hash_builder),
+                hashes_buffer[i],
+            );
+        }
+    } else {
+        for i in array.nulls().unwrap().valid_indices() {
+            let value = unsafe { array.value_unchecked(i) };
+            hashes_buffer[i] = value.hash_one_with_hasher(hash_builder);
+        }
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_array_with_hasher<T, S>(
+    array: &T,
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) where
+    T: ArrayAccessor,
+    T::Item: BuildHasherHashValue,
+    S: BuildHasher,
+{
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    if array.null_count() == 0 {
+        if rehash {
+            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                let value = unsafe { array.value_unchecked(i) };
+                *hash = combine_hashes(value.hash_one_with_hasher(hash_builder), *hash);
+            }
+        } else {
+            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                let value = unsafe { array.value_unchecked(i) };
+                *hash = value.hash_one_with_hasher(hash_builder);
+            }
+        }
+    } else if rehash {
+        for i in array.nulls().unwrap().valid_indices() {
+            let value = unsafe { array.value_unchecked(i) };
+            hashes_buffer[i] = combine_hashes(
+                value.hash_one_with_hasher(hash_builder),
+                hashes_buffer[i],
+            );
+        }
+    } else {
+        for i in array.nulls().unwrap().valid_indices() {
+            let value = unsafe { array.value_unchecked(i) };
+            hashes_buffer[i] = value.hash_one_with_hasher(hash_builder);
+        }
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(never)]
+fn hash_string_view_array_inner_with_hasher<
+    T: ByteViewType,
+    S: BuildHasher,
+    const HAS_NULLS: bool,
+    const HAS_BUFFERS: bool,
+    const REHASH: bool,
+>(
+    array: &GenericByteViewArray<T>,
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+) {
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    let buffers = array.data_buffers();
+    let view_bytes = |view_len: u32, view: u128| {
+        let view = ByteView::from(view);
+        let offset = view.offset as usize;
+        unsafe {
+            let data = buffers.get_unchecked(view.buffer_index as usize);
+            data.get_unchecked(offset..offset + view_len as usize)
+        }
+    };
+
+    let hashes_and_views = hashes_buffer.iter_mut().zip(array.views().iter());
+    for (i, (hash, &v)) in hashes_and_views.enumerate() {
+        if HAS_NULLS && array.is_null(i) {
+            continue;
+        }
+        let view_len = v as u32;
+        if !HAS_BUFFERS || view_len <= 12 {
+            if REHASH {
+                *hash = combine_hashes(v.hash_one_with_hasher(hash_builder), *hash);
+            } else {
+                *hash = v.hash_one_with_hasher(hash_builder);
+            }
+            continue;
+        }
+        let value = view_bytes(view_len, v);
+        if REHASH {
+            *hash = combine_hashes(value.hash_one_with_hasher(hash_builder), *hash);
+        } else {
+            *hash = value.hash_one_with_hasher(hash_builder);
+        }
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_generic_byte_view_array_with_hasher<T: ByteViewType, S: BuildHasher>(
+    array: &GenericByteViewArray<T>,
+    hash_builder: &S,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) {
+    match (
+        array.null_count() != 0,
+        !array.data_buffers().is_empty(),
+        rehash,
+    ) {
+        (false, false, false) => {
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                *hash = view.hash_one_with_hasher(hash_builder);
+            }
+        }
+        (false, false, true) => {
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                *hash = combine_hashes(view.hash_one_with_hasher(hash_builder), *hash);
+            }
+        }
+        (false, true, false) => {
+            hash_string_view_array_inner_with_hasher::<T, S, false, true, false>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (false, true, true) => {
+            hash_string_view_array_inner_with_hasher::<T, S, false, true, true>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (true, false, false) => {
+            hash_string_view_array_inner_with_hasher::<T, S, true, false, false>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (true, false, true) => {
+            hash_string_view_array_inner_with_hasher::<T, S, true, false, true>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (true, true, false) => {
+            hash_string_view_array_inner_with_hasher::<T, S, true, true, false>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+        (true, true, true) => {
+            hash_string_view_array_inner_with_hasher::<T, S, true, true, true>(
+                array,
+                hash_builder,
+                hashes_buffer,
+            )
+        }
+    }
 }
 
 #[cfg(test)]
