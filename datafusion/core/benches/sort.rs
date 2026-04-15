@@ -105,7 +105,7 @@ const BATCH_SIZE: usize = 1024;
 /// Input sizes to benchmark. The small size (100K) exercises the
 /// in-memory concat-and-sort path; the large size (10M) exercises
 /// the sort-then-merge path with high fan-in.
-const INPUT_SIZES: &[(u64, &str)] = &[(100_000, "100k"), (10_000_000, "10M")];
+const INPUT_SIZES: &[(u64, &str)] = &[(100_000, "100k"), (1_000_000, "1M")];
 
 type PartitionedBatches = Vec<Vec<RecordBatch>>;
 type StreamGenerator = Box<dyn Fn(bool) -> PartitionedBatches>;
