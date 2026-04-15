@@ -36,9 +36,9 @@ pub struct GroupValuesBytes<O: OffsetSizeTrait> {
 }
 
 impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
-    pub fn new(output_type: OutputType) -> Self {
+    pub fn new(output_type: OutputType, capacity: usize) -> Self {
         Self {
-            map: ArrowBytesMap::new(output_type),
+            map: ArrowBytesMap::with_capacity(output_type, capacity),
             num_groups: 0,
         }
     }

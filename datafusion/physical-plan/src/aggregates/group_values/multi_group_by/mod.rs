@@ -260,8 +260,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     // ========================================================================
 
     /// Create a new instance of GroupValuesColumn if supported for the specified schema
-    pub fn try_new(schema: SchemaRef) -> Result<Self> {
-        let map = HashTable::with_capacity(0);
+    pub fn try_new(schema: SchemaRef, capacity: usize) -> Result<Self> {
+        let map = HashTable::with_capacity(capacity);
         Ok(Self {
             schema,
             map,
@@ -1268,7 +1268,7 @@ mod tests {
     fn test_intern_for_vectorized_group_values() {
         let data_set = VectorizedTestDataSet::new();
         let mut group_values =
-            GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+            GroupValuesColumn::<false>::try_new(data_set.schema(), 0).unwrap();
 
         data_set.load_to_group_values(&mut group_values);
         let actual_batch = group_values.emit(EmitTo::All).unwrap();
@@ -1281,7 +1281,7 @@ mod tests {
     fn test_emit_first_n_for_vectorized_group_values() {
         let data_set = VectorizedTestDataSet::new();
         let mut group_values =
-            GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+            GroupValuesColumn::<false>::try_new(data_set.schema(), 0).unwrap();
 
         // 1~num_rows times to emit the groups
         let num_rows = data_set.expected_batch.num_rows();
@@ -1332,7 +1332,7 @@ mod tests {
 
         let field = Field::new_list_field(DataType::Int32, true);
         let schema = Arc::new(Schema::new_with_metadata(vec![field], HashMap::new()));
-        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema, 0).unwrap();
 
         // Insert group index views and check if success to insert
         insert_inline_group_index_view(&mut group_values, 0, 0);

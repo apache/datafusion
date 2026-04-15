@@ -1202,7 +1202,10 @@ impl AggregateExec {
     /// **Grouping sets:** `GROUPING SETS ((a), (b), (a, b))` with NDV(a) = 100, NDV(b) = 50
     /// → set(a) = 100, set(b) = 50, set(a, b) = 100 × 50 = 5,000
     /// → total = 100 + 50 + 5,000 = 5,150
-    fn compute_group_ndv(&self, child_statistics: &Statistics) -> Option<usize> {
+    pub(crate) fn compute_group_ndv(
+        &self,
+        child_statistics: &Statistics,
+    ) -> Option<usize> {
         let mut total: usize = 0;
         for group_mask in &self.group_by.groups {
             let mut set_product: usize = 1;

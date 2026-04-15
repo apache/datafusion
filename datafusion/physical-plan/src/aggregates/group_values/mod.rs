@@ -134,13 +134,18 @@ pub trait GroupValues: Send {
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
+    capacity_hint: Option<usize>,
 ) -> Result<Box<dyn GroupValues>> {
+    let capacity = capacity_hint.unwrap_or(0);
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
         macro_rules! downcast_helper {
             ($t:ty, $d:ident) => {
-                return Ok(Box::new(GroupValuesPrimitive::<$t>::new($d.clone())))
+                return Ok(Box::new(GroupValuesPrimitive::<$t>::new(
+                    $d.clone(),
+                    capacity,
+                )))
             };
         }
 
@@ -176,22 +181,40 @@ pub fn new_group_values(
                 downcast_helper!(Decimal128Type, d);
             }
             DataType::Utf8 => {
-                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Utf8)));
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(
+                    OutputType::Utf8,
+                    capacity,
+                )));
             }
             DataType::LargeUtf8 => {
-                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Utf8)));
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(
+                    OutputType::Utf8,
+                    capacity,
+                )));
             }
             DataType::Utf8View => {
-                return Ok(Box::new(GroupValuesBytesView::new(OutputType::Utf8View)));
+                return Ok(Box::new(GroupValuesBytesView::new(
+                    OutputType::Utf8View,
+                    capacity,
+                )));
             }
             DataType::Binary => {
-                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Binary)));
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(
+                    OutputType::Binary,
+                    capacity,
+                )));
             }
             DataType::LargeBinary => {
-                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Binary)));
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(
+                    OutputType::Binary,
+                    capacity,
+                )));
             }
             DataType::BinaryView => {
-                return Ok(Box::new(GroupValuesBytesView::new(OutputType::BinaryView)));
+                return Ok(Box::new(GroupValuesBytesView::new(
+                    OutputType::BinaryView,
+                    capacity,
+                )));
             }
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new()));
@@ -202,11 +225,15 @@ pub fn new_group_values(
 
     if multi_group_by::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
-            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
+            Ok(Box::new(GroupValuesColumn::<false>::try_new(
+                schema, capacity,
+            )?))
         } else {
-            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
+            Ok(Box::new(GroupValuesColumn::<true>::try_new(
+                schema, capacity,
+            )?))
         }
     } else {
-        Ok(Box::new(GroupValuesRows::try_new(schema)?))
+        Ok(Box::new(GroupValuesRows::try_new(schema, capacity)?))
     }
 }

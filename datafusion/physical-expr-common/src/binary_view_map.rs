@@ -155,9 +155,14 @@ where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     pub fn new(output_type: OutputType) -> Self {
+        Self::with_capacity(output_type, INITIAL_MAP_CAPACITY)
+    }
+
+    pub fn with_capacity(output_type: OutputType, capacity: usize) -> Self {
+        let capacity = capacity.max(INITIAL_MAP_CAPACITY);
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
+            map: hashbrown::hash_table::HashTable::with_capacity(capacity),
             map_size: 0,
             views: Vec::new(),
             in_progress: Vec::new(),

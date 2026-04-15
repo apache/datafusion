@@ -587,7 +587,18 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        // Use NDV estimate from child statistics to pre-allocate hash table,
+        // bounded by 128K to avoid over-allocation.
+        const MAX_NDV_CAPACITY: usize = 128 * 1024;
+        let capacity_hint = agg
+            .input
+            .partition_statistics(None)
+            .ok()
+            .and_then(|stats| agg.compute_group_ndv(&stats))
+            .map(|ndv: usize| ndv.min(MAX_NDV_CAPACITY));
+
+        let group_values =
+            new_group_values(group_schema, &group_ordering, capacity_hint)?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
@@ -1269,7 +1280,8 @@ impl GroupedHashAggregateStream {
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
             if group_schema.fields().len() > 1 {
-                self.group_values = new_group_values(group_schema, &self.group_ordering)?;
+                self.group_values =
+                    new_group_values(group_schema, &self.group_ordering, None)?;
             }
 
             // Use `OutOfMemoryMode::ReportError` from this point on

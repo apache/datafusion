@@ -34,9 +34,9 @@ pub struct GroupValuesBytesView {
 }
 
 impl GroupValuesBytesView {
-    pub fn new(output_type: OutputType) -> Self {
+    pub fn new(output_type: OutputType, capacity: usize) -> Self {
         Self {
-            map: ArrowBytesViewMap::new(output_type),
+            map: ArrowBytesViewMap::with_capacity(output_type, capacity),
             num_groups: 0,
         }
     }
