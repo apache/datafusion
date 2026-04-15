@@ -20,7 +20,9 @@ use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_plan::aggregates::{AggregateExec, AggregateInputMode};
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateInputMode, AggregateMode,
+};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
@@ -49,7 +51,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(partial_agg_exec) = take_optimizable(&*plan) {
+        if let Some(partial_agg_exec) = take_optimizable(&plan) {
             let partial_agg_exec = partial_agg_exec
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
@@ -106,19 +108,37 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     }
 }
 
-/// assert if the node passed as argument is a final `AggregateExec` node that can be optimized:
-/// - its child (with possible intermediate layers) is a partial `AggregateExec` node
-/// - they both have no grouping expression
+/// Returns an `AggregateExec` whose statistics can be used to replace the
+/// entire aggregate with literal values, if the plan is eligible.
 ///
-/// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
-/// We would have preferred to return a casted ref to AggregateExec but the recursion requires
-/// the `ExecutionPlan.children()` method that returns an owned reference.
-fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
-    if let Some(final_agg_exec) = node.downcast_ref::<AggregateExec>()
-        && final_agg_exec.mode().input_mode() == AggregateInputMode::Partial
-        && final_agg_exec.group_expr().is_empty()
+/// Two patterns are recognized:
+///
+/// 1. **Final wrapping Partial** (multi-partition): A final `AggregateExec`
+///    (input mode = `Partial`) with no GROUP BY whose descendant is a partial
+///    `AggregateExec` (input mode = `Raw`) with no GROUP BY and no filters.
+///    Returns the inner partial aggregate.
+///
+/// 2. **Single / SinglePartitioned** (single-partition): A `Single` or
+///    `SinglePartitioned` `AggregateExec` with no GROUP BY and no filters.
+///    Returns the aggregate itself.
+fn take_optimizable(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
+    let agg_exec = plan.downcast_ref::<AggregateExec>()?;
+
+    // Case 1: Single-mode aggregate — processes raw input, produces final output
+    if matches!(
+        agg_exec.mode(),
+        AggregateMode::Single | AggregateMode::SinglePartitioned
+    ) && agg_exec.group_expr().is_empty()
+        && agg_exec.filter_expr().iter().all(|e| e.is_none())
     {
-        let mut child = Arc::clone(final_agg_exec.input());
+        return Some(Arc::clone(plan));
+    }
+
+    // Case 2: Final aggregate wrapping a Partial aggregate
+    if agg_exec.mode().input_mode() == AggregateInputMode::Partial
+        && agg_exec.group_expr().is_empty()
+    {
+        let mut child = Arc::clone(agg_exec.input());
         loop {
             if let Some(partial_agg_exec) = child.downcast_ref::<AggregateExec>()
                 && partial_agg_exec.mode().input_mode() == AggregateInputMode::Raw

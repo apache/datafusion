@@ -192,8 +192,8 @@ logical_plan
 03)----Projection: CAST(CAST(hits_raw.EventDate AS Int32) AS Date32) AS EventDate
 04)------TableScan: hits_raw projection=[EventDate]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[min(hits.EventDate), max(hits.EventDate)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[CAST(CAST(EventDate@5 AS Int32) AS Date32) as EventDate], file_type=parquet
+01)ProjectionExec: expr=[2013-07-15 as min(hits.EventDate), 2013-07-15 as max(hits.EventDate)]
+02)--PlaceholderRowExec
 
 query DD
 SELECT MIN("EventDate"), MAX("EventDate") FROM hits;

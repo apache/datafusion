@@ -21,7 +21,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
-use crate::expressions::{Column, Literal};
+use crate::expressions::{CastExpr, Column, Literal};
 use crate::scalar_function::ScalarFunctionExpr;
 use crate::utils::collect_columns;
 
@@ -715,15 +715,54 @@ impl ProjectionExprs {
                     }
                 }
             } else {
-                // TODO stats: estimate more statistics from expressions
-                // (expressions should compute their statistics themselves)
-                ColumnStatistics::new_unknown()
+                // Try to propagate statistics through expressions like CAST
+                project_column_statistics_through_expr(
+                    expr.as_ref(),
+                    &mut stats.column_statistics,
+                )
             };
             column_statistics.push(col_stats);
         }
         stats.calculate_total_byte_size(output_schema);
         stats.column_statistics = column_statistics;
         Ok(stats)
+    }
+}
+
+/// Propagate column statistics through expressions that preserve order.
+///
+/// Currently handles:
+/// - `Column` references (direct passthrough)
+/// - `CAST` expressions (casts min/max values to the target type)
+///
+/// For other expressions, returns unknown statistics.
+fn project_column_statistics_through_expr(
+    expr: &dyn PhysicalExpr,
+    column_stats: &mut [ColumnStatistics],
+) -> ColumnStatistics {
+    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+        std::mem::take(&mut column_stats[col.index()])
+    } else if let Some(cast_expr) = expr.as_any().downcast_ref::<CastExpr>() {
+        let inner_stats =
+            project_column_statistics_through_expr(cast_expr.expr.as_ref(), column_stats);
+        let target_type = cast_expr.cast_type();
+        ColumnStatistics {
+            min_value: inner_stats
+                .min_value
+                .cast_to(target_type)
+                .unwrap_or(Precision::Absent),
+            max_value: inner_stats
+                .max_value
+                .cast_to(target_type)
+                .unwrap_or(Precision::Absent),
+            null_count: inner_stats.null_count,
+            distinct_count: inner_stats.distinct_count,
+            // Sum and byte size change under CAST, don't propagate
+            sum_value: Precision::Absent,
+            byte_size: Precision::Absent,
+        }
+    } else {
+        ColumnStatistics::new_unknown()
     }
 }
 
