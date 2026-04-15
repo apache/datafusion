@@ -458,7 +458,7 @@ pub struct CacheManagerConfig {
     /// Enabling the cache avoids repeatedly reading file statistics in a DataFusion session.
     /// Default is enabled with 1MiB. Currently only Parquet files are supported.
     pub file_statistics_cache: Option<Arc<dyn FileStatisticsCache>>,
-    /// Limit of the file statistics cache, in bytes. Default: 1MiB.
+    /// Limit of the file statistics cache, in bytes. Default: 20MiB.
     pub file_statistics_cache_limit: usize,
     /// Enable caching of file metadata when listing files.
     /// Enabling the cache avoids repeat list and object metadata fetch operations, which may be
