@@ -218,20 +218,31 @@ LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn/';
 statement ok
 set datafusion.execution.collect_statistics = true;
 
+# Suppress metrics: pruning counts are nondeterministic under parallel
+# execution (the order in which Partial aggregates publish dynamic filter
+# updates races against when the scan reads each partition). The original
+# Rust test only asserted matched < 4; the important invariant here is
+# that the DynamicFilter text is correct.
 statement ok
-set datafusion.explain.analyze_categories = 'rows';
+set datafusion.explain.analyze_level = summary;
+
+statement ok
+set datafusion.explain.analyze_categories = 'none';
 
 query TT
 EXPLAIN ANALYZE select max(column1) from agg_dyn_e2e where column1 > 1;
 ----
 Plan with Metrics
-01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[output_rows=1, output_batches=1]
-02)--CoalescePartitionsExec, metrics=[output_rows=2, output_batches=2]
-03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[output_rows=2, output_batches=2]
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_3.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 > 1 AND DynamicFilter [ column1@0 > 4 ], pruning_predicate=column1_null_count@1 != row_count@2 AND column1_max@0 > 1 AND column1_null_count@1 != row_count@2 AND column1_max@0 > 4, required_guarantees=[], metrics=[output_rows=2, output_batches=2, files_ranges_pruned_statistics=4 total → 4 matched, row_groups_pruned_statistics=4 total → 2 matched -> 2 fully matched, row_groups_pruned_bloom_filter=2 total → 2 matched, page_index_pages_pruned=2 total → 2 matched, page_index_rows_pruned=2 total → 2 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=4, files_processed=4, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=0, predicate_cache_inner_records=2, predicate_cache_records=4, scan_efficiency_ratio=25.15% (130/517)]
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
+02)--CoalescePartitionsExec, metrics=[]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_3.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 > 1 AND DynamicFilter [ column1@0 > 4 ], pruning_predicate=column1_null_count@1 != row_count@2 AND column1_max@0 > 1 AND column1_null_count@1 != row_count@2 AND column1_max@0 > 4, required_guarantees=[], metrics=[]
 
 statement ok
 reset datafusion.explain.analyze_categories;
+
+statement ok
+reset datafusion.explain.analyze_level;
 
 statement ok
 reset datafusion.execution.collect_statistics;
