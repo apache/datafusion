@@ -5282,11 +5282,15 @@ union_tag(union_expression)
 ## Other Functions
 
 - [arrow_cast](#arrow_cast)
+- [arrow_field](#arrow_field)
 - [arrow_metadata](#arrow_metadata)
 - [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
+- [cast_to_type](#cast_to_type)
 - [get_field](#get_field)
+- [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
+- [with_metadata](#with_metadata)
 
 ### `arrow_cast`
 
@@ -5324,6 +5328,36 @@ arrow_cast(expression, datatype)
 +---------------------------+---------------------+
 | 2023-01-02T12:53:02+08:00 | 2023-01-02T12:53:02 |
 +---------------------------+---------------------+
+```
+
+### `arrow_field`
+
+Returns a struct containing the Arrow field information of the expression, including name, data type, nullability, and metadata.
+
+```sql
+arrow_field(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select arrow_field(1);
++-------------------------------------------------------------+
+| arrow_field(Int64(1))                                       |
++-------------------------------------------------------------+
+| {name: lit, data_type: Int64, nullable: false, metadata: {}} |
++-------------------------------------------------------------+
+
+> select arrow_field(1)['data_type'];
++-----------------------------------+
+| arrow_field(Int64(1))[data_type]  |
++-----------------------------------+
+| Int64                             |
++-----------------------------------+
 ```
 
 ### `arrow_metadata`
@@ -5405,6 +5439,37 @@ arrow_typeof(expression)
 +---------------------------+------------------------+
 ```
 
+### `cast_to_type`
+
+Casts the first argument to the data type of the second argument. Only the type of the second argument is used; its value is ignored.
+
+```sql
+cast_to_type(expression, reference)
+```
+
+#### Arguments
+
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
+
+#### Example
+
+```sql
+> select cast_to_type('42', NULL::INTEGER) as a;
++----+
+| a  |
++----+
+| 42 |
++----+
+
+> select cast_to_type(1 + 2, NULL::DOUBLE) as b;
++-----+
+| b   |
++-----+
+| 3.0 |
++-----+
+```
+
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
@@ -5457,6 +5522,32 @@ get_field(expression, field_name[, field_name2, ...])
 +--------+
 ```
 
+### `try_cast_to_type`
+
+Casts the first argument to the data type of the second argument, returning NULL if the cast fails. Only the type of the second argument is used; its value is ignored.
+
+```sql
+try_cast_to_type(expression, reference)
+```
+
+#### Arguments
+
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
+
+#### Example
+
+```sql
+> select try_cast_to_type('123', NULL::INTEGER) as a,
+         try_cast_to_type('not_a_number', NULL::INTEGER) as b;
+
++-----+------+
+| a   | b    |
++-----+------+
+| 123 | NULL |
++-----+------+
+```
+
 ### `version`
 
 Returns the version of DataFusion.
@@ -5474,4 +5565,33 @@ version()
 +--------------------------------------------+
 | Apache DataFusion 42.0.0, aarch64 on macos |
 +--------------------------------------------+
+```
+
+### `with_metadata`
+
+Attaches Arrow field metadata (key/value pairs) to the input expression. Keys must be non-empty constant strings and values must be constant strings (empty values are allowed). Existing metadata on the input field is preserved; new keys overwrite on collision. This is the inverse of `arrow_metadata`.
+
+```sql
+with_metadata(expression, key1, value1[, key2, value2, ...])
+```
+
+#### Arguments
+
+- **expression**: The expression whose output Arrow field should be annotated. Values flow through unchanged.
+- **key**: Metadata key. Must be a non-empty constant string literal.
+- **value**: Metadata value. Must be a constant string literal (may be empty).
+
+#### Example
+
+```sql
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms'), 'unit') from (values (1));
++---------------------------------------------------------------+
+| arrow_metadata(with_metadata(column1,Utf8("unit"),Utf8("ms")),Utf8("unit")) |
++---------------------------------------------------------------+
+| ms                                                            |
++---------------------------------------------------------------+
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms', 'source', 'sensor')) from (values (1));
++--------------------------+
+| {source: sensor, unit: ms} |
++--------------------------+
 ```

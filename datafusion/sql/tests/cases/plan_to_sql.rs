@@ -23,7 +23,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
-    count_udaf, max_udaf, min_udaf, sum, sum_udaf,
+    count_udaf, max, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
     EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Union,
@@ -1938,6 +1938,28 @@ fn test_without_offset() {
 }
 
 #[test]
+fn test_cast_to_tinyint() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(3 as tinyint)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT CAST(3 AS SMALLINT)",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_tinyint_default_dialect() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(3 as tinyint)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT CAST(3 AS TINYINT)",
+    );
+    Ok(())
+}
+
+#[test]
 fn test_with_offset0() {
     let statement = generate_round_trip_statement(MySqlDialect {}, "select 1 offset 0");
     assert_snapshot!(
@@ -2729,6 +2751,17 @@ fn test_unparse_window() -> Result<()> {
 }
 
 #[test]
+fn test_array_to_sql_postgres() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT [1, 2, 3, 4, 5]",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT ARRAY[1, 2, 3, 4, 5]",
+    );
+    Ok(())
+}
+
+#[test]
 fn test_like_filter() {
     let statement = generate_round_trip_statement(
         GenericDialect {},
@@ -2903,4 +2936,73 @@ fn test_json_access_3() {
         statement,
         @r#"SELECT (j1.j1_string : 'field.inner1[''inner2'']') FROM j1"#
     );
+}
+
+/// Roundtrip test for a subquery aggregate with column aliases.
+/// Ensures that `subquery_alias_inner_query_and_columns` unwrapping
+/// a Projection -> Aggregate still triggers the derived-subquery path.
+#[test]
+fn roundtrip_subquery_aggregate_with_column_alias() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT id FROM (SELECT max(j1_id) FROM j1) AS c(id)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT c.id FROM (SELECT max(j1.j1_id) FROM j1) AS c (id)",
+    );
+    Ok(())
+}
+
+/// Test that unparsing a manually constructed join with a subquery aggregate
+/// preserves the MAX aggregate function.
+///
+/// Builds the equivalent of:
+///   SELECT j1.j1_string FROM j1
+///     JOIN (SELECT max(j2_id) AS max_id FROM j2) AS b
+///     ON j1.j1_id = b.max_id
+#[test]
+fn test_unparse_manual_join_with_subquery_aggregate() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+    let j2_schema = context
+        .get_table_source(TableReference::bare("j2"))?
+        .schema();
+
+    // Build the right side: SELECT max(j2_id) AS max_id FROM j2
+    let right_scan = table_scan(Some("j2"), &j2_schema, None)?.build()?;
+    let right_agg = LogicalPlanBuilder::from(right_scan)
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("j2.j2_id")).alias("max_id")],
+        )?
+        .build()?;
+    let right_subquery = subquery_alias(right_agg, "b")?;
+
+    // Build the full plan: SELECT j1.j1_string FROM j1 JOIN (...) AS b ON j1.j1_id = b.max_id
+    let left_scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(left_scan)
+        .join(
+            right_subquery,
+            datafusion_expr::JoinType::Inner,
+            (
+                vec![Column::from_qualified_name("j1.j1_id")],
+                vec![Column::from_qualified_name("b.max_id")],
+            ),
+            None,
+        )?
+        .project(vec![col("j1.j1_string")])?
+        .build()?;
+
+    let unparser = Unparser::default();
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+    let sql_upper = sql.to_uppercase();
+    assert!(
+        sql_upper.contains("MAX("),
+        "Unparsed SQL should preserve the MAX aggregate function call, got: {sql}"
+    );
+
+    Ok(())
 }

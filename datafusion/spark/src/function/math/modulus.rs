@@ -28,28 +28,27 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-/// Attempts `rem(left, right)` with per-element divide-by-zero handling.
+/// Computes `rem(left, right)` with divide-by-zero handling.
 /// In ANSI mode, any zero divisor causes an error.
-/// In legacy mode (ANSI off), positions where the divisor is zero return NULL
-/// while other positions compute normally.
+/// In legacy mode (ANSI off), zero divisors are replaced with NULL before
+/// computing the remainder, so those positions return NULL while others
+/// compute normally.
 fn try_rem(
     left: &arrow::array::ArrayRef,
     right: &arrow::array::ArrayRef,
     enable_ansi_mode: bool,
 ) -> Result<arrow::array::ArrayRef> {
-    match rem(left, right) {
-        Ok(result) => Ok(result),
-        Err(arrow::error::ArrowError::DivideByZero) if !enable_ansi_mode => {
-            // Integer rem fails when ANY divisor element is zero.
-            // Handle per-element: null out zero divisors
-            let zero = ScalarValue::new_zero(right.data_type())?.to_array()?;
-            let zero = Scalar::new(zero);
-            let null = Scalar::new(new_null_array(right.data_type(), 1));
-            let is_zero = eq(right, &zero)?;
-            let safe_right = zip(&is_zero, &null, right)?;
-            Ok(rem(left, &safe_right)?)
-        }
-        Err(e) => Err(e.into()),
+    if enable_ansi_mode {
+        Ok(rem(left, right)?)
+    } else {
+        // In legacy mode, null out zero divisors so that division by zero
+        // returns NULL instead of erroring (integers) or returning NaN (floats).
+        let zero = ScalarValue::new_zero(right.data_type())?.to_array()?;
+        let zero = Scalar::new(zero);
+        let null = Scalar::new(new_null_array(right.data_type(), 1));
+        let is_zero = eq(right, &zero)?;
+        let safe_right = zip(&is_zero, &null, right)?;
+        Ok(rem(left, &safe_right)?)
     }
 }
 
@@ -241,6 +240,8 @@ mod test {
             Some(5.0),
             Some(f64::NAN),
             Some(f64::INFINITY),
+            Some(10.5),
+            Some(15.8),
         ]);
         let right = Float64Array::from(vec![
             Some(3.0),
@@ -252,6 +253,8 @@ mod test {
             Some(f64::INFINITY),
             Some(f64::INFINITY),
             Some(f64::NAN),
+            Some(0.0),
+            Some(0.0),
         ]);
 
         let left_value = ColumnarValue::Array(Arc::new(left));
@@ -280,6 +283,9 @@ mod test {
             assert!(result_float64.value(7).is_nan());
             // inf % nan = nan
             assert!(result_float64.value(8).is_nan());
+            // Division by zero returns NULL
+            assert!(result_float64.is_null(9)); // 10.5 % 0.0 = NULL
+            assert!(result_float64.is_null(10)); // 15.8 % 0.0 = NULL
         } else {
             panic!("Expected array result");
         }
@@ -297,6 +303,8 @@ mod test {
             Some(5.0),
             Some(f32::NAN),
             Some(f32::INFINITY),
+            Some(10.5),
+            Some(15.8),
         ]);
         let right = Float32Array::from(vec![
             Some(3.0),
@@ -308,6 +316,8 @@ mod test {
             Some(f32::INFINITY),
             Some(f32::INFINITY),
             Some(f32::NAN),
+            Some(0.0),
+            Some(0.0),
         ]);
 
         let left_value = ColumnarValue::Array(Arc::new(left));
@@ -336,6 +346,9 @@ mod test {
             assert!(result_float32.value(7).is_nan());
             // inf % nan = nan
             assert!(result_float32.value(8).is_nan());
+            // Division by zero returns NULL
+            assert!(result_float32.is_null(9)); // 10.5 % 0.0 = NULL
+            assert!(result_float32.is_null(10)); // 15.8 % 0.0 = NULL
         } else {
             panic!("Expected array result");
         }
@@ -462,6 +475,8 @@ mod test {
             Some(f64::INFINITY),
             Some(5.0),
             Some(-5.0),
+            Some(10.5),
+            Some(-7.2),
         ]);
         let right = Float64Array::from(vec![
             Some(3.0),
@@ -472,6 +487,8 @@ mod test {
             Some(2.0),
             Some(f64::INFINITY),
             Some(f64::INFINITY),
+            Some(0.0),
+            Some(0.0),
         ]);
 
         let left_value = ColumnarValue::Array(Arc::new(left));
@@ -497,6 +514,9 @@ mod test {
             assert!((result_float64.value(6) - 5.0).abs() < f64::EPSILON);
             // -5.0 pmod inf = NaN
             assert!(result_float64.value(7).is_nan());
+            // Division by zero returns NULL
+            assert!(result_float64.is_null(8)); // 10.5 pmod 0.0 = NULL
+            assert!(result_float64.is_null(9)); // -7.2 pmod 0.0 = NULL
         } else {
             panic!("Expected array result");
         }
@@ -513,6 +533,8 @@ mod test {
             Some(f32::INFINITY),
             Some(5.0),
             Some(-5.0),
+            Some(10.5),
+            Some(-7.2),
         ]);
         let right = Float32Array::from(vec![
             Some(3.0),
@@ -523,6 +545,8 @@ mod test {
             Some(2.0),
             Some(f32::INFINITY),
             Some(f32::INFINITY),
+            Some(0.0),
+            Some(0.0),
         ]);
 
         let left_value = ColumnarValue::Array(Arc::new(left));
@@ -548,6 +572,9 @@ mod test {
             assert!((result_float32.value(6) - 5.0).abs() < f32::EPSILON * 10.0);
             // -5.0 pmod inf = NaN
             assert!(result_float32.value(7).is_nan());
+            // Division by zero returns NULL
+            assert!(result_float32.is_null(8)); // 10.5 pmod 0.0 = NULL
+            assert!(result_float32.is_null(9)); // -7.2 pmod 0.0 = NULL
         } else {
             panic!("Expected array result");
         }

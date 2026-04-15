@@ -289,7 +289,7 @@ impl Range {
     ///
     /// # Arguments
     ///
-    /// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
+    /// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step (step value can not be zero) values.
     ///
     /// # Examples
     ///

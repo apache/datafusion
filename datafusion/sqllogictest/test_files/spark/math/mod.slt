@@ -158,7 +158,7 @@ NULL
 query R
 SELECT MOD(10.5::float8, 0.0::float8) as mod_div_zero_float;
 ----
-NaN
+NULL
 
 # Division by zero errors in ANSI mode
 statement ok
