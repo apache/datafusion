@@ -49,6 +49,7 @@ use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -1215,7 +1216,15 @@ impl AggregateExec {
                 }
                 let col = expr.as_any().downcast_ref::<Column>()?;
                 let col_stats = &child_statistics.column_statistics[col.index()];
-                let ndv = *col_stats.distinct_count.get_value()?;
+                let ndv =
+                    col_stats.distinct_count.get_value().copied().or_else(|| {
+                        let min = col_stats.min_value.get_value()?;
+                        let max = col_stats.max_value.get_value()?;
+                        let card = Interval::try_new(min.clone(), max.clone())
+                            .ok()
+                            .and_then(|i| i.cardinality())?;
+                        Some(card as usize)
+                    })?;
                 let null_adjustment = match col_stats.null_count.get_value() {
                     Some(&n) if n > 0 => 1usize,
                     _ => 0,
