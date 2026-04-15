@@ -70,7 +70,6 @@ impl DefaultExpressionAnalyzer {
             _ => None,
         }
     }
-
 }
 
 impl ExpressionAnalyzer for DefaultExpressionAnalyzer {

@@ -1,0 +1,118 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for ExpressionAnalyzerRegistry end-to-end integration.
+#
+# t_ndv is a StatisticsTable with controlled statistics:
+#   1000 rows, column a (Int64, NDV=10), column b (Int64, NDV=5).
+#
+# OR predicates are not expressible as a single interval, so the built-in
+# interval-arithmetic path always falls back to the default selectivity (20%).
+# ExpressionAnalyzerRegistry applies inclusion-exclusion instead:
+#   P(a=42 OR b=5) = P(a=42) + P(b=5) - P(a=42)*P(b=5)
+#                  = 1/10 + 1/5 - 1/50
+#                  = 0.1 + 0.2 - 0.02 = 0.28
+# Expected rows = round(1000 * 0.28) = 280.
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.explain.show_statistics = true;
+
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+# Without ExpressionAnalyzerRegistry: OR predicate falls back to 20% default selectivity
+# → FilterExec estimated rows = 1000 * 0.20 = 200
+query TT
+EXPLAIN SELECT * FROM t_ndv WHERE a = 42 OR b = 5;
+----
+physical_plan
+01)FilterExec: a@0 = 42 OR b@1 = 5, statistics=[Rows=Inexact(200), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+02)--CooperativeExec, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+03)----StatisticsTable, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+
+# Enable ExpressionAnalyzerRegistry so inclusion-exclusion applies to OR predicates
+statement ok
+SET datafusion.optimizer.use_expression_analyzer = true;
+
+# With ExpressionAnalyzerRegistry: OR uses inclusion-exclusion
+# P(a=42 OR b=5) = 1/10 + 1/5 - (1/10 * 1/5) = 0.28 → 280 rows
+query TT
+EXPLAIN SELECT * FROM t_ndv WHERE a = 42 OR b = 5;
+----
+physical_plan
+01)FilterExec: a@0 = 42 OR b@1 = 5, statistics=[Rows=Inexact(280), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+02)--CooperativeExec, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+03)----StatisticsTable, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+
+# Verify the registry survives physical optimizer rules: ORDER BY + LIMIT triggers the
+# TopK sort rule which rewrites the plan above FilterExec. The FilterExec row estimate
+# must still reflect inclusion-exclusion (280), not the 20% default.
+query TT
+EXPLAIN SELECT * FROM t_ndv WHERE a = 42 OR b = 5 ORDER BY a LIMIT 100;
+----
+physical_plan
+01)SortExec: TopK(fetch=100), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false], statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+02)--FilterExec: a@0 = 42 OR b@1 = 5, statistics=[Rows=Inexact(280), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+03)----CooperativeExec, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+04)------StatisticsTable, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+
+# Verify the registry reaches FilterExec nodes created by optimizer rules: the
+# filter_pushdown rule running on UnionExec creates fresh FilterExec nodes (one per
+# branch) that never existed when the registry was first injected. Both must show
+# 280 rows, confirming re-injection after each rule reaches newly created nodes.
+# The UnionExec row count (560 = 2 * 280) and doubled NDVs (20, 10) also confirm
+# that distinct-count propagation through UnionExec is correct.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM t_ndv UNION ALL SELECT * FROM t_ndv) WHERE a = 42 OR b = 5;
+----
+physical_plan
+01)UnionExec, statistics=[Rows=Inexact(560), Bytes=Absent, [(Col[0]: Distinct=Inexact(20)),(Col[1]: Distinct=Inexact(10))]]
+02)--FilterExec: a@0 = 42 OR b@1 = 5, statistics=[Rows=Inexact(280), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+03)----CooperativeExec, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+04)------StatisticsTable, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+05)--FilterExec: a@0 = 42 OR b@1 = 5, statistics=[Rows=Inexact(280), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+06)----CooperativeExec, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+07)------StatisticsTable, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+
+# Verify the registry reaches a FilterExec pushed through a join: filter_pushdown
+# moves the WHERE clause filter to the left side of the HashJoinExec, creating a
+# FilterExec that was not present in the plan at initial injection time.
+query TT
+EXPLAIN SELECT l.a, r.b FROM t_ndv l JOIN t_ndv r ON l.a = r.a WHERE l.a = 42 OR l.b = 5;
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)], projection=[a@0, b@2], statistics=[Rows=Inexact(28000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+02)--FilterExec: a@0 = 42 OR b@1 = 5, projection=[a@0], statistics=[Rows=Inexact(280), Bytes=Absent, [(Col[0]: Distinct=Inexact(10))]]
+03)----CooperativeExec, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+04)------StatisticsTable, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+05)--CooperativeExec, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+06)----StatisticsTable, statistics=[Rows=Inexact(1000), Bytes=Absent, [(Col[0]: Distinct=Inexact(10)),(Col[1]: Distinct=Inexact(5))]]
+
+statement ok
+SET datafusion.optimizer.use_expression_analyzer = false;
+
+statement ok
+SET datafusion.explain.show_statistics = false;
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;

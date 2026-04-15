@@ -3212,7 +3212,7 @@ mod tests {
             schema.clone(),
         ));
         // (a = 42 OR b = 5): OR is not expressible as a single interval
-        let predicate = Arc::new(BinaryExpr::new(
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
                 Operator::Eq,
@@ -3227,7 +3227,7 @@ mod tests {
         ));
 
         // Without ExpressionAnalyzer: default 20% selectivity -> 200 rows
-        let filter = Arc::new(FilterExec::try_new(predicate.clone(), input as _)?);
+        let filter = Arc::new(FilterExec::try_new(Arc::clone(&predicate), input as _)?);
         let stats = filter.partition_statistics(None)?;
         assert_eq!(stats.num_rows, Precision::Inexact(200));
 
