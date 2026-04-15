@@ -3770,11 +3770,11 @@ impl PartialOrd for Aggregate {
 /// Returns 0 when no grouping set is duplicated.
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
-        sets.iter()
-            .map(|set| sets.iter().filter(|other| *other == set).count())
-            .max()
-            .unwrap_or(0)
-            .saturating_sub(1)
+        let mut counts: HashMap<&[Expr], usize> = HashMap::new();
+        for set in sets {
+            *counts.entry(set).or_insert(0) += 1;
+        }
+        counts.into_values().max().unwrap_or(0).saturating_sub(1)
     } else {
         0
     }
