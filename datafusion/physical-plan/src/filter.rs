@@ -3180,6 +3180,67 @@ mod tests {
     /// an explicit projection must not panic when `try_swapping_with_projection`
     /// attempts to swap the two nodes.
     ///
+    /// Verifies that `ExpressionAnalyzerRegistry` computes selectivity for OR predicates
+    /// using inclusion-exclusion, which interval arithmetic cannot represent (a union of
+    /// two disjoint intervals is not a single interval).
+    ///
+    /// For `(a = 42 OR b = 5)` with NDV_a=10, NDV_b=5 on 1000 rows:
+    /// - Without ExpressionAnalyzer: default 20% selectivity -> 200 rows
+    /// - With ExpressionAnalyzer: P(a=42) + P(b=5) - P(a=42)*P(b=5) = 0.1 + 0.2 - 0.02 = 0.28 -> 280 rows
+    #[tokio::test]
+    async fn test_filter_statistics_expression_analyzer_selectivity_or_predicate() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(10),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(5),
+                        ..Default::default()
+                    },
+                ],
+            },
+            schema.clone(),
+        ));
+        // (a = 42 OR b = 5): OR is not expressible as a single interval
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+            )),
+            Operator::Or,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("b", 1)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
+            )),
+        ));
+
+        // Without ExpressionAnalyzer: default 20% selectivity -> 200 rows
+        let filter = Arc::new(FilterExec::try_new(predicate.clone(), input as _)?);
+        let stats = filter.partition_statistics(None)?;
+        assert_eq!(stats.num_rows, Precision::Inexact(200));
+
+        // With ExpressionAnalyzer: inclusion-exclusion -> 0.1 + 0.2 - 0.02 = 0.28 -> 280 rows
+        let registry = Arc::new(ExpressionAnalyzerRegistry::new());
+        let filter_with_registry = filter
+            .with_expression_analyzer_registry(&registry)
+            .expect("registry should be injectable when not already set");
+        let stats_with_registry = filter_with_registry.partition_statistics(None)?;
+        assert_eq!(stats_with_registry.num_rows, Precision::Inexact(280));
+
+        Ok(())
+    }
+
     /// Before the fix, `FilterExecBuilder::from(self)` copied the old projection
     /// (e.g. `[0, 1, 2]`) from the FilterExec. After `.with_input` replaced the
     /// input with the narrower ProjectionExec (2 columns), `.build()` tried to
