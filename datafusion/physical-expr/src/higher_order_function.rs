@@ -55,6 +55,7 @@ pub struct HigherOrderFunctionExpr {
     fun: Arc<dyn HigherOrderUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
+    lambda_positions: Vec<usize>,
     return_field: FieldRef,
     config_options: Arc<ConfigOptions>,
 }
@@ -65,6 +66,7 @@ impl Debug for HigherOrderFunctionExpr {
             .field("fun", &"<FUNC>")
             .field("name", &self.name)
             .field("args", &self.args)
+            .field("lambda_positions", &self.lambda_positions)
             .field("return_field", &self.return_field)
             .finish()
     }
@@ -72,10 +74,17 @@ impl Debug for HigherOrderFunctionExpr {
 
 impl HigherOrderFunctionExpr {
     /// Create a new Higher Order function
+    ///
+    /// `lambda_positions` should contain the positions at `args` where
+    /// lambda arguments can be found, wrapped or not. Note that any lambda wrapper
+    /// [PhysicalExpr::evaluate] will not be called. The lambda *body* should be wrapped instead
+    /// If any arg referenced by `lambda_positions` does not contain a lambda or contains a wrapper
+    /// with multiple children before finding the lambda, the function evaluation will error
     pub fn new(
         name: impl Into<String>,
         fun: Arc<dyn HigherOrderUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
+        lambda_positions: Vec<usize>,
         return_field: FieldRef,
         config_options: Arc<ConfigOptions>,
     ) -> Self {
@@ -83,12 +92,17 @@ impl HigherOrderFunctionExpr {
             fun,
             name: name.into(),
             args,
+            lambda_positions,
             return_field,
             config_options,
         }
     }
 
     /// Create a new Higher Order function
+    ///
+    /// Note that lambda arguments must be present directly in args as [LambdaExpr],
+    /// and not as a wrapped child of any arg. Use [HigherOrderFunctionExpr::new] to provide
+    /// wrapped lambdas
     pub fn try_new(
         fun: Arc<dyn HigherOrderUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
@@ -98,12 +112,11 @@ impl HigherOrderFunctionExpr {
         let name = fun.name().to_string();
         let arg_fields = args
             .iter()
-            .map(|e| {
-                let field = e.return_field(schema)?;
-                match e.as_any().downcast_ref::<LambdaExpr>() {
-                    Some(_lambda) => Ok(ValueOrLambda::Lambda(field)),
-                    None => Ok(ValueOrLambda::Value(field)),
+            .map(|e| match e.as_any().downcast_ref::<LambdaExpr>() {
+                Some(lambda) => {
+                    Ok(ValueOrLambda::Lambda(lambda.body().return_field(schema)?))
                 }
+                None => Ok(ValueOrLambda::Value(e.return_field(schema)?)),
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -125,11 +138,23 @@ impl HigherOrderFunctionExpr {
         };
 
         let return_field = fun.return_field_from_args(ret_args)?;
+        let lambda_positions = args
+            .iter()
+            .enumerate()
+            .filter_map(|(i, arg)| {
+                if arg.as_any().is::<LambdaExpr>() {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         Ok(Self {
             fun,
             name,
             args,
+            lambda_positions,
             return_field,
             config_options,
         })
@@ -169,6 +194,10 @@ impl HigherOrderFunctionExpr {
     pub fn config_options(&self) -> &ConfigOptions {
         &self.config_options
     }
+
+    pub fn lambda_positions(&self) -> &[usize] {
+        &self.lambda_positions
+    }
 }
 
 impl fmt::Display for HigherOrderFunctionExpr {
@@ -187,12 +216,14 @@ impl PartialEq for HigherOrderFunctionExpr {
             fun,
             name,
             args,
+            lambda_positions,
             return_field,
             config_options,
         } = self;
         fun.eq(&o.fun)
             && name.eq(&o.name)
             && args.eq(&o.args)
+            && lambda_positions.eq(&o.lambda_positions)
             && return_field.eq(&o.return_field)
             && (Arc::ptr_eq(config_options, &o.config_options)
                 || sorted_config_entries(config_options)
@@ -206,12 +237,14 @@ impl Hash for HigherOrderFunctionExpr {
             fun,
             name,
             args,
+            lambda_positions,
             return_field,
             config_options: _, // expensive to hash, and often equal
         } = self;
         fun.hash(state);
         name.hash(state);
         args.hash(state);
+        lambda_positions.hash(state);
         return_field.hash(state);
     }
 }
@@ -239,12 +272,16 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
         let arg_fields = self
             .args
             .iter()
-            .map(|e| {
-                let field = e.return_field(batch.schema_ref())?;
+            .enumerate()
+            .map(|(i, e)| {
+                if self.lambda_positions.contains(&i) {
+                    let lambda = wrapped_lambda(e)?;
 
-                match e.as_any().downcast_ref::<LambdaExpr>() {
-                    Some(_lambda) => Ok(ValueOrLambda::Lambda(field)),
-                    None => Ok(ValueOrLambda::Value(field)),
+                    Ok(ValueOrLambda::Lambda(
+                        lambda.body().return_field(batch.schema_ref())?,
+                    ))
+                } else {
+                    Ok(ValueOrLambda::Value(e.return_field(batch.schema_ref())?))
                 }
             })
             .collect::<Result<Vec<_>>>()?;
@@ -282,8 +319,11 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
         let args = self
             .args
             .iter()
-            .map(|arg| match arg.as_any().downcast_ref::<LambdaExpr>() {
-                Some(lambda) => {
+            .enumerate()
+            .map(|(i, arg)| {
+                if self.lambda_positions.contains(&i) {
+                    let lambda = wrapped_lambda(arg)?;
+
                     let lambda_params = lambda_parameters.next().ok_or_else(|| {
                         internal_datafusion_err!(
                             "params len should have been checked above"
@@ -292,7 +332,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
 
                     if lambda.params().len() > lambda_params.len() {
                         return exec_err!(
-                            "lambda defined {} params but UDF support only {}",
+                            "lambda defined {} params but UDHOF support only {}",
                             lambda.params().len(),
                             lambda_params.len()
                         );
@@ -306,8 +346,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         params,
                         Arc::clone(lambda.body()),
                     )))
-                }
-                None => {
+                } else {
                     let value = arg.evaluate(batch)?;
 
                     let value =
@@ -374,6 +413,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
             &self.name,
             Arc::clone(&self.fun),
             children,
+            self.lambda_positions.clone(),
             Arc::clone(&self.return_field),
             Arc::clone(&self.config_options),
         )))
@@ -395,6 +435,21 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
     }
 }
 
+fn wrapped_lambda(expr: &Arc<dyn PhysicalExpr>) -> Result<&LambdaExpr> {
+    let mut current = expr;
+
+    loop {
+        if let Some(lambda) = current.as_any().downcast_ref::<LambdaExpr>() {
+            return Ok(lambda);
+        }
+
+        match current.children().as_slice() {
+            [single_child] => current = *single_child,
+            _ => return exec_err!("unable to unwrap lambda from {expr}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -402,8 +457,13 @@ mod tests {
     use super::*;
     use crate::HigherOrderFunctionExpr;
     use crate::expressions::Column;
+    use crate::expressions::lambda;
+    use crate::expressions::not;
+    use arrow::array::NullArray;
+    use arrow::array::RecordBatchOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
+    use datafusion_common::assert_contains;
     use datafusion_expr::{
         HigherOrderFunctionArgs, HigherOrderSignature, HigherOrderUDF,
     };
@@ -430,21 +490,30 @@ mod tests {
             &self,
             _value_fields: &[FieldRef],
         ) -> Result<Vec<Vec<Field>>> {
-            unimplemented!()
+            Ok(vec![vec![Field::new("", DataType::Null, true)]])
         }
 
         fn return_field_from_args(
             &self,
-            _args: HigherOrderReturnFieldArgs,
+            args: HigherOrderReturnFieldArgs,
         ) -> Result<FieldRef> {
-            Ok(Arc::new(Field::new("", DataType::Int32, false)))
+            match &args.arg_fields[0] {
+                ValueOrLambda::Lambda(field) | ValueOrLambda::Value(field) => {
+                    Ok(Arc::clone(field))
+                }
+            }
         }
 
         fn invoke_with_args(
             &self,
-            _args: HigherOrderFunctionArgs,
+            args: HigherOrderFunctionArgs,
         ) -> Result<ColumnarValue> {
-            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))))
+            match &args.args[0] {
+                ValueOrLambda::Lambda(lambda) => {
+                    lambda.evaluate(&[&|| Ok(Arc::new(NullArray::new(args.number_rows)))])
+                }
+                ValueOrLambda::Value(value) => Ok(value.clone()),
+            }
         }
     }
 
@@ -485,5 +554,85 @@ mod tests {
         assert!(!stable_expr.is_volatile_node());
         let stable_arc: Arc<dyn PhysicalExpr> = Arc::new(stable_expr);
         assert!(!is_volatile(&stable_arc));
+    }
+
+    #[test]
+    fn test_higher_order_function_wrapped_lambda() {
+        let fun = Arc::new(MockHigherOrderUDF {
+            signature: HigherOrderSignature::variadic_any(Volatility::Stable),
+        });
+
+        let expected = ScalarValue::Int32(Some(42));
+
+        let hof = HigherOrderFunctionExpr::try_new(
+            fun,
+            vec![lambda(["a"], Arc::new(Literal::new(expected.clone()))).unwrap()],
+            &Schema::empty(),
+            Arc::new(ConfigOptions::new()),
+        )
+        .unwrap();
+
+        let wrapped = HigherOrderFunctionExpr::new(
+            hof.name,
+            hof.fun,
+            vec![not(Arc::clone(&hof.args[0])).unwrap()],
+            hof.lambda_positions,
+            hof.return_field,
+            hof.config_options,
+        );
+
+        let result = wrapped
+            .evaluate(
+                &RecordBatch::try_new_with_options(
+                    Arc::new(Schema::empty()),
+                    vec![],
+                    &RecordBatchOptions::new().with_row_count(Some(0)),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let ColumnarValue::Scalar(result) = result else {
+            unreachable!()
+        };
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_higher_order_function_badly_wrapped_lambda() {
+        let fun = Arc::new(MockHigherOrderUDF {
+            signature: HigherOrderSignature::variadic_any(Volatility::Stable),
+        });
+
+        let hof = HigherOrderFunctionExpr::try_new(
+            fun,
+            vec![
+                not(
+                    lambda(["a"], Arc::new(Literal::new(ScalarValue::Int32(Some(42)))))
+                        .unwrap(),
+                )
+                .unwrap(),
+            ],
+            &Schema::empty(),
+            Arc::new(ConfigOptions::new()),
+        )
+        .unwrap();
+
+        let result = hof
+            .evaluate(
+                &RecordBatch::try_new_with_options(
+                    Arc::new(Schema::empty()),
+                    vec![],
+                    &RecordBatchOptions::new().with_row_count(Some(0)),
+                )
+                .unwrap(),
+            )
+            .unwrap_err();
+
+        assert_contains!(
+            result.to_string(),
+            "LambdaExpr::evaluate() should not be called"
+        );
     }
 }

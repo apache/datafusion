@@ -87,16 +87,16 @@ impl PhysicalExpr for LambdaExpr {
         self
     }
 
-    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        self.body.data_type(input_schema)
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Null)
     }
 
-    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        self.body.nullable(input_schema)
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+        Ok(true)
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        internal_err!("Lambda::evaluate() should not be called")
+        internal_err!("LambdaExpr::evaluate() should not be called")
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
