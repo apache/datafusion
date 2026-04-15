@@ -18,38 +18,43 @@
 use crate::Result;
 use crate::error::_internal_err;
 use crate::types::extension::DFExtensionType;
-use arrow::array::{Array, FixedSizeBinaryArray};
+use arrow::array::{Array, Int8Array};
 use arrow::datatypes::DataType;
 use arrow::util::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
-use arrow_schema::extension::{ExtensionType, Uuid};
+use arrow_schema::extension::{Bool8, ExtensionType};
 use std::fmt::Write;
-use uuid::Bytes;
 
-/// Defines the extension type logic for the canonical `arrow.uuid` extension type. This extension
-/// type defines that a field should be interpreted as a
-/// [UUID](https://de.wikipedia.org/wiki/Universally_Unique_Identifier).
+/// Defines the extension type logic for the canonical `arrow.bool8` extension type. This extension
+/// type allows storing a Boolean value in a single byte, instead of a single bit.
 ///
 /// See [`DFExtensionType`] for information on DataFusion's extension type mechanism. See also
-/// [`Uuid`] for the implementation of arrow-rs, which this type uses internally.
+/// [`Bool8`] for the implementation of arrow-rs, which this type uses internally.
 ///
-/// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid>
+/// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#bit-boolean>
 #[derive(Debug, Clone)]
-pub struct DFUuid(Uuid);
+pub struct DFBool8(Bool8);
 
-impl DFUuid {
-    /// Creates a new [`DFUuid`], validating that the storage type is compatible with the
+impl DFBool8 {
+    /// Creates a new [`DFBool8`], validating that the storage type is compatible with the
     /// extension type.
+    ///
+    /// Even though [`DFBool8`] only supports a single storage type ([`DataType::Int8`]), passing-in
+    /// the storage type allows conveniently validating whether this extension type is compatible
+    /// with a given [`DataType`].
     pub fn try_new(
         data_type: &DataType,
-        metadata: <Uuid as ExtensionType>::Metadata,
+        metadata: <Bool8 as ExtensionType>::Metadata,
     ) -> Result<Self> {
-        Ok(Self(<Uuid as ExtensionType>::try_new(data_type, metadata)?))
+        // Validates the storage type
+        Ok(Self(<Bool8 as ExtensionType>::try_new(
+            data_type, metadata,
+        )?))
     }
 }
 
-impl DFExtensionType for DFUuid {
+impl DFExtensionType for DFBool8 {
     fn storage_type(&self) -> DataType {
-        DataType::FixedSizeBinary(16)
+        DataType::Int8
     }
 
     fn serialize_metadata(&self) -> Option<String> {
@@ -61,11 +66,11 @@ impl DFExtensionType for DFUuid {
         array: &'fmt dyn Array,
         options: &FormatOptions<'fmt>,
     ) -> Result<Option<ArrayFormatter<'fmt>>> {
-        if array.data_type() != &DataType::FixedSizeBinary(16) {
-            return _internal_err!("Wrong array type for Uuid");
+        if array.data_type() != &DataType::Int8 {
+            return _internal_err!("Wrong array type for Bool8");
         }
 
-        let display_index = UuidValueDisplayIndex {
+        let display_index = Bool8ValueDisplayIndex {
             array: array.as_any().downcast_ref().unwrap(),
             null_str: options.null(),
         };
@@ -76,24 +81,22 @@ impl DFExtensionType for DFUuid {
     }
 }
 
-/// Pretty printer for binary UUID values.
+/// Pretty printer for binary bool8 values.
 #[derive(Debug, Clone, Copy)]
-struct UuidValueDisplayIndex<'a> {
-    array: &'a FixedSizeBinaryArray,
+struct Bool8ValueDisplayIndex<'a> {
+    array: &'a Int8Array,
     null_str: &'a str,
 }
 
-impl DisplayIndex for UuidValueDisplayIndex<'_> {
+impl DisplayIndex for Bool8ValueDisplayIndex<'_> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         if self.array.is_null(idx) {
             write!(f, "{}", self.null_str)?;
             return Ok(());
         }
 
-        let bytes = Bytes::try_from(self.array.value(idx))
-            .expect("FixedSizeBinaryArray length checked in create_array_formatter");
-        let uuid = uuid::Uuid::from_bytes(bytes);
-        write!(f, "{uuid}")?;
+        let bytes = self.array.value(idx);
+        write!(f, "{}", bytes != 0)?;
         Ok(())
     }
 }
@@ -101,24 +104,20 @@ impl DisplayIndex for UuidValueDisplayIndex<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ScalarValue;
-    use arrow_schema::ArrowError;
 
     #[test]
-    pub fn test_pretty_print_uuid() -> Result<(), ArrowError> {
-        let my_uuid = uuid::Uuid::nil();
-        let uuid = ScalarValue::FixedSizeBinary(16, Some(my_uuid.as_bytes().to_vec()))
-            .to_array_of_size(1)?;
+    pub fn test_pretty_bool8() {
+        let values = Int8Array::from_iter([Some(0), Some(1), Some(-20), None]);
 
-        let formatter = DFUuid::try_new(uuid.data_type(), ())?
-            .create_array_formatter(uuid.as_ref(), &FormatOptions::default())?
+        let extension_type = DFBool8(Bool8 {});
+        let formatter = extension_type
+            .create_array_formatter(&values, &FormatOptions::default().with_null("NULL"))
+            .unwrap()
             .unwrap();
 
-        assert_eq!(
-            formatter.value(0).to_string(),
-            "00000000-0000-0000-0000-000000000000"
-        );
-
-        Ok(())
+        assert_eq!(formatter.value(0).to_string(), "false");
+        assert_eq!(formatter.value(1).to_string(), "true");
+        assert_eq!(formatter.value(2).to_string(), "true");
+        assert_eq!(formatter.value(3).to_string(), "NULL");
     }
 }

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetOpener`] and [`ParquetMorselizer`] state machines for opening Parquet files
+//! [`ParquetMorselizer`] state machines for opening Parquet files
 
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_filter::build_projection_read_plan;
@@ -26,15 +26,11 @@ use crate::{
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
-use datafusion_common::internal_err;
-use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_datasource::morsel::{
-    Morsel, MorselPlan, MorselPlanner, Morselizer, PendingMorselPlanner,
-};
+use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::mem;
@@ -81,19 +77,6 @@ use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
-
-/// Implements [`FileOpener`] for Parquet
-#[derive(Clone)]
-pub(super) struct ParquetOpener {
-    pub(super) morselizer: ParquetMorselizer,
-}
-
-impl FileOpener for ParquetOpener {
-    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
-        let future = ParquetOpenFuture::new(&self.morselizer, partitioned_file)?;
-        Ok(Box::pin(future))
-    }
-}
 
 /// Stateless Parquet morselizer implementation.
 ///
@@ -173,7 +156,7 @@ impl Morselizer for ParquetMorselizer {
     }
 }
 
-/// States for [`ParquetOpenFuture`]
+/// States for [`ParquetMorselPlanner`]
 ///
 /// These states correspond to the steps required to read and apply various
 /// filter operations.
@@ -420,85 +403,6 @@ impl ParquetOpenState {
             ParquetOpenState::Ready(stream) => Ok(ParquetOpenState::Ready(stream)),
             ParquetOpenState::Done => {
                 panic!("ParquetOpenFuture polled after completion");
-            }
-        }
-    }
-}
-
-/// Adapter for a [`MorselPlanner`] to the [`FileOpener`] API
-///
-/// Compatibility adapter that drives a morsel planner through the
-/// [`FileOpener`] API.
-struct ParquetOpenFuture {
-    planner: Option<Box<dyn MorselPlanner>>,
-    pending_io: Option<PendingMorselPlanner>,
-    ready_morsels: VecDeque<Box<dyn Morsel>>,
-}
-
-impl ParquetOpenFuture {
-    fn new(
-        morselizer: &ParquetMorselizer,
-        partitioned_file: PartitionedFile,
-    ) -> Result<Self> {
-        Ok(Self {
-            planner: Some(morselizer.plan_file(partitioned_file)?),
-            pending_io: None,
-            ready_morsels: VecDeque::new(),
-        })
-    }
-}
-
-impl Future for ParquetOpenFuture {
-    type Output = Result<BoxStream<'static, Result<RecordBatch>>>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        loop {
-            // If planner I/O completed, resume with the returned planner.
-            if let Some(io_future) = self.pending_io.as_mut() {
-                let maybe_planner = ready!(io_future.poll_unpin(cx));
-                // Clear `pending_io` before handling the result so an error
-                // cannot leave both continuation paths populated.
-                self.pending_io = None;
-                if self.planner.is_some() {
-                    return Poll::Ready(internal_err!(
-                        "ParquetOpenFuture does not support concurrent planners"
-                    ));
-                }
-                self.planner = Some(maybe_planner?);
-            }
-
-            // If a stream morsel is ready, return it.
-            if let Some(morsel) = self.ready_morsels.pop_front() {
-                return Poll::Ready(Ok(morsel.into_stream()));
-            }
-
-            // This shim must always own either a planner, a pending planner
-            // future, or a ready morsel. Reaching this branch means the
-            // continuation was lost.
-            let Some(planner) = self.planner.take() else {
-                return Poll::Ready(internal_err!(
-                    "ParquetOpenFuture polled after completion"
-                ));
-            };
-
-            // Planner completed without producing a stream morsel.
-            // (e.g. all row groups were pruned)
-            let Some(mut plan) = planner.plan()? else {
-                return Poll::Ready(Ok(futures::stream::empty().boxed()));
-            };
-
-            let mut child_planners = plan.take_ready_planners();
-            if child_planners.len() > 1 {
-                return Poll::Ready(internal_err!(
-                    "Parquet FileOpener adapter does not support child morsel planners"
-                ));
-            }
-            self.planner = child_planners.pop();
-
-            self.ready_morsels = plan.take_morsels().into();
-
-            if let Some(io_future) = plan.take_pending_planner() {
-                self.pending_io = Some(io_future);
             }
         }
     }
@@ -1710,17 +1614,18 @@ async fn load_page_index<T: AsyncFileReader>(
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
+    use super::*;
     use super::{ConstantColumns, ParquetMorselizer, constant_columns_from_stats};
-    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
+    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess};
+    use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        ColumnStatistics, DataFusionError, ScalarValue, Statistics, record_batch,
+        ColumnStatistics, ScalarValue, Statistics, internal_err, record_batch,
         stats::Precision,
     };
-    use datafusion_datasource::{PartitionedFile, TableSchema, file_stream::FileOpener};
+    use datafusion_datasource::morsel::{Morsel, Morselizer};
+    use datafusion_datasource::{PartitionedFile, TableSchema};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
@@ -1732,14 +1637,17 @@ mod test {
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-    use futures::{Stream, StreamExt};
+    use futures::StreamExt;
+    use futures::stream::BoxStream;
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
 
-    /// Builder for creating [`ParquetOpener`] instances with sensible defaults for tests.
+    /// Builder for creating [`ParquetMorselizer`] instances with sensible defaults for tests.
     /// This helps reduce code duplication and makes it clear what differs between test cases.
-    struct ParquetOpenerBuilder {
+    struct ParquetMorselizerBuilder {
         store: Option<Arc<dyn ObjectStore>>,
         table_schema: Option<TableSchema>,
         partition_index: usize,
@@ -1756,13 +1664,13 @@ mod test {
         enable_page_index: bool,
         enable_bloom_filter: bool,
         enable_row_group_stats_pruning: bool,
-        coerce_int96: Option<arrow::datatypes::TimeUnit>,
+        coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
         preserve_order: bool,
     }
 
-    impl ParquetOpenerBuilder {
+    impl ParquetMorselizerBuilder {
         /// Create a new builder with sensible defaults for tests.
         fn new() -> Self {
             Self {
@@ -1849,17 +1757,17 @@ mod test {
             self
         }
 
-        /// Build the ParquetOpener instance.
+        /// Build the ParquetMorselizer instance.
         ///
         /// # Panics
         ///
         /// Panics if required fields (store, schema/table_schema) are not set.
-        fn build(self) -> ParquetOpener {
+        fn build(self) -> ParquetMorselizer {
             let store = self
                 .store
-                .expect("ParquetOpenerBuilder: store must be set via with_store()");
+                .expect("ParquetMorselizerBuilder: store must be set via with_store()");
             let table_schema = self.table_schema.expect(
-                "ParquetOpenerBuilder: table_schema must be set via with_schema() or with_table_schema()",
+                "ParquetMorselizerBuilder: table_schema must be set via with_schema() or with_table_schema()",
             );
             let file_schema = Arc::clone(table_schema.file_schema());
 
@@ -1873,7 +1781,7 @@ mod test {
                 ProjectionExprs::from_indices(&all_indices, &file_schema)
             };
 
-            let morselizer = ParquetMorselizer {
+            ParquetMorselizer {
                 partition_index: self.partition_index,
                 projection,
                 batch_size: self.batch_size,
@@ -1900,8 +1808,45 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+            }
+        }
+    }
+
+    /// Test helper that drives a [`ParquetMorselizer`] to completion and returns
+    /// the first stream morsel it produces.
+    ///
+    /// This mirrors how `FileStream` consumes the morsel APIs: it repeatedly
+    /// plans CPU work, awaits any discovered I/O futures, and feeds the planner
+    /// back into the ready queue until a stream morsel is ready.
+    async fn open_file(
+        morselizer: &ParquetMorselizer,
+        file: PartitionedFile,
+    ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+        let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
+        let mut morsels: VecDeque<Box<dyn Morsel>> = VecDeque::new();
+
+        loop {
+            if let Some(morsel) = morsels.pop_front() {
+                return Ok(Box::pin(morsel.into_stream()));
+            }
+
+            let Some(planner) = planners.pop_front() else {
+                return Ok(Box::pin(futures::stream::empty()));
             };
-            ParquetOpener { morselizer }
+
+            if let Some(mut plan) = planner.plan()? {
+                morsels.extend(plan.take_morsels());
+                planners.extend(plan.take_ready_planners());
+
+                if let Some(pending_planner) = plan.take_pending_planner() {
+                    planners.push_front(pending_planner.await?);
+                    continue;
+                }
+
+                if morsels.is_empty() && planners.is_empty() {
+                    return internal_err!("planner returned an empty morsel plan");
+                }
+            }
         }
     }
 
@@ -1989,12 +1934,7 @@ mod test {
     }
 
     async fn count_batches_and_rows(
-        mut stream: std::pin::Pin<
-            Box<
-                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
-                    + Send,
-            >,
-        >,
+        mut stream: BoxStream<'static, Result<RecordBatch>>,
     ) -> (usize, usize) {
         let mut num_batches = 0;
         let mut num_rows = 0;
@@ -2007,12 +1947,7 @@ mod test {
 
     /// Helper to collect all int32 values from the first column of batches
     async fn collect_int32_values(
-        mut stream: std::pin::Pin<
-            Box<
-                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
-                    + Send,
-            >,
-        >,
+        mut stream: BoxStream<'static, Result<RecordBatch>>,
     ) -> Vec<i32> {
         use arrow::array::Array;
         let mut values = vec![];
@@ -2098,7 +2033,7 @@ mod test {
         ));
 
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0, 1])
@@ -2111,7 +2046,7 @@ mod test {
         let expr = col("a").eq(lit(1));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -2120,7 +2055,7 @@ mod test {
         let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2151,7 +2086,7 @@ mod test {
             vec![Arc::new(Field::new("part", DataType::Int32, false))],
         );
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_table_schema(table_schema_for_opener.clone())
                 .with_projection_indices(&[0])
@@ -2166,7 +2101,7 @@ mod test {
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -2177,7 +2112,7 @@ mod test {
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2220,7 +2155,7 @@ mod test {
             vec![Arc::new(Field::new("part", DataType::Int32, false))],
         );
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_table_schema(table_schema_for_opener.clone())
                 .with_projection_indices(&[0])
@@ -2233,7 +2168,7 @@ mod test {
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -2242,7 +2177,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2251,7 +2186,7 @@ mod test {
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(7.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2260,7 +2195,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(7.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2292,7 +2227,7 @@ mod test {
             vec![Arc::new(Field::new("part", DataType::Int32, false))],
         );
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_table_schema(table_schema_for_opener.clone())
                 .with_projection_indices(&[0])
@@ -2306,7 +2241,7 @@ mod test {
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(1)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -2315,7 +2250,7 @@ mod test {
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -2324,7 +2259,7 @@ mod test {
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(1)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 1);
@@ -2333,7 +2268,7 @@ mod test {
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2373,7 +2308,7 @@ mod test {
             vec![Arc::new(Field::new("part", DataType::Int32, false))],
         );
         let make_opener = |predicate| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_table_schema(table_schema_for_opener.clone())
                 .with_projection_indices(&[0])
@@ -2386,7 +2321,7 @@ mod test {
         let expr = col("a").eq(lit(42));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2395,7 +2330,7 @@ mod test {
         // This allows dynamic filters to prune partitions/files even if they are populated late into execution.
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2405,7 +2340,7 @@ mod test {
         let expr = col("part").eq(lit(2));
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2414,7 +2349,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("a").eq(lit(42)));
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -2455,7 +2390,7 @@ mod test {
         );
 
         let make_opener = |reverse_scan: bool| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0])
@@ -2465,12 +2400,12 @@ mod test {
 
         // Test normal scan (forward)
         let opener = make_opener(false);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let forward_values = collect_int32_values(stream).await;
 
         // Test reverse scan
         let opener = make_opener(true);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let reverse_values = collect_int32_values(stream).await;
 
         // The forward scan should return data in the order written
@@ -2497,7 +2432,7 @@ mod test {
         );
 
         let make_opener = |reverse_scan: bool| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0])
@@ -2508,11 +2443,11 @@ mod test {
         // With a single row group, forward and reverse should be the same
         // (only the row group order is reversed, not the rows within)
         let opener_forward = make_opener(false);
-        let stream_forward = opener_forward.open(file.clone()).unwrap().await.unwrap();
+        let stream_forward = open_file(&opener_forward, file.clone()).await.unwrap();
         let (batches_forward, _) = count_batches_and_rows(stream_forward).await;
 
         let opener_reverse = make_opener(true);
-        let stream_reverse = opener_reverse.open(file).unwrap().await.unwrap();
+        let stream_reverse = open_file(&opener_reverse, file).await.unwrap();
         let (batches_reverse, _) = count_batches_and_rows(stream_reverse).await;
 
         // Both should have the same number of batches since there's only one row group
@@ -2573,7 +2508,7 @@ mod test {
         .with_extensions(Arc::new(access_plan));
 
         let make_opener = |reverse_scan: bool| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0])
@@ -2583,7 +2518,7 @@ mod test {
 
         // Forward scan: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
         let opener = make_opener(false);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let forward_values = collect_int32_values(stream).await;
 
         // Forward scan should produce: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
@@ -2599,7 +2534,7 @@ mod test {
         // - RG1 is read second, WITH RG1's selection (select all) -> 5, 6, 7, 8
         // - RG0 is read third, WITH RG0's selection (skip 2, select 2) -> 3, 4
         let opener = make_opener(true);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let reverse_values = collect_int32_values(stream).await;
 
         // Correct expected result: row groups reversed but each keeps its own selection
@@ -2674,7 +2609,7 @@ mod test {
         .with_extensions(Arc::new(access_plan));
 
         let make_opener = |reverse_scan: bool| {
-            ParquetOpenerBuilder::new()
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_projection_indices(&[0])
@@ -2685,7 +2620,7 @@ mod test {
         // Forward scan: RG0(1), RG2(5), RG3(7)
         // Note: RG1 is completely skipped
         let opener = make_opener(false);
-        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let stream = open_file(&opener, file.clone()).await.unwrap();
         let forward_values = collect_int32_values(stream).await;
 
         assert_eq!(
@@ -2698,7 +2633,7 @@ mod test {
         // WITHOUT the bug fix, this would return WRONG values
         // because the RowSelection would be incorrectly mapped
         let opener = make_opener(true);
-        let stream = opener.open(file).unwrap().await.unwrap();
+        let stream = open_file(&opener, file).await.unwrap();
         let reverse_values = collect_int32_values(stream).await;
 
         assert_eq!(
@@ -2746,8 +2681,8 @@ mod test {
         // predicate: a > 90 — should allow page index to prune first 9 pages
         let predicate = logical2physical(&col("a").gt(lit(90i32)), &schema);
 
-        let make_opener = |enable_page_index| {
-            ParquetOpenerBuilder::new()
+        let make_morselizer = |enable_page_index| {
+            ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
                 .with_schema(Arc::clone(&schema))
                 .with_predicate(Arc::clone(&predicate))
@@ -2758,12 +2693,15 @@ mod test {
                 .build()
         };
         let (_, rows_with_page_index) = count_batches_and_rows(
-            make_opener(true).open(file.clone()).unwrap().await.unwrap(),
+            open_file(&make_morselizer(true), file.clone())
+                .await
+                .unwrap(),
         )
         .await;
-        let (_, rows_without_page_index) =
-            count_batches_and_rows(make_opener(false).open(file).unwrap().await.unwrap())
-                .await;
+        let (_, rows_without_page_index) = count_batches_and_rows(
+            open_file(&make_morselizer(false), file).await.unwrap(),
+        )
+        .await;
 
         assert_eq!(
             rows_with_page_index, 10,
