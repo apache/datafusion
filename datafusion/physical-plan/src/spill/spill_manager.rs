@@ -20,8 +20,8 @@
 use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
-use arrow::array::StringViewArray;
-use arrow::datatypes::SchemaRef;
+use arrow::array::{BinaryViewArray, GenericByteViewArray, StringViewArray};
+use arrow::datatypes::{ByteViewType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
@@ -214,13 +214,22 @@ impl GetSlicedSize for RecordBatch {
             // "bytes needed if we materialized exactly this slice into fresh buffers".
             // This is a workaround until https://github.com/apache/arrow-rs/issues/8230
             if let Some(sv) = array.as_any().downcast_ref::<StringViewArray>() {
-                for buffer in sv.data_buffers() {
-                    total += buffer.capacity();
-                }
+                total += byte_view_data_buffer_size(sv);
+            }
+            if let Some(bv) = array.as_any().downcast_ref::<BinaryViewArray>() {
+                total += byte_view_data_buffer_size(bv);
             }
         }
         Ok(total)
     }
+}
+
+fn byte_view_data_buffer_size<T: ByteViewType>(array: &GenericByteViewArray<T>) -> usize {
+    array
+        .data_buffers()
+        .iter()
+        .map(|buffer| buffer.capacity())
+        .sum()
 }
 
 #[cfg(test)]

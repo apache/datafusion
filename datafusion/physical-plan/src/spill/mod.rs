@@ -35,8 +35,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::{
-    Array, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray, layout,
+    Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
+    layout, make_array,
 };
+use arrow::datatypes::DataType;
 use arrow::datatypes::{ByteViewType, Schema, SchemaRef};
 use arrow::ipc::{
     MetadataVersion,
@@ -44,6 +46,7 @@ use arrow::ipc::{
     writer::{IpcWriteOptions, StreamWriter},
 };
 use arrow::record_batch::RecordBatch;
+use arrow_data::ArrayDataBuilder;
 
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
@@ -380,63 +383,84 @@ const VIEW_SIZE_BYTES: usize = 16;
 ///
 /// # Performance considerations
 ///
-/// The function always returns a new RecordBatch for API consistency, but:
-/// - If no view arrays are present, it's a cheap clone (just Arc increments)
+/// - If no view arrays need compaction, the original batch is cloned cheaply
 /// - GC is skipped for small buffers to avoid unnecessary CPU overhead
+/// - Nested container types are traversed recursively so view arrays inside
+///   `List`, `Map`, `Union`, `Dictionary`, and other child-bearing arrays are compacted too
 /// - The Arrow `gc()` method itself is optimized and only copies referenced data
 pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
-    // Early return optimization: Skip GC entirely if the batch contains no view arrays.
-    // This avoids unnecessary processing for batches with only primitive types.
-    let has_view_arrays = batch.columns().iter().any(|array| {
-        matches!(
-            array.data_type(),
-            arrow::datatypes::DataType::Utf8View | arrow::datatypes::DataType::BinaryView
-        )
-    });
-
-    if !has_view_arrays {
-        // RecordBatch::clone() is cheap - just Arc reference count bumps
-        return Ok(batch.clone());
-    }
-
+    let mut mutated = false;
     let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
 
     for array in batch.columns() {
-        let gc_array = match array.data_type() {
-            arrow::datatypes::DataType::Utf8View => {
-                let string_view = array
-                    .as_any()
-                    .downcast_ref::<StringViewArray>()
-                    .expect("Utf8View array should downcast to StringViewArray");
-                // Only perform GC if the array appears to be sliced (has potential waste).
-                // The gc() method internally checks if GC is beneficial.
-                if should_gc_view_array(string_view) {
-                    Arc::new(string_view.gc()) as Arc<dyn Array>
-                } else {
-                    Arc::clone(array)
-                }
-            }
-            arrow::datatypes::DataType::BinaryView => {
-                let binary_view = array
-                    .as_any()
-                    .downcast_ref::<BinaryViewArray>()
-                    .expect("BinaryView array should downcast to BinaryViewArray");
-                // Only perform GC if the array appears to be sliced (has potential waste).
-                // The gc() method internally checks if GC is beneficial.
-                if should_gc_view_array(binary_view) {
-                    Arc::new(binary_view.gc()) as Arc<dyn Array>
-                } else {
-                    Arc::clone(array)
-                }
-            }
-            // Non-view arrays are passed through unchanged
-            _ => Arc::clone(array),
-        };
+        let (gc_array, array_mutated) = gc_array(array)?;
+        mutated |= array_mutated;
         new_columns.push(gc_array);
     }
 
-    // Always return a new batch for consistency
-    Ok(RecordBatch::try_new(batch.schema(), new_columns)?)
+    if mutated {
+        Ok(RecordBatch::try_new(batch.schema(), new_columns)?)
+    } else {
+        Ok(batch.clone())
+    }
+}
+
+fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
+    match array.data_type() {
+        DataType::Utf8View => {
+            let string_view = array
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .expect("Utf8View array should downcast to StringViewArray");
+            if should_gc_view_array(string_view) {
+                Ok((Arc::new(string_view.gc()) as ArrayRef, true))
+            } else {
+                Ok((Arc::clone(array), false))
+            }
+        }
+        DataType::BinaryView => {
+            let binary_view = array
+                .as_any()
+                .downcast_ref::<BinaryViewArray>()
+                .expect("BinaryView array should downcast to BinaryViewArray");
+            if should_gc_view_array(binary_view) {
+                Ok((Arc::new(binary_view.gc()) as ArrayRef, true))
+            } else {
+                Ok((Arc::clone(array), false))
+            }
+        }
+        _ => gc_array_children(array),
+    }
+}
+
+fn gc_array_children(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
+    let data = array.to_data();
+    if data.child_data().is_empty() {
+        return Ok((Arc::clone(array), false));
+    }
+
+    let mut mutated = false;
+    let mut child_data = Vec::with_capacity(data.child_data().len());
+    for child in data.child_data() {
+        let child_array = make_array(child.clone());
+        let (gc_child, child_mutated) = gc_array(&child_array)?;
+        mutated |= child_mutated;
+        child_data.push(gc_child.to_data());
+    }
+
+    if !mutated {
+        return Ok((Arc::clone(array), false));
+    }
+
+    let rebuilt = ArrayDataBuilder::new(data.data_type().clone())
+        .len(data.len())
+        .offset(data.offset())
+        .nulls(data.nulls().cloned())
+        .buffers(data.buffers().to_vec())
+        .child_data(child_data)
+        .build()?;
+
+    Ok((make_array(rebuilt), true))
 }
 
 /// Determines whether a view array should be garbage collected before spilling.
@@ -1103,10 +1127,18 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array_ref])?;
 
         // GC should return the original batch for small arrays
+        let should_gc = should_gc_view_array(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .unwrap(),
+        );
         let gc_batch = gc_view_arrays(&batch)?;
 
-        // The batch should be unchanged (cloned, not GC'd)
+        assert!(!should_gc);
         assert_eq!(gc_batch.num_rows(), batch.num_rows());
+        assert!(Arc::ptr_eq(batch.column(0), gc_batch.column(0)));
 
         Ok(())
     }
@@ -1319,6 +1351,72 @@ mod tests {
         assert!(
             reduction_percent > 85.0,
             "Expected >85% reduction for 10% slice, got {reduction_percent:.1}%"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_recurses_into_nested_view_arrays() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int32Array};
+        use arrow::buffer::Buffer;
+
+        let strings: Vec<String> = (0..200)
+            .map(|i| format!("http://example.com/nested/path/that/is/not/inlined/{i}"))
+            .collect();
+        let string_values = Arc::new(StringViewArray::from(strings)) as ArrayRef;
+
+        let list_data = ArrayDataBuilder::new(DataType::List(Arc::new(
+            Field::new_list_field(DataType::Utf8View, true),
+        )))
+        .len(20)
+        .buffers(vec![Buffer::from_iter((0..=20).map(|i| i * 5_i32))])
+        .child_data(vec![string_values.slice(0, 100).to_data()])
+        .build()?;
+        let list_array = make_array(list_data);
+
+        let keys = Int32Array::from_iter_values(0..20);
+        let dictionary = DictionaryArray::new(keys, string_values.slice(0, 20));
+        let dictionary_array = Arc::new(dictionary) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "list_strings",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Utf8View, true))),
+                false,
+            ),
+            Field::new(
+                "dictionary_strings",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Utf8View),
+                ),
+                false,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![list_array, dictionary_array])?;
+        let gc_batch = gc_view_arrays(&batch)?;
+
+        let gc_list_values = gc_batch.column(0).to_data().child_data()[0].clone();
+        let gc_list_values = make_array(gc_list_values);
+        let gc_list_values = gc_list_values
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        assert!(
+            calculate_string_view_waste_ratio(gc_list_values) < 0.2,
+            "GC should compact nested List child views"
+        );
+
+        let gc_dictionary_values = gc_batch.column(1).to_data().child_data()[0].clone();
+        let gc_dictionary_values = make_array(gc_dictionary_values);
+        let gc_dictionary_values = gc_dictionary_values
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        assert!(
+            calculate_string_view_waste_ratio(gc_dictionary_values) < 0.2,
+            "GC should compact nested Dictionary values"
         );
 
         Ok(())
