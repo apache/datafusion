@@ -197,7 +197,6 @@ pub fn new_group_values(
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new()));
             }
-            /*
             DataType::Dictionary(key_type, value_type) => {
                 if supported_single_dictionary_value(value_type) {
                     return match key_type.as_ref() {
@@ -247,7 +246,7 @@ pub fn new_group_values(
                         )),
                     };
                 }
-            }*/
+            }
             _ => {}
         }
     }

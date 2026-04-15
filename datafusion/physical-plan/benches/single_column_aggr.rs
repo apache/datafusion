@@ -1,4 +1,4 @@
-use arrow::array::{ArrayRef, StringArray, StringDictionaryBuilder};
+use arrow::array::{ArrayRef, StringDictionaryBuilder};
 use arrow::datatypes::{DataType, Field, Schema, UInt8Type};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::EmitTo;
@@ -30,7 +30,6 @@ enum NullRate {
 enum GroupType {
     Dictionary,
     GroupValueRows,
-    Utf8,
 }
 fn create_string_values(cardinality: &Cardinality) -> Vec<String> {
     let num_values = match cardinality {
@@ -100,35 +99,23 @@ fn generate_group_values(kind: GroupType) -> Box<dyn GroupValues> {
             // call custom path directly
             Box::new(GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8))
         }
-        GroupType::Utf8 => {
-            //let batch = create_batch(batch_size, cardinality);
-            //let array = StringArray::from(batch);
-            // Create GroupValues implementation for Utf8 type
-            let schema = Arc::new(Schema::new(vec![Field::new(
-                "group_col",
-                DataType::Utf8,
-                false,
-            )]));
-            new_group_values(schema, &GroupOrdering::None).unwrap()
-        }
     }
 }
 
 fn bench_single_column_group_values(c: &mut Criterion) {
-    let group_types = [GroupType::GroupValueRows,  GroupType::Dictionary];
+    let group_types = [GroupType::GroupValueRows, GroupType::Dictionary];
     let cardinalities = [
         Cardinality::Xsmall,
-        /*
         Cardinality::Small,
-        Cardinality::Medium,*/
+        Cardinality::Medium,
         Cardinality::Large,
     ];
-    let batch_sizes = [
-        /*BatchSize::Small, BatchSize::Medium, */ BatchSize::Large,
-    ];
+    let batch_sizes = [BatchSize::Small, BatchSize::Medium, BatchSize::Large];
     let null_rates = [
         NullRate::Zero,
-        /*NullRate::Low, NullRate::Medium,*/ NullRate::High,
+        NullRate::Low,
+        NullRate::Medium,
+        NullRate::High,
     ];
 
     for cardinality in &cardinalities {
@@ -136,17 +123,13 @@ fn bench_single_column_group_values(c: &mut Criterion) {
             for null_rate in &null_rates {
                 for group_type in &group_types {
                     let group_name = format!(
-                        "{:?}_cardinality_{:?}_batch_{:?}_null_rate_{:?}",
+                        "t1_{:?}_cardinality_{:?}_batch_{:?}_null_rate_{:?}",
                         group_type, cardinality, batch_size, null_rate
                     );
 
                     let string_vec = create_batch(batch_size, cardinality);
                     let nullable_values = introduce_nulls(string_vec, null_rate);
                     let col_ref = match group_type {
-                        GroupType::Utf8 => {
-                            Arc::new(StringArray::from(nullable_values.clone()))
-                                as ArrayRef
-                        }
                         GroupType::Dictionary | GroupType::GroupValueRows => {
                             strings_to_dict_array(nullable_values.clone())
                         }
@@ -168,7 +151,7 @@ fn bench_single_column_group_values(c: &mut Criterion) {
                         );
                     });
 
-                    /*  Second benchmark that alternates between intern and emit to simulate more realistic usage patterns where the same group values is used across multiple batches of the same grouping column
+                    //  Second benchmark that alternates between intern and emit to simulate more realistic usage patterns where the same group values is used across multiple batches of the same grouping column
                     let multi_batch_name = format!(
                         "multi_batch/{:?}_cardinality_{:?}_batch_{:?}_null_rate_{:?}",
                         group_type, cardinality, batch_size, null_rate
@@ -200,7 +183,7 @@ fn bench_single_column_group_values(c: &mut Criterion) {
                             },
                             criterion::BatchSize::SmallInput,
                         );
-                    });*/
+                    });
                 }
             }
         }
@@ -209,7 +192,7 @@ fn bench_single_column_group_values(c: &mut Criterion) {
 
 fn bench_repeated_intern_prefab_cols(c: &mut Criterion) {
     let cardinality = Cardinality::Small;
-    let batch_size = BatchSize::Small;
+    let batch_size = BatchSize::Large;
     let null_rate = NullRate::Low;
     let group_types = [GroupType::GroupValueRows, GroupType::Dictionary];
 
@@ -218,9 +201,6 @@ fn bench_repeated_intern_prefab_cols(c: &mut Criterion) {
         let string_vec = create_batch(&batch_size, &cardinality);
         let nullable_values = introduce_nulls(string_vec, &null_rate);
         let col_ref = match group_type {
-            GroupType::Utf8 => {
-                Arc::new(StringArray::from(nullable_values.clone())) as ArrayRef
-            }
             GroupType::Dictionary | GroupType::GroupValueRows => {
                 strings_to_dict_array(nullable_values.clone())
             }
