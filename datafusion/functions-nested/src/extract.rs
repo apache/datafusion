@@ -19,9 +19,9 @@
 
 use arrow::array::{
     Array, ArrayRef, Capacities, GenericListArray, GenericListViewArray, Int64Array,
-    MutableArrayData, NullArray, NullBufferBuilder, OffsetSizeTrait,
+    MutableArrayData, NullArray, OffsetSizeTrait,
 };
-use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, LargeListView, List, ListView, Null},
@@ -39,13 +39,13 @@ use datafusion_common::{
     utils::take_function_args,
 };
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
+    ArrayFunctionArgument, ArrayFunctionSignature, Expr, ScalarFunctionArgs,
+    TypeSignature,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -132,9 +132,6 @@ impl ArrayElement {
 }
 
 impl ScalarUDFImpl for ArrayElement {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_element"
     }
@@ -172,10 +169,7 @@ impl ScalarUDFImpl for ArrayElement {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_element_inner)(&args.args)
     }
 
@@ -358,10 +352,6 @@ impl ArraySlice {
 }
 
 impl ScalarUDFImpl for ArraySlice {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn display_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
         if let Some((arr, indexes)) = args_name.split_first() {
@@ -395,10 +385,7 @@ impl ScalarUDFImpl for ArraySlice {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_slice_inner)(&args.args)
     }
 
@@ -608,6 +595,23 @@ where
     }
 }
 
+/// Combine null bitmaps from all slice inputs into a single mask.
+fn combine_input_nulls(
+    array: &dyn Array,
+    from_array: &Int64Array,
+    to_array: &Int64Array,
+    stride: Option<&Int64Array>,
+) -> Option<NullBuffer> {
+    [
+        array.nulls(),
+        from_array.nulls(),
+        to_array.nulls(),
+        stride.and_then(|s| s.nulls()),
+    ]
+    .into_iter()
+    .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls))
+}
+
 fn general_array_slice<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     from_array: &Int64Array,
@@ -628,25 +632,19 @@ where
     // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
 
     let mut offsets = vec![O::usize_as(0)];
-    let mut null_builder = NullBufferBuilder::new(array.len());
+
+    let nulls = combine_input_nulls(array, from_array, to_array, stride);
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let start = offset_window[0];
         let end = offset_window[1];
         let len = end - start;
 
-        // If any input is null, return null.
-        if array.is_null(row_index)
-            || from_array.is_null(row_index)
-            || to_array.is_null(row_index)
-            || stride.is_some_and(|s| s.is_null(row_index))
-        {
+        if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
             mutable.extend_nulls(1);
             offsets.push(offsets[row_index] + O::usize_as(1));
-            null_builder.append_null();
             continue;
         }
-        null_builder.append_non_null();
 
         // Empty arrays always return an empty array.
         if len == O::usize_as(0) {
@@ -689,7 +687,7 @@ where
         Arc::new(Field::new_list_field(array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
-        null_builder.finish(),
+        nulls,
     )?))
 }
 
@@ -720,21 +718,15 @@ where
     let mut offsets = Vec::with_capacity(array.len());
     let mut sizes = Vec::with_capacity(array.len());
     let mut current_offset = O::usize_as(0);
-    let mut null_builder = NullBufferBuilder::new(array.len());
+
+    let nulls = combine_input_nulls(array, from_array, to_array, stride);
 
     for row_index in 0..array.len() {
-        // Propagate NULL semantics: any NULL input yields a NULL output slot.
-        if array.is_null(row_index)
-            || from_array.is_null(row_index)
-            || to_array.is_null(row_index)
-            || stride.is_some_and(|s| s.is_null(row_index))
-        {
-            null_builder.append_null();
+        if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
             offsets.push(current_offset);
             sizes.push(O::usize_as(0));
             continue;
         }
-        null_builder.append_non_null();
 
         let len = array.value_size(row_index);
 
@@ -790,7 +782,7 @@ where
         ScalarBuffer::from(offsets),
         ScalarBuffer::from(sizes),
         arrow::array::make_array(data),
-        null_builder.finish(),
+        nulls,
     )?))
 }
 
@@ -827,9 +819,6 @@ impl ArrayPopFront {
 }
 
 impl ScalarUDFImpl for ArrayPopFront {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_pop_front"
     }
@@ -842,10 +831,7 @@ impl ScalarUDFImpl for ArrayPopFront {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_pop_front_inner)(&args.args)
     }
 
@@ -923,9 +909,6 @@ impl ArrayPopBack {
 }
 
 impl ScalarUDFImpl for ArrayPopBack {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_pop_back"
     }
@@ -938,10 +921,7 @@ impl ScalarUDFImpl for ArrayPopBack {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_pop_back_inner)(&args.args)
     }
 
@@ -1023,9 +1003,6 @@ impl ArrayAnyValue {
 }
 
 impl ScalarUDFImpl for ArrayAnyValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_any_value"
     }
@@ -1043,10 +1020,7 @@ impl ScalarUDFImpl for ArrayAnyValue {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_any_value_inner)(&args.args)
     }
 

@@ -889,3 +889,54 @@ set datafusion.execution.parquet.pushdown_filters = false;
 
 statement ok
 DROP TABLE t_struct_filter;
+
+##########
+# Regression test for https://github.com/apache/datafusion/issues/20937
+#
+# Dynamic filter pushdown fails when joining VALUES against
+# Dictionary-encoded Parquet columns. The InListExpr's ArrayStaticFilter
+# unwraps the needle Dictionary but not the stored in_array, causing a
+# make_comparator(Utf8, Dictionary) type mismatch.
+##########
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+set datafusion.execution.parquet.reorder_filters = true;
+
+statement ok
+COPY (
+  SELECT
+    arrow_cast(chr(65 + (row_num % 26)), 'Dictionary(Int32, Utf8)') as tag1,
+    row_num * 1.0 as value
+  FROM (SELECT unnest(range(0, 10000)) as row_num)
+) TO 'test_files/scratch/parquet_filter_pushdown/dict_filter_bug.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE dict_filter_bug
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/dict_filter_bug.parquet';
+
+query TR
+SELECT t.tag1, t.value
+FROM dict_filter_bug t
+JOIN (VALUES ('A'), ('B')) AS v(c1)
+ON t.tag1 = v.c1
+ORDER BY t.tag1, t.value
+LIMIT 4;
+----
+A 0
+A 26
+A 52
+A 78
+
+# Cleanup
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+set datafusion.execution.parquet.reorder_filters = false;
+
+statement ok
+DROP TABLE dict_filter_bug;

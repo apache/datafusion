@@ -45,7 +45,7 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
-    BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable,
+    BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
     LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown, TableSource,
     WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
 };
@@ -1389,6 +1389,82 @@ impl LogicalPlan {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_) => None,
+        }
+    }
+
+    /// Returns the skip (offset) of this plan node, if it has one.
+    ///
+    /// Only [`LogicalPlan::Limit`] carries a skip value; all other variants
+    /// return `Ok(None)`. Returns `Ok(None)` for a zero skip.
+    pub fn skip(&self) -> Result<Option<usize>> {
+        match self {
+            LogicalPlan::Limit(limit) => match limit.get_skip_type()? {
+                SkipType::Literal(0) => Ok(None),
+                SkipType::Literal(n) => Ok(Some(n)),
+                SkipType::UnsupportedExpr => Ok(None),
+            },
+            LogicalPlan::Sort(_) => Ok(None),
+            LogicalPlan::TableScan(_) => Ok(None),
+            LogicalPlan::Projection(_) => Ok(None),
+            LogicalPlan::Filter(_) => Ok(None),
+            LogicalPlan::Window(_) => Ok(None),
+            LogicalPlan::Aggregate(_) => Ok(None),
+            LogicalPlan::Join(_) => Ok(None),
+            LogicalPlan::Repartition(_) => Ok(None),
+            LogicalPlan::Union(_) => Ok(None),
+            LogicalPlan::EmptyRelation(_) => Ok(None),
+            LogicalPlan::Subquery(_) => Ok(None),
+            LogicalPlan::SubqueryAlias(_) => Ok(None),
+            LogicalPlan::Statement(_) => Ok(None),
+            LogicalPlan::Values(_) => Ok(None),
+            LogicalPlan::Explain(_) => Ok(None),
+            LogicalPlan::Analyze(_) => Ok(None),
+            LogicalPlan::Extension(_) => Ok(None),
+            LogicalPlan::Distinct(_) => Ok(None),
+            LogicalPlan::Dml(_) => Ok(None),
+            LogicalPlan::Ddl(_) => Ok(None),
+            LogicalPlan::Copy(_) => Ok(None),
+            LogicalPlan::DescribeTable(_) => Ok(None),
+            LogicalPlan::Unnest(_) => Ok(None),
+            LogicalPlan::RecursiveQuery(_) => Ok(None),
+        }
+    }
+
+    /// Returns the fetch (limit) of this plan node, if it has one.
+    ///
+    /// [`LogicalPlan::Sort`], [`LogicalPlan::TableScan`], and
+    /// [`LogicalPlan::Limit`] may carry a fetch value; all other variants
+    /// return `Ok(None)`.
+    pub fn fetch(&self) -> Result<Option<usize>> {
+        match self {
+            LogicalPlan::Sort(Sort { fetch, .. }) => Ok(*fetch),
+            LogicalPlan::TableScan(TableScan { fetch, .. }) => Ok(*fetch),
+            LogicalPlan::Limit(limit) => match limit.get_fetch_type()? {
+                FetchType::Literal(s) => Ok(s),
+                FetchType::UnsupportedExpr => Ok(None),
+            },
+            LogicalPlan::Projection(_) => Ok(None),
+            LogicalPlan::Filter(_) => Ok(None),
+            LogicalPlan::Window(_) => Ok(None),
+            LogicalPlan::Aggregate(_) => Ok(None),
+            LogicalPlan::Join(_) => Ok(None),
+            LogicalPlan::Repartition(_) => Ok(None),
+            LogicalPlan::Union(_) => Ok(None),
+            LogicalPlan::EmptyRelation(_) => Ok(None),
+            LogicalPlan::Subquery(_) => Ok(None),
+            LogicalPlan::SubqueryAlias(_) => Ok(None),
+            LogicalPlan::Statement(_) => Ok(None),
+            LogicalPlan::Values(_) => Ok(None),
+            LogicalPlan::Explain(_) => Ok(None),
+            LogicalPlan::Analyze(_) => Ok(None),
+            LogicalPlan::Extension(_) => Ok(None),
+            LogicalPlan::Distinct(_) => Ok(None),
+            LogicalPlan::Dml(_) => Ok(None),
+            LogicalPlan::Ddl(_) => Ok(None),
+            LogicalPlan::Copy(_) => Ok(None),
+            LogicalPlan::DescribeTable(_) => Ok(None),
+            LogicalPlan::Unnest(_) => Ok(None),
+            LogicalPlan::RecursiveQuery(_) => Ok(None),
         }
     }
 
@@ -3490,7 +3566,9 @@ pub struct Aggregate {
     pub input: Arc<LogicalPlan>,
     /// Grouping expressions
     pub group_expr: Vec<Expr>,
-    /// Aggregate expressions
+    /// Aggregate expressions.
+    ///
+    /// Note these *must* be either [`Expr::AggregateFunction`] or [`Expr::Alias`]
     pub aggr_expr: Vec<Expr>,
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
@@ -3517,11 +3595,12 @@ impl Aggregate {
                 .into_iter()
                 .map(|(q, f)| (q, f.as_ref().clone().with_nullable(true).into()))
                 .collect::<Vec<_>>();
+            let max_ordinal = max_grouping_set_duplicate_ordinal(&group_expr);
             qualified_fields.push((
                 None,
                 Field::new(
                     Self::INTERNAL_GROUPING_ID,
-                    Self::grouping_id_type(qualified_fields.len()),
+                    Self::grouping_id_type(qualified_fields.len(), max_ordinal),
                     false,
                 )
                 .into(),
@@ -3607,15 +3686,24 @@ impl Aggregate {
     }
 
     /// Returns the data type of the grouping id.
-    /// The grouping ID value is a bitmask where each set bit
-    /// indicates that the corresponding grouping expression is
-    /// null
-    pub fn grouping_id_type(group_exprs: usize) -> DataType {
-        if group_exprs <= 8 {
+    ///
+    /// The grouping ID packs two pieces of information into a single integer:
+    /// - The low `group_exprs` bits are the semantic bitmask (a set bit means the
+    ///   corresponding grouping expression is NULL for this grouping set).
+    /// - The bits above position `group_exprs` encode a duplicate ordinal that
+    ///   distinguishes multiple occurrences of the same grouping set pattern.
+    ///
+    /// `max_ordinal` is the highest ordinal value that will appear (0 when there
+    /// are no duplicate grouping sets).  The type is chosen to be the smallest
+    /// unsigned integer that can represent both parts.
+    pub fn grouping_id_type(group_exprs: usize, max_ordinal: usize) -> DataType {
+        let ordinal_bits = usize::BITS as usize - max_ordinal.leading_zeros() as usize;
+        let total_bits = group_exprs + ordinal_bits;
+        if total_bits <= 8 {
             DataType::UInt8
-        } else if group_exprs <= 16 {
+        } else if total_bits <= 16 {
             DataType::UInt16
-        } else if group_exprs <= 32 {
+        } else if total_bits <= 32 {
             DataType::UInt32
         } else {
             DataType::UInt64
@@ -3624,21 +3712,36 @@ impl Aggregate {
 
     /// Internal column used when the aggregation is a grouping set.
     ///
-    /// This column contains a bitmask where each bit represents a grouping
-    /// expression. The least significant bit corresponds to the rightmost
-    /// grouping expression. A bit value of 0 indicates that the corresponding
-    /// column is included in the grouping set, while a value of 1 means it is excluded.
+    /// This column packs two values into a single unsigned integer:
     ///
-    /// For example, for the grouping expressions CUBE(a, b), the grouping ID
-    /// column will have the following values:
+    /// - **Low bits (positions 0 .. n-1)**: a semantic bitmask where each bit
+    ///   represents one of the `n` grouping expressions.  The least significant
+    ///   bit corresponds to the rightmost grouping expression.  A `1` bit means
+    ///   the corresponding column is replaced with `NULL` for this grouping set;
+    ///   a `0` bit means it is included.
+    /// - **High bits (positions n and above)**: a *duplicate ordinal* that
+    ///   distinguishes multiple occurrences of the same semantic grouping set
+    ///   pattern within a single query.  The ordinal is `0` for the first
+    ///   occurrence, `1` for the second, and so on.
+    ///
+    /// The integer type is chosen by [`Self::grouping_id_type`] to be the
+    /// smallest `UInt8 / UInt16 / UInt32 / UInt64` that can represent both
+    /// parts.
+    ///
+    /// For example, for the grouping expressions CUBE(a, b) (no duplicates),
+    /// the grouping ID column will have the following values:
     ///     0b00: Both `a` and `b` are included
     ///     0b01: `b` is excluded
     ///     0b10: `a` is excluded
     ///     0b11: Both `a` and `b` are excluded
     ///
-    /// This internal column is necessary because excluded columns are replaced
-    /// with `NULL` values. To handle these cases correctly, we must distinguish
-    /// between an actual `NULL` value in a column and a column being excluded from the set.
+    /// When the same set appears twice and `n = 2`, the duplicate ordinal is
+    /// packed into bit 2:
+    ///     first occurrence:  `0b0_01` (ordinal = 0, mask = 0b01)
+    ///     second occurrence: `0b1_01` (ordinal = 1, mask = 0b01)
+    ///
+    /// The GROUPING function always masks the value with `(1 << n) - 1` before
+    /// interpreting it so the ordinal bits are invisible to user-facing SQL.
     pub const INTERNAL_GROUPING_ID: &'static str = "__grouping_id";
 }
 
@@ -3656,6 +3759,24 @@ impl PartialOrd for Aggregate {
         }
         // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
         .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
+/// Returns the highest duplicate ordinal across all grouping sets in `group_expr`.
+///
+/// The ordinal for each occurrence of a grouping set pattern is its 0-based
+/// index among identical entries. For example, if the same set appears three
+/// times, the ordinals are 0, 1, 2 and this function returns 2.
+/// Returns 0 when no grouping set is duplicated.
+fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
+    if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
+        let mut counts: HashMap<&[Expr], usize> = HashMap::new();
+        for set in sets {
+            *counts.entry(set).or_insert(0) += 1;
+        }
+        counts.into_values().max().unwrap_or(0).saturating_sub(1)
+    } else {
+        0
     }
 }
 
@@ -4194,7 +4315,9 @@ impl Unnest {
                                 }
                                 DataType::List(_)
                                 | DataType::FixedSizeList(_, _)
-                                | DataType::LargeList(_) => {
+                                | DataType::LargeList(_)
+                                | DataType::ListView(_)
+                                | DataType::LargeListView(_) => {
                                     list_columns.push((
                                         index,
                                         ColumnUnnestList {
@@ -4269,7 +4392,11 @@ fn get_unnested_columns(
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+        DataType::List(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => {
             let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
             let new_field = Arc::new(Field::new(
                 col_name, data_type,
@@ -4306,7 +4433,9 @@ fn get_unnested_list_datatype_recursive(
     match data_type {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
             if depth == 1 {
                 return Ok(field.data_type().clone());
             }
@@ -4333,7 +4462,7 @@ mod tests {
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
-    use datafusion_common::{Constraint, ScalarValue, not_impl_err};
+    use datafusion_common::{Constraint, not_impl_err};
     use insta::{assert_debug_snapshot, assert_snapshot};
     use std::hash::DefaultHasher;
 
@@ -4456,49 +4585,49 @@ mod tests {
         [
           {
             "Plan": {
+              "Node Type": "Projection",
               "Expressions": [
                 "employee_csv.id"
               ],
-              "Node Type": "Projection",
-              "Output": [
-                "id"
-              ],
               "Plans": [
                 {
-                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Node Type": "Filter",
-                  "Output": [
-                    "id",
-                    "state"
-                  ],
+                  "Condition": "employee_csv.state IN (<subquery>)",
                   "Plans": [
                     {
                       "Node Type": "Subquery",
-                      "Output": [
-                        "state"
-                      ],
                       "Plans": [
                         {
                           "Node Type": "TableScan",
+                          "Relation Name": "employee_csv",
+                          "Plans": [],
                           "Output": [
                             "state"
-                          ],
-                          "Plans": [],
-                          "Relation Name": "employee_csv"
+                          ]
                         }
+                      ],
+                      "Output": [
+                        "state"
                       ]
                     },
                     {
                       "Node Type": "TableScan",
+                      "Relation Name": "employee_csv",
+                      "Plans": [],
                       "Output": [
                         "id",
                         "state"
-                      ],
-                      "Plans": [],
-                      "Relation Name": "employee_csv"
+                      ]
                     }
+                  ],
+                  "Output": [
+                    "id",
+                    "state"
                   ]
                 }
+              ],
+              "Output": [
+                "id"
               ]
             }
           }
@@ -4965,6 +5094,14 @@ mod tests {
                 .unwrap()
                 .is_nullable()
         );
+    }
+
+    #[test]
+    fn grouping_id_type_accounts_for_duplicate_ordinal_bits() {
+        // 8 grouping columns fit in UInt8 when there are no duplicate ordinals,
+        // but adding one duplicate ordinal bit widens the type to UInt16.
+        assert_eq!(Aggregate::grouping_id_type(8, 0), DataType::UInt8);
+        assert_eq!(Aggregate::grouping_id_type(8, 1), DataType::UInt16);
     }
 
     #[test]

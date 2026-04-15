@@ -22,10 +22,11 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 use crate::expressions::{Column, Literal};
+use crate::scalar_function::ScalarFunctionExpr;
 use crate::utils::collect_columns;
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
@@ -693,12 +694,15 @@ impl ProjectionExprs {
                         Precision::Absent
                     };
 
-                    let sum_value = Precision::<ScalarValue>::from(stats.num_rows)
-                        .cast_to(&value.data_type())
-                        .ok()
-                        .map(|row_count| {
-                            Precision::Exact(value.clone()).multiply(&row_count)
+                    let widened_sum = Precision::Exact(value.clone()).cast_to_sum_type();
+                    let sum_value = widened_sum
+                        .get_value()
+                        .and_then(|sum| {
+                            Precision::<ScalarValue>::from(stats.num_rows)
+                                .cast_to(&sum.data_type())
+                                .ok()
                         })
+                        .map(|row_count| widened_sum.multiply(&row_count))
                         .unwrap_or(Precision::Absent);
 
                     ColumnStatistics {
@@ -1060,9 +1064,72 @@ impl ProjectionMapping {
                 None => Ok(Transformed::no(e)),
             })
             .data()?;
-            map.entry(source_expr)
+            map.entry(Arc::clone(&source_expr))
                 .or_default()
-                .push((target_expr, expr_idx));
+                .push((Arc::clone(&target_expr), expr_idx));
+
+            // For struct-producing functions (e.g. named_struct), decompose
+            // into field-level mapping entries so that orderings propagate
+            // through struct projections. For example, if the projection has
+            // `named_struct('ticker', p.ticker, ...) AS details`, this adds:
+            //   p.ticker → get_field(col("details"), "ticker")
+            // enabling the optimizer to know that sorting by
+            // `details.ticker` is equivalent to sorting by `p.ticker`.
+            if let Some(func_expr) =
+                source_expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+            {
+                let literal_args: Vec<Option<ScalarValue>> = func_expr
+                    .args()
+                    .iter()
+                    .map(|arg| {
+                        arg.as_any()
+                            .downcast_ref::<Literal>()
+                            .map(|l| l.value().clone())
+                    })
+                    .collect();
+
+                if let Some(field_mapping) =
+                    func_expr.fun().struct_field_mapping(&literal_args)
+                    && let DataType::Struct(struct_fields) = func_expr.return_type()
+                {
+                    for (accessor_args, source_arg_idx) in &field_mapping.fields {
+                        let value_expr = Arc::clone(&func_expr.args()[*source_arg_idx]);
+
+                        // Build accessor args: [target_col, ...field_name_literals]
+                        let mut accessor_fn_args: Vec<Arc<dyn PhysicalExpr>> =
+                            vec![Arc::clone(&target_expr)];
+                        accessor_fn_args.extend(accessor_args.iter().map(|sv| {
+                            Arc::new(Literal::new(sv.clone())) as Arc<dyn PhysicalExpr>
+                        }));
+
+                        // Look up the field's return type from the struct schema
+                        let return_field = accessor_args
+                            .first()
+                            .and_then(|sv| sv.try_as_str().flatten())
+                            .and_then(|field_name| {
+                                struct_fields
+                                    .iter()
+                                    .find(|f| f.name() == field_name)
+                                    .cloned()
+                            });
+
+                        if let Some(return_field) = return_field {
+                            let field_access_expr = Arc::new(ScalarFunctionExpr::new(
+                                field_mapping.field_accessor.name(),
+                                Arc::clone(&field_mapping.field_accessor),
+                                accessor_fn_args,
+                                return_field,
+                                Arc::new(func_expr.config_options().clone()),
+                            ))
+                                as Arc<dyn PhysicalExpr>;
+
+                            map.entry(value_expr)
+                                .or_default()
+                                .push((field_access_expr, expr_idx));
+                        }
+                    }
+                }
+            }
         }
         Ok(Self { map })
     }
@@ -1196,15 +1263,13 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::equivalence::{EquivalenceProperties, convert_to_orderings};
-    use crate::expressions::{BinaryExpr, Literal, col};
+    use crate::expressions::{BinaryExpr, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExprRef, ScalarFunctionExpr};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::stats::Precision;
-    use datafusion_common::{ScalarValue, Statistics};
     use datafusion_expr::{Operator, ScalarUDF};
     use insta::assert_snapshot;
 
@@ -1218,8 +1283,10 @@ pub(crate) mod tests {
             let data_type = source.data_type(input_schema)?;
             let nullable = source.nullable(input_schema)?;
             for (target, _) in targets.iter() {
+                // Skip non-Column targets (e.g. struct field decomposition
+                // entries which are ScalarFunctionExpr targets).
                 let Some(column) = target.as_any().downcast_ref::<Column>() else {
-                    return plan_err!("Expects to have column");
+                    continue;
                 };
                 fields.push(Field::new(column.name(), data_type.clone(), nullable));
             }
@@ -2861,6 +2928,35 @@ pub(crate) mod tests {
         assert_eq!(
             output_stats.column_statistics[1].max_value,
             Precision::Exact(ScalarValue::Int64(Some(21)))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_with_i32_literal_sum_widens_to_i64() -> Result<()> {
+        let input_stats = get_stats();
+        let input_schema = get_schema();
+
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+                alias: "constant".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col0", 0)),
+                alias: "num".to_string(),
+            },
+        ]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        assert_eq!(
+            output_stats.column_statistics[0].sum_value,
+            Precision::Exact(ScalarValue::Int64(Some(50)))
         );
 
         Ok(())

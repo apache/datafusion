@@ -216,6 +216,21 @@ c true false NULL
 d NULL false NULL
 e true false NULL
 
+# Config reset
+statement ok
+reset datafusion.execution.batch_size;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
 # Prepare settings to always skip aggregation after couple of batches
 statement ok
 set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 10;
@@ -693,6 +708,21 @@ ORDER BY i;
 2 66
 3 33
 
+# Config reset
+statement ok
+reset datafusion.execution.batch_size;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
 statement ok
 DROP TABLE decimal_table;
 
@@ -737,6 +767,21 @@ query BBBBBBBB
 SELECT bool_and(c1), bool_and(c2), bool_and(c3), bool_and(c4), bool_and(c5), bool_and(c6), bool_and(c7), bool_and(c8) FROM bool_aggregate_functions
 ----
 true false false false false true false NULL
+
+# Config reset
+statement ok
+reset datafusion.execution.batch_size;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
 
 statement ok
 DROP TABLE aggregate_test_100_bool

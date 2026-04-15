@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
@@ -33,7 +32,8 @@ use arrow::datatypes::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarType, ScalarValue, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -387,10 +387,6 @@ macro_rules! impl_with_updated_config {
 }
 
 impl ScalarUDFImpl for ToTimestampFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp"
     }
@@ -405,11 +401,8 @@ impl ScalarUDFImpl for ToTimestampFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -500,10 +493,6 @@ impl ScalarUDFImpl for ToTimestampFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampSecondsFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_seconds"
     }
@@ -518,11 +507,8 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -576,10 +562,6 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampMillisFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_millis"
     }
@@ -594,11 +576,8 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -652,10 +631,6 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampMicrosFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_micros"
     }
@@ -670,11 +645,8 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -728,10 +700,6 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 }
 
 impl ScalarUDFImpl for ToTimestampNanosFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_timestamp_nanos"
     }
@@ -746,11 +714,8 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 
     impl_with_updated_config!();
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let datafusion_expr::ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
 
         if args.is_empty() {
             return exec_err!(
@@ -842,7 +807,6 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use arrow::array::types::Int64Type;
     use arrow::array::{
@@ -852,9 +816,8 @@ mod tests {
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
     use arrow::datatypes::{Field, TimeUnit};
     use chrono::{DateTime, FixedOffset, Utc};
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{DataFusionError, ScalarValue, assert_contains};
-    use datafusion_expr::{ScalarFunctionArgs, ScalarFunctionImplementation};
+    use datafusion_common::{DataFusionError, assert_contains};
+    use datafusion_expr::ScalarFunctionImplementation;
 
     use super::*;
 

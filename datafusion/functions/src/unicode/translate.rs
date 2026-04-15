@@ -15,21 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::sync::Arc;
-
 use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait,
+    ArrayAccessor, ArrayIter, ArrayRef, AsArray, LargeStringBuilder, StringBuilder,
+    StringLikeArrayBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::HashMap;
-use unicode_segmentation::UnicodeSegmentation;
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::make_scalar_function;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -80,10 +78,6 @@ impl TranslateFunc {
 }
 
 impl ScalarUDFImpl for TranslateFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "translate"
     }
@@ -93,56 +87,61 @@ impl ScalarUDFImpl for TranslateFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "translate")
+        Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // When from and to are scalars, pre-build the translation map once
         if let (Some(from_str), Some(to_str)) = (
             try_as_scalar_str(&args.args[1]),
             try_as_scalar_str(&args.args[2]),
         ) {
-            let to_graphemes: Vec<&str> = to_str.graphemes(true).collect();
+            let to_chars: Vec<char> = to_str.chars().collect();
 
-            let mut from_map: HashMap<&str, usize> = HashMap::new();
-            for (index, c) in from_str.graphemes(true).enumerate() {
-                // Ignore characters that already exist in from_map
+            let mut from_map: HashMap<char, usize> = HashMap::new();
+            for (index, c) in from_str.chars().enumerate() {
                 from_map.entry(c).or_insert(index);
             }
 
             let ascii_table = build_ascii_translate_table(from_str, to_str);
 
             let string_array = args.args[0].to_array_of_size(args.number_rows)?;
+            let len = string_array.len();
 
             let result = match string_array.data_type() {
                 DataType::Utf8View => {
                     let arr = string_array.as_string_view();
-                    translate_with_map::<i32, _>(
+                    let builder = StringViewBuilder::with_capacity(len);
+                    translate_with_map(
                         arr,
                         &from_map,
-                        &to_graphemes,
+                        &to_chars,
                         ascii_table.as_ref(),
+                        builder,
                     )
                 }
                 DataType::Utf8 => {
                     let arr = string_array.as_string::<i32>();
-                    translate_with_map::<i32, _>(
+                    let builder =
+                        StringBuilder::with_capacity(len, arr.value_data().len());
+                    translate_with_map(
                         arr,
                         &from_map,
-                        &to_graphemes,
+                        &to_chars,
                         ascii_table.as_ref(),
+                        builder,
                     )
                 }
                 DataType::LargeUtf8 => {
                     let arr = string_array.as_string::<i64>();
-                    translate_with_map::<i64, _>(
+                    let builder =
+                        LargeStringBuilder::with_capacity(len, arr.value_data().len());
+                    translate_with_map(
                         arr,
                         &from_map,
-                        &to_graphemes,
+                        &to_chars,
                         ascii_table.as_ref(),
+                        builder,
                     )
                 }
                 other => {
@@ -163,33 +162,33 @@ impl ScalarUDFImpl for TranslateFunc {
     }
 }
 
-/// If `cv` is a non-null scalar string, return its value.
-fn try_as_scalar_str(cv: &ColumnarValue) -> Option<&str> {
-    match cv {
-        ColumnarValue::Scalar(s) => s.try_as_str().flatten(),
-        _ => None,
-    }
-}
+use super::common::try_as_scalar_str;
 
 fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let len = args[0].len();
     match args[0].data_type() {
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
             let from_array = args[1].as_string::<i32>();
             let to_array = args[2].as_string::<i32>();
-            translate::<i32, _, _>(string_array, from_array, to_array)
+            let builder = StringViewBuilder::with_capacity(len);
+            translate(string_array, from_array, to_array, builder)
         }
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
             let from_array = args[1].as_string::<i32>();
             let to_array = args[2].as_string::<i32>();
-            translate::<i32, _, _>(string_array, from_array, to_array)
+            let builder =
+                StringBuilder::with_capacity(len, string_array.value_data().len());
+            translate(string_array, from_array, to_array, builder)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
             let from_array = args[1].as_string::<i32>();
             let to_array = args[2].as_string::<i32>();
-            translate::<i64, _, _>(string_array, from_array, to_array)
+            let builder =
+                LargeStringBuilder::with_capacity(len, string_array.value_data().len());
+            translate(string_array, from_array, to_array, builder)
         }
         other => {
             exec_err!("Unsupported data type {other:?} for function translate")
@@ -199,68 +198,69 @@ fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Replaces each character in string that matches a character in the from set with the corresponding character in the to set. If from is longer than to, occurrences of the extra characters in from are deleted.
 /// translate('12345', '143', 'ax') = 'a2x5'
-fn translate<'a, T: OffsetSizeTrait, V, B>(
+fn translate<'a, V, B, O>(
     string_array: V,
     from_array: B,
     to_array: B,
+    mut builder: O,
 ) -> Result<ArrayRef>
 where
     V: ArrayAccessor<Item = &'a str>,
     B: ArrayAccessor<Item = &'a str>,
+    O: StringLikeArrayBuilder,
 {
     let string_array_iter = ArrayIter::new(string_array);
     let from_array_iter = ArrayIter::new(from_array);
     let to_array_iter = ArrayIter::new(to_array);
 
-    // Reusable buffers to avoid allocating for each row
-    let mut from_map: HashMap<&str, usize> = HashMap::new();
-    let mut from_graphemes: Vec<&str> = Vec::new();
-    let mut to_graphemes: Vec<&str> = Vec::new();
-    let mut string_graphemes: Vec<&str> = Vec::new();
-    let mut result_graphemes: Vec<&str> = Vec::new();
+    let mut from_map: HashMap<char, usize> = HashMap::new();
+    let mut to_chars: Vec<char> = Vec::new();
+    let mut result_buf = String::new();
 
-    let result = string_array_iter
-        .zip(from_array_iter)
-        .zip(to_array_iter)
-        .map(|((string, from), to)| match (string, from, to) {
+    for ((string, from), to) in string_array_iter.zip(from_array_iter).zip(to_array_iter)
+    {
+        match (string, from, to) {
             (Some(string), Some(from), Some(to)) => {
-                // Clear and reuse buffers
                 from_map.clear();
-                from_graphemes.clear();
-                to_graphemes.clear();
-                string_graphemes.clear();
-                result_graphemes.clear();
+                to_chars.clear();
+                result_buf.clear();
 
-                // Build from_map using reusable buffer
-                from_graphemes.extend(from.graphemes(true));
-                for (index, c) in from_graphemes.iter().enumerate() {
-                    // Ignore characters that already exist in from_map
-                    from_map.entry(*c).or_insert(index);
+                for (index, c) in from.chars().enumerate() {
+                    from_map.entry(c).or_insert(index);
                 }
 
-                // Build to_graphemes
-                to_graphemes.extend(to.graphemes(true));
+                to_chars.extend(to.chars());
 
-                // Process string and build result
-                string_graphemes.extend(string.graphemes(true));
-                for c in &string_graphemes {
-                    match from_map.get(*c) {
-                        Some(n) => {
-                            if let Some(replacement) = to_graphemes.get(*n) {
-                                result_graphemes.push(*replacement);
-                            }
-                        }
-                        None => result_graphemes.push(*c),
-                    }
-                }
+                translate_char_by_char(string, &from_map, &to_chars, &mut result_buf);
 
-                Some(result_graphemes.concat())
+                builder.append_value(&result_buf);
             }
-            _ => None,
-        })
-        .collect::<GenericStringArray<T>>();
+            _ => builder.append_null(),
+        }
+    }
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(builder.finish())
+}
+
+/// Translate `input` character-by-character using `from_map` and `to_chars`,
+/// appending the result to `buf`.
+#[inline]
+fn translate_char_by_char(
+    input: &str,
+    from_map: &HashMap<char, usize>,
+    to_chars: &[char],
+    buf: &mut String,
+) {
+    for c in input.chars() {
+        match from_map.get(&c) {
+            Some(n) => {
+                if let Some(&replacement) = to_chars.get(*n) {
+                    buf.push(replacement);
+                }
+            }
+            None => buf.push(c),
+        }
+    }
 }
 
 /// Sentinel value in the ASCII translate table indicating the character should
@@ -299,22 +299,24 @@ fn build_ascii_translate_table(from: &str, to: &str) -> Option<[u8; 128]> {
 /// Optimized translate for constant `from` and `to` arguments: uses a pre-built
 /// translation map instead of rebuilding it for every row.  When an ASCII byte
 /// lookup table is provided, ASCII input rows use the lookup table; non-ASCII
-/// inputs fallback to using the map.
-fn translate_with_map<'a, T: OffsetSizeTrait, V>(
+/// inputs fall back to the char-based map.
+fn translate_with_map<'a, V, O>(
     string_array: V,
-    from_map: &HashMap<&str, usize>,
-    to_graphemes: &[&str],
+    from_map: &HashMap<char, usize>,
+    to_chars: &[char],
     ascii_table: Option<&[u8; 128]>,
+    mut builder: O,
 ) -> Result<ArrayRef>
 where
     V: ArrayAccessor<Item = &'a str>,
+    O: StringLikeArrayBuilder,
 {
-    let mut result_graphemes: Vec<&str> = Vec::new();
+    let mut result_buf = String::new();
     let mut ascii_buf: Vec<u8> = Vec::new();
 
-    let result = ArrayIter::new(string_array)
-        .map(|string| {
-            string.map(|s| {
+    for string in ArrayIter::new(string_array) {
+        match string {
+            Some(s) => {
                 // Fast path: byte-level table lookup for ASCII strings
                 if let Some(table) = ascii_table
                     && s.is_ascii()
@@ -327,37 +329,26 @@ where
                         }
                     }
                     // SAFETY: all bytes are ASCII, hence valid UTF-8.
-                    return unsafe {
-                        std::str::from_utf8_unchecked(&ascii_buf).to_owned()
-                    };
+                    builder.append_value(unsafe {
+                        std::str::from_utf8_unchecked(&ascii_buf)
+                    });
+                } else {
+                    result_buf.clear();
+                    translate_char_by_char(s, from_map, to_chars, &mut result_buf);
+                    builder.append_value(&result_buf);
                 }
+            }
+            None => builder.append_null(),
+        }
+    }
 
-                // Slow path: grapheme-based translation
-                result_graphemes.clear();
-
-                for c in s.graphemes(true) {
-                    match from_map.get(c) {
-                        Some(n) => {
-                            if let Some(replacement) = to_graphemes.get(*n) {
-                                result_graphemes.push(*replacement);
-                            }
-                        }
-                        None => result_graphemes.push(c),
-                    }
-                }
-
-                result_graphemes.concat()
-            })
-        })
-        .collect::<GenericStringArray<T>>();
-
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(builder.finish())
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -440,7 +431,7 @@ mod tests {
             StringArray
         );
         // Non-ASCII input with ASCII scalar from/to: exercises the
-        // grapheme fallback within translate_with_map.
+        // char-based fallback within translate_with_map.
         test_function!(
             TranslateFunc::new(),
             vec![
@@ -452,6 +443,45 @@ mod tests {
             &str,
             Utf8,
             StringArray
+        );
+        // Utf8View input should produce Utf8View output
+        test_function!(
+            TranslateFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("12345".into()))),
+                ColumnarValue::Scalar(ScalarValue::from("143")),
+                ColumnarValue::Scalar(ScalarValue::from("ax"))
+            ],
+            Ok(Some("a2x5")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        // Null Utf8View input
+        test_function!(
+            TranslateFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ColumnarValue::Scalar(ScalarValue::from("143")),
+                ColumnarValue::Scalar(ScalarValue::from("ax"))
+            ],
+            Ok(None),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        // Non-ASCII Utf8View input
+        test_function!(
+            TranslateFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("é2íñ5".into()))),
+                ColumnarValue::Scalar(ScalarValue::from("éñí")),
+                ColumnarValue::Scalar(ScalarValue::from("óü"))
+            ],
+            Ok(Some("ó2ü5")),
+            &str,
+            Utf8View,
+            StringViewArray
         );
 
         #[cfg(not(feature = "unicode_expressions"))]

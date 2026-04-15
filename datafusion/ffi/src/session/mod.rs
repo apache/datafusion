@@ -20,6 +20,17 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
 
+use crate::arrow_wrappers::WrappedSchema;
+use crate::execution::FFI_TaskContext;
+use crate::execution_plan::FFI_ExecutionPlan;
+use crate::physical_expr::FFI_PhysicalExpr;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::session::config::FFI_SessionConfig;
+use crate::udaf::FFI_AggregateUDF;
+use crate::udf::FFI_ScalarUDF;
+use crate::udwf::FFI_WindowUDF;
+use crate::util::FFIResult;
+use crate::{df_result, rresult, rresult_return};
 use abi_stable::StableAbi;
 use abi_stable::std_types::{RHashMap, RResult, RStr, RString, RVec};
 use arrow_schema::SchemaRef;
@@ -32,6 +43,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::registry::{ExtensionTypeRegistryRef, MemoryExtensionTypeRegistry};
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, ScalarUDFImpl,
     WindowUDF, WindowUDFImpl,
@@ -46,18 +58,6 @@ use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::Session;
 use prost::Message;
 use tokio::runtime::Handle;
-
-use crate::arrow_wrappers::WrappedSchema;
-use crate::execution::FFI_TaskContext;
-use crate::execution_plan::FFI_ExecutionPlan;
-use crate::physical_expr::FFI_PhysicalExpr;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
-use crate::session::config::FFI_SessionConfig;
-use crate::udaf::FFI_AggregateUDF;
-use crate::udf::FFI_ScalarUDF;
-use crate::udwf::FFI_WindowUDF;
-use crate::util::FFIResult;
-use crate::{df_result, rresult, rresult_return};
 
 pub mod config;
 
@@ -339,6 +339,10 @@ impl FFI_SessionRef {
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
+        if let Some(session) = session.as_any().downcast_ref::<ForeignSession>() {
+            return session.session.clone();
+        }
+
         let private_data = Box::new(SessionPrivateData { session, runtime });
 
         Self {
@@ -374,6 +378,7 @@ pub struct ForeignSession {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     window_functions: HashMap<String, Arc<WindowUDF>>,
+    extension_types: ExtensionTypeRegistryRef,
     table_options: TableOptions,
     runtime_env: Arc<RuntimeEnv>,
     props: ExecutionProps,
@@ -442,6 +447,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 scalar_functions,
                 aggregate_functions,
                 window_functions,
+                extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
                 runtime_env: Default::default(),
                 props: Default::default(),
             })
@@ -588,6 +594,10 @@ impl Session for ForeignSession {
         &self.window_functions
     }
 
+    fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
+        &self.extension_types
+    }
+
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {
         &self.runtime_env
     }
@@ -626,11 +636,9 @@ impl Session for ForeignSession {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::execution::SessionStateBuilder;
-    use datafusion_common::DataFusionError;
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;

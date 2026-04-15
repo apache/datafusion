@@ -51,6 +51,12 @@ github:
     main:
       required_pull_request_reviews:
         required_approving_review_count: 1
+      required_status_checks:
+        contexts:
+          - "Check License Header"
+          - "Use prettier to check formatting of documents"
+          - "Validate required_status_checks in .asf.yaml"
+          - "Spell Check with Typos"
     # needs to be updated as part of the release process
     # .asf.yaml doesn't support wildcard branch protection rules, only exact branch names
     # https://github.com/apache/infrastructure-asfyaml?tab=readme-ov-file#branch-protection
@@ -69,6 +75,8 @@ github:
     # enable updating head branches of pull requests
     allow_update_branch: true
     allow_auto_merge: true
+    # auto-delete head branches after being merged
+    del_branch_on_merge: true
 
 # publishes the content of the `asf-site` branch to
 # https://datafusion.apache.org/

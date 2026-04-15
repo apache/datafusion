@@ -24,6 +24,7 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode;
@@ -168,6 +169,32 @@ fn create_pad_args<O: OffsetSizeTrait>(
             ColumnarValue::Array(Arc::new(string_array)),
             ColumnarValue::Array(length_array),
             ColumnarValue::Array(Arc::new(fill_array)),
+        ]
+    }
+}
+
+/// Create args for pad benchmark with scalar length and fill (common pattern:
+/// `lpad(column, 20, '0')`).
+fn create_scalar_pad_args<O: OffsetSizeTrait>(
+    size: usize,
+    str_len: usize,
+    target_len: i64,
+    fill: &str,
+    use_string_view: bool,
+) -> Vec<ColumnarValue> {
+    if use_string_view {
+        let string_array = create_string_view_array_with_len(size, 0.1, str_len, false);
+        vec![
+            ColumnarValue::Array(Arc::new(string_array)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(target_len))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(fill.to_string()))),
+        ]
+    } else {
+        let string_array = create_string_array_with_len::<O>(size, 0.1, str_len);
+        vec![
+            ColumnarValue::Array(Arc::new(string_array)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(target_len))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(fill.to_string()))),
         ]
     }
 }
@@ -336,6 +363,118 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
+        // --- Scalar length + fill benchmarks ---
+
+        // Utf8 with scalar length and fill (3-arg)
+        let args = create_scalar_pad_args::<i32>(size, 5, 20, "x", false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("lpad utf8 scalar [size={size}, str_len=5, target=20, fill='x']"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::lpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // StringView with scalar length and fill (3-arg)
+        let args = create_scalar_pad_args::<i32>(size, 5, 20, "x", true);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!(
+                "lpad stringview scalar [size={size}, str_len=5, target=20, fill='x']"
+            ),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::lpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // Utf8 with scalar length and unicode fill
+        let args = create_scalar_pad_args::<i32>(size, 5, 20, "é", false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!(
+                "lpad utf8 scalar unicode [size={size}, str_len=5, target=20, fill='é']"
+            ),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::lpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // Utf8 with scalar truncation (str_len > target) and unicode fill
+        let args = create_scalar_pad_args::<i32>(size, 20, 5, "é", false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!(
+                "lpad utf8 scalar truncate [size={size}, str_len=20, target=5, fill='é']"
+            ),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::lpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
         group.finish();
     }
 
@@ -496,6 +635,118 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
                         return_field: Field::new("f", DataType::Utf8View, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // --- Scalar length + fill benchmarks ---
+
+        // Utf8 with scalar length and fill (3-arg)
+        let args = create_scalar_pad_args::<i32>(size, 5, 20, "x", false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!("rpad utf8 scalar [size={size}, str_len=5, target=20, fill='x']"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::rpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // StringView with scalar length and fill (3-arg)
+        let args = create_scalar_pad_args::<i32>(size, 5, 20, "x", true);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!(
+                "rpad stringview scalar [size={size}, str_len=5, target=20, fill='x']"
+            ),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::rpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // Utf8 with scalar length and unicode fill
+        let args = create_scalar_pad_args::<i32>(size, 5, 20, "é", false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!(
+                "rpad utf8 scalar unicode [size={size}, str_len=5, target=20, fill='é']"
+            ),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::rpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+
+        // Utf8 with scalar truncation (str_len > target) and unicode fill
+        let args = create_scalar_pad_args::<i32>(size, 20, 5, "é", false);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(
+            format!(
+                "rpad utf8 scalar truncate [size={size}, str_len=20, target=5, fill='é']"
+            ),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(unicode::rpad().invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                         config_options: Arc::clone(&config_options),
                     }))
                 })

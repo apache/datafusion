@@ -25,7 +25,6 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -127,10 +126,6 @@ pub fn start_async_provider() -> (AsyncTableProvider, Handle) {
 
 #[async_trait]
 impl TableProvider for AsyncTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> Arc<Schema> {
         super::create_test_schema()
     }
@@ -189,10 +184,6 @@ impl AsyncTestExecutionPlan {
 impl ExecutionPlan for AsyncTestExecutionPlan {
     fn name(&self) -> &str {
         "async test execution plan"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<datafusion_physical_plan::PlanProperties> {

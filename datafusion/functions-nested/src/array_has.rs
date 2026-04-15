@@ -21,7 +21,7 @@ use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, Datum, Scalar,
     StringArrayType,
 };
-use arrow::buffer::BooleanBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::cast::{as_fixed_size_list_array, as_generic_list_array};
@@ -31,7 +31,8 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility, in_list,
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility, in_list,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -41,7 +42,7 @@ use crate::make_array::make_array_udf;
 use crate::utils::make_scalar_function;
 
 use hashbrown::HashSet;
-use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
@@ -111,9 +112,6 @@ impl ArrayHas {
 }
 
 impl ScalarUDFImpl for ArrayHas {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_has"
     }
@@ -180,10 +178,7 @@ impl ScalarUDFImpl for ArrayHas {
         Ok(ExprSimplifyResult::Original(args))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [first_arg, second_arg] = take_function_args(self.name(), &args.args)?;
         if first_arg.data_type().is_null() {
             // Always return null if the first argument is null
@@ -319,7 +314,7 @@ impl<'a> ArrayWrapper<'a> {
         }
     }
 
-    fn nulls(&self) -> Option<&arrow::buffer::NullBuffer> {
+    fn nulls(&self) -> Option<&NullBuffer> {
         match self {
             ArrayWrapper::FixedSizeList(arr) => arr.nulls(),
             ArrayWrapper::List(arr) => arr.nulls(),
@@ -332,20 +327,21 @@ fn array_has_dispatch_for_array<'a>(
     haystack: ArrayWrapper<'a>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
-    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    let combined_nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
+    let mut result = BooleanBufferBuilder::new(haystack.len());
     for (i, arr) in haystack.iter().enumerate() {
-        if arr.is_none() || needle.is_null(i) {
-            boolean_builder.append_null();
+        if combined_nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            result.append(false);
             continue;
         }
         let arr = arr.unwrap();
         let is_nested = arr.data_type().is_nested();
         let needle_row = Scalar::new(needle.slice(i, 1));
         let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
-        boolean_builder.append_value(eq_array.true_count() > 0);
+        result.append(eq_array.true_count() > 0);
     }
 
-    Ok(Arc::new(boolean_builder.finish()))
+    Ok(Arc::new(BooleanArray::new(result.finish(), combined_nulls)))
 }
 
 fn array_has_dispatch_for_scalar(
@@ -422,30 +418,63 @@ fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     array_has_all_and_any_inner(args, ComparisonType::All)
 }
 
+/// Number of rows to process at a time when doing batched row conversion.  This
+/// amortizes the row conversion overhead over more rows, but making this too
+/// large can cause cache pressure for large arrays. See
+/// <https://github.com/apache/datafusion/pull/20588> for context.
+const ROW_CONVERSION_CHUNK_SIZE: usize = 512;
+
 // General row comparison for array_has_all and array_has_any
 fn general_array_has_for_all_and_any<'a>(
     haystack: ArrayWrapper<'a>,
     needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
-    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    let num_rows = haystack.len();
     let converter = RowConverter::new(vec![SortField::new(haystack.value_type())])?;
 
-    for (arr, sub_arr) in haystack.iter().zip(needle.iter()) {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let arr_values = converter.convert_columns(&[arr])?;
-            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
-            boolean_builder.append_value(general_array_has_all_and_any_kernel(
-                &arr_values,
-                &sub_arr_values,
+    let h_offsets: Vec<usize> = haystack.offsets().collect();
+    let n_offsets: Vec<usize> = needle.offsets().collect();
+
+    let combined_nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
+    let mut result = BooleanBufferBuilder::new(num_rows);
+
+    for chunk_start in (0..num_rows).step_by(ROW_CONVERSION_CHUNK_SIZE) {
+        let chunk_end = (chunk_start + ROW_CONVERSION_CHUNK_SIZE).min(num_rows);
+
+        // For efficiency with sliced arrays, only process the visible elements,
+        // not the entire underlying buffer.
+        let h_elem_start = h_offsets[chunk_start];
+        let h_elem_end = h_offsets[chunk_end];
+        let n_elem_start = n_offsets[chunk_start];
+        let n_elem_end = n_offsets[chunk_end];
+
+        let h_vals = haystack
+            .values()
+            .slice(h_elem_start, h_elem_end - h_elem_start);
+        let n_vals = needle
+            .values()
+            .slice(n_elem_start, n_elem_end - n_elem_start);
+
+        let chunk_h_rows = converter.convert_columns(&[h_vals])?;
+        let chunk_n_rows = converter.convert_columns(&[n_vals])?;
+
+        for i in chunk_start..chunk_end {
+            if combined_nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                result.append(false);
+                continue;
+            }
+            result.append(general_array_has_all_and_any_kernel(
+                &chunk_h_rows,
+                (h_offsets[i] - h_elem_start)..(h_offsets[i + 1] - h_elem_start),
+                &chunk_n_rows,
+                (n_offsets[i] - n_elem_start)..(n_offsets[i + 1] - n_elem_start),
                 comparison_type,
             ));
-        } else {
-            boolean_builder.append_null();
         }
     }
 
-    Ok(Arc::new(boolean_builder.finish()))
+    Ok(Arc::new(BooleanArray::new(result.finish(), combined_nulls)))
 }
 
 // String comparison for array_has_all and array_has_any
@@ -454,25 +483,50 @@ fn array_has_all_and_any_string_internal<'a>(
     needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
-    let mut boolean_builder = BooleanArray::builder(haystack.len());
-    for (arr, sub_arr) in haystack.iter().zip(needle.iter()) {
-        match (arr, sub_arr) {
-            (Some(arr), Some(sub_arr)) => {
-                let haystack_array = string_array_to_vec(&arr);
-                let needle_array = string_array_to_vec(&sub_arr);
-                boolean_builder.append_value(array_has_string_kernel(
-                    &haystack_array,
-                    &needle_array,
-                    comparison_type,
-                ));
+    let num_rows = haystack.len();
+
+    let h_offsets: Vec<usize> = haystack.offsets().collect();
+    let n_offsets: Vec<usize> = needle.offsets().collect();
+
+    let combined_nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
+    let mut result = BooleanBufferBuilder::new(num_rows);
+
+    for chunk_start in (0..num_rows).step_by(ROW_CONVERSION_CHUNK_SIZE) {
+        let chunk_end = (chunk_start + ROW_CONVERSION_CHUNK_SIZE).min(num_rows);
+
+        let h_elem_start = h_offsets[chunk_start];
+        let h_elem_end = h_offsets[chunk_end];
+        let n_elem_start = n_offsets[chunk_start];
+        let n_elem_end = n_offsets[chunk_end];
+
+        let h_vals = haystack
+            .values()
+            .slice(h_elem_start, h_elem_end - h_elem_start);
+        let n_vals = needle
+            .values()
+            .slice(n_elem_start, n_elem_end - n_elem_start);
+
+        let chunk_h_strings = string_array_to_vec(h_vals.as_ref());
+        let chunk_n_strings = string_array_to_vec(n_vals.as_ref());
+
+        for i in chunk_start..chunk_end {
+            if combined_nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                result.append(false);
+                continue;
             }
-            (_, _) => {
-                boolean_builder.append_null();
-            }
+            let h_start = h_offsets[i] - h_elem_start;
+            let h_end = h_offsets[i + 1] - h_elem_start;
+            let n_start = n_offsets[i] - n_elem_start;
+            let n_end = n_offsets[i + 1] - n_elem_start;
+            result.append(array_has_string_kernel(
+                &chunk_h_strings[h_start..h_end],
+                &chunk_n_strings[n_start..n_end],
+                comparison_type,
+            ));
         }
     }
 
-    Ok(Arc::new(boolean_builder.finish()))
+    Ok(Arc::new(BooleanArray::new(result.finish(), combined_nulls)))
 }
 
 fn array_has_all_and_any_dispatch<'a>(
@@ -628,16 +682,16 @@ impl<'a> ScalarStringLookup<'a> {
 fn array_has_any_string_inner<'a, C: StringArrayType<'a> + Copy>(
     col_strings: C,
     col_offsets: &[usize],
-    col_nulls: Option<&arrow::buffer::NullBuffer>,
+    col_nulls: Option<&NullBuffer>,
     has_null_scalar: bool,
     scalar_lookup: &ScalarStringLookup<'_>,
 ) -> ArrayRef {
     let num_rows = col_offsets.len() - 1;
-    let mut builder = BooleanArray::builder(num_rows);
+    let mut result = BooleanBufferBuilder::new(num_rows);
 
     for i in 0..num_rows {
         if col_nulls.is_some_and(|v| v.is_null(i)) {
-            builder.append_null();
+            result.append(false);
             continue;
         }
         let start = col_offsets[i];
@@ -649,10 +703,10 @@ fn array_has_any_string_inner<'a, C: StringArrayType<'a> + Copy>(
                 scalar_lookup.contains(col_strings.value(j))
             }
         });
-        builder.append_value(found);
+        result.append(found);
     }
 
-    Arc::new(builder.finish())
+    Arc::new(BooleanArray::new(result.finish(), col_nulls.cloned()))
 }
 
 /// General scalar fast path for `array_has_any`, using RowConverter for
@@ -675,7 +729,7 @@ fn array_has_any_with_scalar_general(
     let col_offsets: Vec<usize> = col_list.offsets().collect();
     let col_nulls = col_list.nulls();
 
-    let mut builder = BooleanArray::builder(col_list.len());
+    let mut result = BooleanBufferBuilder::new(col_list.len());
     let num_scalar = scalar_rows.num_rows();
 
     if num_scalar > SCALAR_SMALL_THRESHOLD {
@@ -686,38 +740,39 @@ fn array_has_any_with_scalar_general(
 
         for i in 0..col_list.len() {
             if col_nulls.is_some_and(|v| v.is_null(i)) {
-                builder.append_null();
+                result.append(false);
                 continue;
             }
             let start = col_offsets[i];
             let end = col_offsets[i + 1];
             let found =
                 (start..end).any(|j| scalar_set.contains(col_rows.row(j).as_ref()));
-            builder.append_value(found);
+            result.append(found);
         }
     } else {
         // Small scalar: linear scan avoids HashSet hashing overhead
         for i in 0..col_list.len() {
             if col_nulls.is_some_and(|v| v.is_null(i)) {
-                builder.append_null();
+                result.append(false);
                 continue;
             }
             let start = col_offsets[i];
             let end = col_offsets[i + 1];
             let found = (start..end)
                 .any(|j| (0..num_scalar).any(|k| col_rows.row(j) == scalar_rows.row(k)));
-            builder.append_value(found);
+            result.append(found);
         }
     }
 
-    let result: ArrayRef = Arc::new(builder.finish());
+    let output: ArrayRef =
+        Arc::new(BooleanArray::new(result.finish(), col_nulls.cloned()));
 
     if is_scalar_output {
         Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
-            &result, 0,
+            &output, 0,
         )?))
     } else {
-        Ok(ColumnarValue::Array(result))
+        Ok(ColumnarValue::Array(output))
     }
 }
 
@@ -764,9 +819,6 @@ impl ArrayHasAll {
 }
 
 impl ScalarUDFImpl for ArrayHasAll {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_has_all"
     }
@@ -779,10 +831,7 @@ impl ScalarUDFImpl for ArrayHasAll {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_has_all_inner)(&args.args)
     }
 
@@ -838,9 +887,6 @@ impl ArrayHasAny {
 }
 
 impl ScalarUDFImpl for ArrayHasAny {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_has_any"
     }
@@ -853,10 +899,7 @@ impl ScalarUDFImpl for ArrayHasAny {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [first_arg, second_arg] = take_function_args(self.name(), &args.args)?;
 
         // If either argument is scalar, use the fast path.
@@ -905,19 +948,22 @@ fn array_has_string_kernel(
 
 fn general_array_has_all_and_any_kernel(
     haystack_rows: &Rows,
+    h_range: Range<usize>,
     needle_rows: &Rows,
+    mut n_range: Range<usize>,
     comparison_type: ComparisonType,
 ) -> bool {
+    let h_start = h_range.start;
+    let h_end = h_range.end;
+
     match comparison_type {
-        ComparisonType::All => needle_rows.iter().all(|needle_row| {
-            haystack_rows
-                .iter()
-                .any(|haystack_row| haystack_row == needle_row)
+        ComparisonType::All => n_range.all(|ni| {
+            let needle_row = needle_rows.row(ni);
+            (h_start..h_end).any(|hi| haystack_rows.row(hi) == needle_row)
         }),
-        ComparisonType::Any => needle_rows.iter().any(|needle_row| {
-            haystack_rows
-                .iter()
-                .any(|haystack_row| haystack_row == needle_row)
+        ComparisonType::Any => n_range.any(|ni| {
+            let needle_row = needle_rows.row(ni);
+            (h_start..h_end).any(|hi| haystack_rows.row(hi) == needle_row)
         }),
     }
 }
@@ -928,7 +974,10 @@ mod tests {
 
     use arrow::datatypes::Int32Type;
     use arrow::{
-        array::{Array, ArrayRef, AsArray, Int32Array, ListArray, create_array},
+        array::{
+            Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, ListArray,
+            create_array,
+        },
         buffer::OffsetBuffer,
         datatypes::{DataType, Field},
     };
@@ -936,6 +985,7 @@ mod tests {
         DataFusionError, ScalarValue, config::ConfigOptions,
         utils::SingleRowListArrayBuilder,
     };
+    use datafusion_expr::simplify::SimplifyContext;
     use datafusion_expr::{
         ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col, lit,
         simplify::ExprSimplifyResult,
@@ -943,7 +993,7 @@ mod tests {
 
     use crate::expr_fn::make_array;
 
-    use super::ArrayHas;
+    use super::{ArrayHas, ArrayHasAll, ArrayHasAny};
 
     #[test]
     fn test_simplify_array_has_to_in_list() {
@@ -954,7 +1004,7 @@ mod tests {
         .build_list_scalar());
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -977,7 +1027,7 @@ mod tests {
         let haystack = make_array(vec![lit(1), lit(2), lit(3)]);
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -1000,7 +1050,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::Null, None);
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -1017,7 +1067,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::List(Arc::new(haystack)), None);
         let needle = col("c");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -1032,7 +1082,7 @@ mod tests {
         let haystack = col("c1");
         let needle = col("c2");
 
-        let context = datafusion_expr::simplify::SimplifyContext::default();
+        let context = SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Original(args)) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -1152,5 +1202,113 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// Invoke a two-argument list UDF with the given arrays and assert the
+    /// boolean output matches `expected`.
+    fn invoke_and_assert(
+        udf: &dyn ScalarUDFImpl,
+        haystack: &ArrayRef,
+        needle: ArrayRef,
+        expected: &[Option<bool>],
+    ) {
+        let num_rows = haystack.len();
+        let list_type = haystack.data_type();
+        let result = udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(Arc::clone(haystack)),
+                    ColumnarValue::Array(needle),
+                ],
+                arg_fields: vec![
+                    Arc::new(Field::new("haystack", list_type.clone(), false)),
+                    Arc::new(Field::new("needle", list_type.clone(), false)),
+                ],
+                number_rows: num_rows,
+                return_field: Arc::new(Field::new("return", DataType::Boolean, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+        let output = result.into_array(num_rows).unwrap();
+        assert_eq!(output.as_boolean().iter().collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn test_sliced_list_offsets() {
+        // Full rows:
+        //   row 0: [1, 2]   (not visible after slicing)
+        //   row 1: [11, 12] (visible row 0)
+        //   row 2: [21, 22] (visible row 1)
+        //   row 3: [31, 32] (not visible after slicing)
+        let field: Arc<Field> = Arc::new(Field::new("item", DataType::Int32, false));
+        let full_values = Arc::new(Int32Array::from(vec![1, 2, 11, 12, 21, 22, 31, 32]));
+        let full_offsets = OffsetBuffer::new(vec![0, 2, 4, 6, 8].into());
+        let full = ListArray::new(Arc::clone(&field), full_offsets, full_values, None);
+        let sliced_haystack: ArrayRef = Arc::new(full.slice(1, 2));
+
+        // array_has_all: needle row 0 = [11], row 1 = [21]
+        let needle_all: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            Arc::new(Int32Array::from(vec![11, 21])),
+            None,
+        ));
+        invoke_and_assert(
+            &ArrayHasAll::new(),
+            &sliced_haystack,
+            needle_all,
+            &[Some(true), Some(true)],
+        );
+
+        // array_has_any: needle row 0 = [99, 11], row 1 = [99, 21]
+        let needle_any: ArrayRef = Arc::new(ListArray::new(
+            field,
+            OffsetBuffer::new(vec![0, 2, 4].into()),
+            Arc::new(Int32Array::from(vec![99, 11, 99, 21])),
+            None,
+        ));
+        invoke_and_assert(
+            &ArrayHasAny::new(),
+            &sliced_haystack,
+            needle_any,
+            &[Some(true), Some(true)],
+        );
+    }
+
+    #[test]
+    fn test_sliced_fixed_size_list_offsets() {
+        // Same logical data as test_sliced_list_offsets, but using FixedSizeListArray.
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let full_values = Arc::new(Int32Array::from(vec![1, 2, 11, 12, 21, 22, 31, 32]));
+        let full = FixedSizeListArray::new(Arc::clone(&field), 2, full_values, None);
+        let sliced_haystack: ArrayRef = Arc::new(full.slice(1, 2));
+
+        // array_has_all: needle row 0 = [11, 12], row 1 = [21, 22]
+        let needle_all: ArrayRef = Arc::new(FixedSizeListArray::new(
+            Arc::clone(&field),
+            2,
+            Arc::new(Int32Array::from(vec![11, 12, 21, 22])),
+            None,
+        ));
+        invoke_and_assert(
+            &ArrayHasAll::new(),
+            &sliced_haystack,
+            needle_all,
+            &[Some(true), Some(true)],
+        );
+
+        // array_has_any: needle row 0 = [99, 12], row 1 = [99, 22]
+        let needle_any: ArrayRef = Arc::new(FixedSizeListArray::new(
+            field,
+            2,
+            Arc::new(Int32Array::from(vec![99, 12, 99, 22])),
+            None,
+        ));
+        invoke_and_assert(
+            &ArrayHasAny::new(),
+            &sliced_haystack,
+            needle_any,
+            &[Some(true), Some(true)],
+        );
     }
 }

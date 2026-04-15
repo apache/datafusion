@@ -462,7 +462,7 @@ mod tests {
     use std::ops::Not;
 
     use super::*;
-    use datafusion_expr::{Expr, case, col, lit};
+    use datafusion_expr::{case, col};
 
     #[test]
     fn test_split_files() {

@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::ops::Add;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
-use arrow::array::{ArrayRef, PrimitiveBuilder};
+use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
@@ -35,8 +34,8 @@ use datafusion_common::{
     utils::take_function_args,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -121,10 +120,6 @@ impl ToLocalTimeFunc {
 }
 
 impl ScalarUDFImpl for ToLocalTimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_local_time"
     }
@@ -143,10 +138,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [time_value] = take_function_args(self.name(), &args.args)?;
         to_local_time(time_value)
     }
@@ -161,18 +153,9 @@ fn transform_array<T: ArrowTimestampType>(
     tz: Tz,
 ) -> Result<ColumnarValue> {
     let primitive_array = as_primitive_array::<T>(array)?;
-    let mut builder = PrimitiveBuilder::<T>::with_capacity(primitive_array.len());
-    for ts_opt in primitive_array.iter() {
-        match ts_opt {
-            None => builder.append_null(),
-            Some(ts) => {
-                let adjusted_ts: i64 = adjust_to_local_time::<T>(ts, tz)?;
-                builder.append_value(adjusted_ts)
-            }
-        }
-    }
-
-    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+    let result: PrimitiveArray<T> =
+        primitive_array.try_unary(|ts| adjust_to_local_time::<T>(ts, tz))?;
+    Ok(ColumnarValue::Array(Arc::new(result)))
 }
 
 fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {

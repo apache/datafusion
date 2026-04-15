@@ -25,7 +25,6 @@
 //! This plan uses the [`OneSideHashJoiner`] object to facilitate join calculations
 //! for both its children.
 
-use std::any::Any;
 use std::fmt::{self, Debug};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -80,7 +79,7 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
 use parking_lot::Mutex;
@@ -239,7 +238,7 @@ impl SymmetricHashJoinExec {
             build_join_schema(&left_schema, &right_schema, join_type);
 
         // Initialize the random state for the join operation:
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let schema = Arc::new(schema);
         let cache = Self::compute_properties(&left, &right, schema, *join_type, &on)?;
         Ok(SymmetricHashJoinExec {
@@ -421,10 +420,6 @@ impl DisplayAs for SymmetricHashJoinExec {
 impl ExecutionPlan for SymmetricHashJoinExec {
     fn name(&self) -> &'static str {
         "SymmetricHashJoinExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

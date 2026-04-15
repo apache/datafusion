@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, NullBufferBuilder, StringBuilder, StructArray};
@@ -63,10 +62,6 @@ impl JsonTuple {
 }
 
 impl ScalarUDFImpl for JsonTuple {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "json_tuple"
     }
@@ -196,7 +191,6 @@ fn json_tuple_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::ReturnFieldArgs;
 
     #[test]
     fn test_return_field_shape() {

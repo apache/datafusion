@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
 
 use arrow::array::ArrayRef;
@@ -216,10 +214,6 @@ impl RoundFunc {
 }
 
 impl ScalarUDFImpl for RoundFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "round"
     }

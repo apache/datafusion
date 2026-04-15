@@ -496,7 +496,7 @@ impl Optimizer {
 /// These are invariants which should hold true before and after [`LogicalPlan`] optimization.
 ///
 /// This differs from [`LogicalPlan::check_invariants`], which addresses if a singular
-/// LogicalPlan is valid. Instead this address if the optimization was valid based upon permitted changes.
+/// LogicalPlan is valid. Instead, this address if the optimization was valid based upon permitted changes.
 fn assert_valid_optimization(
     plan: &LogicalPlan,
     prev_schema: &Arc<DFSchema>,

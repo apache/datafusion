@@ -17,7 +17,6 @@
 
 //! Test utilities for physical optimizer tests
 
-use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, LazyLock};
 
@@ -450,10 +449,6 @@ impl DisplayAs for RequirementsTestExec {
 impl ExecutionPlan for RequirementsTestExec {
     fn name(&self) -> &str {
         "RequiredInputOrderingExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -927,10 +922,6 @@ impl ExecutionPlan for TestScan {
         "TestScan"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
@@ -958,8 +949,8 @@ impl ExecutionPlan for TestScan {
         internal_err!("TestScan is for testing optimizer only, not for execution")
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema))
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 
     // This is the key method - implement sort pushdown

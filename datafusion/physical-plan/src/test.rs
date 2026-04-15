@@ -17,7 +17,6 @@
 
 //! Utilities for testing datafusion-physical-plan
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -133,10 +132,6 @@ impl ExecutionPlan for TestMemoryExec {
         "DataSourceExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -186,11 +181,11 @@ impl ExecutionPlan for TestMemoryExec {
         unimplemented!()
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            Ok(Statistics::new_unknown(&self.schema))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema)))
         } else {
-            self.statistics_inner()
+            Ok(Arc::new(self.statistics_inner()?))
         }
     }
 

@@ -152,7 +152,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
                 let select_exprs =
                     self.prepare_select_exprs(&plan, exprs, empty_from, planner_context)?;
-                self.project(plan, select_exprs)
+                self.project(plan, select_exprs, None)
             }
             PipeOperator::Extend { exprs } => {
                 let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
@@ -162,7 +162,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     std::iter::once(SelectExpr::Wildcard(WildcardOptions::default()))
                         .chain(extend_exprs)
                         .collect();
-                self.project(plan, all_exprs)
+                self.project(plan, all_exprs, None)
             }
             PipeOperator::As { alias } => self.apply_table_alias(
                 plan,

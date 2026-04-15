@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -28,10 +27,11 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Field, FieldRef, IntervalUnit as ArrowIntervalUnit,
-    TimeUnit,
+    ArrowTimestampType, DataType, Date32Type, Date64Type, Field, FieldRef,
+    IntervalUnit as ArrowIntervalUnit, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, NaiveDate};
 use datafusion_common::types::{NativeType, logical_date};
 
 use datafusion_common::{
@@ -50,8 +50,8 @@ use datafusion_common::{
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility, interval_arithmetic,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility, interval_arithmetic,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -86,7 +86,21 @@ use datafusion_macros::user_doc;
     argument(
         name = "expression",
         description = "Time expression to operate on. Can be a constant, column, or function."
-    )
+    ),
+    sql_example = r#"```sql
+> SELECT date_part('year', '2024-05-01T00:00:00');
++-----------------------------------------------------+
+| date_part(Utf8("year"),Utf8("2024-05-01T00:00:00")) |
++-----------------------------------------------------+
+| 2024                                                |
++-----------------------------------------------------+
+> SELECT extract(day FROM timestamp '2024-05-01T00:00:00');
++----------------------------------------------------+
+| date_part(Utf8("DAY"),Utf8("2024-05-01T00:00:00")) |
++----------------------------------------------------+
+| 1                                                  |
++----------------------------------------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DatePartFunc {
@@ -139,10 +153,6 @@ impl DatePartFunc {
 }
 
 impl ScalarUDFImpl for DatePartFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "date_part"
     }
@@ -182,10 +192,7 @@ impl ScalarUDFImpl for DatePartFunc {
             )
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         let [part, array] = take_function_args(self.name(), args)?;
 
@@ -337,37 +344,32 @@ fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue
 
         Timestamp(unit, tz_opt) => {
             let naive_midnight = date.and_hms_opt(0, 0, 0)?;
-
-            let utc_dt = if let Some(tz_str) = tz_opt {
-                let tz: Tz = tz_str.parse().ok()?;
-
-                let local = tz.from_local_datetime(&naive_midnight);
-
-                let local_dt = match local {
-                    chrono::offset::LocalResult::Single(dt) => dt,
-                    chrono::offset::LocalResult::Ambiguous(dt1, _dt2) => dt1,
-                    chrono::offset::LocalResult::None => local.earliest()?,
-                };
-
-                local_dt.with_timezone(&Utc)
-            } else {
-                Utc.from_utc_datetime(&naive_midnight)
-            };
+            let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
 
             match unit {
-                Second => {
-                    ScalarValue::TimestampSecond(Some(utc_dt.timestamp()), tz_opt.clone())
-                }
+                Second => ScalarValue::TimestampSecond(
+                    TimestampSecondType::from_naive_datetime(naive_midnight, tz.as_ref()),
+                    tz_opt.clone(),
+                ),
                 Millisecond => ScalarValue::TimestampMillisecond(
-                    Some(utc_dt.timestamp_millis()),
+                    TimestampMillisecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
                     tz_opt.clone(),
                 ),
                 Microsecond => ScalarValue::TimestampMicrosecond(
-                    Some(utc_dt.timestamp_micros()),
+                    TimestampMicrosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
                     tz_opt.clone(),
                 ),
                 Nanosecond => ScalarValue::TimestampNanosecond(
-                    Some(utc_dt.timestamp_nanos_opt()?),
+                    TimestampNanosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    ),
                     tz_opt.clone(),
                 ),
             }

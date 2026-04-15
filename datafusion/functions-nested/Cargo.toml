@@ -61,7 +61,7 @@ hashbrown = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 itoa = { workspace = true }
 log = { workspace = true }
-paste = { workspace = true }
+memchr = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
@@ -73,7 +73,15 @@ name = "array_concat"
 
 [[bench]]
 harness = false
+name = "array_min_max"
+
+[[bench]]
+harness = false
 name = "array_expression"
+
+[[bench]]
+harness = false
+name = "arrays_zip"
 
 [[bench]]
 harness = false
@@ -110,3 +118,11 @@ name = "array_to_string"
 [[bench]]
 harness = false
 name = "array_position"
+
+[[bench]]
+harness = false
+name = "array_sort"
+
+[[bench]]
+harness = false
+name = "string_to_array"

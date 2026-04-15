@@ -17,7 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::align_of_val;
@@ -85,11 +84,6 @@ impl Stddev {
 }
 
 impl AggregateUDFImpl for Stddev {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "stddev"
     }
@@ -192,11 +186,6 @@ impl StddevPop {
 }
 
 impl AggregateUDFImpl for StddevPop {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "stddev_pop"
     }
@@ -369,7 +358,6 @@ mod tests {
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
-    use std::sync::Arc;
 
     #[test]
     fn stddev_f64_merge_1() -> Result<()> {

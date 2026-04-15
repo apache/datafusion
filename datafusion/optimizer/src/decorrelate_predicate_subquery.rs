@@ -538,7 +538,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
-    use datafusion_expr::{and, binary_expr, col, lit, not, out_ref_col, table_scan};
+    use datafusion_expr::{and, binary_expr, col, out_ref_col, table_scan};
 
     macro_rules! assert_optimized_plan_equal {
         (
