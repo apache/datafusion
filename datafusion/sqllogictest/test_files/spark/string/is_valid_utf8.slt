@@ -16,17 +16,52 @@
 # under the License.
 
 query B
-SELECT is_valid_utf8('Spark'::string);
+SELECT is_valid_utf8('Hello, world!'::string);
 ----
 true
 
 query B
-SELECT is_valid_utf8(NULL::string);
+SELECT is_valid_utf8('😀🎉✨'::string);
 ----
-NULL
+true
 
 query B
-SELECT is_valid_utf8(arrow_cast(x'61', 'Binary'));
+SELECT is_valid_utf8(''::string);
+----
+true
+
+query B
+SELECT is_valid_utf8('ASCII only 123 !@#'::string);
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'C2A9', 'Binary'));
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'C2AE', 'Binary'));
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'E282AC', 'Binary'));
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'E284A2', 'Binary'));
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'F09F9880', 'Binary'));
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'F09F8E89', 'Binary'));
 ----
 true
 
@@ -36,6 +71,111 @@ SELECT is_valid_utf8(arrow_cast(x'80', 'Binary'));
 false
 
 query B
+SELECT is_valid_utf8(arrow_cast(x'BF', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'808080', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'C2', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'E2', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'F0', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'E282', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'C081', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'E08080', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'F0808080', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'FE', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'FF', 'Binary'));
+----
+false
+
+query B
 SELECT is_valid_utf8(arrow_cast(x'61C262', 'Binary'));
 ----
 false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'41BF42', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'ED9FBF', 'Binary'));
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'EDA080', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'EDBFBF', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'F48FBFBF', 'Binary'));
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'F4908080', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'6162C2A963', 'Binary'));
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'6162806364', 'Binary'));
+----
+false
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'610062', 'Binary'));
+----
+true
+
+query B
+SELECT is_valid_utf8(arrow_cast(x'', 'Binary'));
+----
+true

@@ -21,7 +21,7 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 
 use arrow::array::{Array, ArrayRef, BooleanArray};
-use datafusion_common::cast::{as_binary_array, as_string_array, as_string_view_array};
+use datafusion_common::cast::{as_binary_array, as_binary_view_array, as_large_binary_array, as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::utils::take_function_args;
 use datafusion_functions::utils::make_scalar_function;
 
@@ -96,8 +96,26 @@ fn spark_is_valid_utf8_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(|x| x.map(|y| String::from_utf8(y.as_bytes().to_vec()).is_ok()))
                 .collect::<BooleanArray>(),
         )),
+        DataType::LargeUtf8 => Ok(Arc::new(
+            as_large_string_array(array)?
+                .iter()
+                .map(|x| x.map(|y| String::from_utf8(y.as_bytes().to_vec()).is_ok()))
+                .collect::<BooleanArray>(),
+        )),
         DataType::Binary => Ok(Arc::new(
             as_binary_array(array)?
+                .iter()
+                .map(|x| x.map(|y| String::from_utf8(y.into()).is_ok()))
+                .collect::<BooleanArray>(),
+        )),
+        DataType::LargeBinary => Ok(Arc::new(
+            as_large_binary_array(array)?
+                .iter()
+                .map(|x| x.map(|y| String::from_utf8(y.into()).is_ok()))
+                .collect::<BooleanArray>(),
+        )),
+        DataType::BinaryView => Ok(Arc::new(
+            as_binary_view_array(array)?
                 .iter()
                 .map(|x| x.map(|y| String::from_utf8(y.into()).is_ok()))
                 .collect::<BooleanArray>(),
